@@ -154,14 +154,18 @@ def sync_body_metrics(
 ) -> dict[str, Any] | None:
     """Pull the latest body composition from Google Health, or None if disabled.
 
-    Persists the refresh token so subsequent runs stay authorised.
+    Persists the refresh token so subsequent runs stay authorised. The refresh
+    token may come from the environment or, when the user linked Google Health
+    from the web dashboard, from the database — either is sufficient.
     """
-    if not (client_id and client_secret and env_refresh_token):
+    if not (client_id and client_secret):
         return None
 
     refresh_token = get_meta(_KEY_REFRESH_TOKEN, db_path) or env_refresh_token
+    if not refresh_token:
+        return None
     tokens = _refresh_tokens(client_id, client_secret, refresh_token)
-    if tokens is None and refresh_token != env_refresh_token:
+    if tokens is None and env_refresh_token and refresh_token != env_refresh_token:
         # The stored token may have been invalidated; fall back to the env one.
         tokens = _refresh_tokens(client_id, client_secret, env_refresh_token)
     if tokens is None:
