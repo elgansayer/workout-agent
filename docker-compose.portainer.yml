@@ -1,19 +1,61 @@
-# Portainer stack — workout-agent web dashboard
+# Portainer stack — fully automated workout agent + web dashboard
 #
-# How to deploy in Portainer:
-#   Stacks -> Add stack -> either
-#     (a) "Repository": point it at this file's URL in the GitHub repo, or
-#     (b) "Web editor": paste the contents below.
-#   Then set any overrides under "Environment variables" and deploy.
+# Runs the daily agent (it wakes at RUN_AT every day, builds the plan, syncs
+# Hevy routines + Google Health body composition, and messages you on Telegram)
+# alongside the read-only web dashboard. Both pull pre-built images from GHCR,
+# so the VPS builds nothing.
 #
-# The image is pulled from GHCR, so nothing is built on the Portainer host —
-# just point the stack at the image URL below. The dashboard is a READ-ONLY view
-# of the SQLite database, so it needs NO credentials.
+# Deploy in Portainer:
+#   Stacks -> Add stack -> Repository (point at this file) OR Web editor (paste).
+#   Then add the credentials below under "Environment variables" and Deploy.
 #
-# If the GHCR package is private, add your registry in Portainer
-# (Registries -> Add registry -> Custom, ghcr.io, your GitHub username + a PAT
-# with read:packages) before deploying.
+# CREDENTIALS LIVE ONLY IN PORTAINER, never in git. The compose only references
+# variable names (${...}); you supply the values in the stack's env panel.
+#
+# Required env vars:
+#   GEMINI_API_KEY            https://aistudio.google.com/app/apikey
+#   TELEGRAM_BOT_TOKEN        from @BotFather
+#   TELEGRAM_CHAT_ID          your Telegram chat id
+#
+# Optional env vars (leave unset to disable that feature):
+#   HEVY_API_KEY                    reference your last logged Hevy session
+#   GOOGLE_HEALTH_CLIENT_ID         smart-scale body-composition auto-sync
+#   GOOGLE_HEALTH_CLIENT_SECRET     (run google_health_auth.py once on your
+#   GOOGLE_HEALTH_REFRESH_TOKEN      laptop to obtain the refresh token)
+#   RUN_AT (07:00)  TZ (Europe/London)  WEB_PORT (8770)
+#   GEMINI_MODEL  HEVY_SYNC_ROUTINES  HEVY_PREFILL_WEIGHTS  CHECKIN_ENABLED
+#   LIFESTYLE_ENABLED  SELF_REVIEW_ENABLED  SELF_REVIEW_WEEKDAY  TELEGRAM_PARSE_MODE
 services:
+  agent:
+    image: ghcr.io/elgansayer/workout-agent:latest
+    container_name: workout-agent
+    environment:
+      MODE: schedule
+      RUN_AT: ${RUN_AT:-07:00}
+      TZ: ${TZ:-Europe/London}
+      DATABASE_PATH: /data/workout_agent.db
+      # --- Required ---
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # --- Optional integrations ---
+      HEVY_API_KEY: ${HEVY_API_KEY:-}
+      GOOGLE_HEALTH_CLIENT_ID: ${GOOGLE_HEALTH_CLIENT_ID:-}
+      GOOGLE_HEALTH_CLIENT_SECRET: ${GOOGLE_HEALTH_CLIENT_SECRET:-}
+      GOOGLE_HEALTH_REFRESH_TOKEN: ${GOOGLE_HEALTH_REFRESH_TOKEN:-}
+      # --- Optional toggles (defaults shown) ---
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      HEVY_SYNC_ROUTINES: ${HEVY_SYNC_ROUTINES:-1}
+      HEVY_PREFILL_WEIGHTS: ${HEVY_PREFILL_WEIGHTS:-1}
+      CHECKIN_ENABLED: ${CHECKIN_ENABLED:-1}
+      LIFESTYLE_ENABLED: ${LIFESTYLE_ENABLED:-1}
+      SELF_REVIEW_ENABLED: ${SELF_REVIEW_ENABLED:-1}
+      SELF_REVIEW_WEEKDAY: ${SELF_REVIEW_WEEKDAY:-Sun}
+      TELEGRAM_PARSE_MODE: ${TELEGRAM_PARSE_MODE:-}
+    volumes:
+      - agent-data:/data
+    restart: unless-stopped
+
   web:
     image: ghcr.io/elgansayer/workout-agent-web:latest
     container_name: workout-agent-web
@@ -23,28 +65,9 @@ services:
     ports:
       - "${WEB_PORT:-8770}:8000"
     volumes:
+      # Same volume as the agent, so the dashboard reads live data.
       - agent-data:/data
     restart: unless-stopped
-
-  # Optional: run the agent in the same stack so it populates the database the
-  # dashboard reads. Uncomment, then add the secrets as Portainer stack
-  # environment variables (never commit them to git). Without this service,
-  # point the agent-data volume at a database produced elsewhere.
-  # agent:
-  #   image: ghcr.io/elgansayer/workout-agent:latest
-  #   container_name: workout-agent
-  #   environment:
-  #     MODE: schedule
-  #     RUN_AT: "07:00"
-  #     TZ: ${TZ:-Europe/London}
-  #     DATABASE_PATH: /data/workout_agent.db
-  #     GEMINI_API_KEY: ${GEMINI_API_KEY}
-  #     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-  #     TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
-  #     HEVY_API_KEY: ${HEVY_API_KEY:-}
-  #   volumes:
-  #     - agent-data:/data
-  #   restart: unless-stopped
 
 volumes:
   agent-data:

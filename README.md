@@ -404,33 +404,63 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
 
 ---
 
-## Deploy the dashboard with Portainer
+## Run it fully automated on a VPS with Portainer
 
 Pre-built images are published to the GitHub Container Registry (GHCR) by the
 [build-images workflow](.github/workflows/build-images.yml) on every push to
-`main`, so the Portainer host never builds anything — it just pulls an image:
+`main`, so the VPS never builds anything — it just pulls them:
 
+- `ghcr.io/elgansayer/workout-agent:latest` — the daily agent
 - `ghcr.io/elgansayer/workout-agent-web:latest` — the read-only dashboard
-- `ghcr.io/elgansayer/workout-agent:latest` — the daily agent (optional)
 
-To deploy in Portainer:
+The [Portainer stack](docker-compose.portainer.yml) runs **both**: the agent
+wakes at `RUN_AT` every day (default 07:00 in your `TZ`), builds the plan, syncs
+Hevy routines and Google Health body composition, and messages you on Telegram;
+the dashboard serves a live view of the same data on port `8770`.
+
+**Credentials live only in Portainer, never in git** — the compose references
+variable names (`${...}`) and you supply the values in the stack's
+**Environment variables** panel.
+
+### 1. (Optional, once) Get the Google Health refresh token on your laptop
+
+Body-composition auto-sync needs a one-time browser consent that a headless VPS
+can't do, so do it once locally and copy the result:
+
+```bash
+# on your laptop, in a checkout of this repo
+export GOOGLE_HEALTH_CLIENT_ID=...        # from https://developers.google.com/health/setup
+export GOOGLE_HEALTH_CLIENT_SECRET=...    # OAuth client, redirect URI http://localhost:8080/
+python google_health_auth.py              # approve in the browser; it prints the refresh token
+```
+
+Copy the printed `GOOGLE_HEALTH_REFRESH_TOKEN`. (Skip this whole step if you
+don't use a smart scale — the agent still works without it.)
+
+### 2. Deploy the stack in Portainer
 
 1. **Stacks → Add stack**, then either pick **Repository** and point it at
-   [docker-compose.portainer.yml](docker-compose.portainer.yml) in this repo, or
-   choose **Web editor** and paste that file's contents.
-2. (Optional) Set `TZ` or `WEB_PORT` under **Environment variables**.
-3. **Deploy the stack.** The dashboard comes up on `http://<host-ip>:8770`.
+   [docker-compose.portainer.yml](docker-compose.portainer.yml), or choose
+   **Web editor** and paste that file's contents.
+2. Under **Environment variables**, add your credentials:
 
-The dashboard needs **no credentials** — it only reads the SQLite database in
-the `agent-data` volume. To populate that database, uncomment the `agent`
-service in the Portainer compose and add your secrets (`GEMINI_API_KEY`,
-`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, …) as Portainer stack environment
-variables — never commit them.
+   | Variable | Required | Notes |
+   |---|---|---|
+   | `GEMINI_API_KEY` | ✅ | https://aistudio.google.com/app/apikey |
+   | `TELEGRAM_BOT_TOKEN` | ✅ | from @BotFather |
+   | `TELEGRAM_CHAT_ID` | ✅ | your chat id |
+   | `HEVY_API_KEY` | optional | reference your last logged session |
+   | `GOOGLE_HEALTH_CLIENT_ID` | optional | smart-scale sync |
+   | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
+   | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | from step 1 |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `07:00`, `Europe/London`, `8770` |
 
-> The first workflow run publishes the GHCR packages as **private**. Make
-> `workout-agent-web` public (package page → *Package settings* → *Change
-> visibility*) so Portainer can pull it without auth, or add a GHCR registry in
-> Portainer (**Registries → Add registry**) using a PAT with `read:packages`.
+3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is
+   no auth.
+
+> Want the agent to message you immediately to confirm it works? Temporarily set
+> `MODE=once` as an env var and redeploy, then set it back to `schedule`.
 
 ---
 
