@@ -29,6 +29,8 @@ def _config(tmp_path, hevy_api_key="key") -> Config:
         google_health_client_id=None,
         google_health_client_secret=None,
         google_health_refresh_token=None,
+        self_review_enabled=True,
+        self_review_weekday=6,
     )
 
 

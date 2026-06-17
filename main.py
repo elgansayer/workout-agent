@@ -127,6 +127,30 @@ def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
         checkin.record(config, due_info, message)
 
 
+def _maybe_self_review(
+    config: Config,
+    recovery: dict | None,
+    week: int,
+    block,
+    preview: bool,
+) -> None:
+    """On the configured weekday, send a self-review of how training is going."""
+    if not config.self_review_enabled:
+        return
+    if date.today().weekday() != config.self_review_weekday:
+        return
+    review = insights_engine.build_insights(
+        get_progress_history(db_path=config.database_path),
+        get_body_metrics(db_path=config.database_path),
+        recovery,
+    )
+    if not review.lifts:
+        logger.info("Self-review skipped: not enough logged history yet.")
+        return
+    logger.info("Self-review due: %s", review.headline)
+    _deliver(config, review.as_message(week, block.name), preview)
+
+
 def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -> str:
     """Stitch the workout/rest message, lifestyle pillars, and changes footer."""
     text = body
@@ -167,6 +191,8 @@ def run(preview: bool = False) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(body_metrics_from_recovery(recovery), when, config.database_path)
+
+    _maybe_self_review(config, recovery, week, block, preview)
 
     day = today_day(today)
 

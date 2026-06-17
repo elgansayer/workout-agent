@@ -77,6 +77,25 @@
 </section>
 
 <section class="panel">
+    <h2>Coaching self-review</h2>
+    <p class="muted">{{ review_headline }}</p>
+    {% if review_lifts %}
+    <div class="review-list">
+        {% for lift in review_lifts %}
+        <div class="review-row trend-{{ lift.trend }}">
+            <span class="review-name">{{ lift.name }}</span>
+            <span class="review-trend">{{ lift.trend }}</span>
+            <span class="review-detail">{{ lift.as_line() }}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
+    {% endif %}
+    <p class="muted review-recovery">{{ review_recovery }}</p>
+</section>
+
+<section class="panel">
     <h2>Consistency</h2>
     <div class="cal-scroll">{{ calendar|safe }}</div>
 </section>

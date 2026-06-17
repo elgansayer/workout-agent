@@ -115,6 +115,38 @@ class TrainingInsights:
             lines.append("Per-lift trend analysis: not enough history yet.")
         return "\n".join(lines)
 
+    def as_message(self, week: int | None = None, block_name: str | None = None) -> str:
+        """A phone-friendly weekly self-review for Telegram (plain text)."""
+        header = "Weekly self-review"
+        if week is not None:
+            header += f" - Week {week}"
+            if block_name:
+                header += f" ({block_name})"
+        lines = [header, self.headline, ""]
+
+        progressing = [lift for lift in self.lifts if lift.trend == "progressing"]
+        flagged = self.priorities()
+
+        if progressing:
+            names = ", ".join(
+                f"{lift.name} ({lift.change_pct * 100:+.0f}%)"
+                if lift.change_pct is not None
+                else lift.name
+                for lift in progressing
+            )
+            lines.append(f"Progressing: {names}.")
+        if flagged:
+            lines.append("Needs attention:")
+            for lift in flagged:
+                action = f" {lift.intervention}" if lift.intervention else ""
+                lines.append(f"- {lift.name}: {lift.trend}.{action}")
+        if not progressing and not flagged:
+            lines.append("Not enough logged history yet to spot trends. Keep logging.")
+
+        lines.append("")
+        lines.append(self.recovery.as_text())
+        return "\n".join(lines).strip()
+
 
 def _series_scores(entries: Sequence[dict[str, Any]]) -> tuple[list[float], str]:
     """Reduce an exercise's logged top sets to one comparable score series.

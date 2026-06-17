@@ -39,6 +39,7 @@ from database import (
     init_db,
 )
 import analytics
+import insights
 import lifestyle
 from webapp import charts
 from hevy_parser import normalise_name
@@ -223,6 +224,10 @@ def _dashboard_context(today: date | None = None) -> dict:
         (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]), None
     )
 
+    review = insights.build_insights(
+        get_progress_history(db_path=DB_PATH), metrics, None
+    )
+
     return {
         "active": "today",
         "quote": _daily_quote(today),
@@ -251,6 +256,9 @@ def _dashboard_context(today: date | None = None) -> dict:
         "weight_spark": weight_spark,
         "body_fat": f"{latest_fat:g} %" if latest_fat else None,
         "fat_spark": fat_spark,
+        "review_headline": review.headline,
+        "review_recovery": review.recovery.as_text(),
+        "review_lifts": review.lifts,
     }
 
 

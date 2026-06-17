@@ -199,6 +199,38 @@ h1 { font-size: 1.6rem; margin: 0.2rem 0 1rem; }
 .pillars li { font-size: 0.88rem; }
 .pillars li::marker { color: var(--accent); }
 
+/* ---- Coaching self-review ---- */
+.review-list { display: flex; flex-direction: column; gap: 0.5rem; margin: 0.6rem 0; }
+.review-row {
+    display: grid;
+    grid-template-columns: minmax(120px, 1fr) auto;
+    grid-template-areas: "name trend" "detail detail";
+    gap: 0.2rem 0.6rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--muted);
+    border-radius: 10px;
+    padding: 0.55rem 0.8rem;
+}
+.review-name { grid-area: name; font-weight: 600; }
+.review-trend {
+    grid-area: trend;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    align-self: center;
+}
+.review-detail { grid-area: detail; font-size: 0.82rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.review-row.trend-progressing { border-left-color: var(--accent); }
+.review-row.trend-progressing .review-trend { color: var(--accent); }
+.review-row.trend-stalling { border-left-color: var(--warn); }
+.review-row.trend-stalling .review-trend { color: var(--warn); }
+.review-row.trend-regressing { border-left-color: #f87171; }
+.review-row.trend-regressing .review-trend { color: #f87171; }
+.review-row.trend-new .review-trend { color: var(--muted); }
+.review-recovery { margin-top: 0.6rem; }
+
 /* ---- PR table ---- */
 .pr-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .pr-table th { text-align: left; color: var(--muted); font-weight: 600; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--border); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }

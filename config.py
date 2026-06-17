@@ -21,6 +21,24 @@ class ConfigError(RuntimeError):
     """Raised when required configuration is missing."""
 
 
+# Day-of-week names accepted by SELF_REVIEW_WEEKDAY, mapped to Python's
+# Monday=0 .. Sunday=6 convention.
+_WEEKDAYS = {
+    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+}
+
+
+def _parse_weekday(value: str, default: int = 6) -> int:
+    """Parse a weekday name or 0-6 integer into Monday=0 .. Sunday=6."""
+    text = (value or "").strip().lower()
+    if not text:
+        return default
+    if text.isdigit():
+        number = int(text)
+        return number if 0 <= number <= 6 else default
+    return _WEEKDAYS.get(text[:3], default)
+
+
 # A one-line hint for each required key, shown when it is missing.
 _REQUIRED_HINTS = {
     "GEMINI_API_KEY": "Create one at https://aistudio.google.com/app/apikey",
@@ -46,6 +64,8 @@ class Config:
     google_health_client_id: str | None
     google_health_client_secret: str | None
     google_health_refresh_token: str | None
+    self_review_enabled: bool
+    self_review_weekday: int
 
     @classmethod
     def load(cls) -> "Config":
@@ -102,6 +122,13 @@ class Config:
             os.environ.get("GOOGLE_HEALTH_REFRESH_TOKEN", "").strip() or None
         )
 
+        self_review_enabled = os.environ.get(
+            "SELF_REVIEW_ENABLED", "1"
+        ).strip().lower() not in ("0", "false", "no")
+        self_review_weekday = _parse_weekday(
+            os.environ.get("SELF_REVIEW_WEEKDAY", "Sun")
+        )
+
         return cls(
             hevy_api_key=hevy_api_key,
             gemini_api_key=gemini_api_key,
@@ -119,3 +146,4 @@ class Config:
             google_health_client_secret=google_health_client_secret,
             google_health_refresh_token=google_health_refresh_token,
         )
+

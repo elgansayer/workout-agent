@@ -120,3 +120,20 @@ def test_priorities_returns_only_flagged_lifts():
     names = {lift.name for lift in review.priorities()}
     assert "Bench" in names
     assert "Deadlift" not in names
+
+
+def test_as_message_is_plain_text_with_sections():
+    history = {
+        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),       # stalling
+        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),    # progressing
+    }
+    review = insights.build_insights(history, [], {"sleep_hours": 7.5})
+    message = review.as_message(week=4, block_name="Hypertrophy")
+    assert message.startswith("Weekly self-review - Week 4 (Hypertrophy)")
+    assert "Progressing: Deadlift" in message
+    assert "Needs attention:" in message
+    assert "Bench" in message
+    assert "Recovery status:" in message
+    # Phone-friendly: no markdown and no em dash.
+    assert "*" not in message
+    assert "\u2014" not in message
