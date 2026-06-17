@@ -62,6 +62,14 @@ services:
     environment:
       DATABASE_PATH: /data/workout_agent.db
       TZ: ${TZ:-Europe/London}
+      # Enables the "Connect Google Health" button on the dashboard's Settings
+      # page, so you can link your account in the browser (no manual token).
+      # GOOGLE_HEALTH_REDIRECT_URI must be the dashboard's public callback URL,
+      # e.g. https://gym.example.com/google-health/callback, and be registered
+      # as an Authorized redirect URI on the Google OAuth client.
+      GOOGLE_HEALTH_CLIENT_ID: ${GOOGLE_HEALTH_CLIENT_ID:-}
+      GOOGLE_HEALTH_CLIENT_SECRET: ${GOOGLE_HEALTH_CLIENT_SECRET:-}
+      GOOGLE_HEALTH_REDIRECT_URI: ${GOOGLE_HEALTH_REDIRECT_URI:-}
     ports:
       - "${WEB_PORT:-8770}:8000"
     volumes:

@@ -322,6 +322,41 @@ h1 { font-size: 1.6rem; margin: 0.2rem 0 1rem; }
 
 .foot { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 1.5rem 1rem 2.5rem; }
 
+/* ---- Settings ---- */
+.card {
+    background: linear-gradient(160deg, var(--panel-2), var(--panel));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.2rem 1.3rem;
+    margin: 1rem 0;
+}
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.4rem; }
+.card-head h2 { margin: 0; font-size: 1.15rem; }
+.status { font-size: 0.74rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.2rem 0.6rem; border-radius: 999px; }
+.status.on { color: var(--accent); background: var(--accent-dim); }
+.status.off { color: var(--muted); background: var(--chip); }
+.btn-row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.9rem; }
+.btn-row form { margin: 0; }
+.btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #07210f;
+    font-weight: 700;
+    font-size: 0.9rem;
+    text-decoration: none;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 0.55rem 1rem;
+    cursor: pointer;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+.btn-ghost:hover { background: var(--panel-2); filter: none; }
+.banner { border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.9rem; margin: 0.4rem 0 1rem; font-size: 0.9rem; }
+.banner.ok { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.banner.warn { border-color: var(--warn); color: var(--warn); }
+.card code { background: var(--chip); padding: 0.05rem 0.35rem; border-radius: 6px; font-size: 0.82em; }
+
 @media (max-width: 620px) {
     .two-col { grid-template-columns: 1fr; }
 }

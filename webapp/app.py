@@ -17,12 +17,13 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 from __future__ import annotations
 
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -31,13 +32,16 @@ from database import (
     get_checkins,
     get_daily_logs,
     get_exercise_volumes,
+    get_meta,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
     get_session_volumes,
     init_db,
+    set_meta,
 )
+from google_health_auth import build_authorize_url, exchange_code
 import analytics
 import insights
 import lifestyle
@@ -57,6 +61,17 @@ from program import (
 )
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
+
+# Google Health linking is opt-in: set the OAuth client in the web service's
+# environment to enable the "Connect Google Health" button on the Settings page.
+GH_CLIENT_ID = os.environ.get("GOOGLE_HEALTH_CLIENT_ID", "").strip()
+GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
+# Optional explicit redirect URI (recommended behind a reverse proxy so the
+# scheme/host match exactly what is registered with Google). When unset it is
+# derived from the incoming request.
+GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
+_GH_TOKEN_KEY = "google_health_refresh_token"
+_GH_STATE_KEY = "google_health_oauth_state"
 
 _BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
@@ -527,6 +542,67 @@ def checkins(request: Request):
         "checkins.html",
         {"active": "checkins", "checkins": get_checkins(db_path=DB_PATH)},
     )
+
+
+def _gh_redirect_uri(request: Request) -> str:
+    """The OAuth redirect URI, explicit env override or derived from the request."""
+    return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
+
+
+@app.get("/settings")
+def settings(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "active": "settings",
+            "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
+            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH)),
+            "gh_status": request.query_params.get("gh"),
+        },
+    )
+
+
+@app.get("/google-health/connect")
+def google_health_connect(request: Request):
+    """Start the Google Health OAuth flow and redirect to the consent screen."""
+    if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
+        return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+    state = secrets.token_urlsafe(16)
+    set_meta(_GH_STATE_KEY, state, DB_PATH)
+    url = build_authorize_url(
+        GH_CLIENT_ID, state, redirect_uri=_gh_redirect_uri(request)
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/google-health/callback", name="google_health_callback")
+def google_health_callback(request: Request):
+    """Receive Google's redirect, swap the code for a refresh token, store it."""
+    if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
+        return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+    if request.query_params.get("error"):
+        return RedirectResponse("/settings?gh=denied", status_code=303)
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    expected = get_meta(_GH_STATE_KEY, DB_PATH)
+    set_meta(_GH_STATE_KEY, "", DB_PATH)  # one-time use, regardless of outcome
+    if not code or not state or not expected or state != expected:
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    tokens = exchange_code(
+        GH_CLIENT_ID, GH_CLIENT_SECRET, code, redirect_uri=_gh_redirect_uri(request)
+    )
+    if not tokens or not tokens.get("refresh_token"):
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH)
+    return RedirectResponse("/settings?gh=connected", status_code=303)
+
+
+@app.post("/google-health/disconnect")
+def google_health_disconnect():
+    """Forget the stored refresh token so the agent stops syncing."""
+    set_meta(_GH_TOKEN_KEY, "", DB_PATH)
+    return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
 @app.get("/sw.js", include_in_schema=False)

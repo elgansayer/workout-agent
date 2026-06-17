@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %} - Settings{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+{% if gh_status == 'connected' %}
+<p class="banner ok">Google Health connected. The agent will sync your weight and body fat on its next run.</p>
+{% elif gh_status == 'disconnected' %}
+<p class="banner">Google Health disconnected. The agent will stop syncing body composition.</p>
+{% elif gh_status == 'denied' %}
+<p class="banner warn">Authorisation was cancelled. Nothing was changed.</p>
+{% elif gh_status == 'error' %}
+<p class="banner warn">Could not complete linking. Check the OAuth client and redirect URI, then try again.</p>
+{% elif gh_status == 'unconfigured' %}
+<p class="banner warn">Google Health is not configured on the server yet.</p>
+{% endif %}
+
+<section class="card">
+    <div class="card-head">
+        <h2>Google Health</h2>
+        {% if gh_connected %}
+        <span class="status on">Connected</span>
+        {% else %}
+        <span class="status off">Not connected</span>
+        {% endif %}
+    </div>
+    <p class="muted">
+        Link your Google Health account so the agent automatically reads your
+        latest weight and body fat (e.g. from a Eufy Life smart scale) on every
+        run. Linking happens here in the browser, so the server never needs a
+        manual token.
+    </p>
+
+    {% if not gh_configured %}
+    <p class="muted">
+        To enable linking, set <code>GOOGLE_HEALTH_CLIENT_ID</code> and
+        <code>GOOGLE_HEALTH_CLIENT_SECRET</code> (and ideally
+        <code>GOOGLE_HEALTH_REDIRECT_URI</code>) in the web service's
+        environment, then reload this page.
+    </p>
+    {% elif gh_connected %}
+    <div class="btn-row">
+        <a class="btn" href="/google-health/connect">Re-link account</a>
+        <form method="post" action="/google-health/disconnect">
+            <button class="btn btn-ghost" type="submit">Disconnect</button>
+        </form>
+    </div>
+    {% else %}
+    <div class="btn-row">
+        <a class="btn" href="/google-health/connect">Connect Google Health</a>
+    </div>
+    {% endif %}
+</section>
+{% endblock %}
