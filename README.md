@@ -358,7 +358,8 @@ or add HTTP basic auth at the proxy if you want to gate it.
 ## Run it with Docker (no Python needed)
 
 If you would rather not touch Python at all, run it as a self-scheduling
-container. It wakes at `RUN_AT` (default 07:00, in your `TZ`) and messages you,
+container. It wakes at `RUN_AT` (default `00:00,05:00`, in your `TZ`) and
+messages you,
 then sleeps until the next day. The SQLite data lives in a named volume so your
 history survives rebuilds.
 
@@ -414,7 +415,7 @@ Pre-built images are published to the GitHub Container Registry (GHCR) by the
 - `ghcr.io/elgansayer/workout-agent-web:latest` — the read-only dashboard
 
 The [Portainer stack](docker-compose.portainer.yml) runs **both**: the agent
-wakes at `RUN_AT` every day (default 07:00 in your `TZ`), builds the plan, syncs
+wakes at `RUN_AT` every day (default midnight and 5am in your `TZ`), builds the plan, syncs
 Hevy routines and Google Health body composition, and messages you on Telegram;
 the dashboard serves a live view of the same data on port `8770`.
 
@@ -461,7 +462,7 @@ without it.
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
-   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `07:00`, `Europe/London`, `8770` |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
    `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is

@@ -22,7 +22,7 @@
 #   GOOGLE_HEALTH_CLIENT_ID         smart-scale body-composition auto-sync
 #   GOOGLE_HEALTH_CLIENT_SECRET     (run google_health_auth.py once on your
 #   GOOGLE_HEALTH_REFRESH_TOKEN      laptop to obtain the refresh token)
-#   RUN_AT (07:00)  TZ (Europe/London)  WEB_PORT (8770)
+#   RUN_AT (00:00,05:00)  TZ (Europe/London)  WEB_PORT (8770)
 #   GEMINI_MODEL  HEVY_SYNC_ROUTINES  HEVY_PREFILL_WEIGHTS  CHECKIN_ENABLED
 #   LIFESTYLE_ENABLED  SELF_REVIEW_ENABLED  SELF_REVIEW_WEEKDAY  TELEGRAM_PARSE_MODE
 services:
@@ -31,7 +31,7 @@ services:
     container_name: workout-agent
     environment:
       MODE: schedule
-      RUN_AT: ${RUN_AT:-07:00}
+      RUN_AT: ${RUN_AT:-00:00,05:00}
       TZ: ${TZ:-Europe/London}
       DATABASE_PATH: /data/workout_agent.db
       # --- Required ---

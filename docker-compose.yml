@@ -1,4 +1,4 @@
-# Run with: docker compose up -d   (then it messages you at 07:00 daily)
+# Run with: docker compose up -d   (then it messages you at midnight and 5am)
 # One-off preview: docker compose run --rm agent  (with MODE=preview)
 services:
   agent:
@@ -9,8 +9,8 @@ services:
     environment:
       # schedule | once | preview
       MODE: schedule
-      # Local time of the daily message, and your timezone.
-      RUN_AT: "07:00"
+      # Local time(s) of the daily message (comma separated), and your timezone.
+      RUN_AT: "00:00,05:00"
       TZ: "Europe/London"
       DATABASE_PATH: /data/workout_agent.db
     volumes:
