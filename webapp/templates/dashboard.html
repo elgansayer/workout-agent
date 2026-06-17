@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %} - Today{% endblock %}
+{% block content %}
+<section class="hero">
+    <div class="cycle">Week {{ week }} of {{ cycle_weeks }} &middot; {{ weekday }}</div>
+    <h1>Block {{ block.number }}: {{ block.name }}</h1>
+    <p class="muted">{{ block.focus }}</p>
+    <div class="schemes">
+        <span class="chip">Deadlift {{ block.deadlift.sets }} x {{ block.deadlift.rep_range }}</span>
+        <span class="chip">Pull-ups {{ block.pullups.sets }} x {{ block.pullups.rep_range }}</span>
+        <span class="chip ghost">{{ block.accessory_emphasis }}</span>
+    </div>
+    <p class="quote">&ldquo;{{ quote }}&rdquo;</p>
+</section>
+
+<section class="stat-strip">
+    <div class="stat-card">
+        {{ cycle_ring|safe }}
+        <span class="stat-cap">Cycle</span>
+    </div>
+    <div class="stat-card">
+        {{ block_ring|safe }}
+        <span class="stat-cap">Block</span>
+    </div>
+    <div class="stat-card big-num">
+        <span class="num">{{ streak }}</span>
+        <span class="num-label">day streak</span>
+        <span class="stat-cap">Consistency</span>
+    </div>
+    {% if weight %}
+    <div class="stat-card big-num">
+        <span class="num">{{ weight }}</span>
+        {{ weight_spark|safe }}
+        <span class="stat-cap">Bodyweight</span>
+    </div>
+    {% endif %}
+    {% if body_fat %}
+    <div class="stat-card big-num">
+        <span class="num">{{ body_fat }}</span>
+        {{ fat_spark|safe }}
+        <span class="stat-cap">Body fat</span>
+    </div>
+    {% endif %}
+</section>
+
+<section class="today">
+    <h2>{{ weekday }}: {{ focus }}</h2>
+    {% if is_rest_day %}
+    <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
+        protein, light movement only.</p>
+    {% else %}
+    <div class="exercise-list">
+        {% for row in rows %}
+        <article class="exercise">
+            <div class="ex-head">
+                <span class="ex-name">{{ row.name }}</span>
+                <span class="ex-planned">{{ row.planned }}</span>
+            </div>
+            {% if row.note %}<p class="ex-note">{{ row.note }}</p>{% endif %}
+            <div class="ex-meta">
+                <span class="last">Last: {{ row.last }}</span>
+                <span class="nudge">{{ row.nudge }}</span>
+            </div>
+        </article>
+        {% endfor %}
+    </div>
+    {% endif %}
+</section>
+
+<section class="lifestyle">
+    <h2>Today's lifestyle</h2>
+    <ul class="pillars">
+        {% for line in lifestyle %}
+        <li>{{ line }}</li>
+        {% endfor %}
+    </ul>
+</section>
+
+<section class="panel">
+    <h2>Consistency</h2>
+    <div class="cal-scroll">{{ calendar|safe }}</div>
+</section>
+{% endblock %}

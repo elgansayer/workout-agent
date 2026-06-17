@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Workout Agent">
+  <rect width="512" height="512" rx="96" fill="#0f1115"/>
+  <g transform="translate(256 256)" stroke="#4ade80" stroke-width="26" stroke-linecap="round" fill="none">
+    <!-- bar -->
+    <line x1="-150" y1="0" x2="150" y2="0"/>
+    <!-- left plates -->
+    <line x1="-150" y1="-70" x2="-150" y2="70"/>
+    <line x1="-112" y1="-100" x2="-112" y2="100"/>
+    <!-- right plates -->
+    <line x1="150" y1="-70" x2="150" y2="70"/>
+    <line x1="112" y1="-100" x2="112" y2="100"/>
+  </g>
+</svg>

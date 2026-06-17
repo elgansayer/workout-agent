@@ -1,0 +1,5 @@
+# Extra dependencies for the internal web app (webapp/). Installed on top of
+# requirements.txt in Dockerfile.web.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1

@@ -1,0 +1,43 @@
+# Run with: docker compose up -d   (then it messages you at 07:00 daily)
+# One-off preview: docker compose run --rm agent  (with MODE=preview)
+services:
+  agent:
+    build: .
+    image: workout-agent
+    container_name: workout-agent
+    env_file: .env
+    environment:
+      # schedule | once | preview
+      MODE: schedule
+      # Local time of the daily message, and your timezone.
+      RUN_AT: "07:00"
+      TZ: "Europe/London"
+      DATABASE_PATH: /data/workout_agent.db
+    volumes:
+      # Persists the SQLite database (cycle history + per-exercise bests).
+      - agent-data:/data
+      # Optional: mount the folder your phone syncs Health Connect JSON into,
+      # then set HEALTH_CONNECT_FILE=/health/recovery.json in .env
+      # - /absolute/path/on/host/health:/health:ro
+    restart: unless-stopped
+
+  # Internal web dashboard. Reach it on the LAN at http://<host-ip>:8770
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: workout-agent-web
+    container_name: workout-agent-web
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/workout_agent.db
+      TZ: "Europe/London"
+    ports:
+      - "8770:8000"
+    volumes:
+      # Same volume as the agent, so the dashboard reads live data.
+      - agent-data:/data
+    restart: unless-stopped
+
+volumes:
+  agent-data:

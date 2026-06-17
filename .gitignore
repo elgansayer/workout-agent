@@ -1,6 +1,24 @@
+# Secrets & local config — never commit real credentials
 .env
+.env.*
+!.env.example
+
+# Python
 .venv/
+venv/
 __pycache__/
-*.pyc
-workout_agent.db
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local data & logs
+*.db
+*.sqlite
+*.sqlite3
 agent.log
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

@@ -1,11 +1,13 @@
 # Autonomous Workout Agent
 
 A private, local Python agent that acts as an elite hypertrophy / stage-prep
-bodybuilding coach. Every morning it pulls your latest workout from the
+bodybuilding coach. Every morning it works out what you should train today from
+the real calendar day, pulls your latest workout from the
 [Hevy API](https://api.hevyapp.com/docs/), reads your recovery metrics from
 Google Health Connect (via an exported JSON file), asks Google Gemini to apply
-progressive overload, then sends tomorrow's exact routine plus one daily
-improvement tip to your phone via Telegram.
+progressive overload, then sends today's exact routine plus one daily
+improvement tip to your phone via Telegram. On Sundays it sends a short rest and
+recovery message instead.
 
 Built as a small, focused script rather than a heavyweight generalist agent
 framework. It does one thing well: read your data, reason about it, message you.
@@ -46,6 +48,15 @@ The coach persona must always respect these facts about the athlete (Elgan):
 > Lives in [program.py](program.py) as structured data so the agent can reason
 > over it and progress it.
 
+**Weekly schedule** (driven by the real calendar day):
+
+| Day | Focus |
+| --------- | ----------------------------- |
+| Mon / Thu | Chest & Back (V-taper)        |
+| Tue / Fri | Shoulders & Arms (3D delts)   |
+| Wed / Sat | Legs & Abs                    |
+| Sun       | Rest & Recovery               |
+
 **Day 1 & 4: Chest & Back (V-taper)**
 - Incline Dumbbell Flyes — 4 × 12–15 (pre-exhaust)
 - Incline Smith Machine Press — 3 × 10–12
@@ -75,15 +86,24 @@ The coach persona must always respect these facts about the athlete (Elgan):
 
 ```
 workout_agent/
-├── main.py              # Orchestrates the nightly run
+├── main.py              # Orchestrates the morning run
 ├── config.py            # Loads secrets from environment / .env
-├── database.py          # SQLite: programme state + workout history
+├── database.py          # SQLite: workout history + per-exercise progress
 ├── program.py           # The perfected 6-day split as structured data
 ├── hevy_client.py       # Pulls latest workout from the Hevy API
+├── hevy_parser.py       # Distils the Hevy payload into a compact summary
+├── hevy_sync.py         # Builds/updates the sessions as Hevy routines
 ├── health_connect.py    # Reads sleep/weight JSON exported from Health Connect
+├── google_health_client.py # Auto-syncs weight/body fat from Google Health (Eufy scale)
+├── google_health_auth.py   # One-time OAuth helper to obtain the first refresh token
 ├── gemini_engine.py     # Asks Gemini to apply progressive overload
+├── checkin.py           # Periodic planned-vs-actual check-in engine
+├── lifestyle.py         # Daily lifestyle pillars (nutrition/cardio/recovery)
 ├── telegram_notifier.py # Sends the message to your phone
+├── webapp/              # FastAPI + Jinja2 dashboard (server-rendered SVG charts)
+├── tests/               # pytest suite (no network access)
 ├── requirements.txt
+├── requirements-web.txt # Extra deps for the web dashboard
 ├── .env.example         # Copy to .env and fill in (never committed)
 └── .gitignore
 ```
@@ -91,12 +111,178 @@ workout_agent/
 Data flow each morning:
 
 ```
-Hevy API ─┐
+Hevy API ─┐  parsed by hevy_parser
           ├─► gemini_engine ─► Telegram (your phone)
 Health ───┤        ▲
 Connect   │        │
-SQLite ───┘  (current day + history)
+SQLite ───┘   (workout history + per-exercise bests)
 ```
+
+The day's training focus is derived from the real calendar day (Monday to
+Saturday follow the 6-day split; Sunday is a rest day), so a missed run never
+knocks the schedule out of sync. Each session's top sets are parsed from Hevy
+and stored, so progressive overload references your real history rather than
+just the last raw payload.
+
+---
+
+## Routine check-ins (every 4-6 weeks)
+
+The agent runs a **check-in** roughly every 4-6 weeks. It fires once you have
+logged enough sessions to reach the planned workout count, with a calendar cap
+so it never waits longer than six weeks (or falls back to four weeks if no Hevy
+count is available). A check-in:
+
+- reads your logged Hevy history since the last check-in,
+- compares **planned vs actual** progression for each main lift,
+- flags lifts that are progressing well and lifts that have **stalled**
+  (three or more sessions at the top of the rep range with no load increase),
+- asks Gemini to summarise the findings and **auto-applies** them, then
+- sends you a Telegram **check-in digest** so you always know what changed.
+
+It is numbered ("Check-in 1", "Check-in 2", ...) and stored in SQLite. Set
+`CHECKIN_ENABLED=0` to turn the feature off.
+
+### Change notifications
+
+Whenever the agent refreshes your Hevy routines, the day's Telegram message ends
+with a short footer listing exactly which routines were **created or updated**,
+so programme changes are never silent.
+
+---
+
+## Daily lifestyle pillars (the 90% outside the gym)
+
+The gym is only part of the battle. Every daily message now ends with a
+**"what to do today"** lifestyle block, derived from the day's training focus and
+logged alongside the plan. It names today's session and covers the supporting
+pillars ([lifestyle.py](lifestyle.py)):
+
+1. **Strategic nutrition (carb cycling)** – protein is held static at
+   **2.2 g/kg**; carbohydrates cycle with load. Heavy deadlift/back days (Day 1 &
+   4) run **high carb** (about 70% around the workout), leg days (Day 3 & 6) run
+   **moderate**, and the lighter upper days (Day 2 & 5) and rest days run **low
+   carb / higher healthy fats**. If a bodyweight reading is available, it prints
+   your exact protein target in grams.
+2. **Joint-friendly cardio and NEAT** – a daily **10-12k step** target, plus
+   **20-30 min of Zone 2** (stationary bike or swim) on the lighter days and rest
+   days. Heavy pull and leg days skip steady-state to protect recovery. No
+   stair-master or running (bad toes).
+3. **CNS recovery** – **8 h sleep** minimum, Omega-3, and Magnesium Glycinate
+   before bed.
+
+Set `LIFESTYLE_ENABLED=0` to turn the block off.
+
+### Everything is logged
+
+Each run records the full plan and lifestyle guidance it issued to a `daily_log`
+table (one row per day), and any **body-composition reading** (weight, body fat,
+muscle, resting heart rate) to a `body_metrics` table. The web dashboard plots
+your weight and body-fat trend from this log.
+
+### Reading your Eufy Life scale (weight and body fat)
+
+Eufy Life has no public API, but the scale already syncs body weight and body fat
+to the cloud, so the agent can read them automatically with no manual export. Two
+options:
+
+**Automatic, cloud-to-cloud (recommended): Google Health.** Eufy Life syncs to
+Fitbit / Google Health, which exposes a proper Web API the agent polls every run.
+
+> **Note: this replaces the legacy Fitbit Web API, which is deprecated in
+> September 2026.** New applications can no longer be registered on the old
+> `dev.fitbit.com` form; the agent now uses the Google Health API instead.
+
+1. In the **Eufy Life** app, enable syncing to **Fitbit** (the data flows through
+   to Google Health).
+2. Create an OAuth client at the
+   [Google Health API developer site](https://developers.google.com/health/setup):
+   choose **Web Server**, add the `health_metrics_and_measurements.readonly`
+   scope, and add your Google account under **Test users**.
+3. Authorise it once to obtain a refresh token. The quickest way is the bundled
+   helper: set `GOOGLE_HEALTH_CLIENT_ID` and `GOOGLE_HEALTH_CLIENT_SECRET` in
+   `.env`, add `http://localhost:8080/` as an Authorized redirect URI, then run
+   `python google_health_auth.py`. It opens the consent page, captures the
+   redirect, exchanges it for tokens, stores the refresh token in the database,
+   and prints the `GOOGLE_HEALTH_REFRESH_TOKEN` line to paste into `.env`.
+
+That is it: the agent pulls your latest weight and body fat from Google Health on
+every run, refreshes the access token for you, logs the body composition, and
+uses the weight to compute your daily protein target. Nothing is exported by
+hand.
+
+> Tip: while your OAuth consent screen is still in **Testing** status, Google
+> issues refresh tokens that expire after 7 days. Publish the app (still just for
+> yourself) to get a long-lived refresh token.
+
+**Alternative: a synced file.** If you prefer not to use Google Health, have the
+Eufy Life app sync to **Google Health Connect**, then use **Health Sync** or
+**Tasker** to drop a small daily JSON into a folder synced to this machine
+(Syncthing, Nextcloud, etc.) and point `HEALTH_CONNECT_FILE` at it:
+
+```json
+{ "date": "2026-06-17", "sleep_hours": 7.5, "weight_kg": 82.0,
+  "body_fat_pct": 14.2, "muscle_pct": 47.5, "resting_hr": 58 }
+```
+
+This still runs automatically once the phone-side automation is set up, and is
+the route to also bring in sleep and resting heart rate.
+
+---
+
+## Internal web dashboard
+
+A **FastAPI + Jinja2** web app turns the agent's database into a rich, read-only
+control centre. Every chart is **server-rendered SVG** (no JavaScript, no chart
+library, no external calls), so pages load instantly and work fully offline
+behind a reverse proxy. All motivation is automated: the dashboard shows a daily
+hype line chosen from the date, with no buttons to press.
+
+| Route        | Shows                                                          |
+| ------------ | -------------------------------------------------------------- |
+| `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
+| `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
+| `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
+| `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
+| `/history`   | A training-consistency calendar heatmap and the daily plan log |
+| `/checkins`  | The full history of routine check-in digests                   |
+
+Run it with Docker alongside the agent (it shares the same SQLite volume):
+
+```bash
+docker compose up -d web
+```
+
+Then open `http://<host-ip>:8770` from any device on your network. To run it
+directly instead:
+
+```bash
+pip install -r requirements.txt -r requirements-web.txt
+uvicorn webapp.app:app --host 0.0.0.0 --port 8000
+```
+
+The dashboard is a Progressive Web App: open it in a mobile browser and use
+"Add to Home Screen" to install it as a standalone app. A service worker caches
+the app shell so it opens instantly and survives brief connection drops.
+
+### Hosting behind a reverse proxy (e.g. a public domain)
+
+The app is read-only and has no login, so it sits cleanly behind Apache, nginx,
+or Caddy. Point the proxy at the container's published port. Example Apache
+virtual host mapping `gym.example.com` to the dashboard:
+
+```apache
+<VirtualHost *:443>
+    ServerName gym.example.com
+    ProxyPreserveHost On
+    ProxyPass        / http://127.0.0.1:8770/
+    ProxyPassReverse / http://127.0.0.1:8770/
+    # ... your TLS configuration ...
+</VirtualHost>
+```
+
+Because there is no authentication, only expose data you are happy to be public,
+or add HTTP basic auth at the proxy if you want to gate it.
 
 ---
 
@@ -119,11 +305,17 @@ SQLite ───┘  (current day + history)
 
    | Variable             | Where to get it                                    |
    | -------------------- | -------------------------------------------------- |
-   | `HEVY_API_KEY`       | Hevy web dashboard → Settings → API                |
+   | `HEVY_API_KEY`       | Optional. Hevy web dashboard, Settings, API        |
    | `GEMINI_API_KEY`     | https://aistudio.google.com/app/apikey             |
    | `TELEGRAM_BOT_TOKEN` | Talk to @BotFather on Telegram                     |
    | `TELEGRAM_CHAT_ID`   | Talk to @userinfobot, or see note below            |
-   | `GEMINI_MODEL`       | Optional, defaults to `gemini-2.0-flash`           |
+   | `GEMINI_MODEL`       | Optional, defaults to `gemini-2.5-flash`           |
+   | `TELEGRAM_PARSE_MODE`| Optional, blank for plain text or `MarkdownV2`     |
+   | `CHECKIN_ENABLED`    | Optional, `1` (default) to run periodic check-ins  |
+   | `LIFESTYLE_ENABLED`  | Optional, `1` (default) to append daily lifestyle  |
+
+   If any required key is missing, the agent reports them all at once on
+   startup, each with a one-line hint, rather than failing one at a time.
 
    To find your `TELEGRAM_CHAT_ID`: message your new bot once, then open
    `https://api.telegram.org/bot<TOKEN>/getUpdates` and read `result[].message.chat.id`.
@@ -146,6 +338,13 @@ SQLite ───┘  (current day + history)
    python main.py
    ```
 
+   Use `--preview` for a dry run that prints today's plan to stdout without
+   sending anything to Telegram:
+
+   ```bash
+   python main.py --preview
+   ```
+
 5. **Schedule it for 7:00 AM daily (cron)**
 
    ```bash
@@ -153,6 +352,101 @@ SQLite ───┘  (current day + history)
    # add (adjust the absolute paths):
    0 7 * * * cd /path/to/workout_agent && /path/to/workout_agent/.venv/bin/python main.py >> agent.log 2>&1
    ```
+
+---
+
+## Run it with Docker (no Python needed)
+
+If you would rather not touch Python at all, run it as a self-scheduling
+container. It wakes at `RUN_AT` (default 07:00, in your `TZ`) and messages you,
+then sleeps until the next day. The SQLite data lives in a named volume so your
+history survives rebuilds.
+
+1. **Fill in your keys** (still needed once):
+
+   ```bash
+   cp .env.example .env
+   # then edit .env
+   ```
+
+2. **Start it** (builds on first run, then stays up and messages you daily):
+
+   ```bash
+   docker compose up -d --build
+   docker compose logs -f          # watch it; shows the next scheduled run
+   ```
+
+3. **Preview now without sending anything**:
+
+   ```bash
+   docker compose run --rm -e MODE=preview agent
+   ```
+
+4. **Send one real message immediately**:
+
+   ```bash
+   docker compose run --rm -e MODE=once agent
+   ```
+
+Adjust the time and timezone in [docker-compose.yml](docker-compose.yml) via
+`RUN_AT` and `TZ`. To feed in Health Connect data, uncomment the `/health`
+volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
+`docker compose down` stops it; your data in the `agent-data` volume remains.
+
+5. **Start the internal web dashboard** (optional, shares the same data volume):
+
+   ```bash
+   docker compose up -d web
+   ```
+
+   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
+   from any device on your LAN. Keep it on a trusted network: there is no auth.
+
+---
+
+## Deploy the dashboard with Portainer
+
+Pre-built images are published to the GitHub Container Registry (GHCR) by the
+[build-images workflow](.github/workflows/build-images.yml) on every push to
+`main`, so the Portainer host never builds anything — it just pulls an image:
+
+- `ghcr.io/elgansayer/workout-agent-web:latest` — the read-only dashboard
+- `ghcr.io/elgansayer/workout-agent:latest` — the daily agent (optional)
+
+To deploy in Portainer:
+
+1. **Stacks → Add stack**, then either pick **Repository** and point it at
+   [docker-compose.portainer.yml](docker-compose.portainer.yml) in this repo, or
+   choose **Web editor** and paste that file's contents.
+2. (Optional) Set `TZ` or `WEB_PORT` under **Environment variables**.
+3. **Deploy the stack.** The dashboard comes up on `http://<host-ip>:8770`.
+
+The dashboard needs **no credentials** — it only reads the SQLite database in
+the `agent-data` volume. To populate that database, uncomment the `agent`
+service in the Portainer compose and add your secrets (`GEMINI_API_KEY`,
+`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, …) as Portainer stack environment
+variables — never commit them.
+
+> The first workflow run publishes the GHCR packages as **private**. Make
+> `workout-agent-web` public (package page → *Package settings* → *Change
+> visibility*) so Portainer can pull it without auth, or add a GHCR registry in
+> Portainer (**Registries → Add registry**) using a PAT with `read:packages`.
+
+---
+
+## Testing
+
+The suite is pure and never touches the network (it uses temporary databases
+and files):
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+
+It covers the database (seed, advance/wrap, progress logging), the programme and
+weekday scheduling, the Health Connect reader, the Hevy parser, and the Telegram
+splitting/escaping helpers.
 
 ---
 

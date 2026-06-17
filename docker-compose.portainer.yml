@@ -1,0 +1,50 @@
+# Portainer stack — workout-agent web dashboard
+#
+# How to deploy in Portainer:
+#   Stacks -> Add stack -> either
+#     (a) "Repository": point it at this file's URL in the GitHub repo, or
+#     (b) "Web editor": paste the contents below.
+#   Then set any overrides under "Environment variables" and deploy.
+#
+# The image is pulled from GHCR, so nothing is built on the Portainer host —
+# just point the stack at the image URL below. The dashboard is a READ-ONLY view
+# of the SQLite database, so it needs NO credentials.
+#
+# If the GHCR package is private, add your registry in Portainer
+# (Registries -> Add registry -> Custom, ghcr.io, your GitHub username + a PAT
+# with read:packages) before deploying.
+services:
+  web:
+    image: ghcr.io/elgansayer/workout-agent-web:latest
+    container_name: workout-agent-web
+    environment:
+      DATABASE_PATH: /data/workout_agent.db
+      TZ: ${TZ:-Europe/London}
+    ports:
+      - "${WEB_PORT:-8770}:8000"
+    volumes:
+      - agent-data:/data
+    restart: unless-stopped
+
+  # Optional: run the agent in the same stack so it populates the database the
+  # dashboard reads. Uncomment, then add the secrets as Portainer stack
+  # environment variables (never commit them to git). Without this service,
+  # point the agent-data volume at a database produced elsewhere.
+  # agent:
+  #   image: ghcr.io/elgansayer/workout-agent:latest
+  #   container_name: workout-agent
+  #   environment:
+  #     MODE: schedule
+  #     RUN_AT: "07:00"
+  #     TZ: ${TZ:-Europe/London}
+  #     DATABASE_PATH: /data/workout_agent.db
+  #     GEMINI_API_KEY: ${GEMINI_API_KEY}
+  #     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+  #     TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+  #     HEVY_API_KEY: ${HEVY_API_KEY:-}
+  #   volumes:
+  #     - agent-data:/data
+  #   restart: unless-stopped
+
+volumes:
+  agent-data:

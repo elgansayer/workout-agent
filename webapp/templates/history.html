@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %} - History{% endblock %}
+{% block content %}
+<h1>History</h1>
+
+<section class="panel">
+    <h2>Training calendar</h2>
+    <div class="cal-scroll">{{ calendar|safe }}</div>
+</section>
+
+<section class="panel">
+    <h2>Daily log</h2>
+    {% if not logs %}
+    <p class="muted">No daily plans logged yet. Each morning run records the day's
+        plan and lifestyle guidance here.</p>
+    {% endif %}
+    <div class="log-list">
+        {% for log in logs %}
+        <article class="log-row {{ 'rest' if log.day is none }}">
+            <div class="log-head">
+                <span class="log-date">{{ log.date }}</span>
+                <span class="log-focus">{{ log.focus }}</span>
+                {% if log.carb_tier %}<span class="chip ghost">{{ log.carb_tier }} carb</span>{% endif %}
+            </div>
+            {% if log.plan %}<pre class="log-body">{{ log.plan }}</pre>{% endif %}
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

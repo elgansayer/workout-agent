@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %} - Check-ins{% endblock %}
+{% block content %}
+<h1>Check-ins</h1>
+{% if not checkins %}
+<p class="muted">No check-ins yet. The agent reviews your logged data against the
+    plan every four to six weeks and the summary will appear here.</p>
+{% endif %}
+{% for item in checkins %}
+<section class="checkin">
+    <div class="checkin-head">
+        <span class="checkin-num">Check-in {{ item.number }}</span>
+        <span class="muted">{{ item.date }} &middot; {{ item.workouts_done }} sessions &middot; {{ item.weeks }} weeks</span>
+    </div>
+    <pre class="checkin-body">{{ item.message }}</pre>
+</section>
+{% endfor %}
+{% endblock %}

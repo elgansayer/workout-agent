@@ -1,0 +1,12 @@
+# Keep the image small and never bake secrets or local state into it.
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.pytest_cache/
+tests/
+*.db
+.env
+*.md
+!README.md

@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %} - Stats{% endblock %}
+{% block content %}
+<h1>Stats</h1>
+
+<section class="stat-strip">
+    <div class="stat-card big-num">
+        <span class="num">{{ total_sessions }}</span>
+        <span class="stat-cap">Sessions logged</span>
+    </div>
+    <div class="stat-card big-num">
+        <span class="num">{{ exercises_tracked }}</span>
+        <span class="stat-cap">Exercises tracked</span>
+    </div>
+    <div class="stat-card big-num">
+        <span class="num">{{ '{:,}'.format(total_volume) }}</span>
+        <span class="num-label">kg moved</span>
+        <span class="stat-cap">Est. total load</span>
+    </div>
+    <div class="stat-card big-num">
+        <span class="num">{{ days_on_programme }}</span>
+        <span class="num-label">days</span>
+        <span class="stat-cap">On programme</span>
+    </div>
+</section>
+
+<div class="two-col">
+    <section class="panel">
+        <h2>Training split</h2>
+        {% if has_distribution %}
+        {{ distribution|safe }}
+        {% else %}
+        <p class="muted">No sessions logged yet.</p>
+        {% endif %}
+    </section>
+
+    <section class="panel">
+        <h2>Volume by muscle group</h2>
+        {% if has_muscle %}
+        {{ muscle_donut|safe }}
+        {% else %}
+        <p class="muted">No lifts logged yet.</p>
+        {% endif %}
+    </section>
+</div>
+
+{% if projections %}
+<section class="panel">
+    <h2>End-of-cycle projection</h2>
+    <div class="proj-grid">
+        {% for p in projections %}
+        <div class="proj-card">
+            <span class="proj-label">{{ p.label }}</span>
+            <span class="proj-now muted">Now {{ p.current }}</span>
+            <span class="proj-arrow">&rarr;</span>
+            <span class="proj-value">{{ p.projected }}</span>
+            <span class="proj-meta muted">{{ p.metric }}{% if p.gain > 0 %} &middot; +{{ p.gain }}{% endif %}</span>
+        </div>
+        {% endfor %}
+    </div>
+    <p class="chart-foot muted">Linear projection from your logged trend to the end of this 12-week cycle.</p>
+</section>
+{% endif %}
+
+{% if dots_chart or ratio_chart %}
+<section class="panel">
+    <h2>Relative strength</h2>
+    <div class="chart-grid">
+        {% if dots_chart %}<div class="chart-card"><h3>DOTS score</h3>{{ dots_chart|safe }}<p class="chart-foot muted">Strength relative to bodyweight (deadlift e1RM).</p></div>{% endif %}
+        {% if ratio_chart %}<div class="chart-card"><h3>Deadlift / bodyweight</h3>{{ ratio_chart|safe }}<p class="chart-foot muted">Bodyweight multiples on the deadlift.</p></div>{% endif %}
+    </div>
+</section>
+{% endif %}
+
+<section class="panel">
+    <h2>Recent session load</h2>
+    {% if has_volume %}
+    {{ volume_bars|safe }}
+    <p class="chart-foot muted">Estimated load = top weight x reps x sets per session.</p>
+    {% else %}
+    <p class="muted">No sessions logged yet.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Personal records</h2>
+    {% if not prs %}
+    <p class="muted">Your estimated 1-rep maxes will appear here once lifts are logged.</p>
+    {% else %}
+    <table class="pr-table">
+        <thead><tr><th>Exercise</th><th>Est. 1RM</th><th>Best set</th><th>Date</th></tr></thead>
+        <tbody>
+        {% for pr in prs %}
+        <tr>
+            <td>{{ pr.exercise }}</td>
+            <td class="num-cell">{{ pr.e1rm }} kg</td>
+            <td class="muted">{{ pr.detail }}</td>
+            <td class="muted">{{ pr.date }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+{% endblock %}

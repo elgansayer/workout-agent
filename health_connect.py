@@ -8,6 +8,12 @@ data.
 
 Expected JSON shape:
     {"date": "2026-06-17", "sleep_hours": 7.5, "weight_kg": 82.0, "resting_hr": 58}
+
+Smart scales such as the Eufy Life P3 also report body composition. If your
+export includes them, add `body_fat_pct` and `muscle_pct` and the agent will log
+them too:
+    {"date": "2026-06-17", "sleep_hours": 7.5, "weight_kg": 82.0,
+     "body_fat_pct": 14.2, "muscle_pct": 47.5, "resting_hr": 58}
 """
 
 from __future__ import annotations
@@ -41,3 +47,27 @@ def read_recovery_metrics(file_path: str | None) -> dict[str, Any] | None:
         return None
 
     return data
+
+
+def body_metrics_from_recovery(
+    recovery: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Pull body-composition fields from a recovery payload.
+
+    Returns weight, body fat, muscle and resting heart rate as a dict, or None
+    if no body-composition fields are present (so nothing is logged).
+    """
+    if not recovery:
+        return None
+    metrics = {
+        "weight_kg": recovery.get("weight_kg"),
+        "body_fat_pct": recovery.get("body_fat_pct"),
+        "muscle_pct": recovery.get("muscle_pct"),
+        "resting_hr": recovery.get("resting_hr"),
+    }
+    if all(
+        metrics[key] is None
+        for key in ("weight_kg", "body_fat_pct", "muscle_pct")
+    ):
+        return None
+    return metrics

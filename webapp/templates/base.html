@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Workout Agent{% block title %}{% endblock %}</title>
+    <meta name="theme-color" content="#0f1115">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Workout">
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/static/icon.svg">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <header class="topbar">
+        <a class="brand" href="/">Workout&nbsp;Agent</a>
+        <nav>
+            <a href="/" class="{{ 'on' if active == 'today' }}">Today</a>
+            <a href="/progress" class="{{ 'on' if active == 'progress' }}">Progress</a>
+            <a href="/stats" class="{{ 'on' if active == 'stats' }}">Stats</a>
+            <a href="/plan" class="{{ 'on' if active == 'plan' }}">Plan</a>
+            <a href="/history" class="{{ 'on' if active == 'history' }}">History</a>
+            <a href="/checkins" class="{{ 'on' if active == 'checkins' }}">Check-ins</a>
+        </nav>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="foot">Hybrid Powerbuilding, 12-week periodised cycle.</footer>
+    <script>
+        if ("serviceWorker" in navigator) {
+            window.addEventListener("load", () => {
+                navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
+            });
+        }
+    </script>
+</body>
+</html>
