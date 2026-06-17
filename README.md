@@ -422,10 +422,17 @@ the dashboard serves a live view of the same data on port `8770`.
 variable names (`${...}`) and you supply the values in the stack's
 **Environment variables** panel.
 
-### 1. (Optional, once) Get the Google Health refresh token on your laptop
+### 1. (Optional) Google Health body-composition sync
 
-Body-composition auto-sync needs a one-time browser consent that a headless VPS
-can't do, so do it once locally and copy the result:
+The easiest way is the **"Connect Google Health" button** on the dashboard's
+**Settings** page: after the stack is up, set `GOOGLE_HEALTH_CLIENT_ID`,
+`GOOGLE_HEALTH_CLIENT_SECRET` and `GOOGLE_HEALTH_REDIRECT_URI` (your dashboard's
+public `…/google-health/callback` URL, also registered on the OAuth client),
+open Settings, click Connect, approve once — the token is stored in the database
+and the agent uses it automatically. No laptop or manual token needed.
+
+Prefer the command line? Generate the refresh token once on your laptop instead
+and paste it in as `GOOGLE_HEALTH_REFRESH_TOKEN`:
 
 ```bash
 # on your laptop, in a checkout of this repo
@@ -434,8 +441,8 @@ export GOOGLE_HEALTH_CLIENT_SECRET=...    # OAuth client, redirect URI http://lo
 python google_health_auth.py              # approve in the browser; it prints the refresh token
 ```
 
-Copy the printed `GOOGLE_HEALTH_REFRESH_TOKEN`. (Skip this whole step if you
-don't use a smart scale — the agent still works without it.)
+Skip this whole step if you don't use a smart scale — the agent still works
+without it.
 
 ### 2. Deploy the stack in Portainer
 
@@ -452,7 +459,8 @@ don't use a smart scale — the agent still works without it.)
    | `HEVY_API_KEY` | optional | reference your last logged session |
    | `GOOGLE_HEALTH_CLIENT_ID` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
-   | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | from step 1 |
+   | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
+   | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `07:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
