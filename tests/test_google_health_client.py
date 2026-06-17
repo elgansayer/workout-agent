@@ -163,3 +163,27 @@ def test_sync_uses_stored_token_when_present(tmp_path, monkeypatch):
     google_health_client.sync_body_metrics("id", "secret", "env-token", db)
     assert seen["refresh_token"] == "stored-token"
     assert get_meta("google_health_refresh_token", db) == "next-token"
+
+
+def test_sync_uses_stored_token_without_env_token(tmp_path, monkeypatch):
+    # When the user linked Google Health from the web dashboard, only the stored
+    # token exists (no GOOGLE_HEALTH_REFRESH_TOKEN env var) and sync must work.
+    db = _db(tmp_path)
+    set_meta("google_health_refresh_token", "web-linked", db)
+
+    seen = {}
+
+    def fake_post(url, **kwargs):
+        seen["refresh_token"] = kwargs["data"]["refresh_token"]
+        return _FakeResponse({"access_token": "a", "refresh_token": "rotated"})
+
+    monkeypatch.setattr(google_health_client.requests, "post", fake_post)
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({"dataPoints": []}),
+    )
+
+    google_health_client.sync_body_metrics("id", "secret", None, db)
+    assert seen["refresh_token"] == "web-linked"
+    assert get_meta("google_health_refresh_token", db) == "rotated"

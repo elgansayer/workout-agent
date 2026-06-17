@@ -41,6 +41,10 @@ def client(tmp_path, monkeypatch):
     )
     save_progress(summary, db_path)
     monkeypatch.setenv("DATABASE_PATH", db_path)
+    # Isolate from any real .env (loaded by config.py via load_dotenv) so the
+    # dashboard starts in a known "Google Health not configured" state.
+    monkeypatch.delenv("GOOGLE_HEALTH_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_HEALTH_CLIENT_SECRET", raising=False)
 
     import webapp.app as app_module
 
@@ -126,3 +130,83 @@ def test_pwa_manifest_and_service_worker(client):
     manifest = client.get("/static/manifest.webmanifest")
     assert manifest.status_code == 200
     assert "Workout Agent" in manifest.text
+
+
+def test_settings_page_and_nav(client):
+    page = client.get("/settings")
+    assert page.status_code == 200
+    assert "Google Health" in page.text
+    # Unconfigured in tests: shows the setup hint, not a live connect button.
+    assert "GOOGLE_HEALTH_CLIENT_ID" in page.text
+    assert "/settings" in client.get("/").text
+
+
+def test_google_health_connect_unconfigured_redirects(client):
+    resp = client.get("/google-health/connect", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/settings?gh=unconfigured"
+
+
+def test_google_health_disconnect_clears_token(client):
+    from database import get_meta, set_meta
+
+    db_path = os.environ["DATABASE_PATH"]
+    set_meta("google_health_refresh_token", "tok", db_path)
+    resp = client.post("/google-health/disconnect", follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/settings?gh=disconnected"
+    assert not get_meta("google_health_refresh_token", db_path)
+
+
+def _configured_app(tmp_path, monkeypatch):
+    db_path = str(tmp_path / "web.db")
+    init_db(db_path)
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.setenv("GOOGLE_HEALTH_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_HEALTH_CLIENT_SECRET", "secret")
+    import webapp.app as app_module
+
+    importlib.reload(app_module)
+    return app_module, db_path
+
+
+def test_google_health_connect_redirects_to_google(tmp_path, monkeypatch):
+    app_module, _ = _configured_app(tmp_path, monkeypatch)
+    with TestClient(app_module.app) as c:
+        resp = c.get("/google-health/connect", follow_redirects=False)
+    assert resp.status_code == 303
+    location = resp.headers["location"]
+    assert location.startswith("https://accounts.google.com/o/oauth2/auth")
+    assert "client_id=cid" in location
+
+
+def test_google_health_callback_stores_refresh_token(tmp_path, monkeypatch):
+    from database import get_meta, set_meta
+
+    app_module, db_path = _configured_app(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        app_module, "exchange_code", lambda *a, **k: {"refresh_token": "rt-123"}
+    )
+    set_meta("google_health_oauth_state", "st-1", db_path)
+    with TestClient(app_module.app) as c:
+        resp = c.get(
+            "/google-health/callback?code=abc&state=st-1", follow_redirects=False
+        )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/settings?gh=connected"
+    assert get_meta("google_health_refresh_token", db_path) == "rt-123"
+
+
+def test_google_health_callback_rejects_bad_state(tmp_path, monkeypatch):
+    from database import get_meta, set_meta
+
+    app_module, db_path = _configured_app(tmp_path, monkeypatch)
+    set_meta("google_health_oauth_state", "real-state", db_path)
+    with TestClient(app_module.app) as c:
+        resp = c.get(
+            "/google-health/callback?code=abc&state=forged", follow_redirects=False
+        )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/settings?gh=error"
+    assert not get_meta("google_health_refresh_token", db_path)
+
