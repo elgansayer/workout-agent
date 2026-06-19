@@ -58,10 +58,18 @@
         </div>
         {% endfor %}
     </div>
-    <div id="peak-validation" class="muted" style="margin-top: 10px; padding: 10px; background: #1e2025; border-radius: 4px;">
+    
+    <h2 class="section-head ai-gradient-text">✨ Advanced Data Visualizations</h2>
+    <div class="chart-grid" style="margin-bottom: 20px;">
+        {{ block_phase_svg|safe }}
+        {{ recovery_grid_svg|safe }}
+        {{ vol_dist_svg|safe }}
+    </div>
+
+    <div id="peak-validation" class="xai-result" style="display: none;">
         <p>Loading AI projection validation...</p>
     </div>
-    <p class="chart-foot muted">Linear projection from your logged trend to the end of this 12-week cycle.</p>
+    <p class="chart-foot muted" style="margin-top: 15px;">Linear projection from your logged trend to the end of this 12-week cycle.</p>
 </section>
 <script>
     window.addEventListener('DOMContentLoaded', async () => {
@@ -69,13 +77,16 @@
             const response = await fetch('/api/project_peak');
             const data = await response.json();
             const valDiv = document.getElementById('peak-validation');
+            valDiv.style.display = 'block';
             if (data.Validation) {
-                valDiv.innerHTML = `<p><strong>Coach's Projection Analysis:</strong> ${data.Validation}</p>`;
+                valDiv.innerHTML = `<p><strong class="ai-gradient-text">✨ Coach's Analysis:</strong><br>${data.Validation}</p>`;
             } else {
                 valDiv.innerHTML = `<p>Failed to load validation.</p>`;
             }
         } catch(e) {
-            document.getElementById('peak-validation').innerHTML = `<p>Failed to load validation.</p>`;
+            const valDiv = document.getElementById('peak-validation');
+            valDiv.style.display = 'block';
+            valDiv.innerHTML = `<p>Failed to load validation.</p>`;
         }
     });
 </script>

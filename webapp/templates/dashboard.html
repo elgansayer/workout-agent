@@ -15,7 +15,7 @@
 
 {% if dashboard_insight %}
 <section class="panel insight-header">
-    <h2>Coach's Status</h2>
+    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
     <div class="insight-content">
         <p><strong>Fatigue:</strong> <span class="badge fatigue-{{ dashboard_insight.fatigue|lower }}">{{ dashboard_insight.fatigue }}</span></p>
         <p><strong>Wins & Stalls:</strong> {{ dashboard_insight.wins_stalls }}</p>
@@ -24,7 +24,7 @@
 </section>
 {% else %}
 <section class="panel insight-header">
-    <h2>Coach's Status</h2>
+    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
     <p class="muted">Insights are generating. Check back later.</p>
 </section>
 {% endif %}

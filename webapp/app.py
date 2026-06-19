@@ -58,6 +58,7 @@ import analytics
 import insights
 import lifestyle
 from webapp import charts
+from webapp import ai_widgets
 from hevy_parser import normalise_name
 from program import (
     BLOCKS,
@@ -493,6 +494,12 @@ def stats(request: Request):
         unit="kg",
     )
 
+    # Advanced AI Widgets
+    biometrics = get_body_metrics(db_path=DB_PATH)
+    block_phase_svg = ai_widgets.block_phase_tracker(volumes)
+    recovery_grid_svg = ai_widgets.systemic_recovery_correlation(biometrics, volumes)
+    vol_dist_svg = ai_widgets.volume_distribution(groups)
+
     # Strength score (DOTS) and strength-to-bodyweight ratio over time, built
     # from the deadlift e1RM against the bodyweight recorded at the time.
     body = get_body_metrics(db_path=DB_PATH)
@@ -550,6 +557,9 @@ def stats(request: Request):
             "ratio_chart": ratio_chart,
             "projections": projections,
             "prs": pr_rows,
+            "block_phase_svg": block_phase_svg,
+            "recovery_grid_svg": recovery_grid_svg,
+            "vol_dist_svg": vol_dist_svg,
         },
     )
 
