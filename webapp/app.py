@@ -16,6 +16,7 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 
 from __future__ import annotations
 
+import hashlib
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -93,6 +94,27 @@ if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
 
 _BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
+
+# Cache-busting for static assets. Cloudflare (and browsers) cache /static/*
+# aggressively, so a plain "/static/style.css" can serve a stale copy for hours
+# after a deploy. We append a short content hash (?v=...) so every change yields
+# a brand-new URL the cache has never seen, while unchanged files stay cached.
+_ASSET_VERSIONS: dict[str, str] = {}
+
+
+def static_url(filename: str) -> str:
+    version = _ASSET_VERSIONS.get(filename)
+    if version is None:
+        try:
+            data = (_BASE_DIR / "static" / filename).read_bytes()
+            version = hashlib.sha256(data).hexdigest()[:8]
+        except OSError:
+            version = "0"
+        _ASSET_VERSIONS[filename] = version
+    return f"/static/{filename}?v={version}"
+
+
+templates.env.globals["static_url"] = static_url
 
 
 @asynccontextmanager
