@@ -139,6 +139,8 @@ async def login_google(request: Request):
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
     redirect_uri = str(request.url_for("auth"))
+    if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
+        redirect_uri = redirect_uri.replace("http://", "https://")
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 @app.get("/logout")
