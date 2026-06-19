@@ -23,6 +23,18 @@ framework. It does one thing well: read your data, reason about it, message you.
 
 ---
 
+## AI-Native "Insight-First" Dashboard & Correlation Engine
+
+The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by **Gemini 1.5 Pro**:
+
+- **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
+- **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.
+- **Explainable UI (XAI) Overlays**: Trend charts have a "Why did this happen?" toggle. The frontend queries Gemini with the specific exercise history and block goal to give a clear causal explanation, stored in the database.
+- **Predictive Progressive Overload Visuals**: Projects your estimated 1RM to the end of the peaking phase and validates whether the forecast is physiologically aggressive or conservative based on recent "bad" sessions.
+- **RAG-Enabled Search (Log Investigator)**: A search bar in the dashboard to ask questions like *"Why did I fail my squats in week 3?"*. The backend vectorizes logs and retrieves relevant session context via streaming LLM generation.
+
+---
+
 ## The trainee & constraints (the agent's brief)
 
 The coach persona must always respect these facts about the athlete (Elgan):
@@ -345,13 +357,15 @@ or add HTTP basic auth at the proxy if you want to gate it.
    python main.py --preview
    ```
 
-5. **Schedule it for 7:00 AM daily (cron)**
-
+5. **Populate AI Insights & Test Locally**
+   
+   The easiest way to test everything locally is using Docker. Run the included start script, which spins up the database, the backend agent, and the frontend web app, and forces an initial data population run so you can see the AI insights immediately.
+   
    ```bash
-   crontab -e
-   # add (adjust the absolute paths):
-   0 7 * * * cd /path/to/workout_agent && /path/to/workout_agent/.venv/bin/python main.py >> agent.log 2>&1
+   ./start.sh
    ```
+   
+   Open `http://localhost:8088` (or the port defined in your `.env`) in your browser. The background schedulers inside the container will automatically take over running daily/weekly tasks.
 
 ---
 

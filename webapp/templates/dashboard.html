@@ -13,35 +13,21 @@
     <p class="quote">&ldquo;{{ quote }}&rdquo;</p>
 </section>
 
-<section class="stat-strip">
-    <div class="stat-card">
-        {{ cycle_ring|safe }}
-        <span class="stat-cap">Cycle</span>
+{% if dashboard_insight %}
+<section class="panel insight-header">
+    <h2>Coach's Status</h2>
+    <div class="insight-content">
+        <p><strong>Fatigue:</strong> <span class="badge fatigue-{{ dashboard_insight.fatigue|lower }}">{{ dashboard_insight.fatigue }}</span></p>
+        <p><strong>Wins & Stalls:</strong> {{ dashboard_insight.wins_stalls }}</p>
+        <p><strong>Action for Today:</strong> {{ dashboard_insight.advice }}</p>
     </div>
-    <div class="stat-card">
-        {{ block_ring|safe }}
-        <span class="stat-cap">Block</span>
-    </div>
-    <div class="stat-card big-num">
-        <span class="num">{{ streak }}</span>
-        <span class="num-label">day streak</span>
-        <span class="stat-cap">Consistency</span>
-    </div>
-    {% if weight %}
-    <div class="stat-card big-num">
-        <span class="num">{{ weight }}</span>
-        {{ weight_spark|safe }}
-        <span class="stat-cap">Bodyweight</span>
-    </div>
-    {% endif %}
-    {% if body_fat %}
-    <div class="stat-card big-num">
-        <span class="num">{{ body_fat }}</span>
-        {{ fat_spark|safe }}
-        <span class="stat-cap">Body fat</span>
-    </div>
-    {% endif %}
 </section>
+{% else %}
+<section class="panel insight-header">
+    <h2>Coach's Status</h2>
+    <p class="muted">Insights are generating. Check back later.</p>
+</section>
+{% endif %}
 
 <section class="today">
     <h2>{{ weekday }}: {{ focus }}</h2>

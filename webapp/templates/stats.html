@@ -58,8 +58,27 @@
         </div>
         {% endfor %}
     </div>
+    <div id="peak-validation" class="muted" style="margin-top: 10px; padding: 10px; background: #1e2025; border-radius: 4px;">
+        <p>Loading AI projection validation...</p>
+    </div>
     <p class="chart-foot muted">Linear projection from your logged trend to the end of this 12-week cycle.</p>
 </section>
+<script>
+    window.addEventListener('DOMContentLoaded', async () => {
+        try {
+            const response = await fetch('/api/project_peak');
+            const data = await response.json();
+            const valDiv = document.getElementById('peak-validation');
+            if (data.Validation) {
+                valDiv.innerHTML = `<p><strong>Coach's Projection Analysis:</strong> ${data.Validation}</p>`;
+            } else {
+                valDiv.innerHTML = `<p>Failed to load validation.</p>`;
+            }
+        } catch(e) {
+            document.getElementById('peak-validation').innerHTML = `<p>Failed to load validation.</p>`;
+        }
+    });
+</script>
 {% endif %}
 
 {% if dots_chart or ratio_chart %}

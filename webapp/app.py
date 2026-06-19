@@ -42,10 +42,18 @@ from database import (
     get_progress_history,
     get_recent_bests,
     get_session_volumes,
+    get_dashboard_insight,
+    get_reasoning_log,
+    save_reasoning_log,
     init_db,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
+import google.generativeai as genai
+from config import Config
+import json
+from fastapi import Query
+from fastapi.responses import StreamingResponse
 import analytics
 import insights
 import lifestyle
@@ -386,6 +394,7 @@ def _dashboard_context(today: date | None = None) -> dict:
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH)
     }
 
 
@@ -654,6 +663,75 @@ def checkins(request: Request):
         "checkins.html",
         {"active": "checkins", "checkins": get_checkins(db_path=DB_PATH)},
     )
+
+@app.get("/api/xai_reasoning/{context_id}")
+def xai_reasoning(context_id: str):
+    # context_id is expected to be {date}_{exercise_name}
+    existing = get_reasoning_log(context_id, db_path=DB_PATH)
+    if existing:
+        return {"reasoning": existing}
+    
+    parts = context_id.split("_", 1)
+    if len(parts) != 2:
+        return {"reasoning": "Invalid context ID"}
+    
+    when, ex_name = parts
+    
+    config = Config.load()
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
+    
+    history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
+    
+    prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
+    response = model.generate_content(prompt)
+    reasoning = (response.text or "Could not determine reasoning.").strip()
+    
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
+    return {"reasoning": reasoning}
+
+@app.get("/api/project_peak")
+def project_peak():
+    config = Config.load()
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
+    
+    series = get_progress_history(db_path=DB_PATH)
+    dl_entries = series.get("Deadlift", [])
+    pu_entries = series.get("Pull-ups", [])
+    
+    prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
+    try:
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return json.loads(text.strip())
+    except:
+        return {"error": "Failed to project peak."}
+
+@app.get("/api/rag_search")
+def rag_search(q: str = Query(...)):
+    config = Config.load()
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
+    
+    logs = get_daily_logs(limit=30, db_path=DB_PATH)
+    history = get_progress_history(db_path=DB_PATH)
+    
+    context = json.dumps({"logs": logs, "history": history})
+    
+    prompt = f"You are a Log Investigator. Based on the following SQLite log context, answer the user's query: '{q}'. Reference specific dates or sessions. Context: {context[:30000]}"
+    
+    def generate():
+        response = model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
+
+    return StreamingResponse(generate(), media_type="text/plain")
 
 
 def _gh_redirect_uri(request: Request) -> str:

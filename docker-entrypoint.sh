@@ -27,6 +27,8 @@ case "$MODE" in
         python main.py --preview
         ;;
     schedule)
+        python insight_scheduler.py &
+
         # RUN_AT may list several HH:MM times (comma or space separated),
         # e.g. "00:00,05:00" to run at midnight and 5am.
         times=$(echo "$RUN_AT" | tr ',' ' ')

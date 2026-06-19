@@ -121,6 +121,34 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS dashboard_insights (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                date TEXT NOT NULL,
+                insight_json TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deep_correlations (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                date TEXT NOT NULL,
+                insight_markdown TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reasoning_logs (
+                context_id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                exercise_name TEXT NOT NULL,
+                reasoning TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
             INSERT OR IGNORE INTO programme_state (id, current_day, split_name)
             VALUES (1, 1, ?)
             """,
@@ -556,4 +584,67 @@ def get_body_metrics(
         for when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
     return readings[-limit:]
+
+
+def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    """Save the daily dashboard insight JSON."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO dashboard_insights (id, date, insight_json)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                date = excluded.date,
+                insight_json = excluded.insight_json
+            """,
+            (date.today().isoformat(), insight_json),
+        )
+
+def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
+    """Get the latest dashboard insight JSON as a dict."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT insight_json FROM dashboard_insights WHERE id = 1").fetchone()
+    if row:
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError:
+            pass
+    return None
+
+def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    """Save an AI reasoning log for an exercise change."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO reasoning_logs (context_id, date, exercise_name, reasoning)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(context_id) DO UPDATE SET
+                reasoning = excluded.reasoning
+            """,
+            (context_id, date.today().isoformat(), exercise_name, reasoning),
+        )
+
+def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
+    """Get the reasoning log by context_id."""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)).fetchone()
+    return row[0] if row else None
+
+def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO deep_correlations (id, date, insight_markdown)
+            VALUES (1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                date = excluded.date,
+                insight_markdown = excluded.insight_markdown
+            """,
+            (date.today().isoformat(), insight_markdown),
+        )
+
+def get_deep_correlation(db_path: str = DEFAULT_DB_PATH) -> str | None:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT insight_markdown FROM deep_correlations WHERE id = 1").fetchone()
+    return row[0] if row else None
 

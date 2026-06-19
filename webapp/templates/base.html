@@ -24,6 +24,10 @@
             <a href="/history" class="{{ 'on' if active == 'history' }}">History</a>
             <a href="/checkins" class="{{ 'on' if active == 'checkins' }}">Check-ins</a>
             <a href="/settings" class="{{ 'on' if active == 'settings' }}">Settings</a>
+            <div class="search-bar">
+                <input type="text" id="rag-input" placeholder="Ask Log Investigator..." />
+                <button onclick="ragSearch()">Search</button>
+            </div>
             {% if request.session.get("user") %}
             <a href="/logout">Logout</a>
             {% endif %}
@@ -39,6 +43,26 @@
                 navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
             });
         }
+        
+        async function ragSearch() {
+            const query = document.getElementById("rag-input").value;
+            if (!query) return;
+            const resContainer = document.getElementById("rag-results");
+            resContainer.style.display = "block";
+            resContainer.innerText = "Investigating...";
+            
+            const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`);
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            resContainer.innerText = "";
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                resContainer.innerText += decoder.decode(value, {stream: true});
+            }
+        }
     </script>
+    <div id="rag-results" class="modal" style="display:none; position:fixed; bottom:20px; right:20px; width:400px; max-height:400px; overflow-y:auto; background:#1e2025; padding:15px; border-radius:8px; z-index:9999; border:1px solid #333;"></div>
 </body>
 </html>
