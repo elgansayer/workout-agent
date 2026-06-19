@@ -135,14 +135,20 @@ def _latest_value(
 
 
 def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
-    """Read the latest weight (kg) and body fat (%) from Google Health, or None."""
+    """Read the latest weight (kg), body fat (%), resting hr, and hrv from Google Health, or None."""
     weight_grams = _latest_value(access_token, "weight", "weight", "weightGrams")
     fat = _latest_value(access_token, "body-fat", "bodyFat", "percentage")
+    resting_hr = _latest_value(access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute")
+    hrv = _latest_value(access_token, "heart-rate-variability", "heartRateVariability", "rmssd")
     metrics: dict[str, Any] = {}
     if weight_grams is not None:
         metrics["weight_kg"] = round(weight_grams / 1000.0, 2)
     if fat is not None:
         metrics["body_fat_pct"] = fat
+    if resting_hr is not None:
+        metrics["resting_hr"] = resting_hr
+    if hrv is not None:
+        metrics["hrv"] = hrv
     return metrics or None
 
 

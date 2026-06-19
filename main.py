@@ -22,6 +22,7 @@ from database import (
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
+    get_daily_logs,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -243,6 +244,13 @@ def run(preview: bool = False) -> int:
     )
     logger.info("%s", review.headline)
 
+    logs = get_daily_logs(limit=5, db_path=config.database_path)
+    last_plan = None
+    for log in logs:
+        if log.get("day") is not None and log.get("plan"):
+            last_plan = log["plan"]
+            break
+
     plan = generate_next_workout(
         api_key=config.gemini_api_key,
         model_name=config.gemini_model,
@@ -253,6 +261,7 @@ def run(preview: bool = False) -> int:
         recovery=recovery,
         history=history,
         insights=review,
+        last_plan=last_plan,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)

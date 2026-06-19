@@ -114,7 +114,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 weight_kg REAL,
                 body_fat_pct REAL,
                 muscle_pct REAL,
-                resting_hr INTEGER
+                resting_hr INTEGER,
+                hrv REAL
             )
             """
         )
@@ -132,6 +133,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """,
             (date.today().isoformat(),),
         )
+        
+        # Migration: Add hrv column to body_metrics if it doesn't exist
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        columns = [col[1] for col in cursor.fetchall()]
+        if "hrv" not in columns:
+            cursor.execute("ALTER TABLE body_metrics ADD COLUMN hrv REAL")
 
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
@@ -511,8 +518,8 @@ def save_body_metrics(
         conn.execute(
             """
             INSERT INTO body_metrics
-                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr)
-            VALUES (?, ?, ?, ?, ?)
+                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 when,
@@ -520,6 +527,7 @@ def save_body_metrics(
                 metrics.get("body_fat_pct"),
                 metrics.get("muscle_pct"),
                 metrics.get("resting_hr"),
+                metrics.get("hrv"),
             ),
         )
 
@@ -531,7 +539,7 @@ def get_body_metrics(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr
+            SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
             FROM body_metrics
             ORDER BY date ASC, id ASC
             """
@@ -543,8 +551,9 @@ def get_body_metrics(
             "body_fat_pct": body_fat,
             "muscle_pct": muscle,
             "resting_hr": resting_hr,
+            "hrv": hrv,
         }
-        for when, weight, body_fat, muscle, resting_hr in rows
+        for when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
     return readings[-limit:]
 

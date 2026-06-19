@@ -37,6 +37,7 @@ def _build_prompt(
     recovery: dict[str, Any] | None,
     history: dict[str, dict[str, Any]] | None,
     insights: TrainingInsights | None = None,
+    last_plan: str | None = None,
 ) -> str:
     baseline = format_day(day, block)
     focus = day_focus(day)
@@ -47,6 +48,7 @@ def _build_prompt(
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
     history_text = _format_history(history)
     insights_text = insights.as_text() if insights else "Not enough history yet."
+    last_plan_text = last_plan if last_plan else "None available."
 
     return f"""You are an elite powerbuilding and stage-prep coach for Elgan.
 
@@ -67,13 +69,16 @@ Coaching rules you must always respect:
 The baseline plan for today (already block-adjusted) is:
 {baseline}
 
-Compact summary of his most recent logged Hevy session:
+The PLANNED routine you generated for the last session:
+{last_plan_text}
+
+Compact summary of his most recent logged Hevy session (EXECUTED routine):
 {workout_text}
 
 Per-exercise bests on record (most recent logged top set for each lift):
 {history_text}
 
-Recovery metrics from Health Connect (sleep, bodyweight, resting heart rate):
+Recovery metrics from Health Connect/Fitbit (sleep, bodyweight, resting heart rate, hrv):
 {recovery_json}
 
 Self-review of how the coaching is actually working (trends across recent
@@ -82,10 +87,18 @@ it:
 {insights_text}
 
 Your task:
-- Keep the main lifts (deadlift, pull-up) in this block's prescribed scheme.
+Compare the EXECUTED routine against the PLANNED routine and identify any manual adjustments the user made. Apply the following rules when generating the next workout:
+- Exercise Swaps: If an exercise was substituted, assume this was intentional (due to equipment availability, injury, or preference). Update the master template to use this new exercise for the remainder of the current block. Do not revert to the original movement.
+- Volume and RPE Overrides: If the user completed fewer sets or dropped the load significantly below the plan, treat this as a manual auto-regulation for fatigue. Maintain this lower volume baseline for the next session before attempting progressive overload again.
+- Exercise Reordering: If the order of movements was changed, respect the new sequence for future routines.
+- Added Exercises: If the user added new accessory work, append it to the routine template for this specific training day.
+- Recovery Metrics: If recovery metrics (e.g., HRV or resting HR) drop below baseline average, auto-suggest a lighter variation or force a deload day.
+
+Other rules:
+- Keep the main lifts (deadlift, pull-up) in this block's prescribed scheme unless overriden or recovery is poor.
 - Apply progressive overload from the Hevy data: where the last session hit the
   top of a rep range with good form, add a rep or a small load increase; where
-  recovery looks poor (short sleep or elevated resting heart rate), trim volume
+  recovery looks poor (short sleep, elevated resting heart rate, dropped HRV), trim volume
   slightly.
 - Act on the self-review: for any lift flagged as stalling or regressing, apply
   its suggested intervention (deload, change rep range, or swap the movement)
@@ -114,13 +127,14 @@ def generate_next_workout(
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
+    last_plan: str | None = None,
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error."""
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
         prompt = _build_prompt(
-            day, week, block, workout_summary, recovery, history, insights
+            day, week, block, workout_summary, recovery, history, insights, last_plan
         )
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
