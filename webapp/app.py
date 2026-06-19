@@ -23,9 +23,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from authlib.integrations.starlette_client import OAuth
 
 from database import (
     get_body_metrics,
@@ -73,6 +76,21 @@ GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
 _GH_TOKEN_KEY = "google_health_refresh_token"
 _GH_STATE_KEY = "google_health_oauth_state"
 
+WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
+WEB_GOOGLE_CLIENT_SECRET = os.environ.get("WEB_GOOGLE_CLIENT_SECRET", "").strip()
+WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
+ALLOWED_EMAILS = [e.strip() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()]
+
+oauth = OAuth()
+if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
+    oauth.register(
+        name='google',
+        client_id=WEB_GOOGLE_CLIENT_ID,
+        client_secret=WEB_GOOGLE_CLIENT_SECRET,
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={'scope': 'openid email profile'}
+    )
+
 _BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
@@ -86,6 +104,67 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+
+if WEB_AUTH_SECRET:
+    class AuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            path = request.url.path
+            # Allow static files and auth endpoints
+            if path.startswith("/static") or path in [
+                "/login",
+                "/login/google",
+                "/logout",
+                "/auth",
+                "/google-health/callback",
+                "/favicon.ico",
+                "/sw.js",
+            ]:
+                return await call_next(request)
+            if not request.session.get("user"):
+                return RedirectResponse("/login")
+            return await call_next(request)
+    app.add_middleware(AuthMiddleware)
+    app.add_middleware(SessionMiddleware, secret_key=WEB_AUTH_SECRET)
+
+@app.get("/login")
+async def login(request: Request):
+    if not WEB_GOOGLE_CLIENT_ID:
+        return HTMLResponse("Web auth is not configured.", status_code=500)
+    if request.session.get("user"):
+        return RedirectResponse("/")
+    return templates.TemplateResponse(request, "login.html")
+
+@app.get("/login/google")
+async def login_google(request: Request):
+    if not WEB_GOOGLE_CLIENT_ID:
+        return HTMLResponse("Web auth is not configured.", status_code=500)
+    redirect_uri = str(request.url_for("auth"))
+    return await oauth.google.authorize_redirect(request, redirect_uri)
+
+@app.get("/logout")
+async def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login")
+
+@app.get("/auth")
+async def auth(request: Request):
+    print("DEBUG AUTH: session =", dict(request.session))
+    print("DEBUG AUTH: query_params =", dict(request.query_params))
+    if not WEB_GOOGLE_CLIENT_ID:
+        return RedirectResponse("/")
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        print("DEBUG AUTH ERROR:", type(e), str(e))
+        raise e
+    user = token.get("userinfo")
+    if user:
+        email = user.get("email", "")
+        if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
+            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
+        request.session["user"] = email
+    return RedirectResponse("/")
+
 
 
 # Automated hype lines. One is shown per day, chosen deterministically from the

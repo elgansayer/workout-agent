@@ -145,5 +145,7 @@ class Config:
             google_health_client_id=google_health_client_id,
             google_health_client_secret=google_health_client_secret,
             google_health_refresh_token=google_health_refresh_token,
+            self_review_enabled=self_review_enabled,
+            self_review_weekday=self_review_weekday,
         )
 

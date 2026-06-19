@@ -24,6 +24,9 @@
             <a href="/history" class="{{ 'on' if active == 'history' }}">History</a>
             <a href="/checkins" class="{{ 'on' if active == 'checkins' }}">Check-ins</a>
             <a href="/settings" class="{{ 'on' if active == 'settings' }}">Settings</a>
+            {% if request.session.get("user") %}
+            <a href="/logout">Logout</a>
+            {% endif %}
         </nav>
     </header>
     <main>
