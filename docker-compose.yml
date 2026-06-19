@@ -33,7 +33,7 @@ services:
       DATABASE_PATH: /data/workout_agent.db
       TZ: "Europe/London"
     ports:
-      - "8000:8000"
+      - "${WEB_PORT:-8088}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
       - agent-data:/data
