@@ -48,21 +48,25 @@
             const query = document.getElementById("rag-input").value;
             if (!query) return;
             const resContainer = document.getElementById("rag-results");
+            const resContent = document.getElementById("rag-content");
             resContainer.style.display = "block";
-            resContainer.innerText = "Investigating...";
+            resContent.innerText = "Investigating...";
             
             const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`);
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-            resContainer.innerText = "";
+            resContent.innerText = "";
             
             while (true) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                resContainer.innerText += decoder.decode(value, {stream: true});
+                resContent.innerText += decoder.decode(value, {stream: true});
             }
         }
     </script>
-    <div id="rag-results" class="modal" style="display:none; position:fixed; bottom:20px; right:20px; width:400px; max-height:400px; overflow-y:auto; background:#1e2025; padding:15px; border-radius:8px; z-index:9999; border:1px solid #333;"></div>
+    <div id="rag-results" class="modal-glass ai-glass" style="display:none;">
+        <h4 class="ai-gradient-text">✨ Log Investigator</h4>
+        <div id="rag-content"></div>
+    </div>
 </body>
 </html>

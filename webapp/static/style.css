@@ -357,6 +357,173 @@ h1 { font-size: 1.6rem; margin: 0.2rem 0 1rem; }
 .banner.warn { border-color: var(--warn); color: var(--warn); }
 .card code { background: var(--chip); padding: 0.05rem 0.35rem; border-radius: 6px; font-size: 0.82em; }
 
+/* ---- Premium AI Styles ---- */
+.ai-glass {
+    background: rgba(30, 35, 44, 0.6);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+.ai-gradient-text {
+    background: linear-gradient(90deg, var(--accent-2), #a855f7, var(--accent));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    font-weight: 700;
+}
+
+.ai-btn {
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.1), rgba(56, 189, 248, 0.1));
+    border: 1px solid rgba(74, 222, 128, 0.2);
+    color: var(--text);
+    padding: 0.35rem 0.8rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.ai-btn:hover {
+    background: linear-gradient(135deg, rgba(74, 222, 128, 0.2), rgba(56, 189, 248, 0.2));
+    border-color: rgba(74, 222, 128, 0.4);
+    box-shadow: 0 0 10px rgba(74, 222, 128, 0.15);
+    transform: translateY(-1px);
+}
+
+.ai-btn::before {
+    content: "✨";
+}
+
+.xai-result {
+    margin-top: 12px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    background: rgba(15, 17, 21, 0.8);
+    border-left: 3px solid var(--accent-2);
+    color: #cbd5e1;
+    font-size: 0.85rem;
+    line-height: 1.6;
+    animation: fadeIn 0.4s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(-5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Search Bar (Log Investigator) */
+.search-bar {
+    display: flex;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 0.2rem 0.2rem 0.2rem 1rem;
+    transition: all 0.3s ease;
+}
+
+.search-bar:focus-within {
+    border-color: var(--accent-2);
+    box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.search-bar input {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    outline: none;
+    font-size: 0.85rem;
+    width: 220px;
+}
+
+.search-bar input::placeholder {
+    color: var(--muted);
+}
+
+.search-bar button {
+    background: var(--accent-2);
+    color: #0f1115;
+    border: none;
+    border-radius: 999px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.search-bar button:hover {
+    filter: brightness(1.1);
+    transform: scale(1.03);
+}
+
+.modal-glass {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    width: 420px;
+    max-height: 500px;
+    overflow-y: auto;
+    border-radius: 16px;
+    padding: 20px;
+    z-index: 9999;
+    animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    font-size: 0.9rem;
+    line-height: 1.6;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(20px); scale: 0.95; }
+    to { opacity: 1; transform: translateY(0); scale: 1; }
+}
+
+.modal-glass h4 {
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 1rem;
+}
+
+/* Insight Header Premium */
+.insight-header {
+    background: linear-gradient(145deg, rgba(30, 35, 44, 0.8), rgba(23, 26, 33, 0.8));
+    border: 1px solid rgba(74, 222, 128, 0.15);
+    border-top: 2px solid var(--accent);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    position: relative;
+    overflow: hidden;
+}
+
+.insight-header::before {
+    content: '';
+    position: absolute;
+    top: -50px;
+    right: -50px;
+    width: 150px;
+    height: 150px;
+    background: radial-gradient(circle, rgba(74, 222, 128, 0.15) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+.insight-content p {
+    margin: 0.6rem 0;
+    font-size: 0.95rem;
+}
+.insight-content strong {
+    color: #e2e8f0;
+    margin-right: 0.4rem;
+}
+
 @media (max-width: 620px) {
     .two-col { grid-template-columns: 1fr; }
 }

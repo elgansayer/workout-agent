@@ -26,9 +26,9 @@
         <div class="chart-card-head">
             <h3>{{ chart.name }}</h3>
             {% if chart.best_e1rm %}<span class="badge">e1RM {{ chart.best_e1rm }} kg</span>{% endif %}
-            <button class="xai-toggle badge" style="cursor:pointer;" onclick="fetchXAI('{{ chart.name|urlencode }}', this)">Why did this happen?</button>
+            <button class="ai-btn" onclick="fetchXAI('{{ chart.name|urlencode }}', this)">Why did this happen?</button>
         </div>
-        <div id="xai-{{ chart.name|urlencode }}" class="xai-result" style="display:none; margin-bottom: 10px; padding: 10px; background: #2c2f33; border-radius: 4px;"></div>
+        <div id="xai-{{ chart.name|urlencode }}" class="xai-result" style="display:none;"></div>
         {{ chart.svg|safe }}
         <p class="chart-foot muted">{{ chart.sessions }} logged session(s)</p>
     </section>
