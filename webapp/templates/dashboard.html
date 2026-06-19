@@ -2,7 +2,7 @@
 {% block title %} - Today{% endblock %}
 {% block content %}
 <section class="hero">
-    <div class="cycle">Week {{ week }} of {{ cycle_weeks }} &middot; {{ weekday }}</div>
+    <div class="cycle">Week {{ week }} of {{ cycle_weeks }} | {{ weekday }}</div>
     <h1>Block {{ block.number }}: {{ block.name }}</h1>
     <p class="muted">{{ block.focus }}</p>
     <div class="schemes">
@@ -29,60 +29,62 @@
 </section>
 {% endif %}
 
-<section class="today">
-    <h2>{{ weekday }}: {{ focus }}</h2>
-    {% if is_rest_day %}
-    <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
-        protein, light movement only.</p>
-    {% else %}
-    <div class="exercise-list">
-        {% for row in rows %}
-        <article class="exercise">
-            <div class="ex-head">
-                <span class="ex-name">{{ row.name }}</span>
-                <span class="ex-planned">{{ row.planned }}</span>
-            </div>
-            {% if row.note %}<p class="ex-note">{{ row.note }}</p>{% endif %}
-            <div class="ex-meta">
-                <span class="last">Last: {{ row.last }}</span>
-                <span class="nudge">{{ row.nudge }}</span>
-            </div>
-        </article>
-        {% endfor %}
-    </div>
-    {% endif %}
-</section>
-
-<section class="lifestyle">
-    <h2>Today's lifestyle</h2>
-    <ul class="pillars">
-        {% for line in lifestyle %}
-        <li>{{ line }}</li>
-        {% endfor %}
-    </ul>
-</section>
-
-<section class="panel">
-    <h2>Coaching self-review</h2>
-    <p class="muted">{{ review_headline }}</p>
-    {% if review_lifts %}
-    <div class="review-list">
-        {% for lift in review_lifts %}
-        <div class="review-row trend-{{ lift.trend }}">
-            <span class="review-name">{{ lift.name }}</span>
-            <span class="review-trend">{{ lift.trend }}</span>
-            <span class="review-detail">{{ lift.as_line() }}</span>
+<div class="dashboard-grid">
+    <section class="today">
+        <h2>{{ weekday }}: {{ focus }}</h2>
+        {% if is_rest_day %}
+        <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
+            protein, light movement only.</p>
+        {% else %}
+        <div class="exercise-list">
+            {% for row in rows %}
+            <article class="exercise">
+                <div class="ex-head">
+                    <span class="ex-name">{{ row.name }}</span>
+                    <span class="ex-planned">{{ row.planned }}</span>
+                </div>
+                {% if row.note %}<p class="ex-note">{{ row.note }}</p>{% endif %}
+                <div class="ex-meta">
+                    <span class="last">Last: {{ row.last }}</span>
+                    <span class="nudge">{{ row.nudge }}</span>
+                </div>
+            </article>
+            {% endfor %}
         </div>
-        {% endfor %}
-    </div>
-    {% else %}
-    <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
-    {% endif %}
-    <p class="muted review-recovery">{{ review_recovery }}</p>
-</section>
+        {% endif %}
+    </section>
 
-<section class="panel">
-    <h2>Consistency</h2>
-    <div class="cal-scroll">{{ calendar|safe }}</div>
-</section>
+    <section class="lifestyle panel">
+        <h2>Today's lifestyle</h2>
+        <ul class="pillars">
+            {% for line in lifestyle %}
+            <li>{{ line }}</li>
+            {% endfor %}
+        </ul>
+    </section>
+
+    <section class="panel">
+        <h2>Coaching self-review</h2>
+        <p class="muted">{{ review_headline }}</p>
+        {% if review_lifts %}
+        <div class="review-list">
+            {% for lift in review_lifts %}
+            <div class="review-row trend-{{ lift.trend }}">
+                <span class="review-name">{{ lift.name }}</span>
+                <span class="review-trend">{{ lift.trend }}</span>
+                <span class="review-detail">{{ lift.as_line() }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
+        {% endif %}
+        <p class="muted review-recovery">{{ review_recovery }}</p>
+    </section>
+
+    <section class="panel" style="grid-column: 1 / -1;">
+        <h2>Consistency</h2>
+        <div class="cal-scroll">{{ calendar|safe }}</div>
+    </section>
+</div>
 {% endblock %}

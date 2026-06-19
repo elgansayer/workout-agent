@@ -668,10 +668,26 @@ def history(request: Request):
 
 @app.get("/checkins")
 def checkins(request: Request):
+    checkins_list = get_checkins(db_path=DB_PATH)
+    total_sessions = len(get_session_volumes(db_path=DB_PATH))
+    sessions_since = total_sessions % 24
+    sessions_left = 24 - sessions_since
+    progress_pct = (sessions_since / 24) * 100
+    
+    loading_svg = f'''
+    <svg class="svg-chart" width="100%" height="24" style="background: var(--panel-2); border-radius: 12px; margin-top: 15px;">
+        <rect width="{progress_pct}%" height="100%" fill="var(--accent)" rx="12"></rect>
+        <text x="50%" y="16" fill="#000" font-size="12" font-weight="600" text-anchor="middle">{sessions_left} sessions remaining until next analysis</text>
+    </svg>
+    '''
     return templates.TemplateResponse(
         request,
         "checkins.html",
-        {"active": "checkins", "checkins": get_checkins(db_path=DB_PATH)},
+        {
+            "active": "checkins", 
+            "checkins": checkins_list,
+            "loading_svg": loading_svg
+        },
     )
 
 @app.get("/api/xai_reasoning/{context_id}")

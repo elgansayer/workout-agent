@@ -1,8 +1,8 @@
 {% extends "base.html" %}
-{% block title %} - Plan{% endblock %}
+{% block title %} | Plan{% endblock %}
 {% block content %}
 <h1>The plan</h1>
-<p class="muted">{{ split_name }} &middot; currently week {{ week }} of {{ cycle_weeks }}.</p>
+<p class="muted">{{ split_name }} | currently week {{ week }} of {{ cycle_weeks }}.</p>
 
 <section class="panel">
     <h2>Periodisation</h2>
@@ -11,7 +11,7 @@
         <article class="block-card {{ 'current' if b.is_current }}">
             {% if b.is_current %}<span class="badge">Current</span>{% endif %}
             <h3>Block {{ b.number }}: {{ b.name }}</h3>
-            <p class="muted">Weeks {{ b.weeks }} &middot; {{ b.focus }}</p>
+            <p class="muted">Weeks {{ b.weeks }} | {{ b.focus }}</p>
             <ul class="block-schemes">
                 <li><span>Deadlift</span><strong>{{ b.deadlift }}</strong></li>
                 <li><span>Pull-ups</span><strong>{{ b.pullups }}</strong></li>

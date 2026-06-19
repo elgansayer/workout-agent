@@ -24,7 +24,7 @@
     </div>
 </section>
 
-<div class="two-col">
+<div class="flex-row">
     <section class="panel">
         <h2>Training split</h2>
         {% if has_distribution %}
@@ -52,14 +52,14 @@
         <div class="proj-card">
             <span class="proj-label">{{ p.label }}</span>
             <span class="proj-now muted">Now {{ p.current }}</span>
-            <span class="proj-arrow">&rarr;</span>
+            <span class="proj-arrow">to</span>
             <span class="proj-value">{{ p.projected }}</span>
-            <span class="proj-meta muted">{{ p.metric }}{% if p.gain > 0 %} &middot; +{{ p.gain }}{% endif %}</span>
+            <span class="proj-meta muted">{{ p.metric }}{% if p.gain > 0 %} | +{{ p.gain }}{% endif %}</span>
         </div>
         {% endfor %}
     </div>
     
-    <h2 class="section-head ai-gradient-text">✨ Advanced Data Visualizations</h2>
+    <h2 class="section-head ai-gradient-text">✨ Advanced Data Visualisations</h2>
     <div class="chart-grid" style="margin-bottom: 20px;">
         {{ block_phase_svg|safe }}
         {{ recovery_grid_svg|safe }}
