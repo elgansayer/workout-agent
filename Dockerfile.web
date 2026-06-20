@@ -16,10 +16,7 @@ COPY requirements.txt requirements-web.txt ./
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-web.txt
 
 COPY . .
-RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data \
-    && chown -R appuser:appuser /data
-USER appuser
+RUN mkdir -p /data
 
 EXPOSE 8000
 CMD ["uvicorn", "webapp.app:app", "--host", "0.0.0.0", "--port", "8000", "--forwarded-allow-ips", "*"]

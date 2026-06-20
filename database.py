@@ -10,6 +10,7 @@ import contextlib
 import json
 import sqlite3
 from datetime import date
+from pathlib import Path
 from typing import Any, Iterator, TYPE_CHECKING
 
 from program import SPLIT_NAME, TOTAL_DAYS
@@ -21,7 +22,8 @@ DEFAULT_DB_PATH = "workout_agent.db"
 
 
 @contextlib.contextmanager
-def _connect(db_path: str) -> Iterator[sqlite3.Connection]:
+def _connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     try:
         yield conn

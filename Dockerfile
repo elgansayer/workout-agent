@@ -18,9 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 RUN chmod +x /app/docker-entrypoint.sh \
-    && useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data \
-    && chown -R appuser:appuser /data
-USER appuser
+    && mkdir -p /data
 
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
