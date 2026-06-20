@@ -33,6 +33,11 @@ case "$MODE" in
         # e.g. "00:00,05:00" to run at midnight and 5am.
         times=$(echo "$RUN_AT" | tr ',' ' ')
         echo "[agent] scheduled for ${RUN_AT} daily (TZ=${TZ:-system default})"
+        
+        # Run immediately on boot
+        echo "[agent] running initial boot cycle..."
+        run_once
+
         while true; do
             now=$(date +%s)
             next=""

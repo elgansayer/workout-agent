@@ -189,14 +189,15 @@ def advance_day(db_path: str = DEFAULT_DB_PATH) -> int:
     return nxt
 
 
-def save_workout(payload: Any, db_path: str = DEFAULT_DB_PATH) -> None:
+def save_workout(payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None) -> None:
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
         return
+    today = when or date.today().isoformat()
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
-            (date.today().isoformat(), json.dumps(payload)),
+            (today, json.dumps(payload)),
         )
 
 
@@ -206,7 +207,7 @@ def save_progress(
     """Persist the per-exercise top sets from a parsed workout summary."""
     if summary is None:
         return
-    today = date.today().isoformat()
+    today = summary.date[:10] if summary.date else date.today().isoformat()
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(

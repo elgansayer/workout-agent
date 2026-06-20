@@ -36,7 +36,12 @@ def sync_all():
     for w in workouts:
         # Wrap it so _first_workout parses it correctly
         payload = {"workouts": [w]}
-        save_workout(payload, config.database_path)
+        
+        when = w.get("start_time") or w.get("end_time")
+        if when:
+            when = when[:10]
+            
+        save_workout(payload, config.database_path, when=when)
         
         # We don't have rep_targets for historical blocks, so pass empty targets
         summary = parse_workout(payload, {})
