@@ -42,12 +42,18 @@ class ExerciseSummary:
 class WorkoutSummary:
     title: str
     date: str | None
+    duration_seconds: int | None
+    total_volume_kg: float
     exercises: list[ExerciseSummary]
 
     def as_text(self) -> str:
         header = self.title
         if self.date:
             header += f" ({self.date})"
+        if self.duration_seconds is not None:
+            mins = self.duration_seconds // 60
+            density = self.total_volume_kg / mins if mins > 0 else 0
+            header += f"\nDuration: {mins} mins | Volume: {self.total_volume_kg:g} kg | Density: {density:.1f} kg/min"
         lines = [header]
         lines.extend(f"- {ex.as_line()}" for ex in self.exercises)
         return "\n".join(lines)
@@ -149,5 +155,30 @@ def parse_workout(
         return None
 
     title = (workout.get("title") or "Workout").strip()
-    when = workout.get("start_time") or workout.get("end_time")
-    return WorkoutSummary(title=title, date=when, exercises=summaries)
+    
+    start_str = workout.get("start_time")
+    end_str = workout.get("end_time")
+    when = start_str or end_str
+    
+    duration = None
+    if start_str and end_str:
+        try:
+            from datetime import datetime
+            s = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            e = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+            duration = int((e - s).total_seconds())
+        except ValueError:
+            pass
+            
+    total_volume = sum(
+        (ex.top_weight_kg or 0.0) * (ex.top_reps or 0) * ex.sets 
+        for ex in summaries
+    )
+            
+    return WorkoutSummary(
+        title=title, 
+        date=when, 
+        duration_seconds=duration,
+        total_volume_kg=total_volume,
+        exercises=summaries
+    )

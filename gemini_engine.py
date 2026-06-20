@@ -12,6 +12,11 @@ from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import COACHING_RULES, Block, SPLIT_NAME, day_exercises, day_focus, format_day
 
+try:
+    from weather import WeatherConditions
+except ImportError:
+    WeatherConditions = Any
+
 logger = logging.getLogger(__name__)
 
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
@@ -270,3 +275,88 @@ def generate_checkin_message(
         logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
 
     return fallback
+
+def _build_autonomous_prompt(
+    base_routines: dict[str, list[dict[str, Any]]],
+    hevy_logs: list[dict[str, Any]],
+    weather: WeatherConditions | None,
+    is_catabolic: bool,
+) -> str:
+    routines_json = json.dumps(base_routines, indent=2)
+    # We only send a subset of logs to avoid blowing up context
+    logs_json = json.dumps(hevy_logs[:15], indent=2) if hevy_logs else "[]"
+    
+    thermal_text = "None"
+    if weather and weather.is_extreme_heat:
+        thermal_text = f"ACTIVE: {weather.as_text()}. Reduce high-tax compound volume by 10% to account for thermal stress."
+        
+    catabolism_text = "None"
+    if is_catabolic:
+        catabolism_text = "ACTIVE: Scale data indicates a sudden, disproportionate drop in muscle mass percentage (catabolic state). Increase the daily protein target calculation (e.g., to 2.5 g/kg) in your thought process and importantly, REDUCE training volume across routines until the trend reverses."
+
+    return f"""You are the backend logic engine for an autonomous powerbuilding programme. Analyse the provided JSON payload containing the user's recent `hevy_logs` and the `base_routines`.
+
+Execute the following autonomous adjustments and output the updated workout templates:
+
+1. Cross-Routine Progression Linker
+Scan for identical `exercise_template_id` values that appear in different weekly routines. If the progression (load or reps) achieved in Routine A exceeds the planned baseline for Routine B, automatically normalise Routine B to match this new, higher baseline. Never let identical exercises lag across different days.
+
+2. Predictive Plateau Detection
+Calculate the progression velocity for all main compound lifts over the last 14 days from the logs. Look for a deceleration in rep or load accumulation. If a lift's progression velocity drops by more than 80% compared to the previous week, preemptively reduce the target working sets by 1 for the upcoming session. Do not wait for a complete failure to prescribe a micro-deload.
+
+3. Workout Density & Rest Auto-Tuner
+Evaluate "workout density" in the logs (total volume vs duration). If you detect performance decayed sharply in recent sessions and the duration was unusually short (rushed rest periods), increase the `rest_seconds` field in the updated JSON by 30-60 seconds to force adequate ATP replenishment.
+
+4. Environmental Thermal Scaling
+{thermal_text}
+
+5. Asymmetric Catabolism Detector
+{catabolism_text}
+
+---
+DATA:
+base_routines:
+{routines_json}
+
+hevy_logs (recent):
+{logs_json}
+---
+
+Ensure all output uses British English spelling. 
+Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
+Do not wrap it in markdown block quotes. Output raw JSON only."""
+
+
+def apply_autonomous_adjustments(
+    api_key: str,
+    model_name: str,
+    base_routines: dict[str, list[dict[str, Any]]],
+    hevy_logs: list[dict[str, Any]],
+    weather: WeatherConditions | None = None,
+    is_catabolic: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """Applies the unified autonomous progression and returns updated JSON routines."""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        prompt = _build_autonomous_prompt(base_routines, hevy_logs, weather, is_catabolic)
+        response = model.generate_content(prompt)
+        text = (response.text or "").strip()
+        
+        # Remove any markdown wrapping if the LLM hallucinated it
+        if text.startswith("```json"):
+            text = text[7:]
+        if text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+            
+        updated = json.loads(text.strip())
+        if isinstance(updated, dict):
+            return updated
+            
+        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
+    except Exception as exc:
+        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
+
+    return base_routines

@@ -200,6 +200,28 @@ def save_workout(payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None 
             (today, json.dumps(payload)),
         )
 
+def get_recent_hevy_logs(limit: int = 14, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+    """Return recent raw Hevy payloads for autonomous analysis."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT hevy_payload FROM workout_history ORDER BY date DESC, id DESC LIMIT ?",
+            (limit,)
+        ).fetchall()
+    logs = []
+    for row in rows:
+        try:
+            parsed = json.loads(row[0])
+            # Handle if it's a list or wrapped in {"workouts": [...]}
+            if isinstance(parsed, dict) and "workouts" in parsed:
+                logs.extend(parsed["workouts"])
+            elif isinstance(parsed, list):
+                logs.extend(parsed)
+            else:
+                logs.append(parsed)
+        except Exception:
+            pass
+    return logs[:limit]
+
 
 def save_progress(
     summary: "WorkoutSummary | None", db_path: str = DEFAULT_DB_PATH

@@ -230,11 +230,9 @@ def _migrate_titles(config: Config) -> None:
         delete_routine_record(old_title, config.database_path)
 
 
-def _sync_session(config: Config, title: str, exercises: list[Exercise],
-                  folder_id: int | None, notes: str,
-                  weights: dict[str, float] | None = None) -> str:
+def _sync_session(config: Config, title: str, built: list[dict[str, Any]],
+                  folder_id: int | None, notes: str) -> str:
     """Create or update a single routine. Returns a short status string."""
-    built = _build_exercises(exercises, weights)
     content_hash = _content_hash(title, built, notes)
 
     record = get_routine_record(title, config.database_path)
@@ -288,16 +286,51 @@ def sync_routines(config: Config) -> list[str]:
     weights = (
         _compute_target_weights(config, block) if config.hevy_prefill_weights else {}
     )
-    statuses: list[str] = []
+    base_routines = {}
     for day in _SESSION_DAYS:
+        title = day_focus(day)
+        exercises = day_exercises(day, block)
+        base_routines[title] = _build_exercises(exercises, weights)
+
+    updated_routines = base_routines
+    if config.gemini_api_key:
+        try:
+            from gemini_engine import apply_autonomous_adjustments
+            from database import get_recent_hevy_logs, get_body_metrics
+            from health_connect import read_recovery_metrics
+            from insights import analyse_recovery
+            try:
+                from weather import get_current_weather
+                weather = get_current_weather()
+            except ImportError:
+                weather = None
+                
+            logs = get_recent_hevy_logs(limit=15, db_path=config.database_path)
+            body_metrics = get_body_metrics(limit=14, db_path=config.database_path)
+            recovery_data = read_recovery_metrics(config.health_connect_file)
+            recovery_insight = analyse_recovery(body_metrics, recovery_data)
+            
+            logger.info("Requesting autonomous routine adjustments from Gemini...")
+            updated_routines = apply_autonomous_adjustments(
+                api_key=config.gemini_api_key,
+                model_name=config.gemini_model,
+                base_routines=base_routines,
+                hevy_logs=logs,
+                weather=weather,
+                is_catabolic=getattr(recovery_insight, 'is_catabolic', False)
+            )
+        except Exception as exc:
+            logger.warning("Failed to apply autonomous adjustments: %s", exc)
+
+    statuses: list[str] = []
+    for title, built in updated_routines.items():
         statuses.append(
             _sync_session(
                 config,
-                day_focus(day),
-                day_exercises(day, block),
+                title,
+                built,
                 folder_id,
                 notes,
-                weights,
             )
         )
     return statuses

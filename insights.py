@@ -72,6 +72,8 @@ class RecoveryInsight:
     weight_trend: str | None
     body_fat_pct: float | None
     body_fat_trend: str | None
+    muscle_pct: float | None
+    is_catabolic: bool
     status: str                     # good | fair | poor | unknown
     directive: str                  # what the coach should do about volume today
 
@@ -88,6 +90,8 @@ class RecoveryInsight:
         if self.body_fat_pct is not None:
             trend = f" ({self.body_fat_trend})" if self.body_fat_trend else ""
             bits.append(f"Body fat {self.body_fat_pct:g}%{trend}.")
+        if self.is_catabolic:
+            bits.append("CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight.")
         bits.append(f"Directive: {self.directive}")
         return " ".join(bits)
 
@@ -263,10 +267,26 @@ def analyse_recovery(
     weight_kg = latest.get("weight_kg") or (recovery or {}).get("weight_kg")
     body_fat_pct = latest.get("body_fat_pct") or (recovery or {}).get("body_fat_pct")
 
-    recent = readings[-7:]
-    rhr_trend = _trend_of([r.get("resting_hr") for r in recent], "rising", "falling", 0.3)
-    weight_trend = _trend_of([r.get("weight_kg") for r in recent], "rising", "falling", 0.05)
-    bf_trend = _trend_of([r.get("body_fat_pct") for r in recent], "rising", "falling", 0.05)
+    muscle_pct = latest.get("muscle_pct") or (recovery or {}).get("muscle_pct")
+
+    recent = readings[-14:]
+    rhr_trend = _trend_of([r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3)
+    weight_trend = _trend_of([r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05)
+    bf_trend = _trend_of([r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05)
+
+    is_catabolic = False
+    if len(recent) >= 3 and weight_kg is not None and muscle_pct is not None:
+        first = recent[0]
+        first_weight = first.get("weight_kg")
+        first_muscle_pct = first.get("muscle_pct")
+        if first_weight and first_muscle_pct:
+            weight_lost = first_weight - weight_kg
+            first_muscle_mass = first_weight * (first_muscle_pct / 100)
+            current_muscle_mass = weight_kg * (muscle_pct / 100)
+            muscle_lost = first_muscle_mass - current_muscle_mass
+            # Catabolic if losing weight, and >40% of the lost weight is muscle
+            if weight_lost > 0.5 and muscle_lost > (weight_lost * 0.4):
+                is_catabolic = True
 
     # Decide an overall status and a volume directive for today.
     poor = (sleep_hours is not None and sleep_hours < LOW_SLEEP_HOURS) or rhr_trend == "rising"
@@ -275,7 +295,10 @@ def analyse_recovery(
         and sleep_hours >= GOOD_SLEEP_HOURS
         and rhr_trend != "rising"
     )
-    if poor:
+    if is_catabolic:
+        status = "poor"
+        directive = "increase protein target to 2.5 g/kg and reduce training volume to arrest catabolism"
+    elif poor:
         status = "poor"
         directive = "trim volume and intensity today; keep form strict, no grinding reps"
     elif good:
@@ -296,6 +319,8 @@ def analyse_recovery(
         weight_trend=weight_trend,
         body_fat_pct=round(float(body_fat_pct), 1) if body_fat_pct is not None else None,
         body_fat_trend=bf_trend,
+        muscle_pct=round(float(muscle_pct), 1) if muscle_pct is not None else None,
+        is_catabolic=is_catabolic,
         status=status,
         directive=directive,
     )
