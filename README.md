@@ -12,6 +12,15 @@ recovery message instead.
 Built as a small, focused script rather than a heavyweight generalist agent
 framework. It does one thing well: read your data, reason about it, message you.
 
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/de803041-7959-4230-93b3-bda786d1a406" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/cf1e2e9b-37ac-4b9e-81eb-c0ee4ee00d4b" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/75bff5d6-26f0-4278-8ea0-bd88b9d2a7c6" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/6beffcbb-aa10-4dc7-b561-486b5a43dc76" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/c345415d-a7bc-4031-a420-22c1a3bf219e" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/0d3a355a-2cc2-4c5b-85aa-7e34cf985503" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/217e8556-21df-471e-93a6-bb82e31d316a" />
+<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/e68f0f1a-a508-4ca7-a980-8fc652ffd3f9" />
+
 ---
 
 ## Why a custom agent (not OpenClaw / generalist frameworks)
