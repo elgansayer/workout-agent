@@ -53,7 +53,7 @@ services:
       SELF_REVIEW_WEEKDAY: ${SELF_REVIEW_WEEKDAY:-Sun}
       TELEGRAM_PARSE_MODE: ${TELEGRAM_PARSE_MODE:-}
     volumes:
-      - agent-data:/data
+      - ./data:/data
     restart: unless-stopped
 
   web:
@@ -79,8 +79,6 @@ services:
       - "${WEB_PORT:-8770}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
-      - agent-data:/data
+      - ./data:/data
     restart: unless-stopped
 
-volumes:
-  agent-data:

@@ -44,6 +44,11 @@ def fetch_latest_workout(api_key: str) -> dict[str, Any] | None:
         return None
 
 
+def get_all_workouts(api_key: str) -> list[dict[str, Any]] | None:
+    """Return all logged workouts on the account, or None on failure."""
+    return _get_all_pages(api_key, "workouts", "workouts", page_size=10)
+
+
 def _get_all_pages(
     api_key: str, path: str, collection_key: str, page_size: int
 ) -> list[dict[str, Any]] | None:

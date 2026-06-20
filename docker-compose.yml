@@ -15,7 +15,7 @@ services:
       DATABASE_PATH: /data/workout_agent.db
     volumes:
       # Persists the SQLite database (cycle history + per-exercise bests).
-      - agent-data:/data
+      - ./data:/data
       # Optional: mount the folder your phone syncs Health Connect JSON into,
       # then set HEALTH_CONNECT_FILE=/health/recovery.json in .env
       # - /absolute/path/on/host/health:/health:ro
@@ -36,8 +36,6 @@ services:
       - "${WEB_PORT:-8088}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
-      - agent-data:/data
+      - ./data:/data
     restart: unless-stopped
 
-volumes:
-  agent-data:
