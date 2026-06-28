@@ -76,9 +76,15 @@ from program import (
     week_in_cycle,
 )
 
+from functools import lru_cache
+
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
-APP_CONFIG = Config.load()
+
+@lru_cache(maxsize=1)
+def get_config():
+    from config import Config
+    return Config.load()
 
 _RATE_LIMITS: dict[str, list[float]] = {}
 
@@ -727,7 +733,7 @@ def xai_reasoning(context_id: str, request: Request):
     
     when, ex_name = parts
     
-    config = APP_CONFIG
+    config = get_config()
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
     
@@ -743,7 +749,7 @@ def xai_reasoning(context_id: str, request: Request):
 @app.get("/api/project_peak")
 def project_peak(request: Request):
     _check_rate_limit(request, limit=5)
-    config = APP_CONFIG
+    config = get_config()
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
     
@@ -787,7 +793,7 @@ def chat_clear():
 @app.get("/api/rag_search")
 def rag_search(request: Request, q: str = Query(...)):
     _check_rate_limit(request, limit=15)
-    config = APP_CONFIG
+    config = get_config()
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
 
