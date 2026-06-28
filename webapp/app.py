@@ -90,7 +90,14 @@ _RATE_LIMITS: dict[str, list[float]] = {}
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
     now = time.time()
-    ip = request.client.host if request.client else "unknown"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    elif request.headers.get("x-real-ip"):
+        ip = request.headers.get("x-real-ip").strip()
+    else:
+        ip = request.client.host if request.client else "unknown"
+        
     if ip not in _RATE_LIMITS:
         _RATE_LIMITS[ip] = []
     _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
