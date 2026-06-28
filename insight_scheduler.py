@@ -1,14 +1,24 @@
 import time
 import subprocess
+import logging
 from datetime import datetime, timedelta
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+logger = logging.getLogger("insight_scheduler")
+
 def run_daily():
-    print("[scheduler] Running daily insights...")
-    subprocess.run(["python", "insight_cron.py", "--daily"])
+    logger.info("Running daily insights...")
+    try:
+        subprocess.run(["python", "insight_cron.py", "--daily"], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Daily insights failed with exit code %s", e.returncode)
 
 def run_weekly():
-    print("[scheduler] Running weekly deep correlations...")
-    subprocess.run(["python", "insight_cron.py", "--weekly"])
+    logger.info("Running weekly deep correlations...")
+    try:
+        subprocess.run(["python", "insight_cron.py", "--weekly"], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error("Weekly insights failed with exit code %s", e.returncode)
 
 def get_next_run(hour=6, minute=0):
     now = datetime.now()
@@ -25,8 +35,8 @@ if __name__ == "__main__":
     while True:
         now = datetime.now()
         next_run = get_next_run()
-        sleep_secs = (next_run - now).total_seconds()
-        print(f"[scheduler] Sleeping {sleep_secs}s until next run at {next_run}")
+        sleep_secs = max(0, (next_run - now).total_seconds())
+        logger.info("Sleeping %.0fs until next run at %s", sleep_secs, next_run.strftime("%Y-%m-%d %H:%M:%S"))
         time.sleep(sleep_secs)
         
         run_daily()

@@ -23,11 +23,8 @@
             <a href="/plan" class="{{ 'on' if active == 'plan' }}">Plan</a>
             <a href="/history" class="{{ 'on' if active == 'history' }}">History</a>
             <a href="/checkins" class="{{ 'on' if active == 'checkins' }}">Check-ins</a>
+            <a href="/chat" class="nav-coach {{ 'on' if active == 'chat' }}">✨ Coach</a>
             <a href="/settings" class="{{ 'on' if active == 'settings' }}">Settings</a>
-            <div class="search-bar">
-                <input type="text" id="rag-input" placeholder="Ask Log Investigator..." />
-                <button onclick="ragSearch()">Search</button>
-            </div>
             {% if request.session.get("user") %}
             <a href="/logout">Logout</a>
             {% endif %}
@@ -43,30 +40,55 @@
                 navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {});
             });
         }
-        
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const input = document.getElementById("rag-input");
+            if (input) {
+                input.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") ragSearch();
+                });
+            }
+        });
+
         async function ragSearch() {
-            const query = document.getElementById("rag-input").value;
+            const query = document.getElementById("rag-input").value.trim();
             if (!query) return;
             const resContainer = document.getElementById("rag-results");
             const resContent = document.getElementById("rag-content");
             resContainer.style.display = "block";
             resContent.innerText = "Investigating...";
-            
-            const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`);
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            resContent.innerText = "";
-            
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                resContent.innerText += decoder.decode(value, {stream: true});
+
+            try {
+                const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`);
+                if (!response.ok) {
+                    resContent.innerText = `Error: ${response.status} ${response.statusText}`;
+                    return;
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                resContent.innerText = "";
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    resContent.innerText += decoder.decode(value, {stream: true});
+                }
+            } catch (err) {
+                resContent.innerText = "Failed to reach the server. Please try again.";
             }
+        }
+
+        function closeRagResults() {
+            document.getElementById("rag-results").style.display = "none";
         }
     </script>
     <div id="rag-results" class="modal-glass ai-glass" style="display:none;">
-        <h4 class="ai-gradient-text">✨ Log Investigator</h4>
-        <div id="rag-content"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <h4 class="ai-gradient-text" style="margin:0;">✨ Log Investigator</h4>
+            <button onclick="closeRagResults()" style="background:none;border:none;color:var(--muted);font-size:1.4rem;cursor:pointer;padding:0 4px;line-height:1;" title="Close">&times;</button>
+        </div>
+        <div id="rag-content" style="margin-top:12px;"></div>
     </div>
+    {% block scripts %}{% endblock %}
 </body>
 </html>

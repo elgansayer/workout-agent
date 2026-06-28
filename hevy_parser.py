@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -163,7 +164,6 @@ def parse_workout(
     duration = None
     if start_str and end_str:
         try:
-            from datetime import datetime
             s = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
             e = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
             duration = int((e - s).total_seconds())

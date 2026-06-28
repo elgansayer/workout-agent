@@ -17,7 +17,7 @@ _DOTS_MEN = (-307.75076, 24.0900756, -0.1918759221, 0.0007391293, -0.000001093)
 
 def epley_1rm(weight: float | None, reps: int | None) -> float | None:
     """Estimated one-rep max via the Epley formula."""
-    if not weight or not reps:
+    if weight is None or reps is None:
         return None
     return round(weight * (1 + reps / 30), 1)
 

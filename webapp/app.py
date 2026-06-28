@@ -17,14 +17,16 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import secrets
+import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
+from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -45,6 +47,9 @@ from database import (
     get_dashboard_insight,
     get_reasoning_log,
     save_reasoning_log,
+    get_chat_messages,
+    save_chat_message,
+    clear_chat_messages,
     init_db,
     set_meta,
 )
@@ -52,8 +57,6 @@ from google_health_auth import build_authorize_url, exchange_code
 import google.generativeai as genai
 from config import Config
 import json
-from fastapi import Query
-from fastapi.responses import StreamingResponse
 import analytics
 import insights
 import lifestyle
@@ -74,6 +77,20 @@ from program import (
 )
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
+logger = logging.getLogger(__name__)
+APP_CONFIG = Config.load()
+
+_RATE_LIMITS: dict[str, list[float]] = {}
+
+def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
+    now = time.time()
+    ip = request.client.host if request.client else "unknown"
+    if ip not in _RATE_LIMITS:
+        _RATE_LIMITS[ip] = []
+    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
+    if len(_RATE_LIMITS[ip]) >= limit:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+    _RATE_LIMITS[ip].append(now)
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
 # environment to enable the "Connect Google Health" button on the Settings page.
@@ -152,6 +169,14 @@ if WEB_AUTH_SECRET:
             ]:
                 return await call_next(request)
             if not request.session.get("user"):
+                # API routes: return 401 JSON instead of a redirect so fetch()
+                # callers get a clear error instead of the login page HTML.
+                if path.startswith("/api/"):
+                    return HTMLResponse(
+                        '{"detail":"Not authenticated"}',
+                        status_code=401,
+                        media_type="application/json",
+                    )
                 return RedirectResponse("/login")
             return await call_next(request)
     app.add_middleware(AuthMiddleware)
@@ -190,15 +215,13 @@ async def logout(request: Request):
 
 @app.get("/auth")
 async def auth(request: Request):
-    print("DEBUG AUTH: session =", dict(request.session))
-    print("DEBUG AUTH: query_params =", dict(request.query_params))
     if not WEB_GOOGLE_CLIENT_ID:
         return RedirectResponse("/")
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:
-        print("DEBUG AUTH ERROR:", type(e), str(e))
-        raise e
+        logger.warning("OAuth token exchange failed: %s", e)
+        return RedirectResponse("/login")
     user = token.get("userinfo")
     if user:
         email = user.get("email", "")
@@ -691,7 +714,8 @@ def checkins(request: Request):
     )
 
 @app.get("/api/xai_reasoning/{context_id}")
-def xai_reasoning(context_id: str):
+def xai_reasoning(context_id: str, request: Request):
+    _check_rate_limit(request)
     # context_id is expected to be {date}_{exercise_name}
     existing = get_reasoning_log(context_id, db_path=DB_PATH)
     if existing:
@@ -703,7 +727,7 @@ def xai_reasoning(context_id: str):
     
     when, ex_name = parts
     
-    config = Config.load()
+    config = APP_CONFIG
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
     
@@ -717,8 +741,9 @@ def xai_reasoning(context_id: str):
     return {"reasoning": reasoning}
 
 @app.get("/api/project_peak")
-def project_peak():
-    config = Config.load()
+def project_peak(request: Request):
+    _check_rate_limit(request, limit=5)
+    config = APP_CONFIG
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
     
@@ -735,27 +760,91 @@ def project_peak():
         if text.endswith("```"):
             text = text[:-3]
         return json.loads(text.strip())
-    except:
+    except Exception:
         return {"error": "Failed to project peak."}
 
+@app.get("/chat")
+def chat_page(request: Request):
+    messages = get_chat_messages(limit=50, db_path=DB_PATH)
+    return templates.TemplateResponse(
+        request,
+        "chat.html",
+        {"active": "chat", "messages": messages},
+    )
+
+
+@app.get("/api/chat/history")
+def chat_history():
+    return get_chat_messages(limit=50, db_path=DB_PATH)
+
+
+@app.post("/api/chat/clear")
+def chat_clear():
+    clear_chat_messages(db_path=DB_PATH)
+    return {"status": "ok"}
+
+
 @app.get("/api/rag_search")
-def rag_search(q: str = Query(...)):
-    config = Config.load()
+def rag_search(request: Request, q: str = Query(...)):
+    _check_rate_limit(request, limit=15)
+    config = APP_CONFIG
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
-    
+
+    # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH)
     history = get_progress_history(db_path=DB_PATH)
-    
-    context = json.dumps({"logs": logs, "history": history})
-    
-    prompt = f"You are a Log Investigator. Based on the following SQLite log context, answer the user's query: '{q}'. Reference specific dates or sessions. Context: {context[:30000]}"
-    
+    biometrics = get_body_metrics(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
+
+    context = json.dumps(
+        {"logs": logs, "history": history, "biometrics": biometrics[-10:], "prs": prs[:10]},
+        default=str,
+    )
+
+    # Build multi-turn conversation from chat history
+    chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH)
+    conversation_lines = []
+    for msg in chat_history_msgs:
+        role_label = "User" if msg["role"] == "user" else "Coach"
+        conversation_lines.append(f"{role_label}: {msg['content']}")
+    conversation_text = "\n".join(conversation_lines) if conversation_lines else "No previous messages."
+
+    # Save user message
+    save_chat_message("user", q, db_path=DB_PATH)
+
+    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in Elgan's training dashboard.
+You have full access to his training logs, body composition data, personal records, and programme history.
+
+Your personality:
+- Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
+- Reference specific numbers, dates, and exercises from the context when relevant.
+- Keep answers concise but insightful. Use plain text, no markdown formatting.
+- Use British English.
+
+Conversation so far:
+{conversation_text}
+
+Training data context (recent logs, progress history, biometrics, PRs):
+{context[:25000]}
+
+User's new message: {q}
+
+Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
+
     def generate():
-        response = model.generate_content(prompt, stream=True)
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
+        collected = []
+        try:
+            response = model.generate_content(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    collected.append(chunk.text)
+                    yield chunk.text
+        finally:
+            # Save the full assistant response
+            full_response = "".join(collected)
+            if full_response:
+                save_chat_message("assistant", full_response, db_path=DB_PATH)
 
     return StreamingResponse(generate(), media_type="text/plain")
 

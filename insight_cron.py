@@ -63,9 +63,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
             save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
             logger.info("Daily insight generated successfully.")
         else:
-            logger.error(f"Invalid JSON structure returned: {text}")
+            logger.error("Invalid JSON structure returned: %s", text)
     except Exception as e:
-        logger.error(f"Failed to generate daily insight: {e}")
+        logger.error("Failed to generate daily insight: %s", e)
 
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
@@ -112,7 +112,7 @@ Use Markdown format. Output the Markdown report directly.
             save_deep_correlation(text, db_path=config.database_path)
             logger.info("Weekly deep correlation generated successfully.")
     except Exception as e:
-        logger.error(f"Failed to generate weekly deep correlation: {e}")
+        logger.error("Failed to generate weekly deep correlation: %s", e)
 
 def main():
     parser = argparse.ArgumentParser()

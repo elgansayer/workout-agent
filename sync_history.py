@@ -29,6 +29,13 @@ def sync_all():
         
     logger.info(f"Found {len(workouts)} workouts. Rebuilding history...")
     
+    import sqlite3
+    with sqlite3.connect(config.database_path, timeout=10) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("DELETE FROM workout_history")
+        conn.execute("DELETE FROM exercise_progress")
+        conn.commit()
+    
     # Process from oldest to newest so history is built sequentially
     workouts.reverse()
     

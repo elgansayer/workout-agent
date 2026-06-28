@@ -344,14 +344,15 @@ def apply_autonomous_adjustments(
         text = (response.text or "").strip()
         
         # Remove any markdown wrapping if the LLM hallucinated it
+        text = text.strip()
         if text.startswith("```json"):
-            text = text[7:]
+            text = text[7:].strip()
         if text.startswith("```"):
-            text = text[3:]
+            text = text[3:].strip()
         if text.endswith("```"):
-            text = text[:-3]
+            text = text[:-3].strip()
             
-        updated = json.loads(text.strip())
+        updated = json.loads(text)
         if isinstance(updated, dict):
             return updated
             

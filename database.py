@@ -24,10 +24,14 @@ DEFAULT_DB_PATH = "workout_agent.db"
 @contextlib.contextmanager
 def _connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
     try:
         yield conn
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -164,6 +168,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             (date.today().isoformat(),),
         )
         
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -593,11 +608,17 @@ def get_body_metrics(
         rows = conn.execute(
             """
             SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-            FROM body_metrics
+            FROM (
+                SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                FROM body_metrics
+                ORDER BY date DESC, id DESC
+                LIMIT ?
+            )
             ORDER BY date ASC, id ASC
-            """
+            """,
+            (limit,),
         ).fetchall()
-    readings = [
+    return [
         {
             "date": when,
             "weight_kg": weight,
@@ -608,7 +629,6 @@ def get_body_metrics(
         }
         for when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
-    return readings[-limit:]
 
 
 def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) -> None:
@@ -625,6 +645,7 @@ def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) ->
             (date.today().isoformat(), insight_json),
         )
 
+
 def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
     """Get the latest dashboard insight JSON as a dict."""
     with _connect(db_path) as conn:
@@ -635,6 +656,7 @@ def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
         except json.JSONDecodeError:
             pass
     return None
+
 
 def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH) -> None:
     """Save an AI reasoning log for an exercise change."""
@@ -649,11 +671,13 @@ def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_p
             (context_id, date.today().isoformat(), exercise_name, reasoning),
         )
 
+
 def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
     """Get the reasoning log by context_id."""
     with _connect(db_path) as conn:
         row = conn.execute("SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)).fetchone()
     return row[0] if row else None
+
 
 def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH) -> None:
     with _connect(db_path) as conn:
@@ -668,8 +692,53 @@ def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH)
             (date.today().isoformat(), insight_markdown),
         )
 
+
 def get_deep_correlation(db_path: str = DEFAULT_DB_PATH) -> str | None:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT insight_markdown FROM deep_correlations WHERE id = 1").fetchone()
     return row[0] if row else None
+
+
+def save_chat_message(
+    role: str, content: str, db_path: str = DEFAULT_DB_PATH
+) -> None:
+    """Persist a chat message (role is 'user' or 'assistant')."""
+    from datetime import datetime
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO chat_messages (role, content, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (role, content, datetime.now().isoformat()),
+        )
+
+
+def get_chat_messages(
+    limit: int = 50, db_path: str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
+    """Return chat messages, oldest first."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at FROM (
+                SELECT role, content, created_at
+                FROM chat_messages
+                ORDER BY id DESC
+                LIMIT ?
+            ) ORDER BY rowid ASC
+            """,
+            (limit,),
+        ).fetchall()
+    return [
+        {"role": role, "content": content, "created_at": created_at}
+        for role, content, created_at in rows
+    ]
+
+
+def clear_chat_messages(db_path: str = DEFAULT_DB_PATH) -> None:
+    """Delete all chat messages."""
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM chat_messages")
 

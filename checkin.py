@@ -139,18 +139,30 @@ def _review_exercise(name: str, planned: str, rep_range: str,
     tops = _session_top_sets(history)
     sessions = len(tops)
     latest_w, latest_r = tops[-1] if tops else (None, None)
-    first_w, _ = tops[0] if tops else (None, None)
+    first_w, first_r = tops[0] if tops else (None, None)
 
     change = (
         round(latest_w - first_w, 2)
         if latest_w is not None and first_w is not None
         else None
     )
+    rep_change = (
+        latest_r - first_r
+        if latest_r is not None and first_r is not None
+        else None
+    )
     top_rep = _top_rep(rep_range)
     hit_top = (
         latest_r is not None and top_rep is not None and latest_r >= top_rep
     )
-    stalled = sessions >= 3 and change is not None and change <= 0 and hit_top
+    stalled = (
+        sessions >= 3
+        and change is not None
+        and change <= 0
+        and rep_change is not None
+        and rep_change <= 0
+        and not hit_top
+    )
 
     if latest_w is not None and latest_r is not None:
         latest = f"{latest_w:g} kg x {latest_r}"

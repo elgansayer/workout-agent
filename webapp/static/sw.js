@@ -42,7 +42,7 @@ self.addEventListener("fetch", (event) => {
   // fetching a fresh copy in the background for the next load. This means an
   // updated CSS/JS deploy shows up on the second visit without a hard reload.
   event.respondWith(
-    caches.match(request).then((hit) => {
+    caches.match(request, { ignoreSearch: true }).then((hit) => {
       const fetchPromise = fetch(request).then((response) => {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(request, copy));
