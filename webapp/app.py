@@ -853,6 +853,11 @@ Respond naturally as Coach. If the question is about their training data, refere
                 if chunk.text:
                     collected.append(chunk.text)
                     yield chunk.text
+        except Exception as e:
+            logger.error(f"Error during Gemini streaming: {e}")
+            error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
+            collected.append(error_msg)
+            yield error_msg
         finally:
             # Save the full assistant response
             full_response = "".join(collected)

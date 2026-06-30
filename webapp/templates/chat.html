@@ -186,6 +186,14 @@ async function sendMessage() {
         const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`);
         removeTypingIndicator();
 
+        if (!response.ok) {
+            addBubble('assistant', 'Sorry, I encountered a network or rate limit error. Please try again.');
+            isStreaming = false;
+            sendBtn.classList.remove('sending');
+            chatInput.focus();
+            return;
+        }
+
         // Create assistant bubble for streaming
         const bubble = addBubble('assistant', '');
         const contentEl = bubble.querySelector('.bubble-content');

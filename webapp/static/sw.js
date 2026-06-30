@@ -29,8 +29,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(
       fetch(request)
         .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE).then((cache) => cache.put(request, copy));
+          if (request.url.startsWith("http")) {
+              const copy = response.clone();
+              caches.open(CACHE).then((cache) => cache.put(request, copy));
+          }
           return response;
         })
         .catch(() => caches.match(request).then((hit) => hit || caches.match("/")))
@@ -39,13 +41,14 @@ self.addEventListener("fetch", (event) => {
   }
 
   // Stale-while-revalidate: return the cached copy immediately (if any) while
-  // fetching a fresh copy in the background for the next load. This means an
-  // updated CSS/JS deploy shows up on the second visit without a hard reload.
+  // fetching a fresh copy in the background for the next load.
   event.respondWith(
     caches.match(request, { ignoreSearch: true }).then((hit) => {
       const fetchPromise = fetch(request).then((response) => {
-        const copy = response.clone();
-        caches.open(CACHE).then((cache) => cache.put(request, copy));
+        if (request.url.startsWith("http")) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(request, copy));
+        }
         return response;
       });
       return hit || fetchPromise;
