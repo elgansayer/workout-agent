@@ -179,6 +179,13 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        # Performance optimizations
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name ON exercise_progress(exercise_name)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress(date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date ON workout_history(date)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log(date)")
+
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
         columns = [col[1] for col in cursor.fetchall()]
