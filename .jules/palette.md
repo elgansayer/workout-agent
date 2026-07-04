@@ -1,0 +1,3 @@
+## 2024-11-21 - Missing ARIA labels on utility buttons and chat inputs
+**Learning:** Icon-only buttons (like chat send buttons or modal close buttons) and stylised text inputs (like chat textareas) often lack proper accessibility attributes because they rely on visual cues or `title` attributes. A `title` attribute is often not sufficient for screen reader users, while missing `<label>` tags on standalone text inputs make them inaccessible.
+**Action:** Always verify that input fields without visible labels have an `aria-label` attribute, and ensure that icon-only buttons have an explicitly defined `aria-label` rather than relying solely on `title`.
