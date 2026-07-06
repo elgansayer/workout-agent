@@ -1,0 +1,3 @@
+## 2024-07-06 - Window Functions vs Memory Filtering
+**Learning:** In `get_progress_history`, filtering a large dataset of historical workouts in Python memory by fetching everything from SQLite first (and then taking `[-limit:]`) becomes a massive bottleneck over time as the `exercise_progress` table grows. Using SQLite's `ROW_NUMBER() OVER(PARTITION BY...)` window function allows the database to enforce the limit before sending data to Python, dropping execution time from O(N) to O(1) per exercise group.
+**Action:** When fetching limited "top-N" or "recent-N" grouped items, always use SQLite window functions (`ROW_NUMBER() OVER (PARTITION BY ... ORDER BY ... DESC)`) in the query instead of slicing the lists in Python memory.

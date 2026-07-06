@@ -185,6 +185,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         if "hrv" not in columns:
             cursor.execute("ALTER TABLE body_metrics ADD COLUMN hrv REAL")
 
+        # Indexes for performance optimization
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ex_prog_date_covering ON exercise_progress(date, top_weight_kg, top_reps, sets)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ex_prog_name_id ON exercise_progress(exercise_name, id DESC)"
+        )
+
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
     """Return the current day in the cycle (1-6)."""
@@ -293,14 +301,23 @@ def get_recent_bests(db_path: str = DEFAULT_DB_PATH) -> dict[str, dict[str, Any]
 def get_progress_history(
     limit_per_exercise: int = 12, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return recent logged top sets per exercise, oldest first within each."""
+    """Return recent logged top sets per exercise, oldest first within each.
+
+    Optimized with SQLite window functions to limit rows before Python processing.
+    """
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM exercise_progress
+            FROM (
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                FROM exercise_progress
+            )
+            WHERE rn <= ?
             ORDER BY exercise_name, id ASC
-            """
+            """,
+            (limit_per_exercise,)
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
@@ -313,10 +330,7 @@ def get_progress_history(
                 "date": when,
             }
         )
-    # Keep only the most recent entries per exercise.
-    return {
-        name: entries[-limit_per_exercise:] for name, entries in series.items()
-    }
+    return series
 
 
 def get_session_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
