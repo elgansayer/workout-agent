@@ -1,3 +1,3 @@
-## 2025-03-03 - Missing ARIA Labels on Interactive Elements
-**Learning:** Found several icon-only buttons (like the chat send button and modal close button) and text inputs without proper ARIA labels. This is a common accessibility anti-pattern that makes screen readers unable to convey the purpose of these elements.
-**Action:** Always ensure that any interactive elements, especially those relying purely on visual cues (like SVG icons or close symbols like `&times;`) or inputs without an associated explicit `<label>`, include descriptive `aria-label` attributes to ensure they are fully accessible to screen reader users.
+## 2024-05-29 - Global focus-visible styling
+**Learning:** Adding a generic `:focus-visible` to `webapp/static/style.css` provides clear focus states without disrupting mouse interactions. Using `outline-offset: 2px` prevents clipping inside standard borders, which is crucial for accessibility.
+**Action:** Apply global focus rings using existing design tokens (`var(--accent)`) by default on new projects to ensure keyboard-first a11y out of the box.
