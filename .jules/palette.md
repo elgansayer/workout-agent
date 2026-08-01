@@ -1,3 +1,3 @@
-## 2025-03-03 - Missing ARIA Labels on Interactive Elements
-**Learning:** Found several icon-only buttons (like the chat send button and modal close button) and text inputs without proper ARIA labels. This is a common accessibility anti-pattern that makes screen readers unable to convey the purpose of these elements.
-**Action:** Always ensure that any interactive elements, especially those relying purely on visual cues (like SVG icons or close symbols like `&times;`) or inputs without an associated explicit `<label>`, include descriptive `aria-label` attributes to ensure they are fully accessible to screen reader users.
+## 2023-10-27 - Adding focus states
+**Learning:** In CSS, adding `border-radius: inherit` to focused elements is dangerous. If a circular button (`border-radius: 50%`) inside a standard container receives focus, it inherits a `0px` border-radius from its parent and suddenly turns into a square. Modern browsers automatically curve `outline` to match an element's existing `border-radius`, so modifying `border-radius` on focus is unnecessary.
+**Action:** Simply use `outline` for focus states and avoid modifying `border-radius` directly for focus indicators.
