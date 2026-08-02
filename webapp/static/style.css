@@ -902,3 +902,13 @@ nav a.nav-coach.on {
     .suggest-btn { font-size: 0.76rem; padding: 0.4rem 0.7rem; }
     .chat-bubble { max-width: 92%; }
 }
+
+/* ---- Accessibility focus states ---- */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
