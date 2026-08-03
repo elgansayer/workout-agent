@@ -1,5 +1,3 @@
-## 2024-07-08 - SQLite Compound Indexing for Pagination
-
-**Learning:** When adding or fetching ordered/grouped queries in SQLite (e.g., `ORDER BY date DESC, id DESC LIMIT X`), if a compound index matching the exact columns and directions is missing, SQLite falls back to creating a temporary B-Tree sort on every read. This was severely bottlenecking the `history`, `daily_log`, and `body_metrics` endpoints, particularly as the tables grew.
-
-**Action:** Always ensure compound indexes match the specific query clauses exactly (e.g., `CREATE INDEX ON table (date DESC, id DESC)`) to enable instant limit/offset pagination and avoid slow in-memory sorts.
+## 2024-05-14 - SQLite Temporary B-Tree Sort Overhead
+**Learning:** When queries in `database.py` group and order by `exercise_name` or `date` on the `exercise_progress` table without covering indexes, SQLite resorts to creating temporary B-Trees (`USE TEMP B-TREE FOR ORDER BY` / `GROUP BY`). This incurs a measurable overhead, especially as the size of the progress history grows.
+**Action:** Always verify query plans for commonly accessed tables and add precise, matching compound indexes in `init_db()` (e.g., `(exercise_name, id ASC)`) to eliminate implicit temporary sorting during reads.
