@@ -179,6 +179,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id ASC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date ASC)")
+
+        # ⚡ Bolt: Add compound index to eliminate temporary B-Tree sort on read for history and volume endpoints
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id ASC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date ASC)")
+
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
         columns = [col[1] for col in cursor.fetchall()]
