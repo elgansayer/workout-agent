@@ -303,13 +303,22 @@ def get_progress_history(
     limit_per_exercise: int = 12, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, list[dict[str, Any]]]:
     """Return recent logged top sets per exercise, oldest first within each."""
+    # Performance Optimization (Bolt ⚡): Use a window function to limit the
+    # rows returned per exercise at the database level, preventing memory
+    # exhaustion and reducing processing time as the database grows.
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM exercise_progress
+            FROM (
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                FROM exercise_progress
+            )
+            WHERE rn <= ?
             ORDER BY exercise_name, id ASC
-            """
+            """,
+            (limit_per_exercise,)
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
@@ -322,10 +331,7 @@ def get_progress_history(
                 "date": when,
             }
         )
-    # Keep only the most recent entries per exercise.
-    return {
-        name: entries[-limit_per_exercise:] for name, entries in series.items()
-    }
+    return series
 
 
 def get_session_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
