@@ -179,35 +179,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
-        cursor.execute(
-            """
-            -- ⚡ Bolt: Add compound indexes for the dashboard's frequent ORDER BY date DESC, id DESC LIMIT X queries.
-            -- Avoids SQLite temporary B-Tree sorts on read.
-            CREATE INDEX IF NOT EXISTS idx_workout_history_date_id
-            ON workout_history(date DESC, id DESC)
-            """
-        )
-        cursor.execute(
-            """
-            -- ⚡ Bolt: Add compound index for the dashboard's GROUP BY exercise_name and ORDER BY exercise_name, id ASC queries.
-            CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id
-            ON exercise_progress(exercise_name, id ASC)
-            """
-        )
-        cursor.execute(
-            """
-            -- ⚡ Bolt: Add compound index to optimize daily_log ORDER BY date DESC, id DESC LIMIT X queries.
-            CREATE INDEX IF NOT EXISTS idx_daily_log_date_id
-            ON daily_log(date DESC, id DESC)
-            """
-        )
-        cursor.execute(
-            """
-            -- ⚡ Bolt: Add compound index to optimize body_metrics ORDER BY date DESC, id DESC LIMIT X queries.
-            CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id
-            ON body_metrics(date DESC, id DESC)
-            """
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id ASC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date ASC)")
 
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
