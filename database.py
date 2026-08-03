@@ -179,11 +179,42 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id ASC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date ASC)")
+        cursor.execute(
+            """
+            -- ⚡ Bolt: Add compound indexes for the dashboard's frequent ORDER BY date DESC, id DESC LIMIT X queries.
+            -- Avoids SQLite temporary B-Tree sorts on read.
+            CREATE INDEX IF NOT EXISTS idx_workout_history_date_id
+            ON workout_history(date DESC, id DESC)
+            """
+        )
+        cursor.execute(
+            """
+            -- ⚡ Bolt: Add compound index for the dashboard's GROUP BY exercise_name and ORDER BY exercise_name, id ASC queries.
+            CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id
+            ON exercise_progress(exercise_name, id ASC)
+            """
+        )
+        cursor.execute(
+            """
+            -- ⚡ Bolt: Add index for queries fetching exercise progress by date (e.g. get_session_volumes).
+            CREATE INDEX IF NOT EXISTS idx_exercise_progress_date
+            ON exercise_progress(date ASC)
+            """
+        )
+        cursor.execute(
+            """
+            -- ⚡ Bolt: Add compound index to optimize daily_log ORDER BY date DESC, id DESC LIMIT X queries.
+            CREATE INDEX IF NOT EXISTS idx_daily_log_date_id
+            ON daily_log(date DESC, id DESC)
+            """
+        )
+        cursor.execute(
+            """
+            -- ⚡ Bolt: Add compound index to optimize body_metrics ORDER BY date DESC, id DESC LIMIT X queries.
+            CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id
+            ON body_metrics(date DESC, id DESC)
+            """
+        )
 
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
@@ -300,13 +331,22 @@ def get_progress_history(
     limit_per_exercise: int = 12, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, list[dict[str, Any]]]:
     """Return recent logged top sets per exercise, oldest first within each."""
+    # Performance Optimization (Bolt ⚡): Use a window function to limit the
+    # rows returned per exercise at the database level, preventing memory
+    # exhaustion and reducing processing time as the database grows.
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM exercise_progress
+            FROM (
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                FROM exercise_progress
+            )
+            WHERE rn <= ?
             ORDER BY exercise_name, id ASC
-            """
+            """,
+            (limit_per_exercise,)
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
@@ -319,10 +359,7 @@ def get_progress_history(
                 "date": when,
             }
         )
-    # Keep only the most recent entries per exercise.
-    return {
-        name: entries[-limit_per_exercise:] for name, entries in series.items()
-    }
+    return series
 
 
 def get_session_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
