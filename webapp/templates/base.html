@@ -15,6 +15,7 @@
     <link rel="stylesheet" href="{{ static_url('style.css') }}">
 </head>
 <body>
+    <a href="#main-content" class="skip-to-content">Skip to content</a>
     <header class="topbar">
         <a class="brand" href="/">Workout&nbsp;Agent</a>
         <nav>
@@ -31,7 +32,7 @@
             {% endif %}
         </nav>
     </header>
-    <main>
+    <main id="main-content">
         {% block content %}{% endblock %}
     </main>
     <footer class="foot">Hybrid Powerbuilding, 12-week periodised cycle.</footer>
