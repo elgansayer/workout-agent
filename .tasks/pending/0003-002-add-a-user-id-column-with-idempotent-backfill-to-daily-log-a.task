@@ -1,1 +1,0 @@
-Add a user_id column (with idempotent backfill) to daily_log and thread user_id through main.py's daily run and any webapp/app.py routes that read it, per the multi-tenant-migration skill.

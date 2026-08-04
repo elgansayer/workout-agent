@@ -1,1 +1,0 @@
-Build the programme selection page: list program.py's split as a template option plus an 'infer from my Hevy history' option (calling programme_inference.py) for the user to review and activate, per the programme-builder-ui skill.

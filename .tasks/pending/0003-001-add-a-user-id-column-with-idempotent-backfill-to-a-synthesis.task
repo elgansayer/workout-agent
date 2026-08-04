@@ -1,1 +1,0 @@
-Add a user_id column (with idempotent backfill to a synthesised legacy user) to workout_history and thread user_id through every function in database.py/main.py that reads or writes it, per the multi-tenant-migration skill. Start here - it's the highest-traffic table in the daily agent run.

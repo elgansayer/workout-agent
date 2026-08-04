@@ -1,1 +1,0 @@
-Wire hevy_sync.py to push whichever programme (template/inferred/custom) is currently active for a user to their connected Hevy account, per the programme-builder-ui skill.
