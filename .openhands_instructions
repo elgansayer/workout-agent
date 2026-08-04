@@ -8,5 +8,6 @@ It contains critical instructions regarding our Technology Stack, Multi-Tenancy 
 2. **Multi-Tenancy**: All new tables must have a `user_id` column. All database access must be filtered by `user_id`. Do not break data isolation.
 3. **AI Providers**: Never call an AI SDK (like `google.generativeai`) directly. You must use `ai_provider.get_provider()` to respect the user's preferred AI model and API key.
 4. **Skills System**: Check `.agents/skills/` for detailed guides on how to implement specific recurring patterns (e.g., adding a FastAPI route, migrating a table, or wiring an AI provider).
+5. **GitHub Projects & Issues**: When you pick up a task, use the `gh issue view` command to get the full context. When you complete the task and open a PR, use `gh issue edit` or `gh project item-edit` (if attached to a project board) to update its status to "In Review".
 
 Read `AGENTS.md` thoroughly before starting any new GitHub Issue.
