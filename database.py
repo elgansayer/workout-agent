@@ -180,6 +180,15 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)")
+        # ⚡ Bolt Optimization: Add indexes to eliminate slow TEMP B-TREE sorts on large progress tables.
+        # - idx_exercise_progress_name_id optimizes get_progress_history, get_recent_bests, and get_exercise_volumes
+        # - idx_exercise_progress_date optimizes get_session_volumes
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date)")
+
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
         columns = [col[1] for col in cursor.fetchall()]
@@ -341,13 +350,22 @@ def get_progress_history(
     limit_per_exercise: int = 12, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, list[dict[str, Any]]]:
     """Return recent logged top sets per exercise, oldest first within each."""
+    # Performance Optimization (Bolt ⚡): Use a window function to limit the
+    # rows returned per exercise at the database level, preventing memory
+    # exhaustion and reducing processing time as the database grows.
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM exercise_progress
+            FROM (
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                FROM exercise_progress
+            )
+            WHERE rn <= ?
             ORDER BY exercise_name, id ASC
-            """
+            """,
+            (limit_per_exercise,)
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
@@ -360,10 +378,7 @@ def get_progress_history(
                 "date": when,
             }
         )
-    # Keep only the most recent entries per exercise.
-    return {
-        name: entries[-limit_per_exercise:] for name, entries in series.items()
-    }
+    return series
 
 
 def get_session_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:

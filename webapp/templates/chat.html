@@ -99,16 +99,17 @@
                 placeholder="Ask your coach anything..."
                 rows="1"
                 autofocus
+                aria-label="Chat input"
             ></textarea>
             <div class="input-actions">
-                <button class="chat-stop-btn" id="stop-btn" title="Stop generating" style="display:none;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <button class="chat-stop-btn" id="stop-btn" title="Stop generating" style="display:none;" aria-label="Stop generating">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                         <rect x="4" y="4" width="16" height="16" rx="2"/>
                     </svg>
                 </button>
-                <button class="chat-send-btn" id="send-btn" onclick="sendMessage()" title="Send message">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                        <path d="M22 2L11 13"/><path d="M22 2L15 22 11 13 2 9 22 2"/>
+                <button class="chat-send-btn" id="send-btn" onclick="sendMessage()" title="Send message" aria-label="Send message">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+                        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
                     </svg>
                 </button>
             </div>
@@ -302,6 +303,8 @@ async function sendMessage() {
     if (!query || isStreaming) return;
 
     isStreaming = true;
+    sendBtn.classList.add('sending');
+    sendBtn.disabled = true;
     sendBtn.style.display = 'none';
     stopBtn.style.display = 'flex';
     chatInput.value = '';
@@ -320,7 +323,7 @@ async function sendMessage() {
         removeTypingIndicator();
 
         if (!response.ok) {
-            addBubble('assistant', '<p>Sorry, I encountered an error. Please try again.</p>', { complete: true });
+            addBubble('assistant', '<p>Sorry, I encountered a network or rate limit error. Please try again.</p>', { complete: true });
             resetInputState();
             return;
         }
@@ -359,6 +362,8 @@ async function sendMessage() {
 function resetInputState() {
     isStreaming = false;
     abortController = null;
+    sendBtn.classList.remove('sending');
+    sendBtn.disabled = false;
     sendBtn.style.display = 'flex';
     stopBtn.style.display = 'none';
     setStatus('Online · Trained on your data', 'online');
