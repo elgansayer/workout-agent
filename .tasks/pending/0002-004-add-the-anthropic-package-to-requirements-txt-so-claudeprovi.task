@@ -1,0 +1,1 @@
+Add the anthropic package to requirements.txt so ClaudeProvider in ai_provider.py is actually usable, and add tests/test_ai_provider.py covering get_provider() for all four providers (gemini, claude, openai, deepseek) with mocked SDK clients - this module currently has zero test coverage.

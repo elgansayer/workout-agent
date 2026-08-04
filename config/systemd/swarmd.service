@@ -1,0 +1,23 @@
+[Unit]
+Description=workout-agent AI Coding Supervisor (swarmd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/dev/workout-agent
+ExecStart=%h/dev/workout-agent/.venv/bin/python3 %h/dev/workout-agent/swarmd.py
+EnvironmentFile=-%h/dev/workout-agent/.env
+EnvironmentFile=-%h/dev/workout-agent/.env.swarm
+Restart=always
+RestartSec=30
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=yes
+PrivateTmp=no
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/dev/workout-agent /tmp
+
+[Install]
+WantedBy=multi-user.target

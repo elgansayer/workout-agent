@@ -3,6 +3,18 @@
 {% block content %}
 <h1>Settings</h1>
 
+{% if key_status == 'saved' %}
+<p class="banner ok">API key saved successfully.</p>
+{% elif key_status == 'deleted' %}
+<p class="banner">API key removed.</p>
+{% elif key_status == 'error' %}
+<p class="banner warn">Could not save key. Please try again.</p>
+{% endif %}
+
+{% if pref_status == 'saved' %}
+<p class="banner ok">Preferences updated.</p>
+{% endif %}
+
 {% if gh_status == 'connected' %}
 <p class="banner ok">Google Health connected. The agent will sync your weight and body fat on its next run.</p>
 {% elif gh_status == 'disconnected' %}
@@ -15,9 +27,110 @@
 <p class="banner warn">Google Health is not configured on the server yet.</p>
 {% endif %}
 
-<section class="card">
+<!-- ──────────── Hevy Integration ──────────── -->
+<section class="card" id="settings-hevy">
     <div class="card-head">
-        <h2>Google Health</h2>
+        <h2>🏋️ Hevy Integration</h2>
+        {% if user_keys.get('hevy', {}).get('has_key') %}
+        <span class="status on">Connected</span>
+        {% else %}
+        <span class="status off">Not connected</span>
+        {% endif %}
+    </div>
+    <p class="muted">
+        Connect your Hevy account so workouts are synced automatically.
+        You need a <strong>Hevy Pro</strong> subscription. Generate an API key at
+        <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener" style="color:var(--accent-2)">hevy.com/settings</a>.
+    </p>
+
+    <div class="key-form" id="hevy-form">
+        <div class="input-row">
+            <input
+                type="password"
+                id="hevy-key-input"
+                class="key-input"
+                placeholder="{{ user_keys.get('hevy', {}).get('masked', 'Paste your Hevy API key') }}"
+                autocomplete="off"
+            >
+            <button class="btn btn-sm" onclick="saveKey('hevy')" id="hevy-save-btn">
+                {{ 'Update' if user_keys.get('hevy', {}).get('has_key') else 'Connect' }}
+            </button>
+            {% if user_keys.get('hevy', {}).get('has_key') %}
+            <button class="btn btn-ghost btn-sm" onclick="verifyHevy()">Verify</button>
+            <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteKey('hevy')">Remove</button>
+            {% endif %}
+        </div>
+        <div id="hevy-status" class="key-status"></div>
+    </div>
+</section>
+
+<!-- ──────────── AI Provider ──────────── -->
+<section class="card" id="settings-ai">
+    <div class="card-head">
+        <h2>🤖 AI Provider</h2>
+        {% set ai_prov = user_prefs.get('preferred_ai', 'gemini') %}
+        {% set ai_key = user_keys.get(ai_prov, {}) %}
+        {% if ai_key.get('has_key') %}
+        <span class="status on">{{ ai_prov|title }}</span>
+        {% else %}
+        <span class="status off">No key</span>
+        {% endif %}
+    </div>
+    <p class="muted">
+        Choose which AI powers your coaching. You bring your own API key.
+    </p>
+
+    <div class="ai-provider-select">
+        <div class="provider-tabs" id="provider-tabs">
+            {% for p in ai_providers %}
+            <button
+                class="provider-tab {{ 'active' if p.id == ai_prov }}"
+                data-provider="{{ p.id }}"
+                onclick="selectProvider('{{ p.id }}')"
+            >
+                {% if p.id == 'gemini' %}✦{% elif p.id == 'claude' %}⬡{% else %}◉{% endif %}
+                {{ p.name }}
+            </button>
+            {% endfor %}
+        </div>
+
+        {% for p in ai_providers %}
+        <div class="provider-config {{ '' if p.id == ai_prov else 'hidden' }}" id="config-{{ p.id }}">
+            <div class="input-row">
+                <input
+                    type="password"
+                    id="{{ p.id }}-key-input"
+                    class="key-input"
+                    placeholder="{{ user_keys.get(p.id, {}).get('masked', 'Paste your ' + p.name + ' API key') }}"
+                    autocomplete="off"
+                >
+                <button class="btn btn-sm" onclick="saveKey('{{ p.id }}')">
+                    {{ 'Update' if user_keys.get(p.id, {}).get('has_key') else 'Save' }}
+                </button>
+                {% if user_keys.get(p.id, {}).get('has_key') %}
+                <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteKey('{{ p.id }}')">Remove</button>
+                {% endif %}
+            </div>
+            <div class="model-row">
+                <label class="muted" for="{{ p.id }}-model">Model:</label>
+                <input
+                    type="text"
+                    id="{{ p.id }}-model"
+                    class="model-input"
+                    value="{{ user_prefs.get('ai_model', '') or p.default_model }}"
+                    placeholder="{{ p.default_model }}"
+                >
+            </div>
+        </div>
+        {% endfor %}
+        <div id="ai-status" class="key-status"></div>
+    </div>
+</section>
+
+<!-- ──────────── Google Health ──────────── -->
+<section class="card" id="settings-google-health">
+    <div class="card-head">
+        <h2>📊 Google Health</h2>
         {% if gh_connected %}
         <span class="status on">Connected</span>
         {% else %}
@@ -27,8 +140,7 @@
     <p class="muted">
         Link your Google Health account so the agent automatically reads your
         latest weight and body fat (e.g. from a Eufy Life smart scale) on every
-        run. Linking happens here in the browser, so the server never needs a
-        manual token.
+        run. This uses OAuth 2.0 — no API key needed.
     </p>
 
     {% if not gh_configured %}
@@ -51,4 +163,189 @@
     </div>
     {% endif %}
 </section>
+
+<!-- ──────────── Training Profile ──────────── -->
+<section class="card" id="settings-profile">
+    <div class="card-head">
+        <h2>👤 Training Profile</h2>
+    </div>
+    <p class="muted">
+        Tell the AI about your goals and constraints. This replaces the hardcoded
+        coaching rules.
+    </p>
+
+    <div class="pref-form">
+        <div class="pref-group">
+            <label class="pref-label">Goals</label>
+            <div class="chip-select" id="goals-select">
+                {% set user_goals = user_prefs.get('goals', []) %}
+                {% for goal in ['strength', 'hypertrophy', 'fat_loss', 'endurance', 'general_fitness', 'powerlifting', 'bodybuilding'] %}
+                <button
+                    class="chip-option {{ 'selected' if goal in user_goals }}"
+                    data-value="{{ goal }}"
+                    onclick="toggleChip(this)"
+                >{{ goal|replace('_', ' ')|title }}</button>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="pref-group">
+            <label class="pref-label">Experience Level</label>
+            <div class="chip-select" id="experience-select">
+                {% for level in ['beginner', 'intermediate', 'advanced'] %}
+                <button
+                    class="chip-option {{ 'selected' if level == user_prefs.get('experience_level', 'intermediate') }}"
+                    data-value="{{ level }}"
+                    onclick="selectSingle(this, 'experience-select')"
+                >{{ level|title }}</button>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="pref-group">
+            <label class="pref-label">Constraints <span class="muted">(optional)</span></label>
+            <textarea
+                id="constraints-input"
+                class="pref-textarea"
+                placeholder="e.g. Bad knees — no jumping. Shoulder rehab — no overhead pressing."
+                rows="2"
+            >{{ (user_prefs.get('constraints', []) or [])|join('. ') }}</textarea>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn" onclick="savePreferences()">Save Profile</button>
+        </div>
+        <div id="pref-status" class="key-status"></div>
+    </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function selectProvider(id) {
+    document.querySelectorAll('.provider-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.provider-config').forEach(c => c.classList.add('hidden'));
+    document.querySelector(`[data-provider="${id}"]`).classList.add('active');
+    document.getElementById(`config-${id}`).classList.remove('hidden');
+}
+
+function showStatus(elId, msg, isError) {
+    const el = document.getElementById(elId);
+    el.textContent = msg;
+    el.className = 'key-status ' + (isError ? 'error' : 'success');
+    setTimeout(() => { el.textContent = ''; el.className = 'key-status'; }, 5000);
+}
+
+async function saveKey(provider) {
+    const input = document.getElementById(`${provider}-key-input`);
+    const key = input.value.trim();
+    if (!key) { showStatus(provider === 'hevy' ? 'hevy-status' : 'ai-status', 'Please enter an API key.', true); return; }
+
+    const body = { provider, api_key: key };
+    // Include model for AI providers.
+    const modelEl = document.getElementById(`${provider}-model`);
+    if (modelEl) body.model = modelEl.value.trim();
+
+    try {
+        const res = await fetch('/api/settings/key', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            showStatus(provider === 'hevy' ? 'hevy-status' : 'ai-status', err.detail || 'Error saving key.', true);
+            return;
+        }
+        // Also save AI preference if it's an AI provider.
+        if (['gemini', 'claude', 'openai'].includes(provider)) {
+            await fetch('/api/settings/preferences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ preferred_ai: provider, ai_model: body.model }),
+            });
+        }
+        showStatus(provider === 'hevy' ? 'hevy-status' : 'ai-status', `${provider} key saved!`, false);
+        input.value = '';
+        setTimeout(() => location.reload(), 1200);
+    } catch (e) {
+        showStatus(provider === 'hevy' ? 'hevy-status' : 'ai-status', 'Network error. Please try again.', true);
+    }
+}
+
+async function deleteKey(provider) {
+    if (!confirm(`Remove your ${provider} API key?`)) return;
+    try {
+        await fetch('/api/settings/key/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider }),
+        });
+        location.reload();
+    } catch (e) {
+        showStatus(provider === 'hevy' ? 'hevy-status' : 'ai-status', 'Network error.', true);
+    }
+}
+
+async function verifyHevy() {
+    const stored = document.getElementById('hevy-key-input');
+    // We need to send the actual key; if user just entered one use that,
+    // otherwise the backend should use the stored one.
+    showStatus('hevy-status', 'Verifying...', false);
+
+    try {
+        // Fetch the key from the user's stored keys (already saved).
+        const res = await fetch('/api/settings/verify-hevy', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: stored.value.trim() || '__stored__' }),
+        });
+        const data = await res.json();
+        if (data.status === 'ok') {
+            showStatus('hevy-status', `✓ Connected! ${data.workout_count} workouts found.`, false);
+        } else {
+            showStatus('hevy-status', data.detail || 'Verification failed.', true);
+        }
+    } catch (e) {
+        showStatus('hevy-status', 'Could not reach the server.', true);
+    }
+}
+
+function toggleChip(el) {
+    el.classList.toggle('selected');
+}
+
+function selectSingle(el, groupId) {
+    document.querySelectorAll(`#${groupId} .chip-option`).forEach(c => c.classList.remove('selected'));
+    el.classList.add('selected');
+}
+
+async function savePreferences() {
+    const goals = Array.from(document.querySelectorAll('#goals-select .chip-option.selected'))
+        .map(el => el.dataset.value);
+    const experience = document.querySelector('#experience-select .chip-option.selected');
+    const constraintsText = document.getElementById('constraints-input').value.trim();
+    const constraints = constraintsText ? constraintsText.split(/[.\n]+/).map(s => s.trim()).filter(Boolean) : [];
+
+    try {
+        const res = await fetch('/api/settings/preferences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                goals,
+                constraints,
+                experience_level: experience ? experience.dataset.value : 'intermediate',
+            }),
+        });
+        if (res.ok) {
+            showStatus('pref-status', 'Profile saved!', false);
+        } else {
+            showStatus('pref-status', 'Could not save preferences.', true);
+        }
+    } catch (e) {
+        showStatus('pref-status', 'Network error.', true);
+    }
+}
+</script>
 {% endblock %}
