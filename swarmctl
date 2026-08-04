@@ -1,0 +1,183 @@
+#!/bin/bash
+# swarmctl - Unified CLI for the workout-agent AI swarm.
+#
+# Usage:
+#   ./swarmctl start           Launch swarmd.py in a tmux session (foreground-visible)
+#   ./swarmctl stop            Stop the swarm
+#   ./swarmctl restart         Stop then start
+#   ./swarmctl status          Show swarm health, task queue, git status
+#   ./swarmctl logs            Tail the daemon log (last 50 lines)
+#   ./swarmctl attach          Attach to the tmux session
+#   ./swarmctl migrate         Migrate TODO.md/CONTINUE.md checkboxes into .tasks/pending/
+#
+#   ./swarmctl daemon-start    Launch swarmd.py as a detached background process (no tmux)
+#   ./swarmctl daemon-stop     Stop the detached daemon
+#   ./swarmctl daemon-status   Show daemon status
+#   ./swarmctl daemon-logs     Tail daemon logs (follow mode)
+#
+#   ./swarmctl once            Run exactly one supervisor cycle then exit (good for cron/CI)
+#   ./swarmctl health          Run a full health check on all providers/models
+
+set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export SWARM_ROOT="$SCRIPT_DIR"
+# shellcheck disable=SC1091
+source "$SWARM_ROOT/scripts/swarm-env.sh"
+
+TMUX_SESSION="workout_agent_swarm"
+PY="$(swarm_venv_python)"
+
+cmd="${1:-status}"
+shift 2>/dev/null || true
+
+case "$cmd" in
+    start)
+        echo "Starting workout-agent AI swarm in tmux session '$TMUX_SESSION'..."
+        tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+        pkill -9 -f "swarmd.py" 2>/dev/null || true
+        rm -f "$SWARM_LOCK_FILE"
+        sleep 1
+        tmux new-session -d -s "$TMUX_SESSION" "$PY $SWARM_ROOT/swarmd.py"
+        echo "Started. Attach with: ./swarmctl attach"
+        ;;
+    stop)
+        echo "Stopping swarm..."
+        tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+        pkill -TERM -f "swarmd.py" 2>/dev/null || true
+        sleep 2
+        pkill -9 -f "swarmd.py" 2>/dev/null || true
+        rm -f "$SWARM_LOCK_FILE"
+        echo "Stopped. Coordination lock cleared."
+        ;;
+    restart)
+        "$0" stop
+        sleep 2
+        "$0" start
+        ;;
+    status)
+        echo "============================================"
+        echo " workout-agent AI Swarm Status"
+        echo "============================================"
+        echo ""
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            echo "Tmux session:  RUNNING"
+        else
+            echo "Tmux session:  DEAD"
+        fi
+        echo ""
+        if pgrep -f "swarmd\.py" >/dev/null 2>&1; then
+            echo "Daemon:        RUNNING (PID: $(pgrep -f 'swarmd\.py' | head -1))"
+        else
+            echo "Daemon:        STOPPED"
+        fi
+        echo ""
+        if [ -f "$SWARM_STATE_FILE" ]; then
+            echo "State file:    $(cat "$SWARM_STATE_FILE" | tr -d '\n ' )"
+        else
+            echo "State file:    (none yet)"
+        fi
+        echo ""
+        echo "Task queue:    $(swarm_task_stats)"
+        echo ""
+        echo "Last commit:   $(git -C "$SWARM_ROOT" log -1 --format='%ai %s' 2>/dev/null || echo 'N/A')"
+        echo ""
+        echo "Disk:          $(df -h "$SWARM_ROOT" 2>/dev/null | awk 'NR==2 {print $3"/"$2" ("$5")"}')"
+        echo "Memory:        $(free -h 2>/dev/null | awk '/Mem:/ {print $3"/"$2}')"
+        ;;
+    logs)
+        if [ -f "$SWARM_ROOT/logs/swarmd.log" ]; then
+            tail -50 "$SWARM_ROOT/logs/swarmd.log"
+        else
+            echo "No logs yet."
+        fi
+        ;;
+    attach)
+        if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+            exec tmux attach -t "$TMUX_SESSION"
+        else
+            echo "Swarm is not running. Start it with: $0 start"
+        fi
+        ;;
+    migrate)
+        echo "Migrating TODO.md/CONTINUE.md checkbox items into .tasks/pending/..."
+        "$PY" "$SWARM_ROOT/swarmd.py" --migrate
+        ;;
+    daemon-start)
+        echo "Starting swarmd.py as a detached background process..."
+        if pgrep -f "swarmd\.py" >/dev/null 2>&1; then
+            echo "swarmd.py is already running (PID: $(pgrep -f 'swarmd\.py' | head -1))"
+            exit 1
+        fi
+        mkdir -p "$SWARM_ROOT/logs"
+        nohup "$PY" "$SWARM_ROOT/swarmd.py" >> "$SWARM_ROOT/logs/swarmd.log" 2>&1 &
+        disown
+        echo "swarmd.py started (PID: $!)"
+        ;;
+    daemon-stop)
+        echo "Stopping swarmd.py daemon..."
+        pkill -TERM -f "swarmd\.py" 2>/dev/null || true
+        sleep 2
+        pkill -9 -f "swarmd\.py" 2>/dev/null || true
+        rm -f "$SWARM_LOCK_FILE"
+        echo "Stopped."
+        ;;
+    daemon-status)
+        if pgrep -f "swarmd\.py" >/dev/null 2>&1; then
+            echo "swarmd.py is RUNNING (PID: $(pgrep -f 'swarmd\.py' | head -1))"
+            [ -f "$SWARM_ROOT/logs/swarmd.log" ] && { echo "--- last 20 log lines ---"; tail -20 "$SWARM_ROOT/logs/swarmd.log"; }
+        else
+            echo "swarmd.py is STOPPED"
+        fi
+        ;;
+    daemon-logs)
+        [ -f "$SWARM_ROOT/logs/swarmd.log" ] && tail -f "$SWARM_ROOT/logs/swarmd.log" || echo "No logs yet."
+        ;;
+    once)
+        "$PY" "$SWARM_ROOT/swarmd.py" --once
+        ;;
+    health)
+        echo "============================================"
+        echo " workout-agent AI Swarm Health Check"
+        echo "============================================"
+        echo ""
+        echo "--- Model CLIs ---"
+        for c in claude agy antigravity aider gh; do
+            if command -v "$c" &>/dev/null; then
+                echo "  $c: FOUND ($(command -v "$c"))"
+            else
+                echo "  $c: MISSING"
+            fi
+        done
+        echo ""
+        echo "--- API Keys ---"
+        for key in DEEPSEEK_API_KEY OPENAI_API_KEY GEMINI_API_KEY ANTHROPIC_API_KEY; do
+            if [ -n "${!key:-}" ]; then
+                echo "  $key: SET"
+            else
+                echo "  $key: NOT SET"
+            fi
+        done
+        echo ""
+        echo "--- Verification tooling (invoked as \`$PY -m <tool>\`, not bare PATH) ---"
+        for c in ruff mypy pytest; do
+            "$PY" -c "import $c" &>/dev/null && echo "  $c: FOUND in $PY" || echo "  $c: MISSING - run: $PY -m pip install $c"
+        done
+        echo ""
+        echo "--- GitHub CLI ---"
+        gh auth status 2>&1 | sed 's/^/  /'
+        echo ""
+        echo "--- Process Status ---"
+        pgrep -f "swarmd\.py" >/dev/null 2>&1 && echo "  swarmd.py: RUNNING" || echo "  swarmd.py: NOT RUNNING"
+        tmux has-session -t "$TMUX_SESSION" 2>/dev/null && echo "  tmux session: RUNNING" || echo "  tmux session: NOT RUNNING"
+        echo ""
+        echo "--- Git ---"
+        echo "  Branch: $(git -C "$SWARM_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo 'N/A')"
+        echo "  Remote: $(git -C "$SWARM_ROOT" remote get-url origin 2>/dev/null || echo 'N/A')"
+        echo "  Dirty:  $(git -C "$SWARM_ROOT" status --porcelain 2>/dev/null | wc -l) files"
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status|logs|attach|migrate|once|health}"
+        echo "       $0 {daemon-start|daemon-stop|daemon-status|daemon-logs}"
+        exit 1
+        ;;
+esac

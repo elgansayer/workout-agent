@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Iterator, TYPE_CHECKING
 
 from program import SPLIT_NAME, TOTAL_DAYS
+from encryption import encrypt, decrypt
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
@@ -184,6 +185,52 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         columns = [col[1] for col in cursor.fetchall()]
         if "hrv" not in columns:
             cursor.execute("ALTER TABLE body_metrics ADD COLUMN hrv REAL")
+
+        # ---- Multi-user tables (Sprint 1) ----
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                created_at TEXT NOT NULL,
+                timezone TEXT DEFAULT 'UTC',
+                units TEXT DEFAULT 'metric'
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_api_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                provider TEXT NOT NULL,
+                api_key TEXT NOT NULL,
+                client_id TEXT,
+                client_secret TEXT,
+                refresh_token TEXT,
+                extra_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, provider)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_preferences (
+                user_id TEXT PRIMARY KEY REFERENCES users(id),
+                goals TEXT,
+                constraints TEXT,
+                experience_level TEXT DEFAULT 'intermediate',
+                coaching_style TEXT DEFAULT 'direct',
+                preferred_ai TEXT DEFAULT 'gemini',
+                ai_model TEXT,
+                custom_rules TEXT,
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
 
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
@@ -741,4 +788,276 @@ def clear_chat_messages(db_path: str = DEFAULT_DB_PATH) -> None:
     """Delete all chat messages."""
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM chat_messages")
+
+
+# ---------------------------------------------------------------------------
+# Multi-user management (Sprint 1)
+# ---------------------------------------------------------------------------
+
+def get_or_create_user(
+    email: str,
+    display_name: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Return the user row for an email, creating one on first login."""
+    import uuid
+    from datetime import datetime
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, email, display_name, created_at, timezone, units "
+            "FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "email": row[1],
+                "display_name": row[2],
+                "created_at": row[3],
+                "timezone": row[4],
+                "units": row[5],
+            }
+
+        user_id = str(uuid.uuid4())
+        now = datetime.now().isoformat()
+        conn.execute(
+            """
+            INSERT INTO users (id, email, display_name, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, email, display_name, now),
+        )
+        return {
+            "id": user_id,
+            "email": email,
+            "display_name": display_name,
+            "created_at": now,
+            "timezone": "UTC",
+            "units": "metric",
+        }
+
+
+def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+    """Return the user row for a user_id, or None."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, email, display_name, created_at, timezone, units "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "email": row[1],
+        "display_name": row[2],
+        "created_at": row[3],
+        "timezone": row[4],
+        "units": row[5],
+    }
+
+
+# ---- API key management ----
+
+def save_user_api_key(
+    user_id: str,
+    provider: str,
+    api_key: str,
+    *,
+    client_id: str | None = None,
+    client_secret: str | None = None,
+    refresh_token: str | None = None,
+    extra: dict[str, Any] | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Store (or update) an encrypted API key for a user + provider pair."""
+    from datetime import datetime
+
+    now = datetime.now().isoformat()
+    encrypted_key = encrypt(api_key) if api_key else ""
+    encrypted_secret = encrypt(client_secret) if client_secret else None
+    encrypted_refresh = encrypt(refresh_token) if refresh_token else None
+    extra_json = json.dumps(extra) if extra else None
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_api_keys
+                (user_id, provider, api_key, client_id, client_secret,
+                 refresh_token, extra_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                api_key = excluded.api_key,
+                client_id = excluded.client_id,
+                client_secret = excluded.client_secret,
+                refresh_token = excluded.refresh_token,
+                extra_json = excluded.extra_json,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                provider.lower(),
+                encrypted_key,
+                client_id,
+                encrypted_secret,
+                encrypted_refresh,
+                extra_json,
+                now,
+                now,
+            ),
+        )
+
+
+def get_user_api_key(
+    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
+    """Return the decrypted API key record for a user + provider, or None."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT api_key, client_id, client_secret, refresh_token,
+                   extra_json, updated_at
+            FROM user_api_keys
+            WHERE user_id = ? AND provider = ?
+            """,
+            (user_id, provider.lower()),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "api_key": decrypt(row[0]) if row[0] else "",
+        "client_id": row[1],
+        "client_secret": decrypt(row[2]) if row[2] else None,
+        "refresh_token": decrypt(row[3]) if row[3] else None,
+        "extra": json.loads(row[4]) if row[4] else None,
+        "updated_at": row[5],
+    }
+
+
+def get_user_api_keys(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> dict[str, dict[str, Any]]:
+    """Return all API key records for a user, keyed by provider name.
+
+    Keys are decrypted. Providers without a stored key are omitted.
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT provider, api_key, client_id, client_secret,
+                   refresh_token, extra_json, updated_at
+            FROM user_api_keys
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchall()
+
+    result: dict[str, dict[str, Any]] = {}
+    for provider, key, cid, csecret, rtoken, extra, updated in rows:
+        result[provider] = {
+            "api_key": decrypt(key) if key else "",
+            "client_id": cid,
+            "client_secret": decrypt(csecret) if csecret else None,
+            "refresh_token": decrypt(rtoken) if rtoken else None,
+            "extra": json.loads(extra) if extra else None,
+            "updated_at": updated,
+        }
+    return result
+
+
+def delete_user_api_key(
+    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH
+) -> None:
+    """Remove a stored API key for a user + provider."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, provider.lower()),
+        )
+
+
+# ---- User preferences ----
+
+def save_user_preferences(
+    user_id: str,
+    *,
+    goals: list[str] | None = None,
+    constraints: list[str] | None = None,
+    experience_level: str | None = None,
+    coaching_style: str | None = None,
+    preferred_ai: str | None = None,
+    ai_model: str | None = None,
+    custom_rules: list[str] | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Save or update a user's training preferences."""
+    from datetime import datetime
+
+    now = datetime.now().isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_preferences
+                (user_id, goals, constraints, experience_level,
+                 coaching_style, preferred_ai, ai_model, custom_rules, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                goals = COALESCE(excluded.goals, user_preferences.goals),
+                constraints = COALESCE(excluded.constraints, user_preferences.constraints),
+                experience_level = COALESCE(excluded.experience_level, user_preferences.experience_level),
+                coaching_style = COALESCE(excluded.coaching_style, user_preferences.coaching_style),
+                preferred_ai = COALESCE(excluded.preferred_ai, user_preferences.preferred_ai),
+                ai_model = COALESCE(excluded.ai_model, user_preferences.ai_model),
+                custom_rules = COALESCE(excluded.custom_rules, user_preferences.custom_rules),
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                json.dumps(goals) if goals is not None else None,
+                json.dumps(constraints) if constraints is not None else None,
+                experience_level,
+                coaching_style,
+                preferred_ai,
+                ai_model,
+                json.dumps(custom_rules) if custom_rules is not None else None,
+                now,
+            ),
+        )
+
+
+def get_user_preferences(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> dict[str, Any]:
+    """Return the user's training preferences, with defaults for unset fields."""
+    defaults = {
+        "goals": [],
+        "constraints": [],
+        "experience_level": "intermediate",
+        "coaching_style": "direct",
+        "preferred_ai": "gemini",
+        "ai_model": None,
+        "custom_rules": [],
+    }
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT goals, constraints, experience_level, coaching_style,
+                   preferred_ai, ai_model, custom_rules
+            FROM user_preferences
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return defaults
+    return {
+        "goals": json.loads(row[0]) if row[0] else [],
+        "constraints": json.loads(row[1]) if row[1] else [],
+        "experience_level": row[2] or "intermediate",
+        "coaching_style": row[3] or "direct",
+        "preferred_ai": row[4] or "gemini",
+        "ai_model": row[5],
+        "custom_rules": json.loads(row[6]) if row[6] else [],
+    }
 

@@ -189,3 +189,59 @@ def get_workout_count(api_key: str) -> int | None:
         return None
 
 
+def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:
+    """Return all exercise templates (built-in + custom), or None on failure.
+
+    Each template has at least ``id``, ``title``, ``type``,
+    ``primary_muscle_group``, and ``secondary_muscle_groups``.
+    """
+    return _get_all_pages(api_key, "exercise_templates", "exercise_templates", page_size=100)
+
+
+def get_user_info(api_key: str) -> dict[str, Any] | None:
+    """Return the authenticated user's profile, or None on failure."""
+    url = f"{BASE_URL}/user/info"
+    try:
+        response = requests.get(
+            url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as exc:
+        logger.warning("Could not fetch user info from Hevy: %s", exc)
+        return None
+    except ValueError as exc:
+        logger.warning("Hevy returned invalid JSON for user info: %s", exc)
+        return None
+
+
+def get_recent_workouts(
+    api_key: str, limit: int = 10
+) -> list[dict[str, Any]] | None:
+    """Return the N most recent workouts (most recent first), or None."""
+    url = f"{BASE_URL}/workouts"
+    items: list[dict[str, Any]] = []
+    page = 1
+    per_page = min(limit, 10)
+    try:
+        while len(items) < limit:
+            response = requests.get(
+                url,
+                headers=_headers(api_key),
+                params={"page": page, "pageSize": per_page},
+                timeout=REQUEST_TIMEOUT,
+            )
+            response.raise_for_status()
+            data = response.json()
+            batch = data.get("workouts", [])
+            items.extend(batch)
+            if page >= int(data.get("page_count", 1)):
+                break
+            page += 1
+        return items[:limit]
+    except requests.RequestException as exc:
+        logger.warning("Could not fetch recent workouts from Hevy: %s", exc)
+        return None
+    except ValueError as exc:
+        logger.warning("Hevy returned invalid JSON for workouts: %s", exc)
+        return None

@@ -1,0 +1,1 @@
+Consolidate docker-entrypoint.sh's bash sleep-loop and insight_scheduler.py's Python sleep-loop into a single per-user-aware scheduler (respecting each user's own timezone/run-time preference), per the scheduler-job skill.

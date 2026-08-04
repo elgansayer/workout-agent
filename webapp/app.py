@@ -52,10 +52,18 @@ from database import (
     clear_chat_messages,
     init_db,
     set_meta,
+    get_or_create_user,
+    get_user_api_keys,
+    get_user_api_key,
+    save_user_api_key,
+    delete_user_api_key,
+    get_user_preferences,
+    save_user_preferences,
 )
 from google_health_auth import build_authorize_url, exchange_code
 import google.generativeai as genai
 from config import Config
+from ai_provider import available_providers
 import json
 import analytics
 import insights
@@ -240,7 +248,14 @@ async def auth(request: Request):
         email = user.get("email", "")
         if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
             return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
+        # Create or retrieve the user record on first login.
+        user_record = get_or_create_user(
+            email,
+            display_name=user.get("name"),
+            db_path=DB_PATH,
+        )
         request.session["user"] = email
+        request.session["user_id"] = user_record["id"]
     return RedirectResponse("/")
 
 
@@ -832,7 +847,7 @@ You have full access to his training logs, body composition data, personal recor
 Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
 - Reference specific numbers, dates, and exercises from the context when relevant.
-- Keep answers concise but insightful. Use plain text, no markdown formatting.
+- Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use British English.
 
 Conversation so far:
@@ -874,6 +889,23 @@ def _gh_redirect_uri(request: Request) -> str:
 
 @app.get("/settings")
 def settings(request: Request):
+    user_id = request.session.get("user_id")
+    user_keys: dict = {}
+    user_prefs: dict = {}
+    if user_id:
+        user_keys = get_user_api_keys(user_id, db_path=DB_PATH)
+        user_prefs = get_user_preferences(user_id, db_path=DB_PATH)
+
+    # Mask keys for display (show last 4 chars only).
+    masked_keys: dict = {}
+    for provider, data in user_keys.items():
+        key = data.get("api_key", "")
+        masked_keys[provider] = {
+            "masked": f"{'●' * 12}{key[-4:]}" if len(key) > 4 else ("●" * len(key) if key else ""),
+            "has_key": bool(key),
+            "updated_at": data.get("updated_at", ""),
+        }
+
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -882,9 +914,108 @@ def settings(request: Request):
             "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
             "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH)),
             "gh_status": request.query_params.get("gh"),
+            "user_keys": masked_keys,
+            "user_prefs": user_prefs,
+            "ai_providers": available_providers(),
+            "key_status": request.query_params.get("key_status"),
+            "pref_status": request.query_params.get("pref_status"),
         },
     )
 
+
+@app.post("/api/settings/key")
+async def save_api_key(request: Request):
+    """Save or update an API key for the current user."""
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider = body.get("provider", "").strip().lower()
+    api_key = body.get("api_key", "").strip()
+
+    if not provider or not api_key:
+        raise HTTPException(status_code=400, detail="Provider and api_key are required")
+
+    valid_providers = {"hevy", "gemini", "claude", "openai"}
+    if provider not in valid_providers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown provider '{provider}'. Use: {', '.join(valid_providers)}",
+        )
+
+    # Optional model override for AI providers.
+    extra = {}
+    model = body.get("model", "").strip()
+    if model:
+        extra["model"] = model
+
+    save_user_api_key(
+        user_id,
+        provider,
+        api_key,
+        extra=extra or None,
+        db_path=DB_PATH,
+    )
+    return {"status": "ok", "provider": provider}
+
+
+@app.post("/api/settings/key/delete")
+async def remove_api_key(request: Request):
+    """Remove a stored API key for the current user."""
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider = body.get("provider", "").strip().lower()
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
+
+    delete_user_api_key(user_id, provider, db_path=DB_PATH)
+    return {"status": "ok", "provider": provider}
+
+
+@app.post("/api/settings/verify-hevy")
+async def verify_hevy_key(request: Request):
+    """Test a Hevy API key by calling /v1/workouts/count."""
+    _check_rate_limit(request, limit=5)
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    api_key = body.get("api_key", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="api_key is required")
+
+    from hevy_client import get_workout_count
+    count = get_workout_count(api_key)
+    if count is not None:
+        return {"status": "ok", "workout_count": count}
+    return {"status": "error", "detail": "Could not connect to Hevy. Check the API key."}
+
+
+@app.post("/api/settings/preferences")
+async def save_preferences(request: Request):
+    """Save user training preferences."""
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    save_user_preferences(
+        user_id,
+        goals=body.get("goals"),
+        constraints=body.get("constraints"),
+        experience_level=body.get("experience_level"),
+        coaching_style=body.get("coaching_style"),
+        preferred_ai=body.get("preferred_ai"),
+        ai_model=body.get("ai_model"),
+        custom_rules=body.get("custom_rules"),
+        db_path=DB_PATH,
+    )
+    return {"status": "ok"}
 
 @app.get("/google-health/connect")
 def google_health_connect(request: Request):
