@@ -165,11 +165,11 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path):
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary("S1", "2026-06-10", [ExerciseSummary("Deadlift", 100.0, 5, 4)]),
+        WorkoutSummary("S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]),
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", [ExerciseSummary("Deadlift", 120.0, 3, 5)]),
+        WorkoutSummary("S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]),
         db,
     )
     prs = get_personal_records(db)

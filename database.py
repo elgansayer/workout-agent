@@ -434,28 +434,34 @@ def get_personal_records(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]
     Uses the Epley estimate (weight x (1 + reps / 30)) across every logged top
     set, so personal records surface even as the rep targets change by block.
     """
+    # Performance Optimization (Bolt ⚡): Delegate the O(N) iteration and PR calculation
+    # to the SQLite engine to eliminate retrieving every historical record into Python
+    # memory. SQLite ensures bare columns align with the row containing the MAX value.
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT exercise_name, top_weight_kg, top_reps, date
+            SELECT exercise_name,
+                   top_weight_kg,
+                   top_reps,
+                   date,
+                   MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
             FROM exercise_progress
             WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
+            GROUP BY exercise_name
+            ORDER BY e1rm DESC
             """
         ).fetchall()
 
-    best: dict[str, dict[str, Any]] = {}
-    for name, weight, reps, when in rows:
-        e1rm = float(weight) * (1 + int(reps) / 30)
-        current = best.get(name)
-        if current is None or e1rm > current["e1rm"]:
-            best[name] = {
-                "exercise": name,
-                "e1rm": e1rm,
-                "weight_kg": float(weight),
-                "reps": int(reps),
-                "date": when,
-            }
-    return sorted(best.values(), key=lambda r: r["e1rm"], reverse=True)
+    return [
+        {
+            "exercise": name,
+            "e1rm": float(e1rm),
+            "weight_kg": float(weight),
+            "reps": int(reps),
+            "date": when,
+        }
+        for name, weight, reps, when, e1rm in rows
+    ]
 
 
 def get_routine_record(

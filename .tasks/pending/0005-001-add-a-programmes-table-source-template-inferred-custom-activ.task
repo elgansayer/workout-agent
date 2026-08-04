@@ -1,1 +1,0 @@
-Add a programmes table (source: template|inferred|custom, active flag per user) per the programme-builder-ui skill, as the data-model foundation for letting users choose their own workout programme instead of inheriting the hardcoded program.py split.

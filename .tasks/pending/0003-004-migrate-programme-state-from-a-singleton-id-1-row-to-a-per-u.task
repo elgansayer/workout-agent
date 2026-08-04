@@ -1,1 +1,0 @@
-Migrate programme_state from a singleton (id=1) row to a per-user row keyed by user_id, per the multi-tenant-migration skill's note on singleton tables needing more than a simple ALTER TABLE.

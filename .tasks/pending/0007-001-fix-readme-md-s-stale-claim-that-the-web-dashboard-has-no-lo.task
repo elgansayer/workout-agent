@@ -1,1 +1,0 @@
-Fix README.md's stale claim that the web dashboard has no login (it has a working Google OAuth flow in webapp/app.py) and reconcile the inconsistent documented web port numbers (8088 vs 8080 vs 8770) across README.md, docker-compose.yml, and docker-compose.portainer.yml, per the daily documentation sync automation.

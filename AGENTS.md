@@ -1,11 +1,10 @@
 # AGENTS.md (The Engineering Constitution)
 
 This is the authoritative rulebook for any human or AI agent (Claude, DeepSeek,
-Gemini/Antigravity, GitHub Copilot via aider, or otherwise) working on this
-repository, whether interactively or via the autonomous swarm (`swarmd.py`).
-Read this before touching code. Every rule below is enforced mechanically
+Gemini/Antigravity, OpenHands, GitHub Copilot, or otherwise) working on this
+repository. Read this before touching code. Every rule below is enforced mechanically
 where noted — do not weaken, bypass, or "temporarily" disable a gate to get a
-task to complete.
+task to complete. We use OpenHands for autonomous tasks, driven entirely by GitHub Issues.
 
 ## 1. Technology Stack Mandate
 
@@ -90,16 +89,10 @@ contract:
 
 ## 4. Autonomous Execution Protocol
 
-- **A failing verification gate must never reach `main`.** `swarmd.py`'s
-  supervisor runs the full gate (`swarmd syntax`, `ruff check`, `mypy`
+- **A failing verification gate must never reach `main`.** The agent (OpenHands) must run the full gate (`ruff check`, `mypy`
   advisory, `pytest`, an import-sanity check for `webapp.app` and `main`)
-  after every task. On failure it attempts up to `SWARM_FIX_MAX_ROUNDS`
-  automated fix passes targeted at just the failing files; if it's *still*
-  failing after that, the working tree is discarded
-  (`discard_working_tree_changes()`) and the task is moved to
-  `.tasks/stuck/` for human attention — it is never silently committed
-  half-broken, and it is never left retrying forever. A task that cannot
-  pass verification is not done; "stuck" is the correct, honest outcome.
+  before committing any task. If a task cannot
+  pass verification, it is not done.
 - **Before wiring to something outside the file you're editing** (a new pip
   dependency, a new route, a new DB column, a new env var) confirm it
   actually exists: is the package in `requirements*.txt` *and* installed in
@@ -109,11 +102,8 @@ contract:
   code implies they should be is exactly how half-finished features break
   production here.
 - **Before starting any task, check for existing/overlapping work.** Read
-  `.tasks/pending/`, `.tasks/active/`, `.tasks/completed/` (or run
-  `./swarmctl status`) and skim recent `git log` for the area you're about
-  to touch. `task_add()` runs a fuzzy-duplicate check (`find_similar_task()`,
-  threshold 0.72) against titles in all four state directories, but that
-  only catches near-duplicate *titles* — if a task describes something
+  the GitHub Issues queue and skim recent `git log` for the area you're about
+  to touch. If an issue describes something
   already partially implemented (e.g. `hevy_reader.py` /
   `programme_inference.py` already exist but are unwired, per §8), extend or
   wire up the existing implementation rather than writing a second one.
@@ -233,20 +223,11 @@ re-deriving conventions from scratch:
 - `secrets-and-encryption` — storing/reading anything through
   `encryption.py`/`user_api_keys` safely.
 - `verification-gate` — the exact command sequence and pass criteria to run
-  before considering any task complete (this is what `swarmd.py` automates,
-  but the checklist is the source of truth for a human/agent working
-  interactively too).
+  before considering any task complete. OpenHands must execute this checklist
+  successfully before marking an issue complete or pushing code.
 
-## 9. Continuous Agent System (Swarm)
+## 9. Continuous AI Development (OpenHands + GitHub Issues)
 
-This repository runs an autonomous coding swarm (`swarmd.py`, controlled via
-`./swarmctl`) modelled on the same idea used in other projects: a task queue
-(`.tasks/{pending,active,stuck,completed}/`), a rotating multi-model fallback
-chain (Claude CLI → Antigravity/Gemini CLI → GitHub Copilot via aider →
-DeepSeek via aider), a blocking verification gate, and scheduled recurring
-maintenance tasks (`.agents/automations/*.md`, turned into queue entries by
-`.github/workflows/agent-{hourly,daily,weekly}.yml`). See `SWARM.md` for the
-operational quick-start (starting/stopping, required env vars, what each
-component does). The swarm auto-pushes verified commits directly to `main` —
-treat every task file you write as something that will genuinely ship
-unattended, not a suggestion someone will review first.
+We use OpenHands to autonomously build and maintain this project, controlled entirely via GitHub Issues.
+Instead of local task files or a bespoke daemon, OpenHands reads issues directly from the GitHub repository, plans a solution, implements the code, runs the verification gate (linting and testing), and pushes the verified commits.
+Treat every GitHub issue as a direct instruction to the AI that will be worked on and shipped unattended. When you encounter a bug or need a feature, open a GitHub issue.

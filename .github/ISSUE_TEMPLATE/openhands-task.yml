@@ -1,0 +1,27 @@
+name: OpenHands Task
+description: Create a new task for the OpenHands AI agent to solve autonomously
+title: "[TASK] "
+labels: ["ai-agent-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to create a clear, actionable task for the OpenHands agent. The agent will read this issue, plan a solution, implement the code, run tests/linting, and commit the result.
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Description
+      description: What should the AI agent do? Be specific about the desired outcome.
+      placeholder: e.g., Add a user_id column to the workout_history table and migrate all existing reads/writes to scope by the logged-in user.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: How will we know this is done? (The agent will also run `pytest` and `ruff` automatically).
+      placeholder: |
+        - [ ] workout_history table has a user_id column
+        - [ ] All functions in database.py reading/writing to this table accept a user_id
+    validations:
+      required: false

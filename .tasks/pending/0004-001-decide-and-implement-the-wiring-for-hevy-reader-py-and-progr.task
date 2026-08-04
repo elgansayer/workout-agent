@@ -1,1 +1,0 @@
-Decide and implement the wiring for hevy_reader.py and programme_inference.py: expose infer_programme() as a selectable 'infer from my Hevy history' option somewhere reachable from webapp/app.py (a read-only preview endpoint is a reasonable first step) instead of leaving both modules unimported dead code, per the programme-builder-ui skill.

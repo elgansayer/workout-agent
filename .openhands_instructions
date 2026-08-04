@@ -1,0 +1,12 @@
+# OpenHands Instructions for Workout Agent
+
+Welcome to the Workout Agent project! When you start a task, you **MUST** read and adhere to `AGENTS.md` (The Engineering Constitution).
+It contains critical instructions regarding our Technology Stack, Multi-Tenancy Mandate, AI Provider Mandate, Python Code Standards, and Verification Gates.
+
+## Key Directives:
+1. **Verification Gate**: Before considering any task complete, you must run our verification gates (`ruff check .`, `pytest`, `mypy`). Code must be 100% clean and pass all tests before you push.
+2. **Multi-Tenancy**: All new tables must have a `user_id` column. All database access must be filtered by `user_id`. Do not break data isolation.
+3. **AI Providers**: Never call an AI SDK (like `google.generativeai`) directly. You must use `ai_provider.get_provider()` to respect the user's preferred AI model and API key.
+4. **Skills System**: Check `.agents/skills/` for detailed guides on how to implement specific recurring patterns (e.g., adding a FastAPI route, migrating a table, or wiring an AI provider).
+
+Read `AGENTS.md` thoroughly before starting any new GitHub Issue.
