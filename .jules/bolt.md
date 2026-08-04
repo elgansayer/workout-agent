@@ -5,3 +5,7 @@
 ## 2024-XX-XX - [O(n) memory to O(1) in get_progress_history]
 **Learning:** The database query in `get_progress_history` was pulling the entire history of workouts into memory to extract only the last `limit_per_exercise` records. Over time, this unbounded growth would cause performance bottlenecks.
 **Action:** Added an SQLite window function (`ROW_NUMBER() OVER PARTITION BY`) to limit results at the database level. Always look for "fetch everything then slice in Python" patterns as the database grows.
+
+## 2024-05-14 - SQLite 1RM Calculation Offloading
+**Learning:** `get_personal_records()` previously loaded the entire workout history into Python memory to find the highest Epley 1RM per exercise, operating in O(N) memory scale. SQLite natively supports retrieving correctly associated bare columns with aggregate functions like `MAX(weight * (1 + reps/30))` combined with `GROUP BY`.
+**Action:** Shift row-level aggregation logic directly to SQLite queries (e.g., max calculations over history) to ensure unbounded memory growth does not break application logic, fetching O(1) records per exercise instead of O(N).
