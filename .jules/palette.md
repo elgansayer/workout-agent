@@ -13,3 +13,7 @@
 ## 2025-03-03 - Missing Keyboard Focus Indicators
 **Learning:** Found that interactive elements (buttons, links, inputs, textareas) lacked a visible `:focus-visible` state. This makes keyboard navigation very difficult for users who rely on it, as they can't tell which element currently has focus.
 **Action:** Added a global `:focus-visible` rule in `style.css` using the existing `--accent` color to ensure high contrast, accessible focus indicators are present for keyboard users across the entire application without affecting mouse users.
+
+## 2025-03-03 - AI Loading States and Aria Attributes Pattern
+**Learning:** For dynamic AI requests in this design system (like the "Why did this happen?" button), buttons often lack `aria-expanded`, `aria-controls` bindings to their response containers, and visual/functional loading states (e.g. disabling the button) which can result in duplicate requests and poor screen reader experience.
+**Action:** Always bind dynamic explanation buttons to their result containers using `aria-controls` and `aria-expanded`. Use `aria-live="polite"` on the result container to read out the content dynamically. Disable the button during async fetch and restore it in the `finally` block to prevent redundant clicks.
