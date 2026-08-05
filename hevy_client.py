@@ -35,7 +35,8 @@ def fetch_latest_workout(api_key: str) -> dict[str, Any] | None:
             url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-        return response.json()
+        data: dict[str, Any] = response.json()
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not fetch latest workout from Hevy: %s", exc)
         return None
@@ -98,7 +99,8 @@ def create_routine_folder(api_key: str, title: str) -> dict[str, Any] | None:
             url, headers=_headers(api_key), json=body, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-        return response.json()
+        data: dict[str, Any] = response.json()
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not create routine folder '%s': %s", title, exc)
         return None
@@ -115,7 +117,8 @@ def create_routine(api_key: str, payload: dict[str, Any]) -> dict[str, Any] | No
             url, headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-        return response.json()
+        data: dict[str, Any] = response.json()
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not create routine: %s", exc)
         return None
@@ -134,7 +137,8 @@ def update_routine(
             url, headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-        return response.json()
+        data: dict[str, Any] = response.json()
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not update routine %s: %s", routine_id, exc)
         return None
@@ -160,7 +164,9 @@ def get_exercise_history(
             url, headers=_headers(api_key), params=params, timeout=REQUEST_TIMEOUT
         )
         response.raise_for_status()
-        return response.json().get("exercise_history", [])
+        data: dict[str, Any] = response.json()
+        history: list[dict[str, Any]] = data.get("exercise_history", [])
+        return history
     except requests.RequestException as exc:
         logger.warning("Could not fetch exercise history for %s: %s", template_id, exc)
         return None
@@ -202,7 +208,8 @@ def get_user_info(api_key: str) -> dict[str, Any] | None:
     try:
         response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        return response.json()
+        data: dict[str, Any] = response.json()
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not fetch user info from Hevy: %s", exc)
         return None
