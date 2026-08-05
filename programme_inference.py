@@ -169,7 +169,9 @@ def _classify_split(days: list[TrainingDay]) -> str:
     if full_body_days >= len(days) * 0.6:
         return "full_body"
 
+
     # PPL: distinct push, pull, and legs days.
+
     has_push = any(
         "push" == max(cats, key=lambda c: c, default="")
         for cats in day_categories
@@ -179,6 +181,7 @@ def _classify_split(days: list[TrainingDay]) -> str:
     has_legs = any("legs" in cats for cats in day_categories)
     if has_push and has_pull and has_legs and len(days) >= 3:
         return "push_pull_legs"
+
 
     # Upper/Lower: days are either upper or lower focused.
     upper_count = sum(
@@ -198,6 +201,7 @@ def _classify_split(days: list[TrainingDay]) -> str:
     specific_days = sum(1 for d in days if len(d.primary_muscles) <= 3)
     if specific_days >= len(days) * 0.7 and len(days) >= 4:
         return "bro_split"
+
 
     return "custom"
 

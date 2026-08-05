@@ -156,8 +156,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
+
         # Note: For new databases the initial programme_state row is
         # inserted by the migration block below (after table recreation).
+
         cursor.execute(
             """
             INSERT OR IGNORE INTO hevy_meta (key, value)
@@ -478,6 +480,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON check_ins (user_id, id DESC)"
         )
 
+
         # Migration: Migrate programme_state from singleton to user_id-scoped
         cursor.execute("PRAGMA table_info(programme_state)")
         ps_columns = {row[1] for row in cursor.fetchall()}
@@ -561,6 +564,7 @@ def advance_day(
                 "UPDATE programme_state SET current_day = ?",
                 (nxt,),
             )
+
     return nxt
 
 
@@ -1887,7 +1891,9 @@ def set_active_programme(
             ),
         )
         # Reset current_day to 1 for the new programme.
+
         conn.execute(
             "UPDATE programme_state SET current_day = 1 WHERE user_id = ?",
             (user_id,),
         )
+

@@ -34,6 +34,7 @@ jobs:
             exit 0
           fi
 
+
           # Ensure priority labels exist
           gh label create "swarm-active"   --color "0E8A16" --force --repo ${{ github.repository }} || true
           gh label create "ai-agent-task"  --color "1D76DB" --force --repo ${{ github.repository }} || true
