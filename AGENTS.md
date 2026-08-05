@@ -189,19 +189,18 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
-- **`sync_history.py` has zero callers outside itself.** It is never
-  imported by any module, referenced by any shell script, or invoked from
-  any Dockerfile/compose file. It is a standalone utility script for
-  one-off historical Hevy backfills (`python sync_history.py`) and
-  could be moved to a `scripts/` directory or documented in README.
+- **`sync_history.py` is wired** into `main.py` (`--sync-history` CLI flag)
+  and `webapp/app.py` (`/api/settings/sync-history` endpoint). The module
+  itself can still be invoked standalone (`python sync_history.py`).
+  Moving it to a `scripts/` directory would require updating those two
+  import sites.
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Two independent, hand-rolled scheduling loops in one container**
-  (`docker-entrypoint.sh`'s bash sleep-loop and `insight_scheduler.py`'s
-  Python sleep-loop), each single-timezone/single-recipient by construction.
-  Needs consolidating into one scheduler that can support per-user run times
-  once multi-tenancy lands.
+- **Scheduler consolidated.** The dual sleep-loop architecture (bash
+  `docker-entrypoint.sh` + Python `insight_scheduler.py`) has been replaced
+  by a unified `scheduler.py` that iterates per-user run times. The
+  `insight_scheduler.py` module no longer exists.
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
@@ -209,7 +208,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Test coverage gaps** remain on the following modules (any task that
   touches these should add tests as part of the same change, not as a
   follow-up): `programme_inference.py`, `hevy_reader.py`,
-  `insight_cron.py`, `insight_scheduler.py`, `main.py`, `sync_history.py`,
+  `insight_cron.py`, `main.py`, `sync_history.py`,
   `ai_widgets.py`, `weather.py`. Now-covered modules:
   `tests/test_ai_provider.py` (7 tests, PR #85),
   `tests/test_gemini_engine.py` (32 tests, PR #164),

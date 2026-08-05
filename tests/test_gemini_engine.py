@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-from ai_provider import get_provider as ai_get_provider
 from gemini_engine import (
     _build_autonomous_prompt,
     _build_checkin_prompt,
@@ -15,11 +14,9 @@ from gemini_engine import (
     _fallback_rest_message,
     _format_history,
     apply_autonomous_adjustments,
-    create_provider,
     generate_checkin_message,
     generate_next_workout,
     generate_rest_day_message,
-    get_provider,
 )
 from program import BLOCKS
 
@@ -403,36 +400,3 @@ def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
         hevy_logs=[],
     )
     assert result is base
-
-
-# ---------------------------------------------------------------------------
-# get_provider re-export
-# ---------------------------------------------------------------------------
-
-
-def test_get_provider_reexported() -> None:
-    """gemini_engine.get_provider is the same callable as ai_provider.get_provider."""
-    assert get_provider is ai_get_provider
-
-
-# ---------------------------------------------------------------------------
-# create_provider
-# ---------------------------------------------------------------------------
-
-
-def test_create_provider_gemini() -> None:
-    provider = create_provider("gemini", "test-key")
-    assert provider.name() == "Gemini (gemini-2.5-flash)"
-
-
-def test_create_provider_custom_model() -> None:
-    provider = create_provider("openai", "sk-test", model="gpt-4o-mini")
-    assert "gpt-4o-mini" in provider.name()
-    assert "OpenAI" in provider.name()
-
-
-def test_create_provider_unknown_raises() -> None:
-    import pytest
-
-    with pytest.raises(ValueError, match="Unknown AI provider"):
-        create_provider("nonexistent", "key")

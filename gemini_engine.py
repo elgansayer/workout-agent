@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ai_provider import AIProvider, get_provider
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -20,11 +20,9 @@ from program import (
 
 __all__ = [
     "apply_autonomous_adjustments",
-    "create_provider",
     "generate_checkin_message",
     "generate_next_workout",
     "generate_rest_day_message",
-    "get_provider",
 ]
 
 try:
@@ -386,31 +384,3 @@ def apply_autonomous_adjustments(
         )
 
     return base_routines
-
-
-def create_provider(
-    provider_name: str,
-    api_key: str,
-    model: str | None = None,
-) -> AIProvider:
-    """Create an AI provider instance from raw credentials.
-
-    Thin wrapper around :func:`ai_provider.get_provider` so callers that
-    already have a provider name and key on hand don't need to import
-    ``ai_provider`` separately.
-
-    Args:
-        provider_name: ``"gemini"``, ``"claude"``, ``"openai"``, or
-            ``"deepseek"``.
-        api_key: The API key for the chosen provider.
-        model: Optional model override (e.g. ``"gemini-2.0-flash"``).
-
-    Returns:
-        A configured :class:`AIProvider` instance ready to call
-        :meth:`~AIProvider.generate`.
-
-    Raises:
-        ValueError: Unknown *provider_name*.
-        ImportError: The provider's SDK is not installed.
-    """
-    return get_provider(provider_name, api_key, model)
