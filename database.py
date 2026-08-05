@@ -172,6 +172,21 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS programmes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                source TEXT NOT NULL CHECK (source IN ('template', 'inferred', 'custom')),
+                template_key TEXT,
+                name TEXT NOT NULL,
+                definition_json TEXT NOT NULL,
+                active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 role TEXT NOT NULL,
@@ -412,6 +427,63 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("DROP TABLE deep_correlations")
             cursor.execute(
                 "ALTER TABLE deep_correlations_new RENAME TO deep_correlations"
+            )
+
+        # Index for programmes table
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
+            "ON programmes (user_id, active)"
+        )
+
+        # Seed the default template programme (Hybrid Powerbuilding) if no
+        # programmes exist yet for the legacy user.
+        existing = cursor.execute(
+            "SELECT COUNT(*) FROM programmes"
+        ).fetchone()[0]
+        if existing == 0:
+            legacy_id = _ensure_legacy_user(cursor)
+            from program import (
+                BLOCKS,
+                COACHING_RULES,
+                day_exercises,
+                day_focus,
+            )
+
+            days: list[dict[str, Any]] = []
+            for day_num in range(1, TOTAL_DAYS + 1):
+                block = BLOCKS[1]  # Block 1 for initial definition
+                exercises = []
+                for ex in day_exercises(day_num, block):
+                    exercises.append({
+                        "name": ex.name,
+                        "sets": ex.sets,
+                        "rep_range": ex.rep_range,
+                        "note": ex.note,
+                        "template_id": ex.template_id,
+                    })
+                days.append({
+                    "day": day_num,
+                    "focus": day_focus(day_num),
+                    "exercises": exercises,
+                })
+
+            definition = {
+                "days": days,
+                "total_days": TOTAL_DAYS,
+                "cycle_weeks": 12,
+                "block_weeks": 4,
+                "coaching_rules": COACHING_RULES,
+            }
+
+            now = datetime.now(tz=timezone.utc).isoformat()
+            cursor.execute(
+                """
+                INSERT INTO programmes
+                    (user_id, source, template_key, name, definition_json,
+                     active, created_at)
+                VALUES (?, 'template', 'hybrid_powerbuilding', ?, ?, 1, ?)
+                """,
+                (legacy_id, SPLIT_NAME, json.dumps(definition), now),
             )
 
 
@@ -1513,4 +1585,158 @@ def get_user_preferences(
         "preferred_ai": row[4] or "gemini",
         "ai_model": row[5],
         "custom_rules": json.loads(row[6]) if row[6] else [],
+    }
+
+
+# ---- Programme management ----
+
+
+def save_programme(
+    user_id: str,
+    source: str,
+    name: str,
+    definition: dict[str, Any],
+    *,
+    template_key: str | None = None,
+    active: bool = False,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Create a new programme and return its id.
+
+    If *active* is True, all other programmes for this user are first
+    deactivated so only one programme is active at a time.
+    """
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        if active:
+            conn.execute(
+                "UPDATE programmes SET active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+        cursor = conn.execute(
+            """
+            INSERT INTO programmes
+                (user_id, source, template_key, name, definition_json,
+                 active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (user_id, source, template_key, name,
+             json.dumps(definition), int(active), now),
+        )
+        row_id: int | None = cursor.lastrowid
+        assert row_id is not None, "INSERT did not return a row id"
+        return row_id
+
+
+def get_active_programme(
+    user_id: str, db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return the user's currently active programme, or None."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, source, template_key, name, definition_json,
+                   active, created_at
+            FROM programmes
+            WHERE user_id = ? AND active = 1
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _programme_row(row)
+
+
+def get_programmes(
+    user_id: str, db_path: str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Return all programmes for a user, newest first."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, source, template_key, name, definition_json,
+                   active, created_at
+            FROM programmes
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+    return [_programme_row(r) for r in rows]
+
+
+def get_programme(
+    user_id: str, programme_id: int, db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return a specific programme by id, or None if not found/not owned."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, source, template_key, name, definition_json,
+                   active, created_at
+            FROM programmes
+            WHERE id = ? AND user_id = ?
+            """,
+            (programme_id, user_id),
+        ).fetchone()
+    if not row:
+        return None
+    return _programme_row(row)
+
+
+def set_active_programme(
+    user_id: str, programme_id: int, db_path: str = DEFAULT_DB_PATH,
+) -> bool:
+    """Activate a programme, deactivating all others for the user.
+
+    Returns False if the programme was not found or not owned by the user.
+    """
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE programmes SET active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        cursor = conn.execute(
+            "UPDATE programmes SET active = 1 WHERE id = ? AND user_id = ?",
+            (programme_id, user_id),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def delete_programme(
+    user_id: str, programme_id: int, db_path: str = DEFAULT_DB_PATH,
+) -> bool:
+    """Delete a programme.
+
+    Will not delete the active programme unless it is the only one left.
+    Returns False if the programme was not found or not owned.
+    """
+    with _connect(db_path) as conn:
+        # Guard: don't leave a user with zero programmes if at all possible.
+        total = conn.execute(
+            "SELECT COUNT(*) FROM programmes WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()[0]
+        if total <= 1:
+            return False
+        cursor = conn.execute(
+            "DELETE FROM programmes WHERE id = ? AND user_id = ? AND active = 0",
+            (programme_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def _programme_row(row: tuple) -> dict[str, Any]:
+    """Convert a programmes table row to a dictionary."""
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "source": row[2],
+        "template_key": row[3],
+        "name": row[4],
+        "definition_json": row[5],
+        "definition": json.loads(row[5]),
+        "active": bool(row[6]),
+        "created_at": row[7],
     }
