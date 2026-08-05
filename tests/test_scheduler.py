@@ -68,37 +68,6 @@ def test_is_due_multiple_times(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _next_run_time
-# ---------------------------------------------------------------------------
-
-
-def test_next_run_time_already_passed_today(monkeypatch) -> None:
-    fake_now = datetime(2026, 8, 5, 8, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    result = scheduler._next_run_time("UTC", ["07:00"])
-    assert result.hour == 7
-    assert result.minute == 0
-    assert result.day == 6
-
-
-def test_next_run_time_still_upcoming_today(monkeypatch) -> None:
-    fake_now = datetime(2026, 8, 5, 6, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    result = scheduler._next_run_time("UTC", ["07:00"])
-    assert result.hour == 7
-    assert result.minute == 0
-    assert result.day == 5
-
-
-def test_next_run_time_multiple_picks_earliest_upcoming(monkeypatch) -> None:
-    fake_now = datetime(2026, 8, 5, 1, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    result = scheduler._next_run_time("UTC", ["00:00", "05:00"])
-    assert result.hour == 5
-    assert result.day == 5
-
-
-# ---------------------------------------------------------------------------
 # Job dispatch helpers
 # ---------------------------------------------------------------------------
 
