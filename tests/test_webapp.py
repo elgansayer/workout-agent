@@ -265,7 +265,7 @@ def test_api_programmes_select_requires_template_key(client):
 # ---------------------------------------------------------------------------
 
 
-def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
+def test_xai_reasoning_uses_resolve_provider(client, monkeypatch) -> None:
     """The XAI reasoning endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -313,7 +313,7 @@ def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
     assert captured[0]["server_gemini_key"] == "test-gem-key"
 
 
-def test_project_peak_uses_resolve_provider(client, monkeypatch):
+def test_project_peak_uses_resolve_provider(client, monkeypatch) -> None:
     """The project_peak endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -350,7 +350,7 @@ def test_project_peak_uses_resolve_provider(client, monkeypatch):
     assert len(captured) == 1
 
 
-def test_rag_search_uses_resolve_provider(client, monkeypatch):
+def test_rag_search_uses_resolve_provider(client, monkeypatch) -> None:
     """The RAG search (chat) endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -438,7 +438,9 @@ def test_sync_history_requires_hevy_key(monkeypatch, tmp_path):
 
     result = sync_all("", str(tmp_path / "test.db"))
     assert "error" in result
-    assert "Hevy API key" in result["error"]
+    error_msg = result["error"]
+    assert isinstance(error_msg, str)
+    assert "Hevy API key" in error_msg
 
 
 def test_sync_history_no_workouts(monkeypatch, tmp_path):
