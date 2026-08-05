@@ -284,6 +284,38 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON workout_history (user_id, date DESC, id DESC)"
         )
 
+        # Migration: Add user_id column to exercise_progress for multi-tenancy
+        cursor.execute("PRAGMA table_info(exercise_progress)")
+        ep_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ep_columns:
+            cursor.execute(
+                "ALTER TABLE exercise_progress ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            cursor.execute(
+                "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user "
+            "ON exercise_progress (user_id)"
+        )
+
+        # Migration: Add user_id column to body_metrics for multi-tenancy
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        bm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in bm_columns:
+            cursor.execute(
+                "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            cursor.execute(
+                "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user "
+            "ON body_metrics (user_id)"
+        )
+
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
     """Return the current day in the cycle (1-6)."""
@@ -366,9 +398,15 @@ def get_recent_hevy_logs(
 
 
 def save_progress(
-    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
+    summary: WorkoutSummary | None,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Persist the per-exercise top sets from a parsed workout summary."""
+    """Persist the per-exercise top sets from a parsed workout summary.
+
+    If *user_id* is provided, the progress is scoped to that user.
+    """
     if summary is None:
         return
     today = (
@@ -381,8 +419,8 @@ def save_progress(
             conn.execute(
                 """
                 INSERT INTO exercise_progress
-                    (date, exercise_name, top_weight_kg, top_reps, sets)
-                VALUES (?, ?, ?, ?, ?)
+                    (date, exercise_name, top_weight_kg, top_reps, sets, user_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     today,
@@ -390,23 +428,46 @@ def save_progress(
                     exercise.top_weight_kg,
                     exercise.top_reps,
                     exercise.sets,
+                    user_id,
                 ),
             )
 
 
-def get_recent_bests(db_path: str = DEFAULT_DB_PATH) -> dict[str, dict[str, Any]]:
-    """Return the most recently logged top set for each exercise by name."""
+def get_recent_bests(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return the most recently logged top set for each exercise by name.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM exercise_progress
-            WHERE id IN (
-                SELECT MAX(id) FROM exercise_progress GROUP BY exercise_name
-            )
-            ORDER BY exercise_name
-            """
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                FROM exercise_progress
+                WHERE id IN (
+                    SELECT MAX(id) FROM exercise_progress
+                    WHERE user_id = ? GROUP BY exercise_name
+                )
+                AND user_id = ?
+                ORDER BY exercise_name
+                """,
+                (user_id, user_id),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                FROM exercise_progress
+                WHERE id IN (
+                    SELECT MAX(id) FROM exercise_progress GROUP BY exercise_name
+                )
+                ORDER BY exercise_name
+                """
+            ).fetchall()
 
     bests: dict[str, dict[str, Any]] = {}
     for name, weight, reps, sets, when in rows:
@@ -420,26 +481,48 @@ def get_recent_bests(db_path: str = DEFAULT_DB_PATH) -> dict[str, dict[str, Any]
 
 
 def get_progress_history(
-    limit_per_exercise: int = 12, db_path: str = DEFAULT_DB_PATH
+    limit_per_exercise: int = 12,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return recent logged top sets per exercise, oldest first within each."""
+    """Return recent logged top sets per exercise, oldest first within each.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     # Performance Optimization (Bolt ⚡): Use a window function to limit the
     # rows returned per exercise at the database level, preventing memory
     # exhaustion and reducing processing time as the database grows.
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT exercise_name, top_weight_kg, top_reps, sets, date
-            FROM (
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
-                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
-                FROM exercise_progress
-            )
-            WHERE rn <= ?
-            ORDER BY exercise_name, id ASC
-            """,
-            (limit_per_exercise,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                FROM (
+                    SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                           ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                    FROM exercise_progress
+                    WHERE user_id = ?
+                )
+                WHERE rn <= ?
+                ORDER BY exercise_name, id ASC
+                """,
+                (user_id, limit_per_exercise),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                FROM (
+                    SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                           ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                    FROM exercise_progress
+                )
+                WHERE rn <= ?
+                ORDER BY exercise_name, id ASC
+                """,
+                (limit_per_exercise,),
+            ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
     for name, weight, reps, sets, when in rows:
@@ -454,76 +537,139 @@ def get_progress_history(
     return series
 
 
-def get_session_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_session_volumes(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return a per-session training-load proxy, oldest first.
 
     Only the top set of each exercise is stored, so this is an estimate of
     relative session load (sum of top_weight x top_reps x sets), useful for
     spotting volume trends rather than an exact tonnage figure.
+
+    If *user_id* is provided, results are scoped to that user.
     """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT date,
-                   SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                   COUNT(*) AS exercises
-            FROM exercise_progress
-            GROUP BY date
-            ORDER BY date ASC
-            """
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT date,
+                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                       COUNT(*) AS exercises
+                FROM exercise_progress
+                WHERE user_id = ?
+                GROUP BY date
+                ORDER BY date ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT date,
+                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                       COUNT(*) AS exercises
+                FROM exercise_progress
+                GROUP BY date
+                ORDER BY date ASC
+                """
+            ).fetchall()
     return [
         {"date": when, "volume": float(volume or 0), "exercises": int(exercises)}
         for when, volume, exercises in rows
     ]
 
 
-def get_exercise_volumes(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_exercise_volumes(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return total logged training-load per exercise, biggest first.
 
     Like ``get_session_volumes`` this is a top-set proxy (weight x reps x sets),
     useful for breaking volume down by exercise or muscle group.
+
+    If *user_id* is provided, results are scoped to that user.
     """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT exercise_name,
-                   SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                   COUNT(*) AS sessions
-            FROM exercise_progress
-            GROUP BY exercise_name
-            ORDER BY volume DESC
-            """
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT exercise_name,
+                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                       COUNT(*) AS sessions
+                FROM exercise_progress
+                WHERE user_id = ?
+                GROUP BY exercise_name
+                ORDER BY volume DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT exercise_name,
+                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                       COUNT(*) AS sessions
+                FROM exercise_progress
+                GROUP BY exercise_name
+                ORDER BY volume DESC
+                """
+            ).fetchall()
     return [
         {"exercise": name, "volume": float(volume or 0), "sessions": int(sessions)}
         for name, volume, sessions in rows
     ]
 
 
-def get_personal_records(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_personal_records(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return the all-time best estimated 1RM for each exercise.
 
     Uses the Epley estimate (weight x (1 + reps / 30)) across every logged top
     set, so personal records surface even as the rep targets change by block.
+
+    If *user_id* is provided, results are scoped to that user.
     """
     # Performance Optimization (Bolt ⚡): Delegate the O(N) iteration and PR calculation
     # to the SQLite engine to eliminate retrieving every historical record into Python
     # memory. SQLite ensures bare columns align with the row containing the MAX value.
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT exercise_name,
-                   top_weight_kg,
-                   top_reps,
-                   date,
-                   MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
-            FROM exercise_progress
-            WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
-            GROUP BY exercise_name
-            ORDER BY e1rm DESC
-            """
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT exercise_name,
+                       top_weight_kg,
+                       top_reps,
+                       date,
+                       MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
+                FROM exercise_progress
+                WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
+                  AND user_id = ?
+                GROUP BY exercise_name
+                ORDER BY e1rm DESC
+                """,
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT exercise_name,
+                       top_weight_kg,
+                       top_reps,
+                       date,
+                       MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
+                FROM exercise_progress
+                WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
+                GROUP BY exercise_name
+                ORDER BY e1rm DESC
+                """
+            ).fetchall()
 
     return [
         {
@@ -708,23 +854,33 @@ def save_body_metrics(
     metrics: dict[str, Any] | None,
     when: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist a body-composition reading (weight, body fat, muscle, resting HR).
 
     Accepts the dict produced by `health_connect.body_metrics_from_recovery`, or
-    None (a no-op). One row per date: a later reading on the same day replaces
-    the earlier one, so the morning weigh-in is what gets stored.
+    None (a no-op). One row per date per user: a later reading on the same day
+    replaces the earlier one, so the morning weigh-in is what gets stored.
+
+    If *user_id* is provided, the metrics are scoped to that user.
     """
     if not metrics:
         return
     when = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
+        if user_id is not None:
+            conn.execute(
+                "DELETE FROM body_metrics WHERE date = ? AND user_id = ?",
+                (when, user_id),
+            )
+        else:
+            conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
         conn.execute(
             """
             INSERT INTO body_metrics
-                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv)
-            VALUES (?, ?, ?, ?, ?, ?)
+                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 when,
@@ -733,28 +889,51 @@ def save_body_metrics(
                 metrics.get("muscle_pct"),
                 metrics.get("resting_hr"),
                 metrics.get("hrv"),
+                user_id,
             ),
         )
 
 
 def get_body_metrics(
-    limit: int = 60, db_path: str = DEFAULT_DB_PATH
+    limit: int = 60,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent body-composition readings, oldest first for charting."""
+    """Return recent body-composition readings, oldest first for charting.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-            FROM (
-                SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-                FROM body_metrics
-                ORDER BY date DESC, id DESC
-                LIMIT ?
-            )
-            ORDER BY date ASC, id ASC
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                FROM (
+                    SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                    FROM body_metrics
+                    WHERE user_id = ?
+                    ORDER BY date DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY date ASC, id ASC
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                FROM (
+                    SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                    FROM body_metrics
+                    ORDER BY date DESC, id DESC
+                    LIMIT ?
+                )
+                ORDER BY date ASC, id ASC
+                """,
+                (limit,),
+            ).fetchall()
     return [
         {
             "date": when,
