@@ -107,19 +107,27 @@ The coach persona must always respect these facts about the athlete (Elgan):
 
 ```
 workout_agent/
-├── main.py              # Orchestrates the morning run
+├── main.py              # Orchestrates the daily run
 ├── config.py            # Loads secrets from environment / .env
-├── database.py          # SQLite: workout history + per-exercise progress
+├── database.py          # SQLite: history, progress, chat, insights, users
 ├── program.py           # The perfected 6-day split as structured data
 ├── hevy_client.py       # Pulls latest workout from the Hevy API
 ├── hevy_parser.py       # Distils the Hevy payload into a compact summary
 ├── hevy_sync.py         # Builds/updates the sessions as Hevy routines
+├── hevy_reader.py       # Infers training split patterns from Hevy history
 ├── health_connect.py    # Reads sleep/weight JSON exported from Health Connect
-├── google_health_client.py # Auto-syncs weight/body fat from Google Health (Eufy scale)
-├── google_health_auth.py   # One-time OAuth helper to obtain the first refresh token
+├── google_health_client.py # Auto-syncs weight/body fat from Google Health
+├── google_health_auth.py   # One-time OAuth helper for refresh token
 ├── gemini_engine.py     # Asks Gemini to apply progressive overload
+├── ai_provider.py       # Multi-provider AI abstraction (Gemini, Claude, etc.)
+├── encryption.py        # Fernet encryption for stored API keys
 ├── checkin.py           # Periodic planned-vs-actual check-in engine
+├── insights.py          # Training trend analysis (progress/stall/regression)
 ├── lifestyle.py         # Daily lifestyle pillars (nutrition/cardio/recovery)
+├── analytics.py         # Epley 1RM, DOTS, linear projections
+├── insight_cron.py      # Automated insight generation pipeline
+├── insight_scheduler.py # Background scheduler for recurring tasks
+├── weather.py           # Weather integration (Open-Meteo)
 ├── telegram_notifier.py # Sends the message to your phone
 ├── webapp/              # FastAPI + Jinja2 dashboard (server-rendered SVG charts)
 ├── tests/               # pytest suite (no network access)
@@ -253,11 +261,13 @@ the route to also bring in sleep and resting heart rate.
 
 ## Internal web dashboard
 
-A **FastAPI + Jinja2** web app turns the agent's database into a rich, read-only
-control centre. Every chart is **server-rendered SVG** (no JavaScript, no chart
-library, no external calls), so pages load instantly and work fully offline
-behind a reverse proxy. All motivation is automated: the dashboard shows a daily
-hype line chosen from the date, with no buttons to press.
+A **FastAPI + Jinja2** web app turns the agent's database into a rich control
+centre. Every chart is **server-rendered SVG** (no JavaScript, no chart library,
+no external calls), so pages load instantly and work fully offline behind a
+reverse proxy. Google OAuth login gates access when configured; without it the
+dashboard is open and suit-ready for a trusted LAN. All motivation is automated:
+the dashboard shows a daily hype line chosen from the date, with no buttons to
+press.
 
 | Route        | Shows                                                          |
 | ------------ | -------------------------------------------------------------- |
@@ -267,6 +277,8 @@ hype line chosen from the date, with no buttons to press.
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
+| `/chat`      | AI-powered chat interface for questions about your training    |
+| `/settings`  | Configure AI provider, model, API keys, and connector links    |
 
 Run it with Docker alongside the agent (it shares the same SQLite volume):
 
@@ -288,9 +300,10 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
-The app is read-only and has no login, so it sits cleanly behind Apache, nginx,
-or Caddy. Point the proxy at the container's published port. Example Apache
-virtual host mapping `gym.example.com` to the dashboard:
+Point the proxy at the container's published port. For a public domain, set the
+`WEB_GOOGLE_CLIENT_ID` and `WEB_GOOGLE_CLIENT_SECRET` env vars to enable Google
+OAuth login. Example Apache virtual host mapping `gym.example.com` to the
+dashboard:
 
 ```apache
 <VirtualHost *:443>
@@ -302,7 +315,7 @@ virtual host mapping `gym.example.com` to the dashboard:
 </VirtualHost>
 ```
 
-Because there is no authentication, only expose data you are happy to be public,
+Without authentication configured, only expose data you are happy to be public,
 or add HTTP basic auth at the proxy if you want to gate it.
 
 ---
@@ -424,7 +437,9 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    ```
 
    It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
-   from any device on your LAN. Keep it on a trusted network: there is no auth.
+   from any device on your LAN. On a trusted network the dashboard is open; to
+   gate access, set the `WEB_GOOGLE_CLIENT_ID` and related env vars for Google
+   OAuth login.
 
 ---
 
@@ -488,8 +503,8 @@ without it.
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
-   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is
-   no auth.
+   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, and
+   configure Google OAuth (see `.env.example`) to gate access.
 
 > Want the agent to message you immediately to confirm it works? Temporarily set
 > `MODE=once` as an env var and redeploy, then set it back to `schedule`.
