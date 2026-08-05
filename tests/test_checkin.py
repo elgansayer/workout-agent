@@ -59,13 +59,14 @@ def test_review_exercise_detects_progress():
 
 def test_review_exercise_detects_stall():
     history = [
-        {"workout_start_time": f"2026-01-0{i}T08:00:00Z", "weight_kg": 100, "reps": 12}
+        {"workout_start_time": f"2026-01-0{i}T08:00:00Z", "weight_kg": 100, "reps": 10}
         for i in range(1, 4)
     ]
     review = checkin._review_exercise("Leg Press", "4 x 10-12", "10-12", history)
     assert review.sessions == 3
     assert review.change_kg == 0
     assert review.stalled is True
+    assert review.hit_top is False
 
 
 def test_due_seeds_baseline_then_not_due(monkeypatch, tmp_path):

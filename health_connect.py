@@ -68,7 +68,7 @@ def body_metrics_from_recovery(
     }
     if all(
         metrics[key] is None
-        for key in ("weight_kg", "body_fat_pct", "muscle_pct", "resting_hr", "hrv")
+        for key in ("weight_kg", "body_fat_pct", "muscle_pct")
     ):
         return None
     return metrics

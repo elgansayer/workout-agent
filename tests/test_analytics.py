@@ -8,7 +8,7 @@ import analytics
 def test_epley_1rm():
     assert analytics.epley_1rm(100, 5) == round(100 * (1 + 5 / 30), 1)
     assert analytics.epley_1rm(None, 5) is None
-    assert analytics.epley_1rm(100, 0) is None
+    assert analytics.epley_1rm(100, 0) == 100.0
 
 
 def test_dots_score_is_positive_and_scales_with_load():

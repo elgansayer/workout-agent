@@ -39,6 +39,8 @@ def client(tmp_path, monkeypatch):
     summary = WorkoutSummary(
         title="Day 1",
         date="2026-03-02",
+        duration_seconds=3600,
+        total_volume_kg=2800.0,
         exercises=[ExerciseSummary("Deadlift (Barbell)", 140.0, 5, 4)],
     )
     save_progress(summary, db_path)
@@ -85,9 +87,9 @@ def test_nudge_button_and_endpoint_removed(client):
 def test_dashboard_shows_automated_quote_and_charts(client):
     response = client.get("/")
     assert response.status_code == 200
-    # The daily quote is rendered automatically and an SVG ring is present.
-    assert "svg-ring" in response.text
-    assert "day streak" in response.text
+    # The daily quote is rendered automatically and the calendar heatmap is present.
+    assert "svg-cal" in response.text
+    assert "&ldquo;" in response.text      # daily quote rendered
 
 
 def test_progress_renders_svg_charts(client):

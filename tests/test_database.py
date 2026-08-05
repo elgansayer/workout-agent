@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from database import (
     advance_day,
     get_body_metrics,
@@ -67,6 +65,8 @@ def test_save_progress_and_get_recent_bests(tmp_path):
     summary = WorkoutSummary(
         title="Legs & Abs",
         date="2026-06-17",
+        duration_seconds=3600,
+        total_volume_kg=5400.0,
         exercises=[
             ExerciseSummary("Leg Press", 120.0, 12, 3, True),
             ExerciseSummary("Leg Extensions", 60.0, 15, 4, True),
@@ -85,13 +85,13 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", [ExerciseSummary("Leg Press", 100.0, 10, 3)]
+            "S1", "2026-06-10", 3600, 3000.0, [ExerciseSummary("Leg Press", 100.0, 10, 3)]
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 12, 3)]
+            "S2", "2026-06-17", 3600, 3960.0, [ExerciseSummary("Leg Press", 110.0, 12, 3)]
         ),
         db,
     )
@@ -154,6 +154,8 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
         WorkoutSummary(
             "S1",
             "2026-06-10",
+            3600,
+            2000.0,
             [
                 ExerciseSummary("Deadlift", 100.0, 5, 4),  # 100*5*4 = 2000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # bodyweight -> 0
@@ -162,9 +164,9 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
         db,
     )
     volumes = get_session_volumes(db)
-    # save_progress stamps the row with the run date, so everything lands today.
+    # save_progress uses the workout's actual date when available.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
+    assert volumes[0]["date"] == "2026-06-10"
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 
@@ -206,6 +208,8 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
         WorkoutSummary(
             "S1",
             "2026-06-10",
+            3600,
+            3000.0,
             [
                 ExerciseSummary("Leg Press", 100.0, 10, 3),  # 3000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # 0 (bodyweight)
@@ -215,7 +219,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 10, 3)]
+            "S2", "2026-06-17", 3600, 3300.0, [ExerciseSummary("Leg Press", 110.0, 10, 3)]
         ),  # 3300
         db,
     )
