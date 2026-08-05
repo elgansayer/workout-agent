@@ -56,7 +56,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             CREATE TABLE IF NOT EXISTS programme_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 current_day INTEGER NOT NULL,
-                split_name TEXT NOT NULL
+                split_name TEXT NOT NULL,
+                user_id TEXT
             )
             """
         )
@@ -110,7 +111,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 focus TEXT NOT NULL,
                 carb_tier TEXT NOT NULL,
                 plan TEXT NOT NULL,
-                lifestyle TEXT NOT NULL
+                lifestyle TEXT NOT NULL,
+                user_id TEXT
             )
             """
         )
@@ -155,21 +157,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO programme_state (id, current_day, split_name)
-            VALUES (1, 1, ?)
-            """,
-            (SPLIT_NAME,),
-        )
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO hevy_meta (key, value)
-            VALUES ('programme_start_date', ?)
-            """,
-            (datetime.now(tz=timezone.utc).date().isoformat(),),
-        )
-
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS chat_messages (
@@ -252,22 +239,105 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        # ---- Multi-tenant migration: Add user_id to domain tables ----
+        cursor.execute("PRAGMA table_info(programme_state)")
+        ps_columns = {col[1] for col in cursor.fetchall()}
+        if "user_id" not in ps_columns:
+            cursor.execute(
+                "ALTER TABLE programme_state ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+        cursor.execute("PRAGMA table_info(daily_log)")
+        dl_columns = {col[1] for col in cursor.fetchall()}
+        if "user_id" not in dl_columns:
+            cursor.execute(
+                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
 
-def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Return the current day in the cycle (1-6)."""
+        # Backfill legacy rows with a stable legacy tenant.
+        legacy = _get_or_create_legacy_user(cursor)
+        cursor.execute(
+            "UPDATE programme_state SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
+        cursor.execute(
+            "UPDATE daily_log SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
+
+        # Composite indexes for user-scoped queries.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
+            "ON daily_log (user_id, date DESC, id DESC)"
+        )
+
+        # Seed the programme state and hevy meta for the legacy user (idempotent).
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO programme_state (id, current_day, split_name, user_id)
+            VALUES (1, 1, ?, ?)
+            """,
+            (SPLIT_NAME, legacy),
+        )
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO hevy_meta (key, value)
+            VALUES ('programme_start_date', ?)
+            """,
+            (datetime.now(tz=timezone.utc).date().isoformat(),),
+        )
+
+
+def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
+    """Return the id of a stable legacy tenant used for pre-migration data."""
+    import uuid
+
+    row = cursor.execute(
+        "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+    ).fetchone()
+    if row:
+        return row[0]
+
+    user_id = str(uuid.uuid4())
+    now = datetime.now(tz=timezone.utc).isoformat()
+    cursor.execute(
+        "INSERT INTO users (id, email, display_name, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, "legacy@local", "Legacy Data", now),
+    )
+    return user_id
+
+
+def get_legacy_user_id(db_path: str = DEFAULT_DB_PATH) -> str:
+    """Return the id of the legacy tenant user."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT current_day FROM programme_state WHERE id = 1"
+            "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+        ).fetchone()
+    if not row:
+        raise RuntimeError("Legacy user not found — run init_db first.")
+    return row[0]
+
+
+def get_current_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
+    """Return the current day in the cycle (1-6)."""
+    uid = user_id or get_legacy_user_id(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT current_day FROM programme_state WHERE id = 1 AND user_id = ?",
+            (uid,),
         ).fetchone()
     return int(row[0]) if row else 1
 
 
-def advance_day(db_path: str = DEFAULT_DB_PATH) -> int:
+def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
     """Move to the next day, wrapping from TOTAL_DAYS back to 1."""
-    current = get_current_day(db_path)
+    uid = user_id or get_legacy_user_id(db_path)
+    current = get_current_day(db_path, user_id=uid)
     nxt = current + 1 if current < TOTAL_DAYS else 1
     with _connect(db_path) as conn:
-        conn.execute("UPDATE programme_state SET current_day = ? WHERE id = 1", (nxt,))
+        conn.execute(
+            "UPDATE programme_state SET current_day = ? WHERE id = 1 AND user_id = ?",
+            (nxt, uid),
+        )
     return nxt
 
 
@@ -605,36 +675,44 @@ def save_daily_log(
     plan: str,
     lifestyle: str,
     db_path: str = DEFAULT_DB_PATH,
+    user_id: str | None = None,
 ) -> None:
     """Log the full plan and lifestyle guidance issued for a day.
 
     One row per date: a re-run on the same day replaces the earlier entry so the
     log always holds the latest guidance that was sent.
     """
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM daily_log WHERE date = ?", (when,))
+        conn.execute(
+            "DELETE FROM daily_log WHERE date = ? AND user_id = ?", (when, uid)
+        )
         conn.execute(
             """
-            INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (when, day, focus, carb_tier, plan, lifestyle),
+            (when, day, focus, carb_tier, plan, lifestyle, uid),
         )
 
 
 def get_daily_logs(
-    limit: int = 30, db_path: str = DEFAULT_DB_PATH
+    limit: int = 30,
+    db_path: str = DEFAULT_DB_PATH,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return recent daily logs, most recent first."""
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT date, day, focus, carb_tier, plan, lifestyle
             FROM daily_log
+            WHERE user_id = ?
             ORDER BY date DESC, id DESC
             LIMIT ?
             """,
-            (limit,),
+            (uid, limit),
         ).fetchall()
     return [
         {

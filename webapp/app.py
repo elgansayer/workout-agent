@@ -357,10 +357,10 @@ def _format_best(best: dict | None) -> str:
     return "No data yet"
 
 
-def _training_levels() -> dict[str, int]:
+def _training_levels(user_id: str | None = None) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
-    for log in get_daily_logs(limit=400, db_path=DB_PATH):
+    for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
         levels[log["date"]] = 2 if log["day"] is not None else 1
     # A session with logged sets is the strongest signal of a completed workout.
     for session in get_session_volumes(db_path=DB_PATH):
@@ -381,7 +381,7 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(today: date | None = None) -> dict:
+def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH)
@@ -412,7 +412,7 @@ def _dashboard_context(today: date | None = None) -> dict:
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(day, day is None, recovery_like)
 
-    levels = _training_levels()
+    levels = _training_levels(user_id=user_id)
     streak = _current_streak(levels)
     week_in_block = ((week - 1) % BLOCK_WEEKS) + 1
 
@@ -465,7 +465,10 @@ def _dashboard_context(today: date | None = None) -> dict:
 
 @app.get("/")
 def dashboard(request: Request):
-    return templates.TemplateResponse(request, "dashboard.html", _dashboard_context())
+    user_id = request.session.get("user_id")
+    return templates.TemplateResponse(
+        request, "dashboard.html", _dashboard_context(user_id=user_id)
+    )
 
 
 @app.get("/progress")
@@ -523,9 +526,10 @@ def _body_charts() -> dict:
 
 @app.get("/stats")
 def stats(request: Request):
+    user_id = request.session.get("user_id")
     volumes = get_session_volumes(db_path=DB_PATH)
     prs = get_personal_records(db_path=DB_PATH)
-    logs = get_daily_logs(limit=400, db_path=DB_PATH)
+    logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(DB_PATH)
     series = get_progress_history(db_path=DB_PATH)
     today = datetime.now(tz=timezone.utc).date()
@@ -741,13 +745,14 @@ def plan(request: Request):
 
 @app.get("/history")
 def history(request: Request):
-    logs = get_daily_logs(limit=60, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
         request,
         "history.html",
         {
             "active": "history",
-            "calendar": charts.calendar_heatmap(_training_levels()),
+            "calendar": charts.calendar_heatmap(_training_levels(user_id=user_id)),
             "logs": logs,
         },
     )
@@ -853,7 +858,8 @@ def rag_search(request: Request, q: str = Query(...)):
     model = genai.GenerativeModel(config.gemini_model)
 
     # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     history = get_progress_history(db_path=DB_PATH)
     biometrics = get_body_metrics(db_path=DB_PATH)
     prs = get_personal_records(db_path=DB_PATH)
