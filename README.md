@@ -288,9 +288,11 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
-The app is read-only and has no login, so it sits cleanly behind Apache, nginx,
-or Caddy. Point the proxy at the container's published port. Example Apache
-virtual host mapping `gym.example.com` to the dashboard:
+The dashboard supports Google OAuth login (see `.env.example` for the
+`WEB_GOOGLE_CLIENT_ID`, `WEB_GOOGLE_CLIENT_SECRET`, `WEB_AUTH_SECRET`, and
+`ALLOWED_EMAILS` variables) so you can expose it behind a reverse proxy with
+peace of mind. Point the proxy at the container's published port. Example
+Apache virtual host mapping `gym.example.com` to the dashboard:
 
 ```apache
 <VirtualHost *:443>
@@ -302,8 +304,8 @@ virtual host mapping `gym.example.com` to the dashboard:
 </VirtualHost>
 ```
 
-Because there is no authentication, only expose data you are happy to be public,
-or add HTTP basic auth at the proxy if you want to gate it.
+With web auth disabled, the dashboard is open — only expose data you are happy
+to be public, or add HTTP basic auth at the proxy.
 
 ---
 
@@ -324,16 +326,34 @@ or add HTTP basic auth at the proxy if you want to gate it.
    # then edit .env
    ```
 
-   | Variable             | Where to get it                                    |
-   | -------------------- | -------------------------------------------------- |
-   | `HEVY_API_KEY`       | Optional. Hevy web dashboard, Settings, API        |
-   | `GEMINI_API_KEY`     | https://aistudio.google.com/app/apikey             |
-   | `TELEGRAM_BOT_TOKEN` | Talk to @BotFather on Telegram                     |
-   | `TELEGRAM_CHAT_ID`   | Talk to @userinfobot, or see note below            |
-   | `GEMINI_MODEL`       | Optional, defaults to `gemini-2.5-flash`           |
-   | `TELEGRAM_PARSE_MODE`| Optional, blank for plain text or `MarkdownV2`     |
-   | `CHECKIN_ENABLED`    | Optional, `1` (default) to run periodic check-ins  |
-   | `LIFESTYLE_ENABLED`  | Optional, `1` (default) to append daily lifestyle  |
+   | Variable | Where to get it |
+   | --- | --- |
+   | `GEMINI_API_KEY` | Required. https://aistudio.google.com/app/apikey |
+   | `TELEGRAM_BOT_TOKEN` | Required. Talk to @BotFather on Telegram |
+   | `TELEGRAM_CHAT_ID` | Required. Talk to @userinfobot, or see note below |
+   | `HEVY_API_KEY` | Optional. Hevy web dashboard, Settings, API |
+   | `GEMINI_MODEL` | Optional, defaults to `gemini-2.5-flash` |
+   | `TELEGRAM_PARSE_MODE` | Optional, blank for plain text or `MarkdownV2` |
+   | `HEVY_SYNC_ROUTINES` | Optional, `1` (default) to push sessions as Hevy routines |
+   | `HEVY_PREFILL_WEIGHTS` | Optional, `1` (default) to pre-fill target weights |
+   | `CHECKIN_ENABLED` | Optional, `1` (default) to run periodic check-ins |
+   | `LIFESTYLE_ENABLED` | Optional, `1` (default) to append daily lifestyle |
+   | `SELF_REVIEW_ENABLED` | Optional, `1` (default) for weekly self-review digest |
+   | `SELF_REVIEW_WEEKDAY` | Optional, day for weekly digest (default `Sun`) |
+   | `HEALTH_CONNECT_FILE` | Optional, path to a JSON file of recovery metrics |
+   | `GOOGLE_HEALTH_CLIENT_ID` | Optional, for automatic body-composition sync |
+   | `GOOGLE_HEALTH_CLIENT_SECRET` | Optional, for body-composition sync |
+   | `GOOGLE_HEALTH_REFRESH_TOKEN` | Optional, for body-composition sync |
+   | `GOOGLE_HEALTH_REDIRECT_URI` | Optional, dashboard callback URL for OAuth connect button |
+   | `DATABASE_PATH` | Optional, defaults to `workout_agent.db` |
+   | `WEB_GOOGLE_CLIENT_ID` | Optional, for web dashboard Google OAuth login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | Optional, for web dashboard login |
+   | `WEB_AUTH_SECRET` | Optional, encryption key for login session cookies |
+   | `ALLOWED_EMAILS` | Optional, comma-separated Google emails allowed to log in |
+   | `ENCRYPTION_KEY` | Optional, Fernet key for encrypting user API keys at rest |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | Optional, Docker-only scheduling and port overrides |
+
+   See `.env.example` for full descriptions of every variable.
 
    If any required key is missing, the agent reports them all at once on
    startup, each with a one-line hint, rather than failing one at a time.
@@ -374,7 +394,7 @@ or add HTTP basic auth at the proxy if you want to gate it.
    ./start.sh
    ```
    
-   Open `http://localhost:8088` (or the port defined in your `.env`) in your browser. The background schedulers inside the container will automatically take over running daily/weekly tasks.
+   Open `http://localhost:8770` (or the `WEB_PORT` defined in your `.env`) in your browser. The background schedulers inside the container will automatically take over running daily/weekly tasks.
 
 ---
 
@@ -424,7 +444,8 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    ```
 
    It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
-   from any device on your LAN. Keep it on a trusted network: there is no auth.
+   from any device on your LAN. Configure web auth (see `.env.example`) before
+   exposing it beyond a trusted network.
 
 ---
 
@@ -488,8 +509,8 @@ without it.
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
-   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is
-   no auth.
+   `http://<vps-ip>:8770`. Configure web auth (see `.env.example`) if exposing
+   it beyond a private network.
 
 > Want the agent to message you immediately to confirm it works? Temporarily set
 > `MODE=once` as an env var and redeploy, then set it back to `schedule`.
