@@ -288,9 +288,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Dry run: print the generated plan to stdout without sending Telegram.",
     )
+    parser.add_argument(
+        "--sync-history",
+        action="store_true",
+        help="Rebuild local workout_history and exercise_progress from Hevy API "
+        "(one-off backfill). Requires HEVY_API_KEY.",
+    )
     return parser.parse_args(argv)
 
 
 if __name__ == "__main__":
     args = _parse_args()
+    if args.sync_history:
+        from sync_history import sync_all
+
+        api_key = Config.load().hevy_api_key
+        if not api_key:
+            logger.error("HEVY_API_KEY is not set in .env")
+            sys.exit(1)
+        result = sync_all(api_key)
+        if "error" in result:
+            logger.error("%s", result["error"])
+            sys.exit(1)
+        else:
+            logger.info("%s", result)
+            sys.exit(0)
     sys.exit(run(preview=args.preview))
