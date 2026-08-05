@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime, timezone
 
 from database import (
     advance_day,
@@ -84,11 +84,15 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary("S1", "2026-06-10", [ExerciseSummary("Leg Press", 100.0, 10, 3)]),
+        WorkoutSummary(
+            "S1", "2026-06-10", [ExerciseSummary("Leg Press", 100.0, 10, 3)]
+        ),
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 12, 3)]),
+        WorkoutSummary(
+            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 12, 3)]
+        ),
         db,
     )
     bests = get_recent_bests(db)
@@ -106,9 +110,13 @@ def test_save_progress_ignores_none(tmp_path):
 def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
     db = _db(tmp_path)
     init_db(db)
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
+    )
     # A re-run on the same day replaces the earlier entry.
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
+    )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
     logs = get_daily_logs(db_path=db)
@@ -156,7 +164,7 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
     volumes = get_session_volumes(db)
     # save_progress stamps the row with the run date, so everything lands today.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == date.today().isoformat()
+    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 
@@ -165,11 +173,15 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path):
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary("S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]),
+        WorkoutSummary(
+            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]
+        ),
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]),
+        WorkoutSummary(
+            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]
+        ),
         db,
     )
     prs = get_personal_records(db)
@@ -202,11 +214,12 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 10, 3)]),  # 3300
+        WorkoutSummary(
+            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 10, 3)]
+        ),  # 3300
         db,
     )
     volumes = {row["exercise"]: row for row in get_exercise_volumes(db)}
     assert volumes["Leg Press"]["volume"] == 6300.0
     assert volumes["Leg Press"]["sessions"] == 2
     assert volumes["Pull-Ups"]["volume"] == 0.0
-

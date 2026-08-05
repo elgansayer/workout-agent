@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 from config import Config
 from database import (
@@ -39,8 +39,8 @@ _KEY_LAST_COUNT = "last_checkin_workout_count"
 
 @dataclass(frozen=True)
 class CheckinDue:
-    number: int          # this check-in's sequence number (1, 2, 3, ...)
-    workouts_done: int   # sessions logged since the last check-in
+    number: int  # this check-in's sequence number (1, 2, 3, ...)
+    workouts_done: int  # sessions logged since the last check-in
     weeks_elapsed: int
     total_count: int | None
 
@@ -48,9 +48,9 @@ class CheckinDue:
 @dataclass(frozen=True)
 class LiftReview:
     name: str
-    planned: str            # e.g. "4 x 5-8"
+    planned: str  # e.g. "4 x 5-8"
     sessions: int
-    latest: str             # e.g. "120 kg x 6" or "8 reps"
+    latest: str  # e.g. "120 kg x 6" or "8 reps"
     change_kg: float | None  # weight delta across the window
     hit_top: bool | None
     stalled: bool
@@ -79,15 +79,22 @@ def _seed_baseline_if_missing(config: Config, total_count: int | None) -> None:
     """Initialise check-in tracking the first time we ever see this account."""
     if get_meta(_KEY_NUMBER, config.database_path) is None:
         set_meta(_KEY_NUMBER, "0", config.database_path)
-        set_meta(_KEY_LAST_DATE, date.today().isoformat(), config.database_path)
-    if total_count is not None and get_meta(_KEY_LAST_COUNT, config.database_path) is None:
+        set_meta(
+            _KEY_LAST_DATE,
+            datetime.now(tz=timezone.utc).date().isoformat(),
+            config.database_path,
+        )
+    if (
+        total_count is not None
+        and get_meta(_KEY_LAST_COUNT, config.database_path) is None
+    ):
         set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
 
 
 def due(config: Config, today: date | None = None) -> CheckinDue | None:
     """Return check-in details if one is due, otherwise None."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
 
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
@@ -126,16 +133,21 @@ def _session_top_sets(
         )
         current = best.get(when)
         current_key = (
-            current[0] if current and current[0] is not None else -1.0,
-            current[1] if current and current[1] is not None else -1,
-        ) if current is not None else None
+            (
+                current[0] if current and current[0] is not None else -1.0,
+                current[1] if current and current[1] is not None else -1,
+            )
+            if current is not None
+            else None
+        )
         if current_key is None or key > current_key:
             best[when] = (weight, reps)
     return [best[when] for when in sorted(best)]
 
 
-def _review_exercise(name: str, planned: str, rep_range: str,
-                     history: list[dict]) -> LiftReview:
+def _review_exercise(
+    name: str, planned: str, rep_range: str, history: list[dict]
+) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
     latest_w, latest_r = tops[-1] if tops else (None, None)
@@ -147,14 +159,10 @@ def _review_exercise(name: str, planned: str, rep_range: str,
         else None
     )
     rep_change = (
-        latest_r - first_r
-        if latest_r is not None and first_r is not None
-        else None
+        latest_r - first_r if latest_r is not None and first_r is not None else None
     )
     top_rep = _top_rep(rep_range)
-    hit_top = (
-        latest_r is not None and top_rep is not None and latest_r >= top_rep
-    )
+    hit_top = latest_r is not None and top_rep is not None and latest_r >= top_rep
     stalled = (
         sessions >= 3
         and change is not None
@@ -191,9 +199,7 @@ def _analyse(config: Config, block: Block) -> list[LiftReview]:
                 or []
             )
             planned = f"{ex.sets} x {ex.rep_range}"
-            reviews.append(
-                _review_exercise(ex.name, planned, ex.rep_range, history)
-            )
+            reviews.append(_review_exercise(ex.name, planned, ex.rep_range, history))
     return reviews
 
 
@@ -202,7 +208,9 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
         return "No logged Hevy data is available for this period."
     lines = []
     for r in reviews:
-        line = f"- {r.name}: planned {r.planned}; latest {r.latest}; {r.sessions} sessions"
+        line = (
+            f"- {r.name}: planned {r.planned}; latest {r.latest}; {r.sessions} sessions"
+        )
         if r.change_kg is not None and r.change_kg != 0:
             line += f"; weight change {r.change_kg:+g} kg"
         if r.stalled:
@@ -213,12 +221,15 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
     return "\n".join(lines)
 
 
-def _fallback_message(due_info: CheckinDue, block: Block,
-                      reviews: list[LiftReview]) -> str:
+def _fallback_message(
+    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
-        f"{due_info.workouts_done} sessions logged over "
-        f"{due_info.weeks_elapsed} weeks.",
+        (
+            f"{due_info.workouts_done} sessions logged over "
+            f"{due_info.weeks_elapsed} weeks."
+        ),
     ]
     if reviews:
         lines.append("")
@@ -234,8 +245,7 @@ def _fallback_message(due_info: CheckinDue, block: Block,
     return "\n".join(lines)
 
 
-def run_checkin(config: Config, due_info: CheckinDue, week: int,
-                block: Block) -> str:
+def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -> str:
     """Build the check-in message from logged data versus the plan."""
     reviews = _analyse(config, block)
     fallback = _fallback_message(due_info, block, reviews)
@@ -252,11 +262,12 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int,
     )
 
 
-def record(config: Config, due_info: CheckinDue, message: str,
-           today: date | None = None) -> None:
+def record(
+    config: Config, due_info: CheckinDue, message: str, today: date | None = None
+) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     set_meta(_KEY_NUMBER, str(due_info.number), config.database_path)
     set_meta(_KEY_LAST_DATE, today.isoformat(), config.database_path)
     if due_info.total_count is not None:

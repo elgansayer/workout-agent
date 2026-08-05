@@ -19,8 +19,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
 from hevy_reader import (
     CompletedWorkout,
@@ -35,6 +34,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class TrainingDay:
@@ -71,7 +71,9 @@ class InferredProgramme:
 
     # Frequency analysis.
     sessions_per_week: float = 0.0
-    muscle_frequency: dict[str, float] = field(default_factory=dict)  # muscle -> sessions/week
+    muscle_frequency: dict[str, float] = field(
+        default_factory=dict
+    )  # muscle -> sessions/week
 
     # Training history stats.
     total_workouts: int = 0
@@ -87,7 +89,7 @@ class InferredProgramme:
         """Heuristic: if the user trained yesterday but not today, it's rest."""
         if not self.recent_workout_days:
             return False
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         return today not in self.recent_workout_days
 
 
@@ -166,16 +168,28 @@ def _classify_split(days: list[TrainingDay]) -> str:
         return "full_body"
 
     # PPL: distinct push, pull, and legs days.
-    has_push = any("push" == max(cats, key=lambda c: c, default="") for cats in day_categories if "push" in cats)
+    has_push = any(
+        "push" == max(cats, key=lambda c: c, default="")
+        for cats in day_categories
+        if "push" in cats
+    )
     has_pull = any("pull" in cats for cats in day_categories)
     has_legs = any("legs" in cats for cats in day_categories)
     if has_push and has_pull and has_legs and len(days) >= 3:
         return "push_pull_legs"
 
     # Upper/Lower: days are either upper or lower focused.
-    upper_count = sum(1 for cats in day_categories if cats & {"push", "pull"} and not cats & {"legs"})
-    lower_count = sum(1 for cats in day_categories if cats & {"legs"} and not cats & {"push", "pull"})
-    if upper_count > 0 and lower_count > 0 and upper_count + lower_count >= len(days) * 0.7:
+    upper_count = sum(
+        1 for cats in day_categories if cats & {"push", "pull"} and not cats & {"legs"}
+    )
+    lower_count = sum(
+        1 for cats in day_categories if cats & {"legs"} and not cats & {"push", "pull"}
+    )
+    if (
+        upper_count > 0
+        and lower_count > 0
+        and upper_count + lower_count >= len(days) * 0.7
+    ):
         return "upper_lower"
 
     # Bro split: each day focuses on 1-2 specific muscle groups.
@@ -196,7 +210,7 @@ def _compute_frequency(
         return 0.0, {}
 
     # Filter to the window.
-    cutoff = datetime.now() - timedelta(days=window_days)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=window_days)
     recent = []
     for w in workouts:
         if w.start_time:
@@ -261,6 +275,7 @@ def _determine_next_routine(
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 def infer_programme(hevy_data: HevyTrainingData) -> InferredProgramme:
     """Build an InferredProgramme from the user's Hevy training data.

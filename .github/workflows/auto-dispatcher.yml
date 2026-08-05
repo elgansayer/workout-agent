@@ -1,7 +1,6 @@
 name: Swarm Auto-Dispatcher
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: '*/5 * * * *'
   workflow_run:

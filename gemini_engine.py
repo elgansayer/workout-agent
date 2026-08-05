@@ -10,7 +10,14 @@ import google.generativeai as genai
 
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
-from program import COACHING_RULES, Block, SPLIT_NAME, day_exercises, day_focus, format_day
+from program import (
+    COACHING_RULES,
+    SPLIT_NAME,
+    Block,
+    day_exercises,
+    day_focus,
+    format_day,
+)
 
 try:
     from weather import WeatherConditions
@@ -18,6 +25,7 @@ except ImportError:
     WeatherConditions = Any
 
 logger = logging.getLogger(__name__)
+
 
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
     if not history:
@@ -47,9 +55,7 @@ def _build_prompt(
     baseline = format_day(day, block)
     focus = day_focus(day)
     rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
-    workout_text = (
-        workout_summary.as_text() if workout_summary else "None available."
-    )
+    workout_text = workout_summary.as_text() if workout_summary else "None available."
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
     history_text = _format_history(history)
     insights_text = insights.as_text() if insights else "Not enough history yet."
@@ -146,7 +152,7 @@ def generate_next_workout(
         if text:
             return text
         logger.warning("Gemini returned an empty response; using baseline plan.")
-    except Exception as exc:  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
         logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
@@ -199,7 +205,7 @@ def generate_rest_day_message(
         if text:
             return text
         logger.warning("Gemini returned an empty rest-day response; using fallback.")
-    except Exception as exc:  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
         logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
@@ -271,10 +277,11 @@ def generate_checkin_message(
         if text:
             return text
         logger.warning("Gemini returned an empty check-in; using fallback.")
-    except Exception as exc:  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
         logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
 
     return fallback
+
 
 def _build_autonomous_prompt(
     base_routines: dict[str, list[dict[str, Any]]],
@@ -285,11 +292,11 @@ def _build_autonomous_prompt(
     routines_json = json.dumps(base_routines, indent=2)
     # We only send a subset of logs to avoid blowing up context
     logs_json = json.dumps(hevy_logs[:15], indent=2) if hevy_logs else "[]"
-    
+
     thermal_text = "None"
     if weather and weather.is_extreme_heat:
         thermal_text = f"ACTIVE: {weather.as_text()}. Reduce high-tax compound volume by 10% to account for thermal stress."
-        
+
     catabolism_text = "None"
     if is_catabolic:
         catabolism_text = "ACTIVE: Scale data indicates a sudden, disproportionate drop in muscle mass percentage (catabolic state). Increase the daily protein target calculation (e.g., to 2.5 g/kg) in your thought process and importantly, REDUCE training volume across routines until the trend reverses."
@@ -339,10 +346,12 @@ def apply_autonomous_adjustments(
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
-        prompt = _build_autonomous_prompt(base_routines, hevy_logs, weather, is_catabolic)
+        prompt = _build_autonomous_prompt(
+            base_routines, hevy_logs, weather, is_catabolic
+        )
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
-        
+
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
         if text.startswith("```json"):
@@ -351,13 +360,17 @@ def apply_autonomous_adjustments(
             text = text[3:].strip()
         if text.endswith("```"):
             text = text[:-3].strip()
-            
+
         updated = json.loads(text)
         if isinstance(updated, dict):
             return updated
-            
-        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
-    except Exception as exc:
-        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
+
+        logger.warning(
+            "Gemini autonomous routines did not return a dict; using baseline."
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Gemini autonomous adjustment failed (%s); using baseline routines.", exc
+        )
 
     return base_routines

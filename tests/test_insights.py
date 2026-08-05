@@ -98,9 +98,9 @@ def test_recovery_unknown_without_data():
 
 def test_build_insights_orders_problems_first():
     history = {
-        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),       # stalling
-        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),    # progressing
-        "Squat": _sets((110, 8), (107, 8), (104, 8), (100, 8)),       # regressing
+        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),  # stalling
+        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),  # progressing
+        "Squat": _sets((110, 8), (107, 8), (104, 8), (100, 8)),  # regressing
     }
     review = insights.build_insights(history, [], {"sleep_hours": 7.5})
     trends = [lift.trend for lift in review.lifts]
@@ -124,8 +124,8 @@ def test_priorities_returns_only_flagged_lifts():
 
 def test_as_message_is_plain_text_with_sections():
     history = {
-        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),       # stalling
-        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),    # progressing
+        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),  # stalling
+        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),  # progressing
     }
     review = insights.build_insights(history, [], {"sleep_hours": 7.5})
     message = review.as_message(week=4, block_name="Hypertrophy")
