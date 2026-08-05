@@ -54,6 +54,6 @@ def get_current_weather(
         return WeatherConditions(
             temperature_c=temp, humidity_pct=hum, is_extreme_heat=is_extreme
         )
-    except Exception as exc:  # noqa: BLE001
+    except (requests.RequestException, ValueError, KeyError) as exc:
         logger.warning("Could not fetch weather data: %s", exc)
         return None
