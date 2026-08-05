@@ -6,7 +6,10 @@ import json
 import logging
 from typing import Any
 
-from ai_provider import AIProvider
+from ai_provider import (  # re-exported for callers
+    AIProvider,
+    get_provider,
+)
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -17,6 +20,14 @@ from program import (
     day_focus,
     format_day,
 )
+
+__all__ = [
+    "apply_autonomous_adjustments",
+    "generate_checkin_message",
+    "generate_next_workout",
+    "generate_rest_day_message",
+    "get_provider",
+]
 
 try:
     from weather import WeatherConditions
