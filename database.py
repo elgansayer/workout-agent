@@ -435,6 +435,40 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "ALTER TABLE deep_correlations_new RENAME TO deep_correlations"
             )
 
+        # Migration: Add user_id column to daily_log for multi-tenancy
+        cursor.execute("PRAGMA table_info(daily_log)")
+        dl_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in dl_columns:
+            cursor.execute(
+                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            dl_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE daily_log SET user_id = ? WHERE user_id IS NULL",
+                (dl_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
+            "ON daily_log (user_id, date DESC, id DESC)"
+        )
+
+        # Migration: Add user_id column to check_ins for multi-tenancy
+        cursor.execute("PRAGMA table_info(check_ins)")
+        ci_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ci_columns:
+            cursor.execute(
+                "ALTER TABLE check_ins ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            ci_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE check_ins SET user_id = ? WHERE user_id IS NULL",
+                (ci_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_check_ins_user "
+            "ON check_ins (user_id, id DESC)"
+        )
+
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
     """Return the current day in the cycle (1-6)."""
@@ -879,32 +913,55 @@ def save_checkin(
     weeks: int,
     message: str,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Persist a completed programme check-in for later review."""
+    """Persist a completed programme check-in for later review.
+
+    If *user_id* is provided, the check-in is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO check_ins (number, date, workouts_done, weeks, message)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO check_ins (number, date, workouts_done, weeks, message, user_id)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (number, when, workouts_done, weeks, message),
+            (number, when, workouts_done, weeks, message, user_id),
         )
 
 
 def get_checkins(
-    limit: int = 20, db_path: str = DEFAULT_DB_PATH
+    limit: int = 20,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent check-ins, most recent first."""
+    """Return recent check-ins, most recent first.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT number, date, workouts_done, weeks, message
-            FROM check_ins
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT number, date, workouts_done, weeks, message
+                FROM check_ins
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT number, date, workouts_done, weeks, message
+                FROM check_ins
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [
         {
             "number": number,
@@ -925,37 +982,65 @@ def save_daily_log(
     plan: str,
     lifestyle: str,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Log the full plan and lifestyle guidance issued for a day.
 
-    One row per date: a re-run on the same day replaces the earlier entry so the
-    log always holds the latest guidance that was sent.
+    One row per date per user: a re-run on the same day replaces the earlier
+    entry so the log always holds the latest guidance that was sent.
+
+    If *user_id* is provided, the log is scoped to that user.
     """
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM daily_log WHERE date = ?", (when,))
+        if user_id is not None:
+            conn.execute(
+                "DELETE FROM daily_log WHERE date = ? AND user_id = ?",
+                (when, user_id),
+            )
+        else:
+            conn.execute("DELETE FROM daily_log WHERE date = ?", (when,))
         conn.execute(
             """
-            INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (when, day, focus, carb_tier, plan, lifestyle),
+            (when, day, focus, carb_tier, plan, lifestyle, user_id),
         )
 
 
 def get_daily_logs(
-    limit: int = 30, db_path: str = DEFAULT_DB_PATH
+    limit: int = 30,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent daily logs, most recent first."""
+    """Return recent daily logs, most recent first.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT date, day, focus, carb_tier, plan, lifestyle
-            FROM daily_log
-            ORDER BY date DESC, id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT date, day, focus, carb_tier, plan, lifestyle
+                FROM daily_log
+                WHERE user_id = ?
+                ORDER BY date DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT date, day, focus, carb_tier, plan, lifestyle
+                FROM daily_log
+                ORDER BY date DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [
         {
             "date": when,
