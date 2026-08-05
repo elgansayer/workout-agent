@@ -132,7 +132,9 @@ def test_resolve_preserves_provider_case(monkeypatch, fake_calls: list) -> None:
     assert fake_calls[0][0] == "deepseek"
 
 
-def test_resolve_no_user_record_defaults_to_gemini(monkeypatch, fake_calls: list) -> None:
+def test_resolve_no_user_record_defaults_to_gemini(
+    monkeypatch, fake_calls: list
+) -> None:
     """If user has no preferences row, defaults should apply."""
     monkeypatch.setattr(
         "database.get_user_preferences",
