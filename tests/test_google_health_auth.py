@@ -20,6 +20,16 @@ def test_build_authorize_url_contains_required_params():
     assert "googlehealth" in params["scope"][0]
 
 
+def test_build_authorize_url_custom_redirect_and_scope():
+    url = google_health_auth.build_authorize_url(
+        "CID", "ST", redirect_uri="http://example.com/cb", scope="custom"
+    )
+    parsed = urllib.parse.urlparse(url)
+    params = urllib.parse.parse_qs(parsed.query)
+    assert params["redirect_uri"] == ["http://example.com/cb"]
+    assert params["scope"] == ["custom"]
+
+
 def test_exchange_code_posts_and_returns_json(monkeypatch):
     captured = {}
 
@@ -45,3 +55,50 @@ def test_exchange_code_posts_and_returns_json(monkeypatch):
     assert captured["data"]["code"] == "CODE"
     assert captured["data"]["client_id"] == "CID"
     assert captured["data"]["client_secret"] == "SECRET"
+
+
+def test_exchange_code_request_exception_no_response(monkeypatch):
+    import requests
+
+    def _fake_post(url, headers=None, data=None, timeout=None):
+        raise requests.RequestException("network down")
+
+    monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
+    tokens = google_health_auth.exchange_code("CID", "SECRET", "CODE")
+    assert tokens is None
+
+
+def test_exchange_code_request_exception_with_response(monkeypatch):
+    import requests
+
+    class _Resp:
+        text = "bad request error"
+
+    exc = requests.RequestException("bad request")
+    exc.response = _Resp()
+
+    def _fake_post(url, headers=None, data=None, timeout=None):
+        raise exc
+
+    monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
+    tokens = google_health_auth.exchange_code("CID", "SECRET", "CODE")
+    assert tokens is None
+
+
+def test_exchange_code_value_error_on_bad_json(monkeypatch):
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    def _fake_post(url, headers=None, data=None, timeout=None):
+        return _Resp()
+
+    monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
+    tokens = google_health_auth.exchange_code("CID", "SECRET", "CODE")
+    assert tokens is None
+
+
+
