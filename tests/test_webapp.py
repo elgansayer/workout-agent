@@ -257,3 +257,139 @@ def test_api_programmes_select_requires_template_key(client):
         json={},
     )
     assert resp.status_code in (400, 401)
+
+# ---------------------------------------------------------------------------
+# AI Provider wiring tests - verify the chat/RAG/XAI endpoints resolve the
+# user's preferred AI provider rather than hardcoding Gemini.
+# ---------------------------------------------------------------------------
+
+
+def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
+    """The XAI reasoning endpoint resolves via ai_provider.resolve_provider."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+    captured: list[dict] = []
+    saved_prompts: list[str] = []
+
+    class _FakeProvider:
+        def generate(self, prompt, *, stream=False):
+            saved_prompts.append(prompt)
+            return "Causal explanation from fake provider."
+
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+            "server_gemini_model": server_gemini_model,
+            "db_path": db_path,
+        })
+        return _FakeProvider()
+
+    monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
+    monkeypatch.setattr(
+        "webapp.app.save_reasoning_log",
+        lambda *a, **kw: None,
+    )
+    from config import Config
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    response = client.get("/api/xai_reasoning/2026-03-02_Deadlift (Barbell)")
+    assert response.status_code == 200
+    data = response.json()
+    assert "reasoning" in data
+    assert len(captured) == 1
+    assert captured[0]["server_gemini_key"] == "test-gem-key"
+
+
+def test_project_peak_uses_resolve_provider(client, monkeypatch):
+    """The project_peak endpoint resolves via ai_provider.resolve_provider."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+    captured: list[dict] = []
+
+    class _FakeProvider:
+        def generate(self, prompt, *, stream=False):
+            return '{"Deadlift_Projected": 200, "Pullups_Projected": 25, "Validation": "ok"}'
+
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+        })
+        return _FakeProvider()
+
+    monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
+    from config import Config
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    response = client.get("/api/project_peak")
+    assert response.status_code == 200
+    assert len(captured) == 1
+
+
+def test_rag_search_uses_resolve_provider(client, monkeypatch):
+    """The RAG search (chat) endpoint resolves via ai_provider.resolve_provider."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+    captured: list[dict] = []
+
+    class _FakeProvider:
+        def generate(self, prompt, *, stream=False):
+            if stream:
+                return iter(["Response from fake provider."])
+            return "Response from fake provider."
+
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+        })
+        return _FakeProvider()
+
+    monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
+    from config import Config
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    response = client.get("/api/rag_search?q=How+is+my+deadlift+progressing")
+    assert response.status_code == 200
+    assert len(captured) == 1
+
+
+def test_rag_search_rate_limited(client, monkeypatch):
+    """Repeated RAG search requests hit the rate limiter."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+    class _StubProvider:
+        def generate(self, prompt, *, stream=False):
+            return "ok"
+
+    monkeypatch.setattr(
+        "webapp.app.resolve_provider",
+        lambda user_id=None, **kw: _StubProvider(),
+    )
+    from config import Config
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    for i in range(20):
+        client.get(f"/api/rag_search?q=test+{i}")
+
+    response = client.get("/api/rag_search?q=final-test")
+    assert response.status_code == 429
+
+
+def test_xai_reasoning_invalid_context(client):
+    """An invalid context ID returns a graceful error, not a stack trace."""
+    response = client.get("/api/xai_reasoning/nounderscore")
+    assert response.status_code == 200
+    assert response.json() == {"reasoning": "Invalid context ID"}
