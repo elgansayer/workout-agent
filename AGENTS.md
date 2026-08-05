@@ -166,15 +166,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   everyone else. This is the top-priority backlog item.
 - **`ai_provider.py` multi-provider wiring is in progress.** PR #85
   (`wire-ai-provider`) integrates `resolve_provider()` into `gemini_engine.py`,
-  `main.py`, `checkin.py`, and `hevy_sync.py` with full test coverage
-  (`tests/test_ai_provider.py`). `webapp/app.py` and `insight_cron.py`
-  still use hardcoded Gemini SDK calls — they are the next wiring targets.
-- **Two orphaned modules**: `programme_inference.py` and `hevy_reader.py`
-  implement a data-driven "infer the user's real training split from their
-  Hevy history" path but are never imported by `main.py` or
-  `webapp/app.py`. Tracked by GitHub Issue #37
-  ("[TASK] Programme Inference: Wire hevy_reader.py into the app") —
-  deliberate wiring belongs in a dedicated task, not a drive-by sweep.
+  `main.py`, `checkin.py`, and `hevy_sync.py`. `webapp/app.py` and
+  `insight_cron.py` now also use `resolve_provider()` — all AI generation
+  call sites are migrated. `tests/test_ai_provider.py` covers the provider
+  abstraction. The remaining gap is that `gemini_engine.py` still imports
+  `google.generativeai` directly for its prompt functions (it calls
+  `resolve_provider()` at runtime but keeps the SDK import at module level).
+- **`hevy_reader.py` and `programme_inference.py` are now wired** into
+  `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
+  "Infer from my Hevy history" programme builder flow (PR #142). Neither is
+  orphaned; the remaining work is a full programme-selection UI (see next
+  item).
 - **`sync_history.py` has zero callers outside itself.** It is never
   imported by any module, referenced by any shell script, or invoked from
   any Dockerfile/compose file. It is a standalone utility script for
@@ -188,12 +190,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   Python sleep-loop), each single-timezone/single-recipient by construction.
   Needs consolidating into one scheduler that can support per-user run times
   once multi-tenancy lands.
-- **Docs drift from code**: README.md claims the dashboard "has no login" —
-  it has a working Google OAuth login (`webapp/app.py`). README's documented
-  web port (8088/8080/8770 appear inconsistently across README and the two
-  compose files) needs reconciling. `SWARM_RELAXED_TESTS`-style "aspirational
-  comment" drift is exactly the kind of thing `task-daily-documentation-sync`
-  (§9) exists to catch — don't let it recur here.
+- **Docs drift from code**: README.md no longer claims the dashboard "has no
+  login" — the Google OAuth section is accurate. Web port is now uniformly
+  `8770` across README and both compose files (reconciled 2026-08-05).
 - **Zero test coverage** on the newest/most product-relevant modules:
   `gemini_engine.py`, `programme_inference.py`,
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,

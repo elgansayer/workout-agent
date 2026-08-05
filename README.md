@@ -376,7 +376,7 @@ Example Apache virtual host mapping `gym.example.com` to the dashboard:
    ./start.sh
    ```
    
-   Open `http://localhost:8088` (or the port defined in your `.env`) in your browser. The background schedulers inside the container will automatically take over running daily/weekly tasks.
+   Open `http://localhost:8770` (or the port defined in your `.env`) in your browser. The background schedulers inside the container will automatically take over running daily/weekly tasks.
 
 ---
 
