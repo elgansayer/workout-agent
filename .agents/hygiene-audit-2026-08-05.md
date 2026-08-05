@@ -1,6 +1,25 @@
-# Commit Hygiene Audit — 2026-08-05 (Run #4 — Issue #323)
+# Commit Hygiene Audit — 2026-08-05 (Run #4 — Issue #323, Run #5 — Issue #338)
 
 **Result: CLEAN** — No issues found.
+
+## Run #5 (Issue #338, 2026-08-05)
+
+- **Commit messages**: Reviewed last 10 commits. The sole commit message
+  ("feat(hygiene): expand sensitive file scanning to sqlite/log patterns (#323) (#332)")
+  is descriptive. No "fix" or "wip" commits found.
+- **Sensitive files**: `git log -p -10 --` against `SENSITIVE_GLOBS` returned
+  no `.env`, database, sqlite, log, or `data/` files. `.env.example` matched
+  but is explicitly whitelisted.
+- **`.gitignore` coverage**: All required patterns present (`*.db`, `.env`,
+  `__pycache__/`, `.pytest_cache/`, `.venv/`, `*.sqlite`, `*.sqlite3`, `*.log`)
+  plus comprehensive variants for WAL/SHM/journal files, binary images, and OS
+  cruft. No missing entries.
+- **Large files**: No files >3 MB outside `data/` (gitignored). Largest tracked
+  source file is `database.py` at ~1.9 KB — well within limits.
+- **`commit_hygiene.py`**: Runs clean (exit 0), all 40 tests pass.
+- **Verification gates**: ruff clean, pytest 40/40 commit_hygiene tests pass.
+
+## Run #4 (Issue #323)
 
 - **Commit messages**: Reviewed last 10 commits (shallow clone, HEAD grafted
   at 657f3f1). The sole available commit message is descriptive ("Fixes #311:
@@ -19,4 +38,4 @@
   All 37 tests pass. Tool reports clean with zero findings.
 
 **Verification gates (re-run)**: ruff clean (0 warnings), mypy clean (0 issues),
-  pytest 37/37 commit_hygiene tests pass. No action required.
+  pytest 40/40 commit_hygiene tests pass. No action required.
