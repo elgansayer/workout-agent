@@ -307,9 +307,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
                 (legacy_id,),
             )
+        cursor.execute("DROP INDEX IF EXISTS idx_exercise_progress_user")
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user "
-            "ON exercise_progress (user_id)"
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_name_id "
+            "ON exercise_progress (user_id, exercise_name, id DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_date "
+            "ON exercise_progress (user_id, date ASC)"
         )
 
         # Migration: Add user_id column to body_metrics for multi-tenancy
@@ -323,8 +328,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
                 (legacy_id,),
             )
+        cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user ON body_metrics (user_id)"
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
+            "ON body_metrics (user_id, date DESC, id DESC)"
         )
 
         # ---- Programme templates table (multi-user) ----
