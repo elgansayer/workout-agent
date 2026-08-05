@@ -58,8 +58,8 @@ def test_block_phase_tracker_truncates_to_30_sessions():
 
 def test_correlation_insufficient_data():
     """Returns placeholder when fewer than 3 overlapping data points."""
-    biometrics = [{"date": "2025-01-01", "resting_hr": 60}]
-    sessions = [{"volume": 5000, "date": "2025-01-01"}]
+    biometrics: list[dict] = [{"date": "2025-01-01", "resting_hr": 60}]
+    sessions: list[dict] = [{"volume": 5000, "date": "2025-01-01"}]
     result = systemic_recovery_correlation(biometrics, sessions)
     assert "Not enough overlapping data" in result
 
@@ -81,13 +81,13 @@ def test_correlation_no_matching_dates():
 
 def test_correlation_missing_resting_hr():
     """Biometrics without resting_hr are skipped."""
-    biometrics = [
+    biometrics: list[dict] = [
         {"date": "2025-01-01", "resting_hr": None},
         {"date": "2025-01-02", "resting_hr": 60},
         {"date": "2025-01-03", "resting_hr": 62},
         {"date": "2025-01-04", "resting_hr": 58},
     ]
-    sessions = [
+    sessions: list[dict] = [
         {"volume": 5000, "date": "2025-01-02"},
         {"volume": 5200, "date": "2025-01-03"},
         {"volume": 4800, "date": "2025-01-04"},
@@ -98,12 +98,12 @@ def test_correlation_missing_resting_hr():
 
 def test_correlation_renders_svg():
     """Produces a valid SVG scatter plot."""
-    biometrics = [
+    biometrics: list[dict] = [
         {"date": "2025-01-01", "resting_hr": 60},
         {"date": "2025-01-02", "resting_hr": 62},
         {"date": "2025-01-03", "resting_hr": 58},
     ]
-    sessions = [
+    sessions: list[dict] = [
         {"volume": 5000, "date": "2025-01-01"},
         {"volume": 5200, "date": "2025-01-02"},
         {"volume": 4800, "date": "2025-01-03"},
@@ -116,12 +116,12 @@ def test_correlation_renders_svg():
 
 def test_correlation_highlights_anomalies():
     """Anomalous points (high RHR + low volume) get a different color."""
-    biometrics = [
+    biometrics: list[dict] = [
         {"date": "2025-01-01", "resting_hr": 60},
         {"date": "2025-01-02", "resting_hr": 65},
         {"date": "2025-01-03", "resting_hr": 80},  # high RHR
     ]
-    sessions = [
+    sessions: list[dict] = [
         {"volume": 6000, "date": "2025-01-01"},
         {"volume": 5500, "date": "2025-01-02"},
         {"volume": 2000, "date": "2025-01-03"},  # low volume
