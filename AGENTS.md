@@ -189,19 +189,26 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
-- **`sync_history.py` has zero callers outside itself.** It is never
-  imported by any module, referenced by any shell script, or invoked from
-  any Dockerfile/compose file. It is a standalone utility script for
-  one-off historical Hevy backfills (`python sync_history.py`) and
-  could be moved to a `scripts/` directory or documented in README.
+
+- **`scheduler.py` and `insight_cron.py` are wired.** `scheduler.py` is the
+  main long-running process when `MODE=schedule` (`docker-entrypoint.sh`).
+  `insight_cron.py` is invoked as a subprocess by `scheduler.py` for daily
+  and weekly insight jobs. Both have test coverage
+  (`tests/test_scheduler.py`, `tests/test_insight_cron.py`).
+
+- **`sync_history.py` is orphaned** (no callers, no test coverage). Issue
+  #185 tracks wiring decisions. It remains a standalone utility for one-off
+  historical Hevy backfills (`python sync_history.py`).
+
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Two independent, hand-rolled scheduling loops in one container**
-  (`docker-entrypoint.sh`'s bash sleep-loop and `insight_scheduler.py`'s
-  Python sleep-loop), each single-timezone/single-recipient by construction.
-  Needs consolidating into one scheduler that can support per-user run times
-  once multi-tenancy lands.
+
+- **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
+  for a single replica, will silently break correctness (not just
+  performance) the moment the web app runs as more than one instance behind
+  a load balancer. Flag before deploying multi-replica.
+
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
@@ -209,17 +216,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Test coverage gaps** remain on the following modules (any task that
   touches these should add tests as part of the same change, not as a
   follow-up): `programme_inference.py`, `hevy_reader.py`,
-  `insight_cron.py`, `insight_scheduler.py`, `main.py`, `sync_history.py`,
+  `insight_cron.py`, `main.py`, `sync_history.py`,
   `ai_widgets.py`, `weather.py`. Now-covered modules:
   `tests/test_ai_provider.py` (7 tests, PR #85),
   `tests/test_gemini_engine.py` (32 tests, PR #164),
   `tests/test_encryption.py` (PR #146),
-  `tests/test_config.py` (PR #146).
-
-- **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
-  for a single replica, will silently break correctness (not just
-  performance) the moment the web app runs as more than one instance behind
-  a load balancer. Flag before deploying multi-replica.
+  `tests/test_config.py` (PR #146),
+  `tests/test_scheduler.py` (PR #38),
+  `tests/test_insight_cron.py` (PR #38).
 
 ## 8. Skills System
 
