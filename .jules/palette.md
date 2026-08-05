@@ -17,3 +17,6 @@
 ## 2025-03-03 - AI Loading States and Aria Attributes Pattern
 **Learning:** For dynamic AI requests in this design system (like the "Why did this happen?" button), buttons often lack `aria-expanded`, `aria-controls` bindings to their response containers, and visual/functional loading states (e.g. disabling the button) which can result in duplicate requests and poor screen reader experience.
 **Action:** Always bind dynamic explanation buttons to their result containers using `aria-controls` and `aria-expanded`. Use `aria-live="polite"` on the result container to read out the content dynamically. Disable the button during async fetch and restore it in the `finally` block to prevent redundant clicks.
+## 2024-10-24 - Add ARIA Labels to Missing Icons and Form Inputs
+**Learning:** Found an accessibility issue pattern in the app's components where icon-only buttons rely on `title` attributes instead of explicit `aria-label`, and placeholder-only inputs lack proper `aria-label` definitions, degrading screen reader experience.
+**Action:** Always add `aria-label` to icon-only buttons (while hiding decorative SVGs with `aria-hidden="true"`) and provide explicit labels or `aria-label` tags to input fields lacking a visible `<label>`.
