@@ -23,3 +23,9 @@ reach a public deployment.
    unambiguous, fix it directly. If the fix is large or requires a judgment
    call (e.g. a broader auth model change), file a clearly-titled `task_add()`
    entry instead of a partial fix.
+
+## 2026-08-05 Audit Results
+- **Auth middleware**: ✅ All routes behind AuthMiddleware; allow-list correct.
+- **SQL injection**: ✅ All SQL uses parameterised `?` placeholders; no f-string or %-formatting with execute().
+- **Secret exposure**: ✅ No secrets exposed in logging, print(), or JSON responses.
+- **AI rate limiting**: ✅ All AI/connector endpoints (`xai_reasoning`, `project_peak`, `rag_search`, `verify_hevy`) have `_check_rate_limit`.
