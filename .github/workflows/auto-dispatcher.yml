@@ -1,8 +1,10 @@
 name: Swarm Auto-Dispatcher
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron:
+  workflow_dispatch: '*/5 * * * *'
   workflow_run:
     workflows: ["AI Auto-Resolver"]
     types:
@@ -14,7 +16,8 @@ concurrency:
 
 jobs:
   dispatch_and_plan:
-    runs-on: ubuntu-latest
+    runs-on:
+  workflow_dispatch: ubuntu-latest
     permissions:
       issues: write
       actions: read
