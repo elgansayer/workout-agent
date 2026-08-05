@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ai_provider import get_provider
+from ai_provider import get_provider, resolve_provider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -140,10 +140,28 @@ def generate_next_workout(
     last_plan: str | None = None,
     *,
     provider_name: str = "gemini",
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error."""
+    """Generate today's plan, falling back to the baseline plan on error.
+
+    When *user_id* is provided, the user's preferred provider/model/key are
+    resolved from the database via ``resolve_provider()`` (ignoring the
+    explicit *api_key*/ *model_name*/ *provider_name*).  Otherwise the
+    explicit credentials are used directly.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if user_id is not None:
+            provider = resolve_provider(
+                user_id,
+                server_gemini_key=server_gemini_key,
+                server_gemini_model=server_gemini_model,
+                db_path=db_path,
+            )
+        else:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_prompt(
             day, week, block, workout_summary, recovery, history, insights, last_plan
         )
@@ -195,10 +213,28 @@ def generate_rest_day_message(
     recovery: dict[str, Any] | None = None,
     *,
     provider_name: str = "gemini",
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error."""
+    """Generate a short rest-day recovery message, falling back on error.
+
+    When *user_id* is provided, the user's preferred provider/model/key are
+    resolved from the database via ``resolve_provider()`` (ignoring the
+    explicit *api_key*/ *model_name*/ *provider_name*).  Otherwise the
+    explicit credentials are used directly.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if user_id is not None:
+            provider = resolve_provider(
+                user_id,
+                server_gemini_key=server_gemini_key,
+                server_gemini_model=server_gemini_model,
+                db_path=db_path,
+            )
+        else:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -267,10 +303,28 @@ def generate_checkin_message(
     fallback: str,
     *,
     provider_name: str = "gemini",
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
-    """Generate a periodic check-in message, falling back on error."""
+    """Generate a periodic check-in message, falling back on error.
+
+    When *user_id* is provided, the user's preferred provider/model/key are
+    resolved from the database via ``resolve_provider()`` (ignoring the
+    explicit *api_key*/ *model_name*/ *provider_name*).  Otherwise the
+    explicit credentials are used directly.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if user_id is not None:
+            provider = resolve_provider(
+                user_id,
+                server_gemini_key=server_gemini_key,
+                server_gemini_model=server_gemini_model,
+                db_path=db_path,
+            )
+        else:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_checkin_prompt(
             number, week, block, workouts_done, weeks, analysis_text
         )
@@ -344,10 +398,28 @@ def apply_autonomous_adjustments(
     is_catabolic: bool = False,
     *,
     provider_name: str = "gemini",
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines."""
+    """Applies the unified autonomous progression and returns updated JSON routines.
+
+    When *user_id* is provided, the user's preferred provider/model/key are
+    resolved from the database via ``resolve_provider()`` (ignoring the
+    explicit *api_key*/ *model_name*/ *provider_name*).  Otherwise the
+    explicit credentials are used directly.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if user_id is not None:
+            provider = resolve_provider(
+                user_id,
+                server_gemini_key=server_gemini_key,
+                server_gemini_model=server_gemini_model,
+                db_path=db_path,
+            )
+        else:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
