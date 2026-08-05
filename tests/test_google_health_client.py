@@ -187,3 +187,71 @@ def test_sync_uses_stored_token_without_env_token(tmp_path, monkeypatch):
     google_health_client.sync_body_metrics("id", "secret", None, db)
     assert seen["refresh_token"] == "web-linked"
     assert get_meta("google_health_refresh_token", db) == "rotated"
+
+
+def test_latest_value_handles_non_dict_sample_time(monkeypatch):
+    """Regression: sampleTime as a string (not dict) must not crash _latest_value."""
+    points = {
+        "dataPoints": [
+            {
+                "bodyFat": {
+                    "percentage": 14.0,
+                    # sampleTime is a string instead of a nested dict
+                    "sampleTime": "2026-07-01T08:00:00Z",
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse(points),
+    )
+    result = google_health_client._latest_value("access", "body-fat", "bodyFat", "percentage")
+    assert result == 14.0  # value still readable without a parseable time
+
+
+def test_latest_value_handles_missing_sample_time(monkeypatch):
+    """Regression: missing sampleTime must not crash _latest_value."""
+    points = {
+        "dataPoints": [
+            {
+                "bodyFat": {
+                    "percentage": 14.0,
+                }
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse(points),
+    )
+    result = google_health_client._latest_value("access", "body-fat", "bodyFat", "percentage")
+    assert result == 14.0  # value still readable without a sample time
+
+
+def test_fetch_body_metrics_graceful_on_http_error(monkeypatch):
+    """Connector must return None on a 5xx/connection error, not raise."""
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({}, ok=False),
+    )
+    metrics = google_health_client.fetch_body_metrics("access")
+    assert metrics is None
+
+
+def test_fetch_body_metrics_graceful_on_malformed_json(monkeypatch):
+    """Connector must return None on malformed JSON, not raise."""
+
+    class _Bad:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            raise ValueError("not json")
+
+    monkeypatch.setattr(google_health_client.requests, "get", lambda url, **kwargs: _Bad())
+    metrics = google_health_client.fetch_body_metrics("access")
+    assert metrics is None
