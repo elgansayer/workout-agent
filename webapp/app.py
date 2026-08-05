@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import secrets
-import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -52,6 +51,7 @@ import lifestyle
 from ai_provider import available_providers, resolve_provider
 from config import Config
 from database import (
+    check_rate_limit,
     clear_chat_messages,
     delete_user_api_key,
     get_active_programme,
@@ -105,26 +105,26 @@ def get_config():
     return Config.load()
 
 
-_RATE_LIMITS: dict[str, list[float]] = {}
-
-
-def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    now = time.time()
+def _extract_ip(request: Request) -> str:
+    """Extract the client IP from request headers or client info."""
     forwarded = request.headers.get("x-forwarded-for")
     real_ip = request.headers.get("x-real-ip")
     if forwarded:
-        ip = forwarded.split(",")[0].strip()
-    elif real_ip:
-        ip = real_ip.strip()
-    else:
-        ip = request.client.host if request.client else "unknown"
+        return forwarded.split(",")[0].strip()
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
 
-    if ip not in _RATE_LIMITS:
-        _RATE_LIMITS[ip] = []
-    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
-    if len(_RATE_LIMITS[ip]) >= limit:
+
+def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
+    """Enforce a sliding-window rate limit backed by the SQLite database.
+
+    Replaces the old in-process dict so rate limits are correctly shared
+    across multiple web app replicas behind a load balancer.
+    """
+    ip = _extract_ip(request)
+    if not check_rate_limit(ip, limit=limit, window=window, db_path=DB_PATH):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    _RATE_LIMITS[ip].append(now)
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
