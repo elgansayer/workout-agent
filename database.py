@@ -185,9 +185,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)"
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)"
-        )
-        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)"
         )
         # ⚡ Bolt Optimization: Add indexes to eliminate slow TEMP B-TREE sorts on large progress tables.
@@ -252,6 +249,38 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
+        # Migration: Add user_id column to workout_history for multi-tenancy
+        cursor.execute("PRAGMA table_info(workout_history)")
+        woh_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in woh_columns:
+            cursor.execute(
+                "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            # Backfill existing rows with a synthesised legacy user
+            from uuid import uuid4
+            now = datetime.now(tz=timezone.utc).isoformat()
+            # Check if legacy user exists, create if not
+            legacy_row = cursor.execute(
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+            ).fetchone()
+            if legacy_row:
+                legacy_id = legacy_row[0]
+            else:
+                legacy_id = str(uuid4())
+                cursor.execute(
+                    "INSERT INTO users (id, email, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (legacy_id, "legacy@local", "Legacy Data", now),
+                )
+            cursor.execute(
+                "UPDATE workout_history SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
+            "ON workout_history (user_id, date DESC, id DESC)"
+        )
+
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
     """Return the current day in the cycle (1-6)."""
@@ -272,28 +301,51 @@ def advance_day(db_path: str = DEFAULT_DB_PATH) -> int:
 
 
 def save_workout(
-    payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None
+    payload: Any,
+    db_path: str = DEFAULT_DB_PATH,
+    when: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Persist a raw Hevy payload for historical reference."""
+    """Persist a raw Hevy payload for historical reference.
+
+    If *user_id* is provided, the workout is scoped to that user.
+    """
     if payload is None:
         return
     today = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         conn.execute(
-            "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
-            (today, json.dumps(payload)),
+            "INSERT INTO workout_history (date, hevy_payload, user_id) "
+            "VALUES (?, ?, ?)",
+            (today, json.dumps(payload), user_id),
         )
 
 
 def get_recent_hevy_logs(
-    limit: int = 14, db_path: str = DEFAULT_DB_PATH
+    limit: int = 14,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent raw Hevy payloads for autonomous analysis."""
+    """Return recent raw Hevy payloads for autonomous analysis.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT hevy_payload FROM workout_history ORDER BY date DESC, id DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                "SELECT hevy_payload FROM workout_history "
+                "WHERE user_id = ? "
+                "ORDER BY date DESC, id DESC LIMIT ?",
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT hevy_payload FROM workout_history "
+                "ORDER BY date DESC, id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
     logs = []
     for row in rows:
         try:
