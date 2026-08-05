@@ -114,14 +114,15 @@ def _run_insight_job(flag: str) -> bool:
 def _run_commit_hygiene() -> bool:
     """Run the hourly commit-hygiene audit.
 
-    Uses ``--create-issues`` to file GitHub issues for any hygiene findings
-    (security issues, missing .gitignore entries, large files).  Returns True
+    Uses ``--fix`` to apply non-destructive fixes (missing .gitignore entries,
+    remove sensitive files from index) and ``--create-issues`` to file GitHub
+    issues for any hygiene findings requiring human attention.  Returns True
     on success (exit 0 from the audit).
     """
     logger.info("Running commit-hygiene audit ...")
     try:
         subprocess.run(
-            [sys.executable, "commit_hygiene.py", "--create-issues"],
+            [sys.executable, "commit_hygiene.py", "--fix", "--create-issues"],
             check=False,  # exit 1 means issues found, which is informational
             timeout=120,
         )
