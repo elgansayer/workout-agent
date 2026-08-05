@@ -32,8 +32,7 @@ without breaking existing single-tenant deployments mid-migration.
    columns = {row[1] for row in cursor.fetchall()}
    if "user_id" not in columns:
        cursor.execute(
-           "ALTER TABLE workout_history ADD COLUMN user_id TEXT "
-           "REFERENCES users(id)"
+           "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)"
        )
    ```
 

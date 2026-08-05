@@ -37,6 +37,7 @@ class AIProvider(ABC):
 # Gemini
 # ---------------------------------------------------------------------------
 
+
 class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
@@ -66,6 +67,7 @@ class GeminiProvider(AIProvider):
 # ---------------------------------------------------------------------------
 # Anthropic (Claude)
 # ---------------------------------------------------------------------------
+
 
 class ClaudeProvider(AIProvider):
     """Anthropic Claude via the ``anthropic`` SDK."""
@@ -106,6 +108,7 @@ class ClaudeProvider(AIProvider):
 # ---------------------------------------------------------------------------
 # OpenAI
 # ---------------------------------------------------------------------------
+
 
 class OpenAIProvider(AIProvider):
     """OpenAI GPT via the ``openai`` SDK."""
@@ -148,6 +151,7 @@ class OpenAIProvider(AIProvider):
 # ---------------------------------------------------------------------------
 # DeepSeek
 # ---------------------------------------------------------------------------
+
 
 class DeepSeekProvider(AIProvider):
     """DeepSeek via its OpenAI-compatible API.
@@ -207,7 +211,9 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 }
 
 
-def get_provider(provider_name: str, api_key: str, model: str | None = None) -> AIProvider:
+def get_provider(
+    provider_name: str, api_key: str, model: str | None = None
+) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 
     Raises ``ValueError`` for unknown providers and ``ImportError`` when the
@@ -236,6 +242,10 @@ _DISPLAY_NAMES = {
 def available_providers() -> list[dict[str, str]]:
     """Return metadata for each registered provider (for the settings UI)."""
     return [
-        {"id": key, "name": _DISPLAY_NAMES.get(key, key.title()), "default_model": spec["default_model"]}
+        {
+            "id": key,
+            "name": _DISPLAY_NAMES.get(key, key.title()),
+            "default_model": spec["default_model"],
+        }
         for key, spec in PROVIDERS.items()
     ]
