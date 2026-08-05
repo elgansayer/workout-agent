@@ -86,14 +86,20 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", duration_seconds=3600, total_volume_kg=3000.0,
+            "S1",
+            "2026-06-10",
+            duration_seconds=3600,
+            total_volume_kg=3000.0,
             exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)],
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3960.0,
+            "S2",
+            "2026-06-17",
+            duration_seconds=3600,
+            total_volume_kg=3960.0,
             exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)],
         ),
         db,
@@ -113,9 +119,13 @@ def test_save_progress_ignores_none(tmp_path):
 def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
     db = _db(tmp_path)
     init_db(db)
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
+    )
     # A re-run on the same day replaces the earlier entry.
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
+    )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
     logs = get_daily_logs(db_path=db)
@@ -173,11 +183,15 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path):
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary("S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]),
+        WorkoutSummary(
+            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]
+        ),
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]),
+        WorkoutSummary(
+            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]
+        ),
         db,
     )
     prs = get_personal_records(db)
@@ -213,7 +227,10 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3300.0,
+            "S2",
+            "2026-06-17",
+            duration_seconds=3600,
+            total_volume_kg=3300.0,
             exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)],
         ),  # 3300
         db,
@@ -234,6 +251,7 @@ def test_workout_history_migration_adds_user_id_column(tmp_path):
     db = _db(tmp_path)
     # Simulate a pre-migration DB by creating workout_history without user_id
     import sqlite3
+
     conn = sqlite3.connect(db, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
@@ -327,9 +345,9 @@ def test_init_db_migration_idempotent(tmp_path):
     init_db(db)  # must not raise
 
     import sqlite3
+
     with sqlite3.connect(db, timeout=10) as conn:
         row = conn.execute("PRAGMA table_info('workout_history')").fetchall()
         # user_id column still exists
         col_names = {r[1] for r in row}
         assert "user_id" in col_names
-

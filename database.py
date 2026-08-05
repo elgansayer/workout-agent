@@ -261,6 +261,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             # Backfill existing rows with a synthesised legacy user
             from uuid import uuid4
+
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
