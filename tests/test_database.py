@@ -802,7 +802,7 @@ def test_daily_log_user_isolation(tmp_path):
     db = _db(tmp_path)
     init_db(db)
 
-    from database import save_daily_log, get_daily_logs
+    from database import get_daily_logs, save_daily_log
 
     save_daily_log(
         "2026-08-01", 1, "Deadlift", "high", "Plan A", "Walk",
@@ -829,7 +829,7 @@ def test_daily_log_backward_compat(tmp_path):
     db = _db(tmp_path)
     init_db(db)
 
-    from database import save_daily_log, get_daily_logs
+    from database import get_daily_logs, save_daily_log
 
     save_daily_log(
         "2026-08-01", 1, "Deadlift", "high", "Plan", "Lifestyle",
@@ -844,7 +844,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path):
     db = _db(tmp_path)
     init_db(db)
 
-    from database import save_daily_log, get_daily_logs
+    from database import get_daily_logs, save_daily_log
 
     save_daily_log(
         "2026-08-01", 1, "A", "high", "Plan1", "L1",
@@ -913,7 +913,7 @@ def test_check_ins_user_isolation(tmp_path):
     db = _db(tmp_path)
     init_db(db)
 
-    from database import save_checkin, get_checkins
+    from database import get_checkins, save_checkin
 
     save_checkin(1, "2026-08-01", 5, 2, "Message A", db_path=db, user_id="u1")
     save_checkin(1, "2026-08-02", 3, 1, "Message B", db_path=db, user_id="u2")
@@ -932,7 +932,7 @@ def test_check_ins_backward_compat(tmp_path):
     db = _db(tmp_path)
     init_db(db)
 
-    from database import save_checkin, get_checkins
+    from database import get_checkins, save_checkin
 
     save_checkin(1, "2026-08-01", 5, 2, "Legacy checkin", db_path=db)
     cks = get_checkins(limit=10, db_path=db)
