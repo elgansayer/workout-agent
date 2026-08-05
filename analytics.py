@@ -7,7 +7,7 @@ so training volume can be broken down by body part.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 # DOTS coefficients for men (Open Powerlifting). DOTS expresses strength
 # relative to bodyweight on a single scale, so progress shows even as weight
@@ -69,12 +69,94 @@ def project(points: Sequence[tuple[float, float]], x_target: float) -> float | N
 # (Legs) versus "bicep curl" (Arms) and "incline curl" (Arms) versus "incline
 # press" (Chest).
 _GROUP_RULES: list[tuple[str, tuple[str, ...]]] = [
-    ("Core", ("crunch", "hanging leg", "leg raise", "knee raise", "plank", "sit-up", "sit up", "oblique", "ab wheel")),
-    ("Legs", ("leg curl", "leg extension", "leg press", "calf", "squat", "lunge", "hamstring", "quad", "glute", "hip thrust", "rdl")),
-    ("Shoulders", ("lateral", "rear delt", "reverse pec", "delt", "shoulder", "overhead press", "military", "upright")),
-    ("Back", ("deadlift", "pull-up", "pullup", "pull up", "chin-up", "chin up", "chinup", "row", "pulldown", "lat ", "face pull")),
-    ("Arms", ("curl", "tricep", "bicep", "pushdown", "skull", "preacher", "brachial", "cable extension", "overhead cable")),
-    ("Chest", ("bench", "chest", "fly", "flye", "pec", "dip", "push-up", "push up", "incline", "press")),
+    (
+        "Core",
+        (
+            "crunch",
+            "hanging leg",
+            "leg raise",
+            "knee raise",
+            "plank",
+            "sit-up",
+            "sit up",
+            "oblique",
+            "ab wheel",
+        ),
+    ),
+    (
+        "Legs",
+        (
+            "leg curl",
+            "leg extension",
+            "leg press",
+            "calf",
+            "squat",
+            "lunge",
+            "hamstring",
+            "quad",
+            "glute",
+            "hip thrust",
+            "rdl",
+        ),
+    ),
+    (
+        "Shoulders",
+        (
+            "lateral",
+            "rear delt",
+            "reverse pec",
+            "delt",
+            "shoulder",
+            "overhead press",
+            "military",
+            "upright",
+        ),
+    ),
+    (
+        "Back",
+        (
+            "deadlift",
+            "pull-up",
+            "pullup",
+            "pull up",
+            "chin-up",
+            "chin up",
+            "chinup",
+            "row",
+            "pulldown",
+            "lat ",
+            "face pull",
+        ),
+    ),
+    (
+        "Arms",
+        (
+            "curl",
+            "tricep",
+            "bicep",
+            "pushdown",
+            "skull",
+            "preacher",
+            "brachial",
+            "cable extension",
+            "overhead cable",
+        ),
+    ),
+    (
+        "Chest",
+        (
+            "bench",
+            "chest",
+            "fly",
+            "flye",
+            "pec",
+            "dip",
+            "push-up",
+            "push up",
+            "incline",
+            "press",
+        ),
+    ),
 ]
 
 

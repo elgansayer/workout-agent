@@ -24,7 +24,13 @@ class ConfigError(RuntimeError):
 # Day-of-week names accepted by SELF_REVIEW_WEEKDAY, mapped to Python's
 # Monday=0 .. Sunday=6 convention.
 _WEEKDAYS = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
 }
 
 
@@ -68,7 +74,7 @@ class Config:
     self_review_weekday: int
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         missing: list[str] = []
 
         def required(name: str) -> str:
@@ -93,7 +99,9 @@ class Config:
         hevy_api_key = os.environ.get("HEVY_API_KEY", "").strip() or None
         health_file = os.environ.get("HEALTH_CONNECT_FILE", "").strip() or None
         parse_mode = os.environ.get("TELEGRAM_PARSE_MODE", "").strip() or None
-        sync_routines = os.environ.get("HEVY_SYNC_ROUTINES", "1").strip().lower() not in (
+        sync_routines = os.environ.get(
+            "HEVY_SYNC_ROUTINES", "1"
+        ).strip().lower() not in (
             "0",
             "false",
             "no",
@@ -148,4 +156,3 @@ class Config:
             self_review_enabled=self_review_enabled,
             self_review_weekday=self_review_weekday,
         )
-

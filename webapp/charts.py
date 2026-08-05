@@ -12,8 +12,8 @@ drop straight into the markup.
 from __future__ import annotations
 
 import html
-from datetime import date, timedelta
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta, timezone
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -116,20 +116,22 @@ def line_chart(
       <stop offset="100%" stop-color="{colour}" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  {''.join(grid)}
+  {"".join(grid)}
   <polygon points="{area_pts}" fill="url(#{grad_id})"/>
   <polyline points="{line_pts}" fill="none" stroke="{colour}" stroke-width="2.4"
     stroke-linejoin="round" stroke-linecap="round"/>
   {dots}
   <circle cx="{lx:.1f}" cy="{ly:.1f}" r="4" fill="{colour}" stroke="#0f1115" stroke-width="2"/>
-  {''.join(label_axis)}
+  {"".join(label_axis)}
   <text x="{pad_l}" y="{height - 8}" text-anchor="start" class="svg-axis">{first_date}</text>
   <text x="{width - pad_r}" y="{height - 8}" text-anchor="end" class="svg-axis">{last_date}</text>
   <text x="{lx:.1f}" y="{ly - 9:.1f}" text-anchor="end" class="svg-value" fill="{colour}">{last_label}</text>
 </svg>"""
 
 
-def progress_ring(pct: float, *, label: str = "", sub: str = "", colour: str = ACCENT) -> str:
+def progress_ring(
+    pct: float, *, label: str = "", sub: str = "", colour: str = ACCENT
+) -> str:
     """A circular gauge filled to ``pct`` (0-100)."""
     pct = max(0.0, min(100.0, float(pct)))
     size, stroke = 132, 12
@@ -178,12 +180,14 @@ def donut(segments: Sequence[dict], *, size: int = 160) -> str:
         )
     svg = f"""<svg viewBox="0 0 {size} {size}" class="svg-donut" role="img">
   <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{TRACK}" stroke-width="{stroke}"/>
-  {''.join(arcs)}
+  {"".join(arcs)}
 </svg>"""
     return f'<div class="donut-wrap">{svg}<div class="legend">{"".join(legend)}</div></div>'
 
 
-def bar_chart(bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", height: int = 200) -> str:
+def bar_chart(
+    bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", height: int = 200
+) -> str:
     """Vertical bars. ``bars`` = ``[{"label", "value", "caption"?}]``."""
     items = list(bars)
     if not items:
@@ -205,7 +209,7 @@ def bar_chart(bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", hei
         rects.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
             f'rx="4" fill="{colour}"><title>{_esc(b.get("caption") or b["label"])}: '
-            f'{_nice_round(v)} {_esc(unit)}</title></rect>'
+            f"{_nice_round(v)} {_esc(unit)}</title></rect>"
         )
         labels.append(
             f'<text x="{x + bar_w / 2:.1f}" y="{height - 8}" text-anchor="middle" '
@@ -217,17 +221,19 @@ def bar_chart(bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", hei
                 f'class="svg-barval">{_nice_round(v)}</text>'
             )
     return f"""<svg viewBox="0 0 {width} {height}" class="svg-chart" role="img" preserveAspectRatio="none">
-  {''.join(rects)}
-  {''.join(labels)}
+  {"".join(rects)}
+  {"".join(labels)}
 </svg>"""
 
 
-def calendar_heatmap(levels: dict[str, int], *, weeks: int = 18, end: date | None = None) -> str:
+def calendar_heatmap(
+    levels: dict[str, int], *, weeks: int = 18, end: date | None = None
+) -> str:
     """A GitHub-style activity calendar.
 
     ``levels`` maps ISO date strings to an intensity 0-4.
     """
-    end = end or date.today()
+    end = end or datetime.now(tz=timezone.utc).date()
     # Start on the Monday of the earliest visible week.
     start = end - timedelta(days=weeks * 7 - 1)
     start -= timedelta(days=start.weekday())
@@ -273,12 +279,14 @@ def calendar_heatmap(levels: dict[str, int], *, weeks: int = 18, end: date | Non
             last_month = current.month
         current += timedelta(days=1)
     return f"""<svg viewBox="0 0 {width} {height}" class="svg-cal" role="img">
-  {''.join(month_marks)}
-  {''.join(squares)}
+  {"".join(month_marks)}
+  {"".join(squares)}
 </svg>"""
 
 
-def sparkline(values: Sequence[float], *, colour: str = ACCENT, width: int = 120, height: int = 34) -> str:
+def sparkline(
+    values: Sequence[float], *, colour: str = ACCENT, width: int = 120, height: int = 34
+) -> str:
     """A tiny inline trend line."""
     vals = [float(v) for v in values if v is not None]
     if len(vals) < 2:

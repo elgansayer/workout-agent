@@ -31,6 +31,7 @@ standard pattern for closing that gap one call site at a time.
    ```python
    from ai_provider import get_provider
 
+
    def resolve_provider(user_id: str) -> AIProvider:
        prefs = database.get_user_preferences(user_id)
        provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
@@ -41,9 +42,7 @@ standard pattern for closing that gap one call site at a time.
            # provider — never silently use the server key for a provider
            # the user explicitly configured but whose key lookup failed.
            if provider_name != "gemini":
-               raise ValueError(
-                   f"No {provider_name} key configured for this user"
-               )
+               raise ValueError(f"No {provider_name} key configured for this user")
            api_key = config.gemini_api_key
        return get_provider(provider_name, api_key, model)
    ```

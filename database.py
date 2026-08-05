@@ -9,12 +9,13 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
-from datetime import date
+from collections.abc import Iterator
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
-from encryption import encrypt, decrypt
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
@@ -166,9 +167,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             INSERT OR IGNORE INTO hevy_meta (key, value)
             VALUES ('programme_start_date', ?)
             """,
-            (date.today().isoformat(),),
+            (datetime.now(tz=timezone.utc).date().isoformat(),),
         )
-        
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS chat_messages (
@@ -180,14 +181,24 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
         )
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)"
+        )
         # ⚡ Bolt Optimization: Add indexes to eliminate slow TEMP B-TREE sorts on large progress tables.
         # - idx_exercise_progress_name_id optimizes get_progress_history, get_recent_bests, and get_exercise_volumes
         # - idx_exercise_progress_date optimizes get_session_volumes
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date)"
+        )
 
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
@@ -256,29 +267,32 @@ def advance_day(db_path: str = DEFAULT_DB_PATH) -> int:
     current = get_current_day(db_path)
     nxt = current + 1 if current < TOTAL_DAYS else 1
     with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE programme_state SET current_day = ? WHERE id = 1", (nxt,)
-        )
+        conn.execute("UPDATE programme_state SET current_day = ? WHERE id = 1", (nxt,))
     return nxt
 
 
-def save_workout(payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None) -> None:
+def save_workout(
+    payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None
+) -> None:
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
         return
-    today = when or date.today().isoformat()
+    today = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
             (today, json.dumps(payload)),
         )
 
-def get_recent_hevy_logs(limit: int = 14, db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+
+def get_recent_hevy_logs(
+    limit: int = 14, db_path: str = DEFAULT_DB_PATH
+) -> list[dict[str, Any]]:
     """Return recent raw Hevy payloads for autonomous analysis."""
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT hevy_payload FROM workout_history ORDER BY date DESC, id DESC LIMIT ?",
-            (limit,)
+            (limit,),
         ).fetchall()
     logs = []
     for row in rows:
@@ -291,18 +305,22 @@ def get_recent_hevy_logs(limit: int = 14, db_path: str = DEFAULT_DB_PATH) -> lis
                 logs.extend(parsed)
             else:
                 logs.append(parsed)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
     return logs[:limit]
 
 
 def save_progress(
-    summary: "WorkoutSummary | None", db_path: str = DEFAULT_DB_PATH
+    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary."""
     if summary is None:
         return
-    today = summary.date[:10] if summary.date else date.today().isoformat()
+    today = (
+        summary.date[:10]
+        if summary.date
+        else datetime.now(tz=timezone.utc).date().isoformat()
+    )
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(
@@ -365,7 +383,7 @@ def get_progress_history(
             WHERE rn <= ?
             ORDER BY exercise_name, id ASC
             """,
-            (limit_per_exercise,)
+            (limit_per_exercise,),
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
@@ -517,14 +535,10 @@ def set_meta(key: str, value: str, db_path: str = DEFAULT_DB_PATH) -> None:
         )
 
 
-def delete_routine_record(
-    routine_key: str, db_path: str = DEFAULT_DB_PATH
-) -> None:
+def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> None:
     """Remove a tracked routine record (used when a routine is renamed)."""
     with _connect(db_path) as conn:
-        conn.execute(
-            "DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,)
-        )
+        conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
 
 
 def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
@@ -535,7 +549,7 @@ def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return date.today()
+    return datetime.now(tz=timezone.utc).date()
 
 
 def save_checkin(
@@ -648,7 +662,7 @@ def save_body_metrics(
     """
     if not metrics:
         return
-    when = when or date.today().isoformat()
+    when = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
         conn.execute(
@@ -710,14 +724,16 @@ def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) ->
                 date = excluded.date,
                 insight_json = excluded.insight_json
             """,
-            (date.today().isoformat(), insight_json),
+            (datetime.now(tz=timezone.utc).date().isoformat(), insight_json),
         )
 
 
 def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
     """Get the latest dashboard insight JSON as a dict."""
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT insight_json FROM dashboard_insights WHERE id = 1").fetchone()
+        row = conn.execute(
+            "SELECT insight_json FROM dashboard_insights WHERE id = 1"
+        ).fetchone()
     if row:
         try:
             return json.loads(row[0])
@@ -726,7 +742,9 @@ def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
     return None
 
 
-def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH) -> None:
+def save_reasoning_log(
+    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH
+) -> None:
     """Save an AI reasoning log for an exercise change."""
     with _connect(db_path) as conn:
         conn.execute(
@@ -736,18 +754,27 @@ def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_p
             ON CONFLICT(context_id) DO UPDATE SET
                 reasoning = excluded.reasoning
             """,
-            (context_id, date.today().isoformat(), exercise_name, reasoning),
+            (
+                context_id,
+                datetime.now(tz=timezone.utc).date().isoformat(),
+                exercise_name,
+                reasoning,
+            ),
         )
 
 
 def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
     """Get the reasoning log by context_id."""
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)).fetchone()
+        row = conn.execute(
+            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)
+        ).fetchone()
     return row[0] if row else None
 
 
-def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH) -> None:
+def save_deep_correlation(
+    insight_markdown: str, db_path: str = DEFAULT_DB_PATH
+) -> None:
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -757,19 +784,19 @@ def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH)
                 date = excluded.date,
                 insight_markdown = excluded.insight_markdown
             """,
-            (date.today().isoformat(), insight_markdown),
+            (datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
         )
 
 
 def get_deep_correlation(db_path: str = DEFAULT_DB_PATH) -> str | None:
     with _connect(db_path) as conn:
-        row = conn.execute("SELECT insight_markdown FROM deep_correlations WHERE id = 1").fetchone()
+        row = conn.execute(
+            "SELECT insight_markdown FROM deep_correlations WHERE id = 1"
+        ).fetchone()
     return row[0] if row else None
 
 
-def save_chat_message(
-    role: str, content: str, db_path: str = DEFAULT_DB_PATH
-) -> None:
+def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
     from datetime import datetime
 
@@ -779,7 +806,7 @@ def save_chat_message(
             INSERT INTO chat_messages (role, content, created_at)
             VALUES (?, ?, ?)
             """,
-            (role, content, datetime.now().isoformat()),
+            (role, content, datetime.now(tz=timezone.utc).isoformat()),
         )
 
 
@@ -815,6 +842,7 @@ def clear_chat_messages(db_path: str = DEFAULT_DB_PATH) -> None:
 # Multi-user management (Sprint 1)
 # ---------------------------------------------------------------------------
 
+
 def get_or_create_user(
     email: str,
     display_name: str | None = None,
@@ -841,7 +869,7 @@ def get_or_create_user(
             }
 
         user_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = datetime.now(tz=timezone.utc).isoformat()
         conn.execute(
             """
             INSERT INTO users (id, email, display_name, created_at)
@@ -859,7 +887,9 @@ def get_or_create_user(
         }
 
 
-def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> dict[str, Any] | None:
+def get_user_by_id(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> dict[str, Any] | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -881,6 +911,7 @@ def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> dict[str, An
 
 # ---- API key management ----
 
+
 def save_user_api_key(
     user_id: str,
     provider: str,
@@ -895,7 +926,7 @@ def save_user_api_key(
     """Store (or update) an encrypted API key for a user + provider pair."""
     from datetime import datetime
 
-    now = datetime.now().isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
     encrypted_key = encrypt(api_key) if api_key else ""
     encrypted_secret = encrypt(client_secret) if client_secret else None
     encrypted_refresh = encrypt(refresh_token) if refresh_token else None
@@ -1000,6 +1031,7 @@ def delete_user_api_key(
 
 # ---- User preferences ----
 
+
 def save_user_preferences(
     user_id: str,
     *,
@@ -1015,7 +1047,7 @@ def save_user_preferences(
     """Save or update a user's training preferences."""
     from datetime import datetime
 
-    now = datetime.now().isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1081,4 +1113,3 @@ def get_user_preferences(
         "ai_model": row[5],
         "custom_rules": json.loads(row[6]) if row[6] else [],
     }
-

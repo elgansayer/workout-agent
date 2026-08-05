@@ -2,8 +2,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
@@ -20,21 +19,27 @@ from database import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
+
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
 
     # Fetch last 7 days of data
-    cutoff = (date.today() - timedelta(days=7)).isoformat()
-    
-    metrics = [m for m in get_body_metrics(limit=14, db_path=config.database_path) if m["date"] >= cutoff]
-    logs = [log for log in get_daily_logs(limit=14, db_path=config.database_path) if log["date"] >= cutoff]
+    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
 
-    data = {
-        "metrics": metrics,
-        "logs": logs
-    }
+    metrics = [
+        m
+        for m in get_body_metrics(limit=14, db_path=config.database_path)
+        if m["date"] >= cutoff
+    ]
+    logs = [
+        log
+        for log in get_daily_logs(limit=14, db_path=config.database_path)
+        if log["date"] >= cutoff
+    ]
+
+    data = {"metrics": metrics, "logs": logs}
 
     prompt = f"""You are a high-performance strength coach. Analyze the following JSON representing the user's training and recovery data for the last 7 days.
 
@@ -51,10 +56,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
     try:
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
         text = text.strip()
 
         # Validate JSON
@@ -64,8 +67,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
             logger.info("Daily insight generated successfully.")
         else:
             logger.error("Invalid JSON structure returned: %s", text)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
+
 
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
@@ -73,13 +77,23 @@ def generate_weekly_correlations(config: Config) -> None:
     model = genai.GenerativeModel(config.gemini_model)
 
     # Fetch 60-day trailing window
-    cutoff = (date.today() - timedelta(days=60)).isoformat()
-    
-    metrics = [m for m in get_body_metrics(limit=120, db_path=config.database_path) if m["date"] >= cutoff]
-    logs = [log for log in get_daily_logs(limit=120, db_path=config.database_path) if log["date"] >= cutoff]
-    
+    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
+
+    metrics = [
+        m
+        for m in get_body_metrics(limit=120, db_path=config.database_path)
+        if m["date"] >= cutoff
+    ]
+    logs = [
+        log
+        for log in get_daily_logs(limit=120, db_path=config.database_path)
+        if log["date"] >= cutoff
+    ]
+
     # Also fetch training history for the last 60 days
-    all_history = get_progress_history(limit_per_exercise=60, db_path=config.database_path)
+    all_history = get_progress_history(
+        limit_per_exercise=60, db_path=config.database_path
+    )
     filtered_history = {}
     for ex, sets in all_history.items():
         recent = [s for s in sets if s["date"] >= cutoff]
@@ -89,7 +103,7 @@ def generate_weekly_correlations(config: Config) -> None:
     data = {
         "body_metrics": metrics,
         "daily_logs": logs,
-        "exercise_history": filtered_history
+        "exercise_history": filtered_history,
     }
 
     prompt = f"""You are an elite data-driven strength coach and analyst. 
@@ -111,13 +125,18 @@ Use Markdown format. Output the Markdown report directly.
         if text:
             save_deep_correlation(text, db_path=config.database_path)
             logger.info("Weekly deep correlation generated successfully.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--daily", action="store_true", help="Generate daily insight header")
-    parser.add_argument("--weekly", action="store_true", help="Generate weekly deep correlations")
+    parser.add_argument(
+        "--daily", action="store_true", help="Generate daily insight header"
+    )
+    parser.add_argument(
+        "--weekly", action="store_true", help="Generate weekly deep correlations"
+    )
     args = parser.parse_args()
 
     try:
@@ -129,9 +148,10 @@ def main():
 
     if args.daily:
         generate_daily_header(config)
-    
+
     if args.weekly:
         generate_weekly_correlations(config)
+
 
 if __name__ == "__main__":
     main()
