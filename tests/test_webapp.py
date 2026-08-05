@@ -33,7 +33,9 @@ def client(tmp_path, monkeypatch):
     save_checkin(1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path)
     save_body_metrics({"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path)
-    save_daily_log("2026-03-02", 1, "Back, Deadlifts & Chest", "high", "plan", "life", db_path)
+    save_daily_log(
+        "2026-03-02", 1, "Back, Deadlifts & Chest", "high", "plan", "life", db_path
+    )
     summary = WorkoutSummary(
         title="Day 1",
         date="2026-03-02",
@@ -211,4 +213,3 @@ def test_google_health_callback_rejects_bad_state(tmp_path, monkeypatch):
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"
     assert not get_meta("google_health_refresh_token", db_path)
-
