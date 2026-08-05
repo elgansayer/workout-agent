@@ -400,8 +400,8 @@ class TestCLISmoke:
 
 
 class TestGetGitHubRepo:
-    def test_github_https_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_github_https_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://github.com/owner/repo.git\n",
@@ -412,8 +412,8 @@ class TestGetGitHubRepo:
         result = _get_github_repo()
         assert result == ("owner", "repo")
 
-    def test_github_token_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_github_token_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://x-access-token:ghp_xyz@github.com/owner/repo.git\n",
@@ -424,8 +424,8 @@ class TestGetGitHubRepo:
         result = _get_github_repo()
         assert result == ("owner", "repo")
 
-    def test_non_github_remote(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_non_github_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://gitlab.com/owner/repo.git\n",
@@ -435,8 +435,8 @@ class TestGetGitHubRepo:
         monkeypatch.setattr(subprocess, "run", _mock_run)
         assert _get_github_repo() is None
 
-    def test_git_failure(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_git_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> None:
             raise subprocess.TimeoutExpired("git", 10)
 
         monkeypatch.setattr(subprocess, "run", _mock_run)
@@ -444,14 +444,14 @@ class TestGetGitHubRepo:
 
 
 class TestGetGitHubToken:
-    def test_from_env(self, monkeypatch) -> None:
+    def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_from_env")
         assert _get_github_token() == "ghp_from_env"
 
-    def test_from_remote_url(self, monkeypatch) -> None:
+    def test_from_remote_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-        def _mock_run(*args, **kwargs):
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://x-access-token:ghp_from_remote@github.com/x/y.git\n",
@@ -461,10 +461,10 @@ class TestGetGitHubToken:
         monkeypatch.setattr(subprocess, "run", _mock_run)
         assert _get_github_token() == "ghp_from_remote"
 
-    def test_no_token_available(self, monkeypatch) -> None:
+    def test_no_token_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-        def _mock_run(*args, **kwargs):
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://github.com/x/y.git\n",
@@ -562,7 +562,7 @@ class TestCreateGitHubIssues:
         p.write_text("")
         import urllib.error
 
-        def _raise(*args, **kwargs):
+        def _raise(*args: object, **kwargs: object) -> None:
             raise urllib.error.HTTPError("url", 422, "Unprocessable", None, None)  # type: ignore[arg-type]
 
         with (
