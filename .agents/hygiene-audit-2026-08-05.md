@@ -12,8 +12,11 @@
   `.pytest_cache/`, `.venv/` all present with comprehensive variants
   (including `*.db-wal`, `*.db-shm`, `*.db-journal`, `*.sqlite*`, `*.log`,
   binary formats). No missing entries.
-- **Large files**: No files >1MB outside `data/` (which is gitignored).
+- **Large files**: No files >2MB outside `data/` (which is gitignored).
   Largest tracked source file is `database.py` at ~64KB — well within limits.
+- **Working tree**: No untracked `.env`, `.db`, or `data/` files. `workout_agent.db`
+  exists locally but is covered by `.gitignore` (`*.db`).
 
-**Verification gates**: ruff clean, mypy clean (29 source files), 418 pytest
-tests pass. No action required.
+**Verification gates**: ruff clean (0 warnings), mypy clean apart from pre-existing
+  missing library stubs (types-requests, types-Authlib), 432 pytest tests pass.
+  No action required.
