@@ -342,12 +342,16 @@ class TestBuildImportGraph:
 
 
 class TestCLISmoke:
+    _SCRIPT: Path = Path(__file__).resolve().parent.parent / "dead_code_sweep.py"
+    _CWD: Path = Path(__file__).resolve().parent.parent
+
     def test_help(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--help"],
+            [sys.executable, str(self._SCRIPT), "--help"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0
@@ -356,10 +360,11 @@ class TestCLISmoke:
     def test_run_clean(self) -> None:
         """The current repo should be clean — no orphans."""
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py"],
+            [sys.executable, str(self._SCRIPT)],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0, (
@@ -368,10 +373,11 @@ class TestCLISmoke:
 
     def test_json_output(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--json"],
+            [sys.executable, str(self._SCRIPT), "--json"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0
@@ -380,10 +386,11 @@ class TestCLISmoke:
 
     def test_create_issues_flag_help(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--help"],
+            [sys.executable, str(self._SCRIPT), "--help"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert "--create-issues" in result.stdout
