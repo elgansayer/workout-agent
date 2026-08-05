@@ -153,9 +153,11 @@ def _extract_imports(source: str) -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _build_import_graph() -> dict[str, set[str]]:
-    """Return {importing_file_stem -> {module_names_it_imports}}."""
+def _build_import_graph(
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Return ``({importing_file_rel -> {module_names_it_imports}}, {file_rel -> module_name})``."""
     graph: dict[str, set[str]] = {}
+    file_to_mod: dict[str, str] = {}
 
     for py_file in sorted(ROOT.rglob("*.py")):
         # Skip virtual envs, caches, etc.
@@ -169,13 +171,32 @@ def _build_import_graph() -> dict[str, set[str]]:
         source = py_file.read_text(encoding="utf-8")
         graph[rel] = _extract_imports(source)
 
-    return graph
+        # Build module name from file path
+        if rel.startswith("webapp/"):
+            # webapp/foo.py -> webapp.foo
+            file_to_mod[rel] = "webapp." + rel.rsplit("/", 1)[-1].replace(".py", "")
+        elif rel.startswith("tests/"):
+            # Test modules are never source modules; skip them
+            pass
+        else:
+            if (
+                rel.endswith(".py")
+                and not rel.startswith("test_")
+                and rel != "conftest.py"
+                and rel != "__init__.py"
+            ):
+                file_to_mod[rel] = rel.replace(".py", "")
+
+    return graph, file_to_mod
 
 
 def find_orphans() -> list[OrphanReport]:
     """Return every module that is never imported by any reachable code."""
     modules = _discover_modules()
-    import_graph = _build_import_graph()
+    import_graph, file_to_mod = _build_import_graph()
+
+    # Build reverse mapping: module_name -> file_rel that defines it
+    mod_to_file: dict[str, str] = {v: k for k, v in file_to_mod.items()}
 
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
@@ -196,14 +217,14 @@ def find_orphans() -> list[OrphanReport]:
     # entry point, not imported by anyone else.
     _WEB_ENTRY = "webapp/app.py"
 
+    # Also seed wired with webapp.app so it's never flagged as orphan
+    wired.add("webapp.app")
+
     # BFS from entry-point files: anything they import is reachable, and
     # anything *those* import is reachable, etc.
     entry_point_files = {
         f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
     }
-
-    # Also seed wired with webapp.app so it's never flagged as orphan
-    wired.add("webapp.app")
 
     queue: list[str] = []
     for ep in entry_point_files:
@@ -214,13 +235,14 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file(s) that define this module
-        for file_rel, imports in import_graph.items():
-            if module_name in imports:
-                for transitive in import_graph.get(file_rel, set()):
-                    if transitive not in wired:
-                        wired.add(transitive)
-                        queue.append(transitive)
+        # Find the file that defines this module, then add ITS imports
+        defining_file = mod_to_file.get(module_name)
+        if defining_file is None:
+            continue
+        for transitive in import_graph.get(defining_file, set()):
+            if transitive not in wired:
+                wired.add(transitive)
+                queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -230,8 +252,8 @@ def find_orphans() -> list[OrphanReport]:
         if mi.is_entry_point:
             continue
 
-        # Double-check with a simple grep: is the module imported via dynamic
-        # patterns that AST can't catch (e.g. __import__ or importlib)?
+        # Double-check with grep: is the module imported via dynamic patterns
+        # that AST can't catch (e.g. __import__ or importlib)?
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(

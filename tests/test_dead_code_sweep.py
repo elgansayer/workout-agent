@@ -195,6 +195,30 @@ class TestFindOrphansWithMockRepo:
             # This test validates grep fallback exists, not perfection.
             assert isinstance(orphans, list)
 
+    def test_transitive_bfs_works_without_grep(self, tmp_path: Path) -> None:
+        """BFS should trace transitive imports without relying on grep."""
+        (tmp_path / "main.py").write_text("import a\n")
+        (tmp_path / "a.py").write_text("import b\n")
+        (tmp_path / "b.py").write_text("import c\n")
+        (tmp_path / "c.py").write_text("x = 1\n")
+        (tmp_path / "conftest.py").write_text("")
+
+        orig_grep = dead_code_sweep._grep_import
+        dead_code_sweep._grep_import = lambda module_name: []  # type: ignore[assignment]
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            orphans = find_orphans()
+            orphan_names = {r.module.name for r in orphans}
+            # b and c are transitively reachable via a
+            assert "b" not in orphan_names, (
+                "Transitively imported module 'b' incorrectly flagged as orphan"
+            )
+            assert "c" not in orphan_names, (
+                "Deep transitive import 'c' incorrectly flagged as orphan"
+            )
+
+        dead_code_sweep._grep_import = orig_grep
+
     def test_webapp_submodule_detected(self, tmp_path: Path) -> None:
         webapp_dir = tmp_path / "webapp"
         webapp_dir.mkdir()
@@ -319,22 +343,33 @@ class TestFindTrulyDead:
 
 
 class TestBuildImportGraph:
-    def test_returns_dict(self) -> None:
-        graph = _build_import_graph()
+    def test_returns_tuple(self) -> None:
+        graph, file_to_mod = _build_import_graph()
         assert isinstance(graph, dict)
+        assert isinstance(file_to_mod, dict)
         # Should have at least a few files
         assert len(graph) > 10
 
     def test_skips_virtual_envs(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         for key in graph:
             assert "__pycache__" not in key
             assert ".venv" not in key
 
     def test_includes_test_files(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         test_files = [k for k in graph if k.startswith("tests/")]
         assert len(test_files) > 0, "Test files should be in the import graph"
+
+    def test_file_to_mod_has_top_level(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["database.py"] == "database"
+        assert file_to_mod["main.py"] == "main"
+
+    def test_file_to_mod_has_webapp(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["webapp/app.py"] == "webapp.app"
+        assert file_to_mod["webapp/charts.py"] == "webapp.charts"
 
 
 # ---------------------------------------------------------------------------
