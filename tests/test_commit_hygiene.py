@@ -20,28 +20,33 @@ class TestCheckCommitMessages:
     def test_empty_log(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_commit_messages() == []
 
     def test_good_messages(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0,
+                [],
+                0,
                 stdout=(
                     "abc12345 Add user_id column to workout_history\n"
                     "def67890 Fix #42: Handle Hevy API timeout gracefully\n"
                     "11122233 Refactor insight_cron for per-user timezones\n"
                 ),
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_commit_messages() == []
 
     def test_wip_message_is_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0,
+                [],
+                0,
                 stdout="abc12345 wip\n",
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         findings = commit_hygiene.check_commit_messages()
         assert len(findings) == 1
@@ -52,9 +57,11 @@ class TestCheckCommitMessages:
     def test_fix_message_is_info(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0,
+                [],
+                0,
                 stdout="abc12345 fix\n",
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         findings = commit_hygiene.check_commit_messages()
         assert len(findings) == 1
@@ -64,6 +71,7 @@ class TestCheckCommitMessages:
     def test_git_failure_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 1, stdout="", stderr="fatal")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_commit_messages() == []
 
@@ -77,6 +85,7 @@ class TestCheckSensitiveFiles:
     def test_no_sensitive_files(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_sensitive_files() == []
 
@@ -97,6 +106,7 @@ class TestCheckSensitiveFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout=output)
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         findings = commit_hygiene.check_sensitive_files()
         assert len(findings) >= 1
@@ -119,6 +129,7 @@ class TestCheckSensitiveFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout=output)
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         findings = commit_hygiene.check_sensitive_files()
         assert len(findings) == 0
@@ -139,6 +150,7 @@ class TestCheckSensitiveFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout=output)
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         findings = commit_hygiene.check_sensitive_files()
         assert len(findings) >= 1
@@ -147,6 +159,7 @@ class TestCheckSensitiveFiles:
     def test_git_failure_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 1, stdout="", stderr="fatal")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_sensitive_files() == []
 
@@ -159,18 +172,14 @@ class TestCheckSensitiveFiles:
 class TestCheckGitignore:
     def test_all_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
-        gi.write_text(
-            "*.db\n"
-            ".env\n"
-            "__pycache__/\n"
-            ".pytest_cache/\n"
-            ".venv/\n"
-        )
+        gi.write_text("*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n")
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert findings == []
 
-    def test_missing_pycache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_missing_pycache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("*.db\n.env\n.pytest_cache/\n.venv/\n")
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
@@ -202,7 +211,9 @@ class TestCheckGitignore:
         findings = commit_hygiene.check_gitignore()
         assert len(findings) >= 4
 
-    def test_gitignore_missing_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_gitignore_missing_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert len(findings) == 1
@@ -216,7 +227,9 @@ class TestCheckGitignore:
 
 
 class TestCheckLargeFiles:
-    def test_no_large_files(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_no_large_files(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         # Create a small tracked file
         small_file = tmp_path / "small.py"
         small_file.write_text("hello")
@@ -224,16 +237,23 @@ class TestCheckLargeFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0, stdout="small.py\x00",
+                [],
+                0,
+                stdout="small.py\x00",
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(
-            commit_hygiene, "MAX_FILE_SIZE", 10 * 1024 * 1024,
+            commit_hygiene,
+            "MAX_FILE_SIZE",
+            10 * 1024 * 1024,
         )
         findings = commit_hygiene.check_large_files()
         assert findings == []
 
-    def test_large_file_found(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_large_file_found(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         large_file = tmp_path / "big.log"
         # Create a real large-ish file
         large_file.write_text("x" * 1000)
@@ -241,8 +261,11 @@ class TestCheckLargeFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0, stdout="big.log\x00",
+                [],
+                0,
+                stdout="big.log\x00",
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         # Set threshold to a very small value
         monkeypatch.setattr(commit_hygiene, "MAX_FILE_SIZE", 100)
@@ -253,7 +276,9 @@ class TestCheckLargeFiles:
         assert "big.log" in findings[0].message
 
     def test_large_file_under_data_skipped(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         data_dir = tmp_path / "data"
         data_dir.mkdir()
@@ -263,8 +288,11 @@ class TestCheckLargeFiles:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(
-                [], 0, stdout="data/big.csv\x00",
+                [],
+                0,
+                stdout="data/big.csv\x00",
             )
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(commit_hygiene, "MAX_FILE_SIZE", 100)
         findings = commit_hygiene.check_large_files()
@@ -273,6 +301,7 @@ class TestCheckLargeFiles:
     def test_git_failure_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 1, stdout="", stderr="fatal")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         assert commit_hygiene.check_large_files() == []
 
@@ -283,7 +312,9 @@ class TestCheckLargeFiles:
 
 
 class TestFixMissingGitignore:
-    def test_adds_missing_entry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_adds_missing_entry(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("*.db\n.env\n")
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
@@ -299,7 +330,9 @@ class TestFixMissingGitignore:
         assert "__pycache__/" in gi.read_text()
 
     def test_already_present_not_duplicated(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("*.db\n.env\n__pycache__/\n")
@@ -314,7 +347,9 @@ class TestFixMissingGitignore:
         added = commit_hygiene.fix_missing_gitignore_entries(findings)
         assert added == []
 
-    def test_no_gitignore_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_no_gitignore_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = [
             commit_hygiene.HygieneFinding(
@@ -333,15 +368,19 @@ class TestFixMissingGitignore:
 
 
 class TestRemoveSensitiveFromTree:
-    def test_removes_existing_file(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_removes_existing_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         env_file = tmp_path / ".env"
         env_file.write_text("SECRET=foo")
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
 
         calls: list[list[str]] = []
+
         def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
             calls.append(args)
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
 
         findings = [
@@ -424,6 +463,7 @@ class TestRunAllChecks:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
 
         report = commit_hygiene.run_all_checks()
@@ -496,12 +536,15 @@ class TestMain:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(sys, "argv", ["commit_hygiene.py"])
         assert commit_hygiene.main() == 0
 
     def test_main_with_error_exits_nonzero(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("# empty\n")
@@ -510,12 +553,16 @@ class TestMain:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(sys, "argv", ["commit_hygiene.py"])
         assert commit_hygiene.main() == 1
 
     def test_main_json_flag(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture,
     ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n")
@@ -524,6 +571,7 @@ class TestMain:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(sys, "argv", ["commit_hygiene.py", "--json"])
         exit_code = commit_hygiene.main()
@@ -533,7 +581,9 @@ class TestMain:
         assert data["status"] == "clean"
 
     def test_main_fix_adds_entries(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
     ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text("*.db\n")
@@ -542,6 +592,7 @@ class TestMain:
 
         def _run(_args: list[str]) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, stdout="")
+
         monkeypatch.setattr(commit_hygiene, "_run_git", _run)
         monkeypatch.setattr(sys, "argv", ["commit_hygiene.py", "--fix"])
         commit_hygiene.main()
