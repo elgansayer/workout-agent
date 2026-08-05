@@ -23,11 +23,12 @@ import json
 import logging
 import os
 import secrets
+from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from programme_inference import InferredProgramme
@@ -101,7 +102,7 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def get_config():
+def get_config() -> Config:
     return Config.load()
 
 
@@ -175,7 +176,7 @@ templates.env.globals["static_url"] = static_url
 
 
 @asynccontextmanager
-async def _lifespan(_app: FastAPI):
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
     yield
@@ -187,7 +188,7 @@ app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="sta
 if WEB_AUTH_SECRET:
 
     class AuthMiddleware(BaseHTTPMiddleware):
-        async def dispatch(self, request: Request, call_next):
+        async def dispatch(self, request: Request, call_next: Any) -> Any:
             path = request.url.path
             # Allow static files and auth endpoints
             if path.startswith("/static") or path in [
@@ -226,7 +227,7 @@ app.add_middleware(
 
 
 @app.get("/login")
-async def login(request: Request):
+async def login(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
     if request.session.get("user"):
@@ -235,7 +236,7 @@ async def login(request: Request):
 
 
 @app.get("/login/google")
-async def login_google(request: Request):
+async def login_google(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
     redirect_uri = str(request.url_for("auth"))
@@ -245,13 +246,13 @@ async def login_google(request: Request):
 
 
 @app.get("/logout")
-async def logout(request: Request):
+async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse("/login")
 
 
 @app.get("/auth")
-async def auth(request: Request):
+async def auth(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return RedirectResponse("/")
     try:
@@ -495,7 +496,7 @@ def _dashboard_context(
 
 
 @app.get("/")
-def dashboard(request: Request):
+def dashboard(request: Request) -> Any:
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
         request, "dashboard.html", _dashboard_context(user_id=user_id)
@@ -503,7 +504,7 @@ def dashboard(request: Request):
 
 
 @app.get("/progress")
-def progress(request: Request):
+def progress(request: Request) -> Any:
     user_id = request.session.get("user_id")
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     charts_data = []
@@ -561,7 +562,7 @@ def _body_charts(*, user_id: str | None = None) -> dict:
 
 
 @app.get("/stats")
-def stats(request: Request):
+def stats(request: Request) -> Any:
     user_id = request.session.get("user_id")
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
@@ -727,7 +728,7 @@ def _project_lift(
 
 
 @app.get("/plan")
-def plan(request: Request):
+def plan(request: Request) -> Any:
     user_id = request.session.get("user_id")
     today = datetime.now(tz=timezone.utc).date()
 
@@ -788,7 +789,7 @@ def plan(request: Request):
     )
 
 
-def _render_active_plan(request: Request, active: dict, today: date):
+def _render_active_plan(request: Request, active: dict[str, Any], today: date) -> Any:
     """Render /plan from a user's active programme definition (DB-stored)."""
     defn = active.get("definition", {})
     split_name = defn.get("name", "Active Programme")
@@ -866,7 +867,7 @@ def _block_lift_str(lift: dict | None) -> str:
 
 
 @app.get("/programmes")
-def programmes_page(request: Request):
+def programmes_page(request: Request) -> Any:
     """Page where users select or switch their workout programme."""
     user_id = request.session.get("user_id")
     templates_list = get_programme_templates()
@@ -885,7 +886,7 @@ def programmes_page(request: Request):
 
 
 @app.post("/api/programmes/select")
-async def select_programme(request: Request):
+async def select_programme(request: Request) -> dict[str, Any]:
     """Activate a programme template for the current user."""
 
     _check_rate_limit(request, limit=5)
@@ -995,7 +996,7 @@ def _build_inferred_definition(
     }
 
 
-def _run_hevy_inference(user_id: str) -> dict:
+def _run_hevy_inference(user_id: str) -> dict[str, Any]:
     """Fetch Hevy data and infer the user's training programme.
 
     Raises HTTPException if the user has no Hevy API key configured or if
@@ -1024,7 +1025,7 @@ def _run_hevy_inference(user_id: str) -> dict:
 
 
 @app.get("/history")
-def history(request: Request):
+def history(request: Request) -> Any:
     user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1039,7 +1040,7 @@ def history(request: Request):
 
 
 @app.get("/checkins")
-def checkins(request: Request):
+def checkins(request: Request) -> Any:
     user_id = request.session.get("user_id")
     checkins_list = get_checkins(db_path=DB_PATH, user_id=user_id)
     total_sessions = len(get_session_volumes(db_path=DB_PATH, user_id=user_id))
@@ -1061,7 +1062,7 @@ def checkins(request: Request):
 
 
 @app.get("/api/xai_reasoning/{context_id}")
-def xai_reasoning(context_id: str, request: Request):
+def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
     # context_id is expected to be {date}_{exercise_name}
     existing = get_reasoning_log(context_id, db_path=DB_PATH)
@@ -1095,7 +1096,7 @@ def xai_reasoning(context_id: str, request: Request):
 
 
 @app.get("/api/project_peak")
-def project_peak(request: Request):
+def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
     config = get_config()
     user_id = request.session.get("user_id")
@@ -1121,7 +1122,7 @@ def project_peak(request: Request):
 
 
 @app.get("/chat")
-def chat_page(request: Request):
+def chat_page(request: Request) -> Any:
     user_id = request.session.get("user_id")
     messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1132,20 +1133,20 @@ def chat_page(request: Request):
 
 
 @app.get("/api/chat/history")
-def chat_history(request: Request):
+def chat_history(request: Request) -> list[dict[str, Any]]:
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
-def chat_clear(request: Request):
+def chat_clear(request: Request) -> dict[str, str]:
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
 
 
-@app.get("/api/rag_search")
-def rag_search(request: Request, q: str = Query(...)):
+@app.get("/api/rag_search", response_model=None)
+def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = request.session.get("user_id")
     config = get_config()
@@ -1204,7 +1205,7 @@ User's new message: {q}
 
 Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
 
-    def generate():
+    def generate() -> Generator[str, None, None]:
         collected: list[str] = []
         try:
             stream = provider.generate(prompt, stream=True)
@@ -1234,7 +1235,7 @@ def _gh_redirect_uri(request: Request) -> str:
 
 
 @app.get("/settings")
-def settings(request: Request):
+def settings(request: Request) -> Any:
     user_id = request.session.get("user_id")
     user_keys: dict = {}
     user_prefs: dict = {}
@@ -1272,7 +1273,7 @@ def settings(request: Request):
 
 
 @app.post("/api/settings/key")
-async def save_api_key(request: Request):
+async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
     user_id = request.session.get("user_id")
     if not user_id:
@@ -1309,7 +1310,7 @@ async def save_api_key(request: Request):
 
 
 @app.post("/api/settings/key/delete")
-async def remove_api_key(request: Request):
+async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
     user_id = request.session.get("user_id")
     if not user_id:
@@ -1325,7 +1326,7 @@ async def remove_api_key(request: Request):
 
 
 @app.post("/api/settings/verify-hevy")
-async def verify_hevy_key(request: Request):
+async def verify_hevy_key(request: Request) -> dict[str, Any]:
     """Test a Hevy API key by calling /v1/workouts/count."""
     _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
@@ -1349,7 +1350,7 @@ async def verify_hevy_key(request: Request):
 
 
 @app.post("/api/settings/sync-history")
-async def sync_history_endpoint(request: Request):
+async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     """Rebuild local workout_history and exercise_progress from Hevy (one-off backfill)."""
     _check_rate_limit(request, limit=2)
     user_id = request.session.get("user_id")
@@ -1373,7 +1374,7 @@ async def sync_history_endpoint(request: Request):
 
 
 @app.post("/api/settings/preferences")
-async def save_preferences(request: Request):
+async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
     user_id = request.session.get("user_id")
     if not user_id:
@@ -1395,7 +1396,7 @@ async def save_preferences(request: Request):
 
 
 @app.get("/google-health/connect")
-def google_health_connect(request: Request):
+def google_health_connect(request: Request) -> RedirectResponse:
     """Start the Google Health OAuth flow and redirect to the consent screen."""
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
@@ -1408,7 +1409,7 @@ def google_health_connect(request: Request):
 
 
 @app.get("/google-health/callback", name="google_health_callback")
-def google_health_callback(request: Request):
+def google_health_callback(request: Request) -> RedirectResponse:
     """Receive Google's redirect, swap the code for a refresh token, store it."""
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
@@ -1430,14 +1431,14 @@ def google_health_callback(request: Request):
 
 
 @app.post("/google-health/disconnect")
-def google_health_disconnect():
+def google_health_disconnect() -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     set_meta(_GH_TOKEN_KEY, "", DB_PATH)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
 @app.get("/sw.js", include_in_schema=False)
-def service_worker():
+def service_worker() -> FileResponse:
     """Serve the service worker from the root so it can control every page.
 
     A worker only controls URLs within its own path, so it must be served from

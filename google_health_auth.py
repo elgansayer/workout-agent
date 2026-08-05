@@ -32,6 +32,7 @@ import sys
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 import requests
 
@@ -118,7 +119,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         )
         self.wfile.write(body.encode("utf-8"))
 
-    def log_message(self, *_args) -> None:  # silence the default logging
+    def log_message(self, *args: Any, **kwargs: Any) -> None:  # silence the default logging
         pass
 
 

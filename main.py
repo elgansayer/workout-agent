@@ -15,6 +15,7 @@ import argparse
 import logging
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 import checkin
 import google_health_client
@@ -40,6 +41,7 @@ from hevy_parser import parse_workout
 from hevy_sync import sync_routines
 from program import (
     REST_DAY_FOCUS,
+    Block,
     block_for_week,
     day_focus,
     rep_targets,
@@ -105,7 +107,7 @@ def _changes_footer(statuses: list[str]) -> str:
     return "\n\nHevy routines refreshed: " + ", ".join(changed) + "."
 
 
-def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
+def _maybe_check_in(config: Config, week: int, block: Block, preview: bool) -> None:
     """Run a programme check-in if one is due, delivering it as its own message."""
     if not config.checkin_enabled:
         return
@@ -130,9 +132,9 @@ def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
 
 def _maybe_self_review(
     config: Config,
-    recovery: dict | None,
+    recovery: dict[str, Any] | None,
     week: int,
-    block,
+    block: Block,
     preview: bool,
 ) -> None:
     """On the configured weekday, send a self-review of how training is going."""
