@@ -537,7 +537,11 @@ def progress(request: Request):
     return templates.TemplateResponse(
         request,
         "progress.html",
-        {"active": "progress", "charts": charts_data, "body": _body_charts(user_id=user_id)},
+        {
+            "active": "progress",
+            "charts": charts_data,
+            "body": _body_charts(user_id=user_id),
+        },
     )
 
 
@@ -588,7 +592,9 @@ def stats(request: Request):
     )
 
     # Volume broken down by muscle group.
-    groups = analytics.group_volumes(get_exercise_volumes(db_path=DB_PATH, user_id=user_id))
+    groups = analytics.group_volumes(
+        get_exercise_volumes(db_path=DB_PATH, user_id=user_id)
+    )
     muscle_donut = charts.donut(
         [
             {"label": g, "value": v}
@@ -1083,7 +1089,9 @@ def xai_reasoning(context_id: str, request: Request):
     history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = str(provider.generate(prompt)).strip() or "Could not determine reasoning."
+    reasoning = (
+        str(provider.generate(prompt)).strip() or "Could not determine reasoning."
+    )
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}

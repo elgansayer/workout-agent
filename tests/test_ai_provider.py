@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from ai_provider import (
+    ClaudeProvider,
     DeepSeekProvider,
     GeminiProvider,
+    OpenAIProvider,
     available_providers,
     get_provider,
     resolve_provider,
@@ -17,6 +19,18 @@ def test_get_provider_gemini() -> None:
     provider = get_provider("gemini", "test-key")
     assert isinstance(provider, GeminiProvider)
     assert provider.name() == "Gemini (gemini-2.5-flash)"
+
+
+def test_get_provider_claude() -> None:
+    provider = get_provider("claude", "sk-ant-test")
+    assert isinstance(provider, ClaudeProvider)
+    assert provider.name() == "Claude (claude-sonnet-4-20250514)"
+
+
+def test_get_provider_openai() -> None:
+    provider = get_provider("openai", "sk-test")
+    assert isinstance(provider, OpenAIProvider)
+    assert provider.name() == "OpenAI (gpt-4o)"
 
 
 def test_get_provider_deepseek() -> None:
