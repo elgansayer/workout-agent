@@ -58,6 +58,7 @@
             </button>
             {% if user_keys.get('hevy', {}).get('has_key') %}
             <button class="btn btn-ghost btn-sm" onclick="verifyHevy()">Verify</button>
+            <button class="btn btn-ghost btn-sm" onclick="syncHistory()">Sync History</button>
             <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteKey('hevy')">Remove</button>
             {% endif %}
         </div>
@@ -311,6 +312,25 @@ async function verifyHevy() {
         }
     } catch (e) {
         showStatus('hevy-status', 'Could not reach the server.', true);
+    }
+}
+
+async function syncHistory() {
+    if (!confirm('This will DELETE all local workout_history and exercise_progress data, then rebuild them from your Hevy account. This cannot be undone. Continue?')) return;
+    showStatus('hevy-status', 'Syncing history from Hevy... (this may take a while)', false);
+    try {
+        const res = await fetch('/api/settings/sync-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showStatus('hevy-status', `✓ Synced! ${data.processed} of ${data.workouts_found} workouts processed.`, false);
+        } else {
+            showStatus('hevy-status', data.detail || 'Sync failed.', true);
+        }
+    } catch (e) {
+        showStatus('hevy-status', 'Network error.', true);
     }
 }
 

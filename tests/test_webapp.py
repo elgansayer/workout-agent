@@ -419,3 +419,39 @@ def test_xai_reasoning_invalid_context(client):
     response = client.get("/api/xai_reasoning/nounderscore")
     assert response.status_code == 200
     assert response.json() == {"reasoning": "Invalid context ID"}
+
+
+# ---------------------------------------------------------------------------
+# sync_history tests
+# ---------------------------------------------------------------------------
+
+
+def test_sync_history_requires_auth(client):
+    """POST /api/settings/sync-history without a session returns 401."""
+    resp = client.post("/api/settings/sync-history")
+    assert resp.status_code == 401
+
+
+def test_sync_history_requires_hevy_key(monkeypatch, tmp_path):
+    """sync_history.sync_all returns an error string when no key is provided."""
+    from sync_history import sync_all
+
+    result = sync_all("", str(tmp_path / "test.db"))
+    assert "error" in result
+    assert "Hevy API key" in result["error"]
+
+
+def test_sync_history_no_workouts(monkeypatch, tmp_path):
+    """When Hevy returns no workouts, sync_all returns zero counts."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+
+    def _fake_get_all(api_key):
+        return []
+
+    monkeypatch.setattr("sync_history.get_all_workouts", _fake_get_all)
+
+    from sync_history import sync_all
+
+    result = sync_all("fake-hevy-key", str(tmp_path / "test.db"))
+    assert result["workouts_found"] == 0
+    assert result["processed"] == 0

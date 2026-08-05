@@ -1348,6 +1348,30 @@ async def verify_hevy_key(request: Request):
     }
 
 
+@app.post("/api/settings/sync-history")
+async def sync_history_endpoint(request: Request):
+    """Rebuild local workout_history and exercise_progress from Hevy (one-off backfill)."""
+    _check_rate_limit(request, limit=2)
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    from sync_history import sync_all
+
+    # Use the user's stored Hevy key, not the server env var.
+    key_info = get_user_api_keys(user_id, db_path=DB_PATH).get("hevy")
+    if not key_info or not str(key_info.get("api_key", "")):
+        raise HTTPException(
+            status_code=400,
+            detail="No Hevy API key configured. Add one in Settings first.",
+        )
+
+    result = sync_all(str(key_info["api_key"]), DB_PATH, user_id=user_id)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=str(result["error"]))
+    return {"status": "ok", **result}
+
+
 @app.post("/api/settings/preferences")
 async def save_preferences(request: Request):
     """Save user training preferences."""
