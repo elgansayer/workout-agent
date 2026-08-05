@@ -553,7 +553,7 @@ class TestCreateGitHubIssues:
         import urllib.error
 
         def _raise(*args, **kwargs):
-            raise urllib.error.HTTPError("url", 422, "Unprocessable", {}, None)
+            raise urllib.error.HTTPError("url", 422, "Unprocessable", None, None)  # type: ignore[arg-type]
 
         with (
             patch("dead_code_sweep.ROOT", tmp_path),
