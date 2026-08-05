@@ -206,13 +206,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `8770` across README and both compose files (reconciled 2026-08-05).
 
 - **Test coverage audit** (last updated 2026-08-05): all source modules
-  now have corresponding test files. The full test suite stands at 418
-  passing tests covering 27 test modules. Previously-uncovered modules now
+  now have corresponding test files. The full test suite stands at 475
+  passing tests covering 28 test modules. Previously-uncovered modules now
   with tests: `programme_inference.py` (16 tests),
   `hevy_reader.py` (20 tests), `insight_cron.py` (9 tests),
   `main.py` (20 tests), `sync_history.py` (9 tests),
   `webapp/ai_widgets.py` (14 tests), `weather.py` (7 tests).
   `insight_scheduler.py` was replaced by `scheduler.py` (18 tests).
+  `webapp/charts.py` has `tests/test_charts.py` (9 tests).
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
