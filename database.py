@@ -156,13 +156,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO programme_state (id, current_day, split_name)
-            VALUES (1, 1, ?)
-            """,
-            (SPLIT_NAME,),
-        )
+        # Note: For new databases the initial programme_state row is
+        # inserted by the migration block below (after table recreation).
         cursor.execute(
             """
             INSERT OR IGNORE INTO hevy_meta (key, value)
@@ -483,22 +478,89 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON check_ins (user_id, id DESC)"
         )
 
+        # Migration: Migrate programme_state from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(programme_state)")
+        ps_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ps_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS programme_state_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    current_day INTEGER NOT NULL DEFAULT 1,
+                    split_name TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """
+            )
+            old_row = cursor.execute(
+                "SELECT current_day, split_name FROM programme_state WHERE id = 1"
+            ).fetchone()
+            if old_row:
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, ?, ?)",
+                    (ps_legacy_id, old_row[0], old_row[1]),
+                )
+            else:
+                # Brand-new database: seed a default row for the legacy user
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
+                    (ps_legacy_id, SPLIT_NAME),
+                )
+            cursor.execute("DROP TABLE programme_state")
+            cursor.execute(
+                "ALTER TABLE programme_state_new RENAME TO programme_state"
+            )
 
-def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Return the current day in the cycle (1-6)."""
+
+def get_current_day(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> int:
+    """Return the current day in the cycle (1-6).
+
+    When *user_id* is provided, the day is scoped to that user.
+    When None, returns the first row found (backward-compatible single-tenant path).
+    """
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT current_day FROM programme_state WHERE id = 1"
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT current_day FROM programme_state WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT current_day FROM programme_state LIMIT 1"
+            ).fetchone()
     return int(row[0]) if row else 1
 
 
-def advance_day(db_path: str = DEFAULT_DB_PATH) -> int:
-    """Move to the next day, wrapping from TOTAL_DAYS back to 1."""
-    current = get_current_day(db_path)
+def advance_day(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> int:
+    """Move to the next day, wrapping from TOTAL_DAYS back to 1.
+
+    When *user_id* is provided, scoped to that user.
+    """
+    current = get_current_day(db_path, user_id=user_id)
     nxt = current + 1 if current < TOTAL_DAYS else 1
     with _connect(db_path) as conn:
-        conn.execute("UPDATE programme_state SET current_day = ? WHERE id = 1", (nxt,))
+        if user_id is not None:
+            conn.execute(
+                "UPDATE programme_state SET current_day = ? WHERE user_id = ?",
+                (nxt, user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE programme_state SET current_day = ?",
+                (nxt,),
+            )
     return nxt
 
 
@@ -1825,4 +1887,7 @@ def set_active_programme(
             ),
         )
         # Reset current_day to 1 for the new programme.
-        conn.execute("UPDATE programme_state SET current_day = 1 WHERE id = 1")
+        conn.execute(
+            "UPDATE programme_state SET current_day = 1 WHERE user_id = ?",
+            (user_id,),
+        )

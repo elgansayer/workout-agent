@@ -1015,3 +1015,111 @@ def test_deep_correlations_migration_and_isolation(tmp_path):
 
     # None user_id returns None (no matching row)
     assert get_deep_correlation(db_path=db, user_id=None) is None
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: programme_state user_id scoping
+# ---------------------------------------------------------------------------
+
+
+def test_programme_state_migration_and_isolation(tmp_path):
+    """programme_state is migrated from singleton to user_id-scoped."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    # Simulate pre-migration singleton table
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS programme_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            current_day INTEGER NOT NULL,
+            split_name TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
+        "VALUES (1, 3, 'Legacy Split')"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn2:
+        cols = {
+            row[1]
+            for row in conn2.execute("PRAGMA table_info(programme_state)").fetchall()
+        }
+        assert "user_id" in cols
+        assert "id" not in cols  # old singleton id column is gone
+        rows = conn2.execute(
+            "SELECT user_id, current_day, split_name FROM programme_state"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][1] == 3  # current_day preserved
+        assert rows[0][2] == "Legacy Split"  # split_name preserved
+        assert rows[0][0] is not None  # user_id backfilled
+
+
+def test_programme_state_user_isolation(tmp_path):
+    """Two users have independent programme_state rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    # Seed rows for both users directly
+    import sqlite3
+
+    from database import advance_day, get_current_day
+
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
+        "VALUES (?, 2, ?)",
+        (user_a, "Test Split"),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
+        "VALUES (?, 5, ?)",
+        (user_b, "Test Split"),
+    )
+    conn.commit()
+    conn.close()
+
+    assert get_current_day(db, user_id=user_a) == 2
+    assert get_current_day(db, user_id=user_b) == 5
+
+    # Advancing one user does not affect the other
+    assert advance_day(db, user_id=user_a) == 3
+    assert get_current_day(db, user_id=user_a) == 3
+    assert get_current_day(db, user_id=user_b) == 5
+
+
+def test_programme_state_backward_compat(tmp_path):
+    """get_current_day / advance_day without user_id still work."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    # Without user_id, the legacy user's row should exist and work
+    day = get_current_day(db)
+    assert isinstance(day, int)
+    assert 1 <= day <= 6
+
+    nxt = advance_day(db)
+    assert nxt == get_current_day(db)
+    assert nxt != day
+
+
+def test_programme_state_brand_new_db_seeds_legacy(tmp_path):
+    """A brand-new database seeds a programme_state row for the legacy user."""
+    db = _db(tmp_path)
+    init_db(db)
+    from database import get_current_day
+
+    assert get_current_day(db) == 1
