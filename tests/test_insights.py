@@ -40,6 +40,7 @@ def test_regressing_lift_with_poor_recovery_suggests_deload():
     entries = _sets((110, 8), (107.5, 8), (105, 8), (100, 8))
     lift = insights.analyse_lift("Squat", entries, "poor")
     assert lift.trend == "regressing"
+    assert lift.intervention is not None
     assert "deload" in lift.intervention.lower()
 
 
