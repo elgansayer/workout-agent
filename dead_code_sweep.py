@@ -521,9 +521,7 @@ def create_github_issues(reports: list[OrphanReport]) -> list[str]:
             logger.error(msg)
             created.append(f"ERROR: {msg}")
         except (urllib.error.URLError, OSError, ValueError, TypeError) as e:
-            msg = (
-                f"Failed to create issue for '{report.module.name}': {e}"
-            )
+            msg = f"Failed to create issue for '{report.module.name}': {e}"
             logger.error(msg)
             created.append(f"ERROR: {msg}")
 

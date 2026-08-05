@@ -491,9 +491,7 @@ class TestCreateGitHubIssues:
         ):
             reports = [
                 OrphanReport(
-                    module=ModuleInfo(
-                        name="x", path=p, is_entry_point=False
-                    ),
+                    module=ModuleInfo(name="x", path=p, is_entry_point=False),
                     evidence="e",
                 )
             ]
@@ -509,9 +507,7 @@ class TestCreateGitHubIssues:
         ):
             reports = [
                 OrphanReport(
-                    module=ModuleInfo(
-                        name="x", path=p, is_entry_point=False
-                    ),
+                    module=ModuleInfo(name="x", path=p, is_entry_point=False),
                     evidence="e",
                 )
             ]
