@@ -63,7 +63,8 @@ def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
 
 
 def test_generate_daily_header_strips_markdown_code_blocks(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -87,7 +88,8 @@ def test_generate_daily_header_strips_markdown_code_blocks(
 
 
 def test_generate_daily_header_invalid_json_structure_not_saved(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -190,7 +192,8 @@ def test_generate_weekly_correlations_saves_markdown(monkeypatch, tmp_path) -> N
 
 
 def test_generate_weekly_correlations_empty_response_not_saved(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -213,7 +216,8 @@ def test_generate_weekly_correlations_empty_response_not_saved(
 
 
 def test_generate_weekly_correlations_exception_is_handled(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -229,7 +233,8 @@ def test_generate_weekly_correlations_exception_is_handled(
 
 
 def test_generate_weekly_correlations_filters_history_by_date(
-    monkeypatch, tmp_path,
+    monkeypatch,
+    tmp_path,
 ) -> None:
     config = _FakeConfig(tmp_path)
 

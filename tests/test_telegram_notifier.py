@@ -65,7 +65,10 @@ class TestSendTelegramMessage:
         mock_post.return_value = mock_resp
 
         result = send_telegram_message(
-            "token123", "chat456", "a.b-c!", parse_mode="MarkdownV2",
+            "token123",
+            "chat456",
+            "a.b-c!",
+            parse_mode="MarkdownV2",
         )
         assert result is True
         payload = mock_post.call_args.kwargs["json"]

@@ -206,7 +206,9 @@ def run(preview: bool = False) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(
-            body_metrics_from_recovery(recovery), when, config.database_path,
+            body_metrics_from_recovery(recovery),
+            when,
+            config.database_path,
         )
 
     _maybe_self_review(config, recovery, week, block, preview)

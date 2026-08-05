@@ -59,7 +59,8 @@ def block_phase_tracker(session_volumes: list[dict]) -> str:
 
 
 def systemic_recovery_correlation(
-    biometrics: list[dict], session_volumes: list[dict],
+    biometrics: list[dict],
+    session_volumes: list[dict],
 ) -> str:
     """Widget 2: Systemic Recovery Correlation Grid
     Scatter plot: X = Sleep/RHR, Y = Volume. Highlights anomalies.

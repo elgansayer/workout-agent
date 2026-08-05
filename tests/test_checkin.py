@@ -107,10 +107,16 @@ def test_due_calendar_fallback_without_hevy(tmp_path):
 def test_record_persists_and_resets_baseline(tmp_path):
     config = _config(tmp_path)
     due_info = checkin.CheckinDue(
-        number=2, workouts_done=24, weeks_elapsed=4, total_count=64,
+        number=2,
+        workouts_done=24,
+        weeks_elapsed=4,
+        total_count=64,
     )
     checkin.record(
-        config, due_info, "Check-in 2: looking strong.", today=date(2026, 3, 1),
+        config,
+        due_info,
+        "Check-in 2: looking strong.",
+        today=date(2026, 3, 1),
     )
     assert get_meta("checkin_number", config.database_path) == "2"
     assert get_meta("last_checkin_date", config.database_path) == "2026-03-01"

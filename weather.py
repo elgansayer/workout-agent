@@ -33,7 +33,8 @@ class WeatherConditions:
 
 
 def get_current_weather(
-    lat: float = LATITUDE, lon: float = LONGITUDE,
+    lat: float = LATITUDE,
+    lon: float = LONGITUDE,
 ) -> WeatherConditions | None:
     """Fetch current temperature and relative humidity from Open-Meteo."""
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m"
@@ -52,7 +53,9 @@ def get_current_weather(
         is_extreme = temp > 30.0 or (temp > 28.0 and hum > 60.0)
 
         return WeatherConditions(
-            temperature_c=temp, humidity_pct=hum, is_extreme_heat=is_extreme,
+            temperature_c=temp,
+            humidity_pct=hum,
+            is_extreme_heat=is_extreme,
         )
     except (requests.RequestException, ValueError, KeyError) as exc:
         logger.warning("Could not fetch weather data: %s", exc)

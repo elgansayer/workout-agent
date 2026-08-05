@@ -330,7 +330,8 @@ def infer_programme(hevy_data: HevyTrainingData) -> InferredProgramme:
 
     # Next routine suggestion.
     programme.next_routine = _determine_next_routine(
-        programme.training_days, hevy_data.recent_workouts,
+        programme.training_days,
+        hevy_data.recent_workouts,
     )
 
     logger.info(
