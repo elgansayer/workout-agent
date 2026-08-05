@@ -162,9 +162,7 @@ def get_exercise_history(
         response.raise_for_status()
         return response.json().get("exercise_history", [])
     except requests.RequestException as exc:
-        logger.warning(
-            "Could not fetch exercise history for %s: %s", template_id, exc
-        )
+        logger.warning("Could not fetch exercise history for %s: %s", template_id, exc)
         return None
     except ValueError as exc:
         logger.warning("Hevy returned invalid JSON for exercise history: %s", exc)
@@ -175,9 +173,7 @@ def get_workout_count(api_key: str) -> int | None:
     """Return the total number of logged workouts on the account, or None."""
     url = f"{BASE_URL}/workouts/count"
     try:
-        response = requests.get(
-            url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT
-        )
+        response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         count = response.json().get("workout_count")
         return int(count) if count is not None else None
@@ -195,16 +191,16 @@ def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:
     Each template has at least ``id``, ``title``, ``type``,
     ``primary_muscle_group``, and ``secondary_muscle_groups``.
     """
-    return _get_all_pages(api_key, "exercise_templates", "exercise_templates", page_size=100)
+    return _get_all_pages(
+        api_key, "exercise_templates", "exercise_templates", page_size=100
+    )
 
 
 def get_user_info(api_key: str) -> dict[str, Any] | None:
     """Return the authenticated user's profile, or None on failure."""
     url = f"{BASE_URL}/user/info"
     try:
-        response = requests.get(
-            url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT
-        )
+        response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
         return response.json()
     except requests.RequestException as exc:
@@ -215,9 +211,7 @@ def get_user_info(api_key: str) -> dict[str, Any] | None:
         return None
 
 
-def get_recent_workouts(
-    api_key: str, limit: int = 10
-) -> list[dict[str, Any]] | None:
+def get_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, Any]] | None:
     """Return the N most recent workouts (most recent first), or None."""
     url = f"{BASE_URL}/workouts"
     items: list[dict[str, Any]] = []

@@ -89,9 +89,9 @@ def _latest_value(
     the camelCase field on the data point (e.g. "bodyFat"); value_field is the
     numeric field within it (e.g. "percentage").
     """
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     # Filter fields use the snake_case form of the data type name.
     filter_field = data_type.replace("-", "_")
     try:
@@ -138,8 +138,12 @@ def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
     """Read the latest weight (kg), body fat (%), resting hr, and hrv from Google Health, or None."""
     weight_grams = _latest_value(access_token, "weight", "weight", "weightGrams")
     fat = _latest_value(access_token, "body-fat", "bodyFat", "percentage")
-    resting_hr = _latest_value(access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute")
-    hrv = _latest_value(access_token, "heart-rate-variability", "heartRateVariability", "rmssd")
+    resting_hr = _latest_value(
+        access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute"
+    )
+    hrv = _latest_value(
+        access_token, "heart-rate-variability", "heartRateVariability", "rmssd"
+    )
     metrics: dict[str, Any] = {}
     if weight_grams is not None:
         metrics["weight_kg"] = round(weight_grams / 1000.0, 2)
