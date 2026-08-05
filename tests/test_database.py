@@ -333,3 +333,192 @@ def test_init_db_migration_idempotent(tmp_path):
         col_names = {r[1] for r in row}
         assert "user_id" in col_names
 
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: chat_messages
+# ---------------------------------------------------------------------------
+
+
+def test_chat_messages_migration_adds_user_id_column(tmp_path):
+    """Running init_db on a pre-migration DB with chat_messages adds user_id."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO chat_messages (role, content, created_at) VALUES (?, ?, ?)",
+        ("user", "hello", "2026-08-01T00:00:00"),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn2:
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(chat_messages)").fetchall()}
+        assert "user_id" in cols
+        rows = conn2.execute(
+            "SELECT user_id FROM chat_messages WHERE content = 'hello'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] is not None  # backfilled
+
+
+def test_chat_messages_user_isolation(tmp_path):
+    """Two users writing to chat_messages don't see each other's rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import clear_chat_messages, get_chat_messages, save_chat_message
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_chat_message("user", "msg A1", db, user_id=user_a)
+    save_chat_message("user", "msg A2", db, user_id=user_a)
+    save_chat_message("user", "msg B1", db, user_id=user_b)
+
+    msgs_a = get_chat_messages(limit=50, db_path=db, user_id=user_a)
+    msgs_b = get_chat_messages(limit=50, db_path=db, user_id=user_b)
+
+    assert len(msgs_a) == 2
+    assert all(m["content"] in ("msg A1", "msg A2") for m in msgs_a)
+    assert len(msgs_b) == 1
+    assert msgs_b[0]["content"] == "msg B1"
+
+    # clear should only affect the target user
+    clear_chat_messages(db_path=db, user_id=user_a)
+    assert get_chat_messages(limit=50, db_path=db, user_id=user_a) == []
+    assert len(get_chat_messages(limit=50, db_path=db, user_id=user_b)) == 1
+
+
+def test_chat_messages_backward_compat(tmp_path):
+    """Calling save/get/clear without user_id still works."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import clear_chat_messages, get_chat_messages, save_chat_message
+
+    save_chat_message("user", "test", db)
+    msgs = get_chat_messages(db_path=db)
+    assert len(msgs) == 1
+    assert msgs[0]["content"] == "test"
+
+    clear_chat_messages(db_path=db)
+    assert get_chat_messages(db_path=db) == []
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: dashboard_insights
+# ---------------------------------------------------------------------------
+
+
+def test_dashboard_insights_migration_and_isolation(tmp_path):
+    """dashboard_insights is migrated from singleton to user_id-scoped."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    # Simulate pre-migration: create old singleton table
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dashboard_insights (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            date TEXT NOT NULL,
+            insight_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO dashboard_insights (id, date, insight_json) VALUES (1, '2026-08-01', ?)",
+        ('{"fatigue": "Green"}',),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    from database import get_dashboard_insight, save_dashboard_insight
+
+    # The old row should have been backfilled to the legacy user
+    # Without a user_id filter, we default to None which was backfilled as legacy
+    legacy_insight = get_dashboard_insight(db_path=db, user_id=None)
+    assert legacy_insight is None  # None doesn't match legacy user in new schema
+
+    user_a = "user-a-123"
+    save_dashboard_insight('{"fatigue": "Red"}', db, user_id=user_a)
+    insight_a = get_dashboard_insight(db_path=db, user_id=user_a)
+    assert insight_a is not None
+    assert insight_a["fatigue"] == "Red"
+
+    user_b = "user-b-456"
+    save_dashboard_insight('{"fatigue": "Green"}', db, user_id=user_b)
+    insight_b = get_dashboard_insight(db_path=db, user_id=user_b)
+    assert insight_b is not None
+    assert insight_b["fatigue"] == "Green"
+
+    # Users don't see each other's insights
+    insight_a2 = get_dashboard_insight(db_path=db, user_id=user_a)
+    assert insight_a2 is not None
+    assert insight_a2["fatigue"] == "Red"
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: deep_correlations
+# ---------------------------------------------------------------------------
+
+
+def test_deep_correlations_migration_and_isolation(tmp_path):
+    """deep_correlations is migrated from singleton to user_id-scoped."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    # Simulate pre-migration
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS deep_correlations (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            date TEXT NOT NULL,
+            insight_markdown TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO deep_correlations (id, date, insight_markdown) VALUES (1, '2026-08-01', ?)",
+        ("Old insight",),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    from database import get_deep_correlation, save_deep_correlation
+
+    user_a = "user-a-123"
+    save_deep_correlation("Correlation A", db, user_id=user_a)
+    assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
+
+    user_b = "user-b-456"
+    save_deep_correlation("Correlation B", db, user_id=user_b)
+    assert get_deep_correlation(db_path=db, user_id=user_b) == "Correlation B"
+
+    # Users don't see each other's correlations
+    assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
+
+    # None user_id returns None (no matching row)
+    assert get_deep_correlation(db_path=db, user_id=None) is None
+

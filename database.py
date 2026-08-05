@@ -261,6 +261,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             # Backfill existing rows with a synthesised legacy user
             from uuid import uuid4
+
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
@@ -283,6 +284,103 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
             "ON workout_history (user_id, date DESC, id DESC)"
         )
+
+        # ---- Multi-tenant migration helper ----
+        def _ensure_legacy_user(cur: sqlite3.Cursor) -> str:
+            """Return the stable legacy user id, creating the user row if needed."""
+            from uuid import uuid4
+
+            row = cur.execute(
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+            ).fetchone()
+            if row:
+                return row[0]
+            legacy_id = str(uuid4())
+            cur.execute(
+                "INSERT INTO users (id, email, display_name, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (legacy_id, "legacy@local", "Legacy Data",
+                 datetime.now(tz=timezone.utc).isoformat()),
+            )
+            return legacy_id
+
+        # Migration: Add user_id column to chat_messages
+        cursor.execute("PRAGMA table_info(chat_messages)")
+        cm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in cm_columns:
+            cursor.execute(
+                "ALTER TABLE chat_messages ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE chat_messages SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_user "
+            "ON chat_messages (user_id, id DESC)"
+        )
+
+        # Migration: Migrate dashboard_insights from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(dashboard_insights)")
+        di_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in di_columns:
+            # Create new table
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dashboard_insights_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    date TEXT NOT NULL,
+                    insight_json TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """
+            )
+            # Copy existing singleton row (if any) to legacy user
+            old_row = cursor.execute(
+                "SELECT date, insight_json FROM dashboard_insights WHERE id = 1"
+            ).fetchone()
+            if old_row:
+                legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO dashboard_insights_new "
+                    "(user_id, date, insight_json) VALUES (?, ?, ?)",
+                    (legacy_id, old_row[0], old_row[1]),
+                )
+            # Replace old table
+            cursor.execute("DROP TABLE dashboard_insights")
+            cursor.execute(
+                "ALTER TABLE dashboard_insights_new RENAME TO dashboard_insights"
+            )
+
+        # Migration: Migrate deep_correlations from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(deep_correlations)")
+        dc_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in dc_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS deep_correlations_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    date TEXT NOT NULL,
+                    insight_markdown TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """
+            )
+            old_row = cursor.execute(
+                "SELECT date, insight_markdown FROM deep_correlations WHERE id = 1"
+            ).fetchone()
+            if old_row:
+                legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO deep_correlations_new "
+                    "(user_id, date, insight_markdown) VALUES (?, ?, ?)",
+                    (legacy_id, old_row[0], old_row[1]),
+                )
+            cursor.execute("DROP TABLE deep_correlations")
+            cursor.execute(
+                "ALTER TABLE deep_correlations_new RENAME TO deep_correlations"
+            )
 
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
@@ -768,26 +866,42 @@ def get_body_metrics(
     ]
 
 
-def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Save the daily dashboard insight JSON."""
+def save_dashboard_insight(
+    insight_json: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Save the daily dashboard insight JSON.
+
+    If *user_id* is provided, the insight is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO dashboard_insights (id, date, insight_json)
-            VALUES (1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO dashboard_insights (user_id, date, insight_json)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
                 date = excluded.date,
                 insight_json = excluded.insight_json
             """,
-            (datetime.now(tz=timezone.utc).date().isoformat(), insight_json),
+            (user_id, datetime.now(tz=timezone.utc).date().isoformat(), insight_json),
         )
 
 
-def get_dashboard_insight(db_path: str = DEFAULT_DB_PATH) -> dict | None:
-    """Get the latest dashboard insight JSON as a dict."""
+def get_dashboard_insight(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> dict | None:
+    """Get the latest dashboard insight JSON as a dict.
+
+    If *user_id* is provided, returns only that user's insight.
+    """
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT insight_json FROM dashboard_insights WHERE id = 1"
+            "SELECT insight_json FROM dashboard_insights WHERE user_id = ?",
+            (user_id,),
         ).fetchone()
     if row:
         try:
@@ -828,69 +942,118 @@ def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | 
 
 
 def save_deep_correlation(
-    insight_markdown: str, db_path: str = DEFAULT_DB_PATH
+    insight_markdown: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
+    """Save a deep correlation insight.
+
+    If *user_id* is provided, the insight is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO deep_correlations (id, date, insight_markdown)
-            VALUES (1, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO deep_correlations (user_id, date, insight_markdown)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
                 date = excluded.date,
                 insight_markdown = excluded.insight_markdown
             """,
-            (datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
+            (user_id, datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
         )
 
 
-def get_deep_correlation(db_path: str = DEFAULT_DB_PATH) -> str | None:
+def get_deep_correlation(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> str | None:
+    """Return the latest deep correlation for *user_id*."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT insight_markdown FROM deep_correlations WHERE id = 1"
+            "SELECT insight_markdown FROM deep_correlations WHERE user_id = ?",
+            (user_id,),
         ).fetchone()
     return row[0] if row else None
 
 
-def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Persist a chat message (role is 'user' or 'assistant')."""
+def save_chat_message(
+    role: str,
+    content: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Persist a chat message (role is 'user' or 'assistant').
+
+    If *user_id* is provided, the message is scoped to that user.
+    """
     from datetime import datetime
 
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO chat_messages (role, content, created_at)
-            VALUES (?, ?, ?)
+            INSERT INTO chat_messages (role, content, created_at, user_id)
+            VALUES (?, ?, ?, ?)
             """,
-            (role, content, datetime.now(tz=timezone.utc).isoformat()),
+            (role, content, datetime.now(tz=timezone.utc).isoformat(), user_id),
         )
 
 
 def get_chat_messages(
-    limit: int = 50, db_path: str = DEFAULT_DB_PATH
+    limit: int = 50,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return chat messages, oldest first."""
+    """Return chat messages, oldest first.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT role, content, created_at FROM (
-                SELECT role, content, created_at
-                FROM chat_messages
-                ORDER BY id DESC
-                LIMIT ?
-            ) ORDER BY rowid ASC
-            """,
-            (limit,),
-        ).fetchall()
+        if user_id is not None:
+            rows = conn.execute(
+                """
+                SELECT role, content, created_at FROM (
+                    SELECT role, content, created_at, id
+                    FROM chat_messages
+                    WHERE user_id = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC
+                """,
+                (user_id, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT role, content, created_at FROM (
+                    SELECT role, content, created_at, id
+                    FROM chat_messages
+                    ORDER BY id DESC
+                    LIMIT ?
+                ) ORDER BY id ASC
+                """,
+                (limit,),
+            ).fetchall()
     return [
         {"role": role, "content": content, "created_at": created_at}
         for role, content, created_at in rows
     ]
 
 
-def clear_chat_messages(db_path: str = DEFAULT_DB_PATH) -> None:
-    """Delete all chat messages."""
+def clear_chat_messages(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Delete all chat messages for *user_id*."""
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM chat_messages")
+        if user_id is not None:
+            conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
+        else:
+            conn.execute("DELETE FROM chat_messages")
 
 
 # ---------------------------------------------------------------------------
