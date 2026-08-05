@@ -136,7 +136,9 @@ def _classify_routine_muscles(
     for ex in routine.exercises:
         tmpl = templates.get(ex.template_id)
         if tmpl:
-            counts[tmpl.primary_muscle_group] = counts.get(tmpl.primary_muscle_group, 0.0) + 1.0
+            counts[tmpl.primary_muscle_group] = (
+                counts.get(tmpl.primary_muscle_group, 0.0) + 1.0
+            )
             for sec in tmpl.secondary_muscle_groups:
                 counts[sec] = counts.get(sec, 0.0) + 0.5
     return sorted(counts, key=lambda k: counts[k], reverse=True)
