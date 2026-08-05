@@ -25,6 +25,7 @@ def _resolve_provider(config: Config) -> AIProvider:
     return resolve_provider(
         db_path=config.database_path,
         server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
     )
 
 

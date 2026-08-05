@@ -800,6 +800,7 @@ def xai_reasoning(context_id: str, request: Request):
         user_id,
         db_path=DB_PATH,
         server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
     )
 
     history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
@@ -822,6 +823,7 @@ def project_peak(request: Request):
         user_id,
         db_path=DB_PATH,
         server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
     )
 
     series = get_progress_history(db_path=DB_PATH)
@@ -871,6 +873,7 @@ def rag_search(request: Request, q: str = Query(...)):
         user_id,
         db_path=DB_PATH,
         server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
     )
 
     # Gather training context
