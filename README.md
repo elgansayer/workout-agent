@@ -288,9 +288,14 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
-The app is read-only and has no login, so it sits cleanly behind Apache, nginx,
-or Caddy. Point the proxy at the container's published port. Example Apache
-virtual host mapping `gym.example.com` to the dashboard:
+The dashboard supports optional Google OAuth login. Set `WEB_AUTH_SECRET`,
+`WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET` in your environment
+(and optionally `ALLOWED_EMAILS` to restrict which Google accounts can sign in).
+When configured, every page requires authentication. Without those variables
+the dashboard runs without auth — point it at a reverse proxy and add HTTP basic
+auth there if you want to gate it on a public network.
+
+Example Apache virtual host mapping `gym.example.com` to the dashboard:
 
 ```apache
 <VirtualHost *:443>
@@ -301,9 +306,6 @@ virtual host mapping `gym.example.com` to the dashboard:
     # ... your TLS configuration ...
 </VirtualHost>
 ```
-
-Because there is no authentication, only expose data you are happy to be public,
-or add HTTP basic auth at the proxy if you want to gate it.
 
 ---
 
@@ -423,8 +425,10 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
-   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
-   from any device on your LAN. Keep it on a trusted network: there is no auth.
+   It listens on `http://<host-ip>:8770` (or the port you set with `WEB_PORT`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. Keep it on
+   a trusted network, or configure Google OAuth (set `WEB_AUTH_SECRET`,
+   `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`).
 
 ---
 
@@ -485,11 +489,16 @@ without it.
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
+   | `WEB_AUTH_SECRET` | optional | enable Google OAuth login |
+   | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
+   | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
-   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is
-   no auth.
+   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, and
+   optionally enable Google OAuth by setting `WEB_AUTH_SECRET`,
+   `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`.
 
 > Want the agent to message you immediately to confirm it works? Temporarily set
 > `MODE=once` as an env var and redeploy, then set it back to `schedule`.
