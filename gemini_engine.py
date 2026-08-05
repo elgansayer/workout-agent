@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ai_provider import get_provider
 from hevy_parser import WorkoutSummary
@@ -17,6 +17,9 @@ from program import (
     day_focus,
     format_day,
 )
+
+if TYPE_CHECKING:
+    from ai_provider import AIProvider
 
 try:
     from weather import WeatherConditions
@@ -140,10 +143,18 @@ def generate_next_workout(
     last_plan: str | None = None,
     *,
     provider_name: str = "gemini",
+    provider: AIProvider | None = None,
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error."""
+    """Generate today's plan, falling back to the baseline plan on error.
+
+    When *provider* is supplied it is used directly, skipping the
+    ``get_provider()`` factory call.  This is the preferred path for
+    callers that have already resolved a user's preferred AI provider via
+    ``resolve_provider()``.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if provider is None:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_prompt(
             day, week, block, workout_summary, recovery, history, insights, last_plan
         )
@@ -195,10 +206,16 @@ def generate_rest_day_message(
     recovery: dict[str, Any] | None = None,
     *,
     provider_name: str = "gemini",
+    provider: AIProvider | None = None,
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error."""
+    """Generate a short rest-day recovery message, falling back on error.
+
+    When *provider* is supplied it is used directly, skipping the
+    ``get_provider()`` factory call.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if provider is None:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -265,10 +282,16 @@ def generate_checkin_message(
     fallback: str,
     *,
     provider_name: str = "gemini",
+    provider: AIProvider | None = None,
 ) -> str:
-    """Generate a periodic check-in message, falling back on error."""
+    """Generate a periodic check-in message, falling back on error.
+
+    When *provider* is supplied it is used directly, skipping the
+    ``get_provider()`` factory call.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if provider is None:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_checkin_prompt(
             number, week, block, workouts_done, weeks, analysis_text
         )
@@ -342,10 +365,16 @@ def apply_autonomous_adjustments(
     is_catabolic: bool = False,
     *,
     provider_name: str = "gemini",
+    provider: AIProvider | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines."""
+    """Applies the unified autonomous progression and returns updated JSON routines.
+
+    When *provider* is supplied it is used directly, skipping the
+    ``get_provider()`` factory call.
+    """
     try:
-        provider = get_provider(provider_name, api_key, model_name)
+        if provider is None:
+            provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
