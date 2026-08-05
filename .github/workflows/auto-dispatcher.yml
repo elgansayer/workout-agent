@@ -1,7 +1,6 @@
 name: Swarm Auto-Dispatcher
 
 on:
-  workflow_dispatch:
   schedule:
     - cron: '*/5 * * * *'
   workflow_run:
@@ -35,19 +34,6 @@ jobs:
             exit 0
           fi
 
-          # ── DAILY DISPATCH LIMIT ───────────────────────────────────────────
-          # Max 3 issues dispatched per day to control costs.
-          TODAY=$(date -u +%Y-%m-%d)
-          DAILY_COUNT=$(gh pr list --repo ${{ github.repository }} \
-            --state all --json createdAt \
-            --search "created:>=${TODAY}" \
-            -q "length" 2>/dev/null || echo "0")
-          echo "PRs created today: $DAILY_COUNT / 3"
-          if [ "$DAILY_COUNT" -ge 3 ]; then
-            echo "Daily limit of 3 reached. Resuming tomorrow."
-            exit 0
-          fi
-          # ──────────────────────────────────────────────────────────────────
 
           # Ensure priority labels exist
           gh label create "swarm-active"   --color "0E8A16" --force --repo ${{ github.repository }} || true
