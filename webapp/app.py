@@ -893,6 +893,7 @@ def programmes_page(request: Request):
 @app.post("/api/programmes/select")
 async def select_programme(request: Request):
     """Activate a programme template for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1066,8 +1067,9 @@ def checkins(request: Request):
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request):
     _check_rate_limit(request)
+    user_id = request.session.get("user_id")
     # context_id is expected to be {date}_{exercise_name}
-    existing = get_reasoning_log(context_id, db_path=DB_PATH)
+    existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
         return {"reasoning": existing}
 
@@ -1078,7 +1080,6 @@ def xai_reasoning(context_id: str, request: Request):
     when, ex_name = parts
 
     config = get_config()
-    user_id = request.session.get("user_id")
     provider = resolve_provider(
         user_id,
         db_path=DB_PATH,
@@ -1093,7 +1094,7 @@ def xai_reasoning(context_id: str, request: Request):
         str(provider.generate(prompt)).strip() or "Could not determine reasoning."
     )
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
     return {"reasoning": reasoning}
 
 

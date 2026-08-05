@@ -469,6 +469,23 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON check_ins (user_id, id DESC)"
         )
 
+        # Migration: Add user_id column to reasoning_logs for multi-tenancy
+        cursor.execute("PRAGMA table_info(reasoning_logs)")
+        rl_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in rl_columns:
+            cursor.execute(
+                "ALTER TABLE reasoning_logs ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            rl_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE reasoning_logs SET user_id = ? WHERE user_id IS NULL",
+                (rl_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reasoning_logs_user "
+            "ON reasoning_logs (user_id)"
+        )
+
 
 def get_current_day(db_path: str = DEFAULT_DB_PATH) -> int:
     """Return the current day in the cycle (1-6)."""
@@ -1197,32 +1214,60 @@ def get_dashboard_insight(
 
 
 def save_reasoning_log(
-    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH
+    context_id: str,
+    exercise_name: str,
+    reasoning: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Save an AI reasoning log for an exercise change."""
+    """Save an AI reasoning log for an exercise change.
+
+    If *user_id* is provided, the log is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO reasoning_logs (context_id, date, exercise_name, reasoning)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO reasoning_logs (context_id, date, exercise_name, reasoning, user_id)
+            VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(context_id) DO UPDATE SET
-                reasoning = excluded.reasoning
+                reasoning = excluded.reasoning,
+                user_id = excluded.user_id
             """,
             (
                 context_id,
                 datetime.now(tz=timezone.utc).date().isoformat(),
                 exercise_name,
                 reasoning,
+                user_id,
             ),
         )
 
 
-def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
-    """Get the reasoning log by context_id."""
+def get_reasoning_log(
+    context_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> str | None:
+    """Get the reasoning log by context_id.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                """
+                SELECT reasoning FROM reasoning_logs
+                WHERE context_id = ? AND user_id = ?
+                """,
+                (context_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
+                (context_id,),
+            ).fetchone()
     return row[0] if row else None
 
 
