@@ -82,10 +82,11 @@ ROOT = Path(__file__).resolve().parent
 
 # Scripts invoked directly (not imported by another Python module).
 ENTRY_POINTS: set[str] = {
+    "dead_code_sweep.py",
+    "insight_cron.py",
     "main.py",
     "scheduler.py",
     "sync_history.py",
-    "insight_cron.py",
 }
 
 # Files that are not modules in the import sense.
@@ -108,7 +109,7 @@ def _discover_modules() -> list[ModuleInfo]:
                 name=p.stem,
                 path=p,
                 is_entry_point=p.name in ENTRY_POINTS,
-            ),
+            )
         )
 
     # webapp/ sub-package
@@ -122,7 +123,7 @@ def _discover_modules() -> list[ModuleInfo]:
                     name=f"webapp.{p.stem}",
                     path=p,
                     is_entry_point=False,  # webapp modules are never entry points
-                ),
+                )
             )
 
     return modules
@@ -132,6 +133,11 @@ def _extract_imports(source: str) -> set[str]:
     """Return the set of top-level module names imported by *source*.
 
     Handles ``import foo``, ``from foo import bar``, and ``from foo.baz import ...``.
+
+    For ``from local_package import submodule`` patterns where *local_package*
+    is a directory on disk containing ``submodule.py``, this also yields the
+    fully-qualified ``local_package.submodule`` name so that webapp sub-modules
+    are wired transitively without relying on grep fallback.
     """
     try:
         tree = ast.parse(source)
@@ -144,7 +150,18 @@ def _extract_imports(source: str) -> set[str]:
             for alias in node.names:
                 imports.add(alias.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imports.add(node.module.split(".")[0])
+            top = node.module.split(".")[0]
+            imports.add(top)
+            # Resolve ``from webapp import charts`` → ``webapp.charts``
+            _pkg_dir = ROOT / top
+            if _pkg_dir.is_dir() and node.module == top:
+                for alias in node.names:
+                    sub_name = alias.name
+                    if sub_name == "*":
+                        continue
+                    candidate = _pkg_dir / f"{sub_name}.py"
+                    if candidate.is_file():
+                        imports.add(f"{top}.{sub_name}")
     return imports
 
 
@@ -172,10 +189,20 @@ def _build_import_graph() -> dict[str, set[str]]:
     return graph
 
 
+def _module_name_to_file(modules: list[ModuleInfo]) -> dict[str, str]:
+    """Return mapping from dotted module name → relative file path."""
+    m2f: dict[str, str] = {}
+    for mi in modules:
+        rel = str(mi.path.relative_to(ROOT))
+        m2f[mi.name] = rel
+    return m2f
+
+
 def find_orphans() -> list[OrphanReport]:
     """Return every module that is never imported by any reachable code."""
     modules = _discover_modules()
     import_graph = _build_import_graph()
+    module_to_file = _module_name_to_file(modules)
 
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
@@ -196,23 +223,16 @@ def find_orphans() -> list[OrphanReport]:
     # entry point, not imported by anyone else.
     _WEB_ENTRY = "webapp/app.py"
 
-    # BFS from entry-point files: anything they import is reachable, and
-    # anything *those* import is reachable, etc.
-    entry_point_files = {
-        f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
-    }
-
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
-    # Build name → relative-path mapping for module-defining files so BFS can
-    # resolve a module name back to its definition and discover its own imports.
-    _name_to_file: dict[str, str] = {}
-    for mi in modules:
-        try:
-            _name_to_file[mi.name] = str(mi.path.relative_to(ROOT))
-        except ValueError:
-            _name_to_file[mi.name] = str(mi.path)
+    # Forward BFS: start from entry-point files, then follow each module's
+    # own imports transitively.  Each entry point's declared imports are
+    # wired; for every wired module we resolve its file path and add its
+    # imports, continuing until the queue drains.
+    entry_point_files = {
+        f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
+    }
 
     queue: list[str] = []
     for ep in entry_point_files:
@@ -223,9 +243,8 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Look up the file that defines this module and discover its imports.
-        module_file = _name_to_file.get(module_name)
-        if module_file is not None and module_file in import_graph:
+        module_file = module_to_file.get(module_name)
+        if module_file and module_file in import_graph:
             for transitive in import_graph[module_file]:
                 if transitive not in wired:
                     wired.add(transitive)
@@ -244,7 +263,7 @@ def find_orphans() -> list[OrphanReport]:
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
-                "%s: AST missed but grep found imports in %s", mi.name, grep_hits,
+                "%s: AST missed but grep found imports in %s", mi.name, grep_hits
             )
             continue
 
@@ -252,7 +271,7 @@ def find_orphans() -> list[OrphanReport]:
             OrphanReport(
                 module=mi,
                 evidence=f"No imports of '{mi.name}' found in any reachable module.",
-            ),
+            )
         )
 
     return orphans
@@ -389,7 +408,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
                         f"git log shows replacement/supersession: {log_lines[0] if log_lines else 'N/A'}. "
                         "No documentation references remain."
                     ),
-                ),
+                )
             )
 
     return truly_dead
@@ -480,7 +499,7 @@ def create_github_issues(reports: list[OrphanReport]) -> list[str]:
     if not token:
         logger.warning(
             "No GitHub token found (set GITHUB_TOKEN or configure git remote credentials). "
-            "Skipping issue creation.",
+            "Skipping issue creation."
         )
         return []
 
@@ -499,7 +518,7 @@ def create_github_issues(reports: list[OrphanReport]) -> list[str]:
         labels = ["orphaned-module", "dead-code-sweep"]
 
         payload = json.dumps({"title": title, "body": body, "labels": labels}).encode(
-            "utf-8",
+            "utf-8"
         )
 
         req = urllib.request.Request(
@@ -672,7 +691,7 @@ def main() -> int:
             for r in truly_dead:
                 if not args.json_output:
                     logger.warning(
-                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT),
+                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT)
                     )
                     logger.warning("    %s", r.evidence)
             exit_code = 1

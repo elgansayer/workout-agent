@@ -47,7 +47,10 @@ class TestExtractImports:
         assert _extract_imports(source) == {"os", "sys", "datetime"}
 
     def test_webapp_dotted(self) -> None:
-        assert _extract_imports("from webapp import charts\n") == {"webapp"}
+        # ``from webapp import charts`` now resolves the sub-module
+        # provided ``webapp/charts.py`` exists on disk.
+        assert "webapp" in _extract_imports("from webapp import charts\n")
+        assert "webapp.charts" in _extract_imports("from webapp import charts\n")
         assert _extract_imports("from webapp.charts import line_chart\n") == {"webapp"}
 
     def test_syntax_error_returns_empty(self) -> None:
@@ -112,9 +115,18 @@ class TestEntryPoints:
     def test_insight_cron_is_entry_point(self) -> None:
         assert "insight_cron.py" in ENTRY_POINTS
 
+    def test_dead_code_sweep_is_entry_point(self) -> None:
+        assert "dead_code_sweep.py" in ENTRY_POINTS
+
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
-        expected = {"main.py", "scheduler.py", "sync_history.py", "insight_cron.py"}
+        expected = {
+            "dead_code_sweep.py",
+            "insight_cron.py",
+            "main.py",
+            "scheduler.py",
+            "sync_history.py",
+        }
         assert ENTRY_POINTS == expected
 
 
@@ -282,12 +294,12 @@ class TestFindTrulyDead:
         assert find_truly_dead([]) == []
 
     def test_orphan_without_replacement_evidence_not_truly_dead(
-        self, tmp_path: Path,
+        self, tmp_path: Path
     ) -> None:
         """A freshly orphaned module with no replacement evidence is NOT truly dead."""
         (tmp_path / "new_module.py").write_text("x = 1\n")
         mi = ModuleInfo(
-            name="new_module", path=tmp_path / "new_module.py", is_entry_point=False,
+            name="new_module", path=tmp_path / "new_module.py", is_entry_point=False
         )
         report = OrphanReport(module=mi, evidence="no imports")
         with patch("dead_code_sweep.ROOT", tmp_path):
@@ -298,7 +310,7 @@ class TestFindTrulyDead:
     def test_orphan_in_test_dir_handled(self, tmp_path: Path) -> None:
         """Even in a temp dir without git, function should not crash."""
         mi = ModuleInfo(
-            name="some_mod", path=tmp_path / "some_mod.py", is_entry_point=False,
+            name="some_mod", path=tmp_path / "some_mod.py", is_entry_point=False
         )
         report = OrphanReport(module=mi, evidence="no imports")
         with patch("dead_code_sweep.ROOT", tmp_path):
@@ -493,7 +505,7 @@ class TestCreateGitHubIssues:
                 OrphanReport(
                     module=ModuleInfo(name="x", path=p, is_entry_point=False),
                     evidence="e",
-                ),
+                )
             ]
             assert create_github_issues(reports) == []
 
@@ -509,7 +521,7 @@ class TestCreateGitHubIssues:
                 OrphanReport(
                     module=ModuleInfo(name="x", path=p, is_entry_point=False),
                     evidence="e",
-                ),
+                )
             ]
             assert create_github_issues(reports) == []
 
@@ -521,7 +533,7 @@ class TestCreateGitHubIssues:
         mock_response = MagicMock()
         mock_response.__enter__.return_value = mock_response
         mock_response.read.return_value = json.dumps(
-            {"html_url": "https://github.com/own/repo/issues/99"},
+            {"html_url": "https://github.com/own/repo/issues/99"}
         ).encode("utf-8")
 
         with (
@@ -541,7 +553,7 @@ class TestCreateGitHubIssues:
                         is_entry_point=False,
                     ),
                     evidence="e",
-                ),
+                )
             ]
             created = create_github_issues(reports)
             assert len(created) == 1
@@ -553,7 +565,7 @@ class TestCreateGitHubIssues:
         import urllib.error
 
         def _raise(*args, **kwargs):
-            raise urllib.error.HTTPError("url", 422, "Unprocessable", None, None)  # type: ignore[arg-type]
+            raise urllib.error.HTTPError("url", 422, "Unprocessable", {}, None)
 
         with (
             patch("dead_code_sweep.ROOT", tmp_path),
@@ -572,7 +584,7 @@ class TestCreateGitHubIssues:
                         is_entry_point=False,
                     ),
                     evidence="e",
-                ),
+                )
             ]
             created = create_github_issues(reports)
             assert len(created) == 1
