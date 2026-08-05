@@ -914,11 +914,15 @@ def test_set_active_programme(tmp_path):
     pid1 = save_programme(uid, "custom", "P1", {}, active=True, db_path=db)
     pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
 
-    assert get_active_programme(uid, db_path=db)["id"] == pid1
+    active = get_active_programme(uid, db_path=db)
+    assert active is not None
+    assert active["id"] == pid1
 
     ok = set_active_programme(uid, pid2, db_path=db)
     assert ok is True
-    assert get_active_programme(uid, db_path=db)["id"] == pid2
+    active2 = get_active_programme(uid, db_path=db)
+    assert active2 is not None
+    assert active2["id"] == pid2
 
 
 def test_set_active_programme_wrong_user(tmp_path):
