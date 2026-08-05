@@ -242,47 +242,6 @@ _DISPLAY_NAMES = {
 }
 
 
-def resolve_provider(
-    user_id: str | None = None,
-    *,
-    db_path: str | None = None,
-    server_gemini_key: str | None = None,
-) -> AIProvider:
-    """Resolve the right AI provider for *user_id*.
-
-    Looks up the user's preferred AI provider and API key from the database,
-    falling back to the server's ``GEMINI_API_KEY`` only when the default
-    provider (Gemini) is requested and no user-specific key exists.
-
-    When *user_id* is ``None`` (e.g. pre-multitenancy cron runs), Gemini is
-    assumed and *server_gemini_key* must be supplied.
-    """
-    from database import DEFAULT_DB_PATH, get_user_api_key, get_user_preferences
-
-    effective_db = db_path or DEFAULT_DB_PATH
-    prefs = get_user_preferences(user_id, db_path=effective_db) if user_id else {}
-    provider_name: str = (prefs.get("preferred_ai") or "gemini").lower().strip()
-    model: str | None = prefs.get("ai_model")
-
-    api_key: str | None = None
-    if user_id:
-        record = get_user_api_key(user_id, provider_name, db_path=effective_db)
-        if record:
-            api_key = record.get("api_key") or None
-
-    # Fall back to the server key **only** for the default provider (Gemini).
-    if api_key is None and provider_name == "gemini":
-        api_key = server_gemini_key
-
-    if api_key is None:
-        raise ValueError(
-            f"No {provider_name} API key configured. "
-            "Add a key in Settings -> AI Providers."
-        )
-
-    return get_provider(provider_name, api_key, model)
-
-
 def available_providers() -> list[dict[str, str]]:
     """Return metadata for each registered provider (for the settings UI)."""
     return [
@@ -320,7 +279,9 @@ def resolve_provider(
 
     if user_id is not None:
         prefs = get_user_preferences(user_id, db_path=db_path)
-        provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
+        provider_name: str = (
+            (prefs and prefs.get("preferred_ai")) or "gemini"
+        ).lower().strip()
         model: str | None = prefs and prefs.get("ai_model") or None
         record = get_user_api_key(user_id, provider_name, db_path=db_path)
         api_key: str | None = record["api_key"] if record else None
@@ -330,8 +291,8 @@ def resolve_provider(
 
         if provider_name != "gemini":
             raise ValueError(
-                f"No {provider_name} key configured for this user. "
-                "Add one in Settings or switch back to Gemini."
+                f"No {provider_name} API key configured. "
+                "Add a key in Settings -> AI Providers."
             )
 
         # Fall through to server-fallback for the default provider.
