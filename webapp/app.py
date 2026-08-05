@@ -103,10 +103,11 @@ _RATE_LIMITS: dict[str, list[float]] = {}
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
     now = time.time()
     forwarded = request.headers.get("x-forwarded-for")
+    real_ip = request.headers.get("x-real-ip")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
-    elif request.headers.get("x-real-ip"):
-        ip = request.headers.get("x-real-ip").strip()
+    elif real_ip:
+        ip = real_ip.strip()
     else:
         ip = request.client.host if request.client else "unknown"
 
@@ -482,8 +483,8 @@ def progress(request: Request):
             for e in entries
         ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms = [v for v in e1rms if v]
-        best_e1rm = max(e1rms) if e1rms else None
+        e1rms_filtered: list[float] = [v for v in e1rms if v is not None]
+        best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
         charts_data.append(
             {
                 "name": name,

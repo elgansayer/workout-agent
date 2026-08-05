@@ -105,8 +105,10 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
-        _CallbackHandler.code = (params.get("code") or [None])[0]
-        _CallbackHandler.state = (params.get("state") or [None])[0]
+        code_list: list[str] | None = params.get("code")
+        state_list: list[str] | None = params.get("state")
+        _CallbackHandler.code = code_list[0] if code_list else None
+        _CallbackHandler.state = state_list[0] if state_list else None
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
