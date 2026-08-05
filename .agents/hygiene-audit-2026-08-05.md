@@ -1,10 +1,10 @@
-# Commit Hygiene Audit — 2026-08-05 (Run #3)
+# Commit Hygiene Audit — 2026-08-05 (Run #4 — Issue #323)
 
 **Result: CLEAN** — No issues found.
 
 - **Commit messages**: Reviewed last 10 commits (shallow clone, HEAD grafted
-  at 9bec8d0). The sole available commit message is descriptive ("Fixes #307:
-  Fixes #297: [Hourly] Hourly Lint & Format Fix"). No "fix" or "wip" commits found.
+  at 657f3f1). The sole available commit message is descriptive ("Fixes #311:
+  [Hourly] Hourly Lint & Format Fix"). No "fix" or "wip" commits found.
 - **Sensitive files**: `git log -p -10 -- .env .env.* data/ '*.db'` —
   no .env, database, or data/ files ever committed. `.env.example` is the only
   match (1 diff), which is explicitly whitelisted (`!.env.example`).
@@ -19,4 +19,4 @@
   All 37 tests pass. Tool reports clean with zero findings.
 
 **Verification gates (re-run)**: ruff clean (0 warnings), mypy clean (0 issues),
-  482 pytest tests pass. No action required.
+  pytest 37/37 commit_hygiene tests pass. No action required.
