@@ -14,6 +14,7 @@ import logging
 import re
 from typing import Any
 
+from ai_provider import resolve_provider
 from config import Config
 from database import (
     delete_routine_record,
@@ -328,10 +329,16 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            logger.info("Requesting autonomous routine adjustments from Gemini...")
+            provider = resolve_provider(
+                db_path=config.database_path,
+                server_gemini_key=config.gemini_api_key,
+                server_gemini_model=config.gemini_model,
+            )
+            logger.info(
+                "Requesting autonomous routine adjustments from %s...", provider.name()
+            )
             updated_routines = apply_autonomous_adjustments(
-                api_key=config.gemini_api_key,
-                model_name=config.gemini_model,
+                provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
