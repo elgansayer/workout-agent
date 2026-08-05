@@ -9,3 +9,7 @@
 ## 2024-05-14 - SQLite 1RM Calculation Offloading
 **Learning:** `get_personal_records()` previously loaded the entire workout history into Python memory to find the highest Epley 1RM per exercise, operating in O(N) memory scale. SQLite natively supports retrieving correctly associated bare columns with aggregate functions like `MAX(weight * (1 + reps/30))` combined with `GROUP BY`.
 **Action:** Shift row-level aggregation logic directly to SQLite queries (e.g., max calculations over history) to ensure unbounded memory growth does not break application logic, fetching O(1) records per exercise instead of O(N).
+
+## 2024-05-15 - Compound Indexes for Multi-Tenant Queries
+**Learning:** Adding single-column `user_id` indexes during multi-tenancy migrations solves basic filtering, but forces SQLite to use slow temporary B-Trees for queries with `ORDER BY` or `GROUP BY` (e.g. `ORDER BY date DESC, id DESC`). This affects `body_metrics` and `exercise_progress` tables.
+**Action:** When migrating single-user tables to multi-tenant, single-column `user_id` indexes are insufficient if the queries have ordering/grouping. Always create compound indexes like `(user_id, date DESC, id DESC)` or `(user_id, exercise_name, id DESC)` to fully support the query shape and prevent temporary sorts.
