@@ -119,7 +119,9 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         )
         self.wfile.write(body.encode("utf-8"))
 
-    def log_message(self, *args: Any, **kwargs: Any) -> None:  # silence the default logging
+    def log_message(
+        self, *args: Any, **kwargs: Any
+    ) -> None:  # silence the default logging
         pass
 
 
