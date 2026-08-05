@@ -9,6 +9,6 @@ openai>=1.30.0
 anthropic>=0.42.0
 
 # Development / testing
-pytest>=8.0.0
+pytest>=8.0.0,<9
 ruff>=0.6.0
 mypy>=1.10.0
