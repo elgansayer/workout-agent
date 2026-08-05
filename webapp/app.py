@@ -365,13 +365,13 @@ def _format_best(best: dict | None) -> str:
     return "No data yet"
 
 
-def _training_levels() -> dict[str, int]:
+def _training_levels(*, user_id: str | None = None) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
-    for log in get_daily_logs(limit=400, db_path=DB_PATH):
+    for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
         levels[log["date"]] = 2 if log["day"] is not None else 1
     # A session with logged sets is the strongest signal of a completed workout.
-    for session in get_session_volumes(db_path=DB_PATH):
+    for session in get_session_volumes(db_path=DB_PATH, user_id=user_id):
         levels[session["date"]] = 4
     return levels
 
@@ -399,7 +399,7 @@ def _dashboard_context(
     start = get_programme_start_date(DB_PATH)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
-    bests = get_recent_bests(DB_PATH)
+    bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
     # Check for a user-selected active programme.
@@ -444,12 +444,12 @@ def _dashboard_context(
                 }
             )
 
-    metrics = get_body_metrics(db_path=DB_PATH)
+    metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(day, day is None, recovery_like)
 
-    levels = _training_levels()
+    levels = _training_levels(user_id=user_id)
     streak = _current_streak(levels)
     week_in_block = ((week - 1) % BLOCK_WEEKS) + 1
 
@@ -462,7 +462,7 @@ def _dashboard_context(
     )
 
     review = insights.build_insights(
-        get_progress_history(db_path=DB_PATH), metrics, None
+        get_progress_history(db_path=DB_PATH, user_id=user_id), metrics, None
     )
 
     return {
@@ -510,7 +510,8 @@ def dashboard(request: Request):
 
 @app.get("/progress")
 def progress(request: Request):
-    series = get_progress_history(db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     charts_data = []
     for name in sorted(series):
         entries = series[name]
@@ -536,12 +537,12 @@ def progress(request: Request):
     return templates.TemplateResponse(
         request,
         "progress.html",
-        {"active": "progress", "charts": charts_data, "body": _body_charts()},
+        {"active": "progress", "charts": charts_data, "body": _body_charts(user_id=user_id)},
     )
 
 
-def _body_charts() -> dict:
-    readings = get_body_metrics(db_path=DB_PATH)
+def _body_charts(*, user_id: str | None = None) -> dict:
+    readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
         points = [
@@ -563,11 +564,12 @@ def _body_charts() -> dict:
 
 @app.get("/stats")
 def stats(request: Request):
-    volumes = get_session_volumes(db_path=DB_PATH)
-    prs = get_personal_records(db_path=DB_PATH)
-    logs = get_daily_logs(limit=400, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
+    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(DB_PATH)
-    series = get_progress_history(db_path=DB_PATH)
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
@@ -586,7 +588,7 @@ def stats(request: Request):
     )
 
     # Volume broken down by muscle group.
-    groups = analytics.group_volumes(get_exercise_volumes(db_path=DB_PATH))
+    groups = analytics.group_volumes(get_exercise_volumes(db_path=DB_PATH, user_id=user_id))
     muscle_donut = charts.donut(
         [
             {"label": g, "value": v}
@@ -605,14 +607,14 @@ def stats(request: Request):
     )
 
     # Advanced AI Widgets
-    biometrics = get_body_metrics(db_path=DB_PATH)
+    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     block_phase_svg = ai_widgets.block_phase_tracker(volumes)
     recovery_grid_svg = ai_widgets.systemic_recovery_correlation(biometrics, volumes)
     vol_dist_svg = ai_widgets.volume_distribution(groups)
 
     # Strength score (DOTS) and strength-to-bodyweight ratio over time, built
     # from the deadlift e1RM against the bodyweight recorded at the time.
-    body = get_body_metrics(db_path=DB_PATH)
+    body = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     weights = [(m["date"], m["weight_kg"]) for m in body if m["weight_kg"]]
     _, dl_entries = _find_lift_series(series, "deadlift")
     dots_points, ratio_points = [], []
@@ -1020,13 +1022,14 @@ def _run_hevy_inference(user_id: str) -> dict:
 
 @app.get("/history")
 def history(request: Request):
-    logs = get_daily_logs(limit=60, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
         request,
         "history.html",
         {
             "active": "history",
-            "calendar": charts.calendar_heatmap(_training_levels()),
+            "calendar": charts.calendar_heatmap(_training_levels(user_id=user_id)),
             "logs": logs,
         },
     )
@@ -1034,8 +1037,9 @@ def history(request: Request):
 
 @app.get("/checkins")
 def checkins(request: Request):
-    checkins_list = get_checkins(db_path=DB_PATH)
-    total_sessions = len(get_session_volumes(db_path=DB_PATH))
+    user_id = request.session.get("user_id")
+    checkins_list = get_checkins(db_path=DB_PATH, user_id=user_id)
+    total_sessions = len(get_session_volumes(db_path=DB_PATH, user_id=user_id))
     sessions_since = total_sessions % 24
     sessions_left = 24 - sessions_since
     progress_pct = (sessions_since / 24) * 100
@@ -1076,7 +1080,7 @@ def xai_reasoning(context_id: str, request: Request):
         server_gemini_model=config.gemini_model,
     )
 
-    history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
+    history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
     reasoning = str(provider.generate(prompt)).strip() or "Could not determine reasoning."
@@ -1097,7 +1101,7 @@ def project_peak(request: Request):
         server_gemini_model=config.gemini_model,
     )
 
-    series = get_progress_history(db_path=DB_PATH)
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
 
@@ -1148,10 +1152,10 @@ def rag_search(request: Request, q: str = Query(...)):
     )
 
     # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH)
-    history = get_progress_history(db_path=DB_PATH)
-    biometrics = get_body_metrics(db_path=DB_PATH)
-    prs = get_personal_records(db_path=DB_PATH)
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
 
     context = json.dumps(
         {

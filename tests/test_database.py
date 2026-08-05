@@ -757,8 +757,186 @@ def test_dashboard_insights_migration_and_isolation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: deep_correlations
+# Multi-tenant isolation tests: daily_log
 # ---------------------------------------------------------------------------
+
+
+def test_daily_log_migration_adds_user_id_column(tmp_path):
+    """daily_log gets a user_id column via migration and backfills legacy."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            day INTEGER,
+            focus TEXT NOT NULL,
+            carb_tier TEXT NOT NULL,
+            plan TEXT NOT NULL,
+            lifestyle TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle) "
+        "VALUES ('2026-08-01', 1, 'Deadlift', 'high', 'Plan A', 'Walk')"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    from database import get_daily_logs
+
+    logs = get_daily_logs(limit=10, db_path=db)
+    assert len(logs) == 1
+    assert logs[0]["focus"] == "Deadlift"
+
+
+def test_daily_log_user_isolation(tmp_path):
+    """Two different user_ids don't see each other's daily_log rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_daily_logs, save_daily_log
+
+    save_daily_log(
+        "2026-08-01", 1, "Deadlift", "high", "Plan A", "Walk",
+        db_path=db, user_id="user-a",
+    )
+    save_daily_log(
+        "2026-08-01", 2, "Pull-ups", "med", "Plan B", "Run",
+        db_path=db, user_id="user-b",
+    )
+
+    logs_a = get_daily_logs(limit=10, db_path=db, user_id="user-a")
+    assert len(logs_a) == 1
+    assert logs_a[0]["day"] == 1
+    assert logs_a[0]["focus"] == "Deadlift"
+
+    logs_b = get_daily_logs(limit=10, db_path=db, user_id="user-b")
+    assert len(logs_b) == 1
+    assert logs_b[0]["day"] == 2
+    assert logs_b[0]["focus"] == "Pull-ups"
+
+
+def test_daily_log_backward_compat(tmp_path):
+    """Callers not passing user_id still work (backward compat)."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_daily_logs, save_daily_log
+
+    save_daily_log(
+        "2026-08-01", 1, "Deadlift", "high", "Plan", "Lifestyle",
+        db_path=db,
+    )
+    logs = get_daily_logs(limit=10, db_path=db)
+    assert len(logs) == 1
+
+
+def test_daily_log_dedupes_per_user_per_date(tmp_path):
+    """Same user/date writes replace the prior entry; different users don't clash."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_daily_logs, save_daily_log
+
+    save_daily_log(
+        "2026-08-01", 1, "A", "high", "Plan1", "L1",
+        db_path=db, user_id="u1",
+    )
+    save_daily_log(
+        "2026-08-01", 1, "A-v2", "high", "Plan1b", "L1b",
+        db_path=db, user_id="u1",
+    )
+    save_daily_log(
+        "2026-08-01", 2, "B", "med", "Plan2", "L2",
+        db_path=db, user_id="u2",
+    )
+
+    logs_u1 = get_daily_logs(limit=10, db_path=db, user_id="u1")
+    assert len(logs_u1) == 1
+    assert logs_u1[0]["focus"] == "A-v2"
+
+    logs_u2 = get_daily_logs(limit=10, db_path=db, user_id="u2")
+    assert len(logs_u2) == 1
+    assert logs_u2[0]["focus"] == "B"
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: check_ins
+# ---------------------------------------------------------------------------
+
+
+def test_check_ins_migration_adds_user_id_column(tmp_path):
+    """check_ins gets a user_id column via migration and backfills legacy."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS check_ins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            number INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            workouts_done INTEGER NOT NULL,
+            weeks INTEGER NOT NULL,
+            message TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO check_ins (number, date, workouts_done, weeks, message) "
+        "VALUES (1, '2026-08-01', 5, 2, 'Good progress')"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    from database import get_checkins
+
+    cks = get_checkins(limit=10, db_path=db)
+    assert len(cks) == 1
+    assert cks[0]["number"] == 1
+
+
+def test_check_ins_user_isolation(tmp_path):
+    """Two different user_ids don't see each other's check_ins rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_checkins, save_checkin
+
+    save_checkin(1, "2026-08-01", 5, 2, "Message A", db_path=db, user_id="u1")
+    save_checkin(1, "2026-08-02", 3, 1, "Message B", db_path=db, user_id="u2")
+
+    cks_a = get_checkins(limit=10, db_path=db, user_id="u1")
+    assert len(cks_a) == 1
+    assert cks_a[0]["message"] == "Message A"
+
+    cks_b = get_checkins(limit=10, db_path=db, user_id="u2")
+    assert len(cks_b) == 1
+    assert cks_b[0]["message"] == "Message B"
+
+
+def test_check_ins_backward_compat(tmp_path):
+    """Callers not passing user_id still work."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_checkins, save_checkin
+
+    save_checkin(1, "2026-08-01", 5, 2, "Legacy checkin", db_path=db)
+    cks = get_checkins(limit=10, db_path=db)
+    assert len(cks) == 1
 
 
 def test_deep_correlations_migration_and_isolation(tmp_path):
