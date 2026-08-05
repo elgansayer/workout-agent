@@ -205,6 +205,12 @@ def find_orphans() -> list[OrphanReport]:
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
+    # Build a look-up: module_name -> file_rel that defines it
+    module_to_file: dict[str, str] = {}
+    for file_rel in import_graph:
+        stem = file_rel.replace("/", ".").replace(".py", "")
+        module_to_file[stem] = file_rel
+
     queue: list[str] = []
     for ep in entry_point_files:
         for imp in import_graph.get(ep, set()):
@@ -214,13 +220,16 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file(s) that define this module
-        for file_rel, imports in import_graph.items():
-            if module_name in imports:
-                for transitive in import_graph.get(file_rel, set()):
-                    if transitive not in wired:
-                        wired.add(transitive)
-                        queue.append(transitive)
+        # Find the file that defines this module and add everything IT imports.
+        # (The old approach looked at files that import module_name and added
+        # what those files import — that only discovers transitive
+        # dependencies by coincidence when two modules share a common importer.)
+        defining_file = module_to_file.get(module_name)
+        if defining_file is not None:
+            for transitive in import_graph.get(defining_file, set()):
+                if transitive not in wired:
+                    wired.add(transitive)
+                    queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
