@@ -464,3 +464,55 @@ def test_sync_history_no_workouts(monkeypatch: Any, tmp_path: Any) -> None:
     result = sync_all("fake-hevy-key", str(tmp_path / "test.db"))
     assert result["workouts_found"] == 0
     assert result["processed"] == 0
+
+
+
+# -- auth / login / logout ----------------------------------------------
+
+
+def test_login_unconfigured_returns_500(client: Any) -> None:
+    """Without WEB_GOOGLE_CLIENT_ID, /login returns 500."""
+    resp = client.get("/login")
+    assert resp.status_code == 500
+    assert "not configured" in resp.text
+
+
+def test_login_google_unconfigured_returns_500(client: Any) -> None:
+    """Without WEB_GOOGLE_CLIENT_ID, /login/google returns 500."""
+    resp = client.get("/login/google")
+    assert resp.status_code == 500
+    assert "not configured" in resp.text
+
+
+def test_logout_clears_session_and_redirects(client: Any) -> None:
+    """Logout clears the session and redirects to /login."""
+    resp = client.get("/logout", follow_redirects=False)
+    assert resp.status_code == 307
+    assert resp.headers["location"] == "/login"
+
+
+# -- chat routes --------------------------------------------------------
+
+
+def test_chat_page_renders(client: Any) -> None:
+    """GET /chat returns the chat page (no auth required in test env)."""
+    resp = client.get("/chat")
+    assert resp.status_code == 200
+    assert "chat" in resp.text.lower()
+
+
+def test_chat_history_returns_empty_list(client: Any) -> None:
+    """GET /api/chat/history returns an empty list for a fresh DB."""
+    resp = client.get("/api/chat/history")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+def test_chat_clear_returns_ok(client: Any) -> None:
+    """POST /api/chat/clear returns status ok."""
+    resp = client.post("/api/chat/clear")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+# -- settings API-key CRUD ---------------------------------------------
