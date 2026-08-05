@@ -260,11 +260,7 @@ def resolve_provider(
     from database import DEFAULT_DB_PATH, get_user_api_key, get_user_preferences
 
     effective_db = db_path or DEFAULT_DB_PATH
-    prefs = (
-        get_user_preferences(user_id, db_path=effective_db)
-        if user_id
-        else {}
-    )
+    prefs = get_user_preferences(user_id, db_path=effective_db) if user_id else {}
     provider_name: str = (prefs.get("preferred_ai") or "gemini").lower().strip()
     model: str | None = prefs.get("ai_model")
 
