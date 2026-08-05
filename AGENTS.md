@@ -200,21 +200,19 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   sleep-loops described in prior audits no longer exist — `scheduler.py` is
   the single long-running process in the agent container, dispatching both
   coaching runs (`main.py`) and insight jobs (`insight_cron.py`) on one
-  per-minute wake loop.
+  per-minute wake loop, with per-user timezone support.
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
 
-- **Test coverage gaps** remain on the following modules (any task that
-  touches these should add tests as part of the same change, not as a
-  follow-up): `programme_inference.py`, `hevy_reader.py`,
-  `insight_cron.py`, `main.py`, `sync_history.py`,
-  `ai_widgets.py`, `weather.py`. Now-covered modules:
-  `tests/test_ai_provider.py` (7 tests, PR #85),
-  `tests/test_gemini_engine.py` (32 tests, PR #164),
-  `tests/test_encryption.py` (PR #146),
-  `tests/test_config.py` (PR #146),
-  `tests/test_scheduler.py` (PR #142).
+- **Test coverage audit** (last updated 2026-08-05): all source modules
+  now have corresponding test files. The full test suite stands at 418
+  passing tests covering 27 test modules. Previously-uncovered modules now
+  with tests: `programme_inference.py` (16 tests),
+  `hevy_reader.py` (20 tests), `insight_cron.py` (9 tests),
+  `main.py` (20 tests), `sync_history.py` (9 tests),
+  `webapp/ai_widgets.py` (14 tests), `weather.py` (7 tests).
+  `insight_scheduler.py` was replaced by `scheduler.py` (18 tests).
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
