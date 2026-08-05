@@ -6,6 +6,7 @@ cryptography>=42.0
 # AI provider abstraction (ai_provider.py) - openai backs both the OpenAI
 # and DeepSeek providers (DeepSeek uses an OpenAI-compatible API).
 openai>=1.30.0
+anthropic>=0.42.0
 
 # Development / testing
 pytest>=8.0.0

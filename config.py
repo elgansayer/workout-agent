@@ -78,7 +78,7 @@ class Config:
         missing: list[str] = []
 
         def required(name: str) -> str:
-            value = os.environ.get(name, "").strip()
+            value: str = os.environ.get(name, "").strip()
             if not value:
                 missing.append(name)
             return value
