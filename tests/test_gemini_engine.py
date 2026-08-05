@@ -119,22 +119,31 @@ def test_fallback_plan_includes_exercises() -> None:
 _fake_gemini_plan = "Back, Deadlifts & Chest - Week 3 (Hypertrophy)\nDeadlift: 4 x 8 (+2.5 kg)\nPull-Up: 3 x 10 (+1 rep)"
 
 
+def _make_mock_provider(response_text: str, *, raise_error: bool = False) -> MagicMock:
+    """Build a mock AI provider with a ``generate()`` method returning *response_text*."""
+    mock = MagicMock()
+    if raise_error:
+        mock.generate.side_effect = RuntimeError("API error")
+    else:
+        mock.generate.return_value = response_text
+    return mock
+
+
 def test_generate_next_workout_success(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = _fake_gemini_plan
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider(_fake_gemini_plan)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
         api_key="test-key", model_name="gemini-pro",
         day=1, week=3, block=BLOCKS[1],
     )
     assert result == _fake_gemini_plan
+    mock_provider.generate.assert_called_once()
 
 
 def test_generate_next_workout_empty_response_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = ""
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
         api_key="test-key", model_name="gemini-pro",
@@ -144,9 +153,8 @@ def test_generate_next_workout_empty_response_falls_back(monkeypatch) -> None:
 
 
 def test_generate_next_workout_exception_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.side_effect = RuntimeError("API error")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("", raise_error=True)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
         api_key="test-key", model_name="gemini-pro",
@@ -176,9 +184,8 @@ _fake_rest_message = "Rest up, champ. Recovery is key."
 
 
 def test_generate_rest_day_message_success(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = _fake_rest_message
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider(_fake_rest_message)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_rest_day_message(
         api_key="test-key", model_name="gemini-pro",
@@ -188,18 +195,16 @@ def test_generate_rest_day_message_success(monkeypatch) -> None:
 
 
 def test_generate_rest_day_message_empty_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = ""
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_rest_day_message(api_key="test-key", model_name="gemini-pro")
     assert "rest day" in result.lower()
 
 
 def test_generate_rest_day_message_exception_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.side_effect = RuntimeError("API error")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("", raise_error=True)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_rest_day_message(api_key="test-key", model_name="gemini-pro")
     assert "rest day" in result.lower()
@@ -236,9 +241,8 @@ _fake_checkin = "Check-in 2: Block 2 (Strength)\nDeadlift progressing well.\nBen
 
 
 def test_generate_checkin_message_success(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = _fake_checkin
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider(_fake_checkin)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
         api_key="test-key", model_name="gemini-pro",
@@ -251,9 +255,8 @@ def test_generate_checkin_message_success(monkeypatch) -> None:
 
 
 def test_generate_checkin_message_empty_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = ""
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
         api_key="test-key", model_name="gemini-pro",
@@ -266,9 +269,8 @@ def test_generate_checkin_message_empty_falls_back(monkeypatch) -> None:
 
 
 def test_generate_checkin_message_exception_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.side_effect = RuntimeError("API error")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("", raise_error=True)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
         api_key="test-key", model_name="gemini-pro",
@@ -308,9 +310,8 @@ def test_build_autonomous_prompt_catabolic() -> None:
 
 def test_apply_autonomous_adjustments_success(monkeypatch) -> None:
     updated = {"Push Day": [{"name": "Bench Press", "sets": 3}]}
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = json.dumps(updated)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider(json.dumps(updated))
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
         api_key="test-key", model_name="gemini-pro",
@@ -322,9 +323,8 @@ def test_apply_autonomous_adjustments_success(monkeypatch) -> None:
 
 def test_apply_autonomous_adjustments_strips_markdown(monkeypatch) -> None:
     updated = {"Day 1": [{"name": "Squat", "sets": 3}]}
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = f"```json\n{json.dumps(updated)}\n```"
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider(f"```json\n{json.dumps(updated)}\n```")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
         api_key="test-key", model_name="gemini-pro",
@@ -335,9 +335,8 @@ def test_apply_autonomous_adjustments_strips_markdown(monkeypatch) -> None:
 
 
 def test_apply_autonomous_adjustments_non_dict_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = "[1, 2, 3]"
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("[1, 2, 3]")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
@@ -348,9 +347,8 @@ def test_apply_autonomous_adjustments_non_dict_falls_back(monkeypatch) -> None:
 
 
 def test_apply_autonomous_adjustments_exception_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.side_effect = RuntimeError("API error")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("", raise_error=True)
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
@@ -361,9 +359,8 @@ def test_apply_autonomous_adjustments_exception_falls_back(monkeypatch) -> None:
 
 
 def test_apply_autonomous_adjustments_invalid_json_falls_back(monkeypatch) -> None:
-    mock_provider = MagicMock()
-    mock_provider.generate.return_value = "not valid json {"
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *args, **kw: mock_provider)
+    mock_provider = _make_mock_provider("not valid json {")
+    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
