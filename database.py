@@ -1138,7 +1138,7 @@ def get_user_preferences(
     user_id: str, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "goals": [],
         "constraints": [],
         "experience_level": "intermediate",
