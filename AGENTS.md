@@ -103,17 +103,21 @@ contract:
   production here.
 - **Before starting any task, check for existing/overlapping work.** Read
   the GitHub Issues queue and skim recent `git log` for the area you're about
+
   to touch. If an issue describes something already partially implemented
   (e.g. `sync_history.py` exists as a standalone utility script with no
   callers, per §7), extend or wire up the existing implementation rather
   than writing a second one.
+
 - **Never leave dead orphaned modules.** If you write a module intended to
   replace another (e.g. a data-driven programme inference replacing the
   static split), the task is not complete until the old path is either
   removed or the new path is actually called from `main.py`/`webapp/app.py`.
   An unwired module sitting in the repo is exactly as unfinished as no
+
   module at all — `sync_history.py` is the current example: standalone but
   unreferenced (see §7).
+
 
 ## 5. Python Code Standards
 
@@ -150,9 +154,11 @@ The end goal is a product where a user can, entirely from their own account:
    inheriting a hardcoded split — this UI does not exist yet (only read-only
    rendering of the fixed split does); building it is a first-class product
    feature, not a stretch goal. `programme_inference.py`/`hevy_reader.py`
+
    (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
    natural foundation for an "infer from my Hevy history" option alongside
    manually-authored templates.
+
 4. Have the agent **continuously track, adjust, and improve** that
    programme from connector data (Hevy sessions, body metrics, recovery)
    without further manual input, on their own schedule/timezone.
@@ -166,6 +172,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
+
 - **`ai_provider.py` multi-provider wiring is complete.** PR #85
   (`wire-ai-provider`) integrated `resolve_provider()` into `gemini_engine.py`,
   `main.py`, `checkin.py`, and `hevy_sync.py`. `webapp/app.py` and
@@ -176,6 +183,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `tests/test_ai_provider.py` covers the provider abstraction (7 tests);
   `tests/test_gemini_engine.py` covers the prompt/fallback functions
   (32 tests).
+
 - **`hevy_reader.py` and `programme_inference.py` are now wired** into
   `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
@@ -197,6 +205,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
+
 - **Test coverage gaps** remain on the following modules (any task that
   touches these should add tests as part of the same change, not as a
   follow-up): `programme_inference.py`, `hevy_reader.py`,
@@ -206,6 +215,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `tests/test_gemini_engine.py` (32 tests, PR #164),
   `tests/test_encryption.py` (PR #146),
   `tests/test_config.py` (PR #146).
+
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
   performance) the moment the web app runs as more than one instance behind

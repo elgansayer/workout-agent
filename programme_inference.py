@@ -169,10 +169,22 @@ def _classify_split(days: list[TrainingDay]) -> str:
     if full_body_days >= len(days) * 0.6:
         return "full_body"
 
+
+    # PPL: distinct push, pull, and legs days. All days must be
+    # single-category — any mixed-category day (e.g. upper body = push+pull,
+    # arms = biceps+triceps) disqualifies PPL.
+    if all(len(cats) == 1 for cats in day_categories):
+        has_push = any("push" in cats for cats in day_categories)
+        has_pull = any("pull" in cats for cats in day_categories)
+        has_legs = any("legs" in cats for cats in day_categories)
+        if has_push and has_pull and has_legs and len(days) >= 3:
+            return "push_pull_legs"
+
+
     # Upper/Lower: at least one day mixes push AND pull ("true upper"
     # day), at least one day is legs-only, and together these account for
-    # most of the programme.  Requiring a mixed push+pull day prevents
-    # falsely matching PPL or bro splits (where each day is single-category).
+    # most of the programme. Requiring a mixed push+pull day prevents
+    # falsely matching PPL or bro splits.
     mixed_upper = sum(
         1 for cats in day_categories
         if "push" in cats and "pull" in cats and "legs" not in cats
@@ -188,23 +200,11 @@ def _classify_split(days: list[TrainingDay]) -> str:
     ):
         return "upper_lower"
 
-    # Bro split: 4+ days, each day is tightly focused on ≤3 muscle groups.
+    # Bro split: each day focuses on 1-2 specific muscle groups.
     specific_days = sum(1 for d in days if len(d.primary_muscles) <= 3)
     if specific_days >= len(days) * 0.7 and len(days) >= 4:
         return "bro_split"
 
-    # PPL: distinct push, pull, and legs days (each day focuses on a
-    # single movement category — this catches the simplest 3-day PPL
-    # and is checked last because it is the least restrictive).
-    has_push = any(
-        "push" == max(cats, key=lambda c: c, default="")
-        for cats in day_categories
-        if "push" in cats
-    )
-    has_pull = any("pull" in cats for cats in day_categories)
-    has_legs = any("legs" in cats for cats in day_categories)
-    if has_push and has_pull and has_legs and len(days) >= 3:
-        return "push_pull_legs"
 
     return "custom"
 
