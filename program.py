@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 SPLIT_NAME = "Hybrid Powerbuilding (12-week periodised)"
 REST_DAY_FOCUS = "Rest & Recovery"
@@ -20,32 +20,54 @@ BLOCK_WEEKS = 4
 
 # Non-negotiable coaching rules the agent must always honour.
 COACHING_RULES = [
-    "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "
-    "training everything else for hypertrophy.",
-    "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "
-    "intensity of the main lifts to the current block.",
-    "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "
-    "set the moment form or bar speed breaks down. Trap bar is a valid joint-friendly "
-    "deadlift swap.",
-    "Accessories: strict 3-second negative on every rep, taken close to failure. No "
-    "momentum.",
-    "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "
-    "press instead.",
+    (
+        "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "
+        "training everything else for hypertrophy."
+    ),
+    (
+        "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "
+        "intensity of the main lifts to the current block."
+    ),
+    (
+        "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "
+        "set the moment form or bar speed breaks down. Trap bar is a valid joint-friendly "
+        "deadlift swap."
+    ),
+    (
+        "Accessories: strict 3-second negative on every rep, taken close to failure. No "
+        "momentum."
+    ),
+    (
+        "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "
+        "press instead."
+    ),
     "No stomach vacuums. Train abs for mass with progressive overload.",
-    "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "
-    "the shoulders and elbows (Thai boxing and bouldering add load).",
-    "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "
-    "six-pack needs a sustained caloric deficit.",
-    "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "
-    "days (about 70% around the workout), moderate on leg days, low carb with higher "
-    "healthy fats on the lighter upper days and rest days.",
-    "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "
-    "20-30 min of joint-friendly Zone 2 (stationary bike or swim) three to four times "
-    "a week. No stair-master or running (bad toes).",
-    "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "
-    "joints, and Magnesium Glycinate before bed.",
-    "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "
-    "top deadlift and pull-up set each week.",
+    (
+        "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "
+        "the shoulders and elbows (Thai boxing and bouldering add load)."
+    ),
+    (
+        "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "
+        "six-pack needs a sustained caloric deficit."
+    ),
+    (
+        "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "
+        "days (about 70% around the workout), moderate on leg days, low carb with higher "
+        "healthy fats on the lighter upper days and rest days."
+    ),
+    (
+        "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "
+        "20-30 min of joint-friendly Zone 2 (stationary bike or swim) three to four times "
+        "a week. No stair-master or running (bad toes)."
+    ),
+    (
+        "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "
+        "joints, and Magnesium Glycinate before bed."
+    ),
+    (
+        "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "
+        "top deadlift and pull-up set each week."
+    ),
     "Use British English spelling (e.g. programme). Never use the em dash.",
 ]
 
@@ -158,7 +180,7 @@ def block_for_week(week: int) -> Block:
 def week_in_cycle(start: date, today: date | None = None) -> int:
     """Return the current week (1-12) given the programme start date."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     weeks_elapsed = max((today - start).days // 7, 0)
     return weeks_elapsed % CYCLE_WEEKS + 1
 
@@ -262,7 +284,7 @@ def is_rest_day(weekday: int) -> bool:
 def today_day(today: date | None = None) -> int | None:
     """Return today's cycle day (1-6), or None if today is a rest day."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     return day_for_weekday(today.weekday())
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime, timezone
 
 from database import (
     advance_day,
@@ -156,7 +156,7 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
     volumes = get_session_volumes(db)
     # save_progress stamps the row with the run date, so everything lands today.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == date.today().isoformat()
+    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 

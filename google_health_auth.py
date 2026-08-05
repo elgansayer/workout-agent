@@ -102,7 +102,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
     code: str | None = None
     state: str | None = None
 
-    def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
+    def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
         _CallbackHandler.code = (params.get("code") or [None])[0]
@@ -165,7 +165,7 @@ def main() -> int:
     print(url, "\n")
     try:
         webbrowser.open(url)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     code, returned_state = _wait_for_code(redirect_uri)
@@ -194,7 +194,7 @@ def main() -> int:
         db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
         set_meta("google_health_refresh_token", refresh_token, db_path)
         stored = f" (also saved to {db_path})"
-    except Exception:
+    except Exception:  # noqa: BLE001
         stored = ""
 
     print("\nSuccess! Add this line to your .env:\n")

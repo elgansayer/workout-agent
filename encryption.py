@@ -30,7 +30,7 @@ except ImportError:
     InvalidToken = Exception  # type: ignore[misc,assignment]
 
 
-def _fernet() -> "Fernet | None":
+def _fernet() -> Fernet | None:
     key = os.environ.get("ENCRYPTION_KEY", "").strip()
     if not key:
         return None
@@ -42,7 +42,7 @@ def _fernet() -> "Fernet | None":
         return None
     try:
         return Fernet(key.encode())
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.error("ENCRYPTION_KEY is invalid (%s). Keys will be stored in plaintext.", exc)
         return None
 
@@ -71,6 +71,6 @@ def decrypt(ciphertext: str) -> str:
         return ciphertext
     try:
         return f.decrypt(ciphertext.encode()).decode()
-    except (InvalidToken, Exception):
+    except (InvalidToken, Exception):  # noqa: BLE001
         # The value was probably stored before encryption was enabled.
         return ciphertext

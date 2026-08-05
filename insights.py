@@ -12,8 +12,9 @@ fully unit-testable without a database, network, or model.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from analytics import epley_1rm, linear_fit
 

@@ -295,8 +295,8 @@ def sync_routines(config: Config) -> list[str]:
     updated_routines = base_routines
     if config.gemini_api_key:
         try:
+            from database import get_body_metrics, get_recent_hevy_logs
             from gemini_engine import apply_autonomous_adjustments
-            from database import get_recent_hevy_logs, get_body_metrics
             from health_connect import read_recovery_metrics
             from insights import analyse_recovery
             try:
@@ -319,7 +319,7 @@ def sync_routines(config: Config) -> list[str]:
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, 'is_catabolic', False)
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
 
     statuses: list[str] = []

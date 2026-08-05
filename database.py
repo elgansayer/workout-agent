@@ -8,13 +8,17 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import sqlite3
-from datetime import date
+from collections.abc import Iterator
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
-from encryption import encrypt, decrypt
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
@@ -166,7 +170,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             INSERT OR IGNORE INTO hevy_meta (key, value)
             VALUES ('programme_start_date', ?)
             """,
-            (date.today().isoformat(),),
+            (datetime.now(tz=timezone.utc).date().isoformat(),),
         )
         
         cursor.execute(
@@ -266,7 +270,7 @@ def save_workout(payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None 
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
         return
-    today = when or date.today().isoformat()
+    today = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
@@ -291,18 +295,18 @@ def get_recent_hevy_logs(limit: int = 14, db_path: str = DEFAULT_DB_PATH) -> lis
                 logs.extend(parsed)
             else:
                 logs.append(parsed)
-        except Exception:
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("Skipping unparseable log row")
     return logs[:limit]
 
 
 def save_progress(
-    summary: "WorkoutSummary | None", db_path: str = DEFAULT_DB_PATH
+    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary."""
     if summary is None:
         return
-    today = summary.date[:10] if summary.date else date.today().isoformat()
+    today = summary.date[:10] if summary.date else datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(
@@ -535,7 +539,7 @@ def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return date.today()
+    return datetime.now(tz=timezone.utc).date()
 
 
 def save_checkin(
@@ -648,7 +652,7 @@ def save_body_metrics(
     """
     if not metrics:
         return
-    when = when or date.today().isoformat()
+    when = when or datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
         conn.execute(
@@ -710,7 +714,7 @@ def save_dashboard_insight(insight_json: str, db_path: str = DEFAULT_DB_PATH) ->
                 date = excluded.date,
                 insight_json = excluded.insight_json
             """,
-            (date.today().isoformat(), insight_json),
+            (datetime.now(tz=timezone.utc).date().isoformat(), insight_json),
         )
 
 
@@ -736,7 +740,7 @@ def save_reasoning_log(context_id: str, exercise_name: str, reasoning: str, db_p
             ON CONFLICT(context_id) DO UPDATE SET
                 reasoning = excluded.reasoning
             """,
-            (context_id, date.today().isoformat(), exercise_name, reasoning),
+            (context_id, datetime.now(tz=timezone.utc).date().isoformat(), exercise_name, reasoning),
         )
 
 
@@ -757,7 +761,7 @@ def save_deep_correlation(insight_markdown: str, db_path: str = DEFAULT_DB_PATH)
                 date = excluded.date,
                 insight_markdown = excluded.insight_markdown
             """,
-            (date.today().isoformat(), insight_markdown),
+            (datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
         )
 
 
@@ -771,7 +775,7 @@ def save_chat_message(
     role: str, content: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with _connect(db_path) as conn:
         conn.execute(
@@ -779,7 +783,7 @@ def save_chat_message(
             INSERT INTO chat_messages (role, content, created_at)
             VALUES (?, ?, ?)
             """,
-            (role, content, datetime.now().isoformat()),
+            (role, content, datetime.now(tz=timezone.utc).isoformat()),
         )
 
 
@@ -822,7 +826,7 @@ def get_or_create_user(
 ) -> dict[str, Any]:
     """Return the user row for an email, creating one on first login."""
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -841,7 +845,7 @@ def get_or_create_user(
             }
 
         user_id = str(uuid.uuid4())
-        now = datetime.now().isoformat()
+        now = datetime.now(tz=timezone.utc).isoformat()
         conn.execute(
             """
             INSERT INTO users (id, email, display_name, created_at)
@@ -893,9 +897,9 @@ def save_user_api_key(
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Store (or update) an encrypted API key for a user + provider pair."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    now = datetime.now().isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
     encrypted_key = encrypt(api_key) if api_key else ""
     encrypted_secret = encrypt(client_secret) if client_secret else None
     encrypted_refresh = encrypt(refresh_token) if refresh_token else None
@@ -1013,9 +1017,9 @@ def save_user_preferences(
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Save or update a user's training preferences."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
-    now = datetime.now().isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
         conn.execute(
             """

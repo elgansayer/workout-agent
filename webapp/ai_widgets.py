@@ -1,8 +1,4 @@
 from __future__ import annotations
-import math
-from typing import Sequence
-import analytics
-from webapp import charts
 
 # Colors
 ACCENT = "#4ade80"

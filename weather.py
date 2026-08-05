@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 import requests
 
@@ -52,6 +51,6 @@ def get_current_weather(lat: float = LATITUDE, lon: float = LONGITUDE) -> Weathe
             humidity_pct=hum,
             is_extreme_heat=is_extreme
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch weather data: %s", exc)
         return None

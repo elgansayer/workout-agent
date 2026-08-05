@@ -14,16 +14,16 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from database import (  # noqa: E402
+from database import (
     init_db,
     save_body_metrics,
     save_checkin,
     save_daily_log,
     save_progress,
 )
-from hevy_parser import ExerciseSummary, WorkoutSummary  # noqa: E402
+from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
 @pytest.fixture()

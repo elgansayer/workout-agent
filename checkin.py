@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 from config import Config
 from database import (
@@ -79,7 +79,7 @@ def _seed_baseline_if_missing(config: Config, total_count: int | None) -> None:
     """Initialise check-in tracking the first time we ever see this account."""
     if get_meta(_KEY_NUMBER, config.database_path) is None:
         set_meta(_KEY_NUMBER, "0", config.database_path)
-        set_meta(_KEY_LAST_DATE, date.today().isoformat(), config.database_path)
+        set_meta(_KEY_LAST_DATE, datetime.now(tz=timezone.utc).date().isoformat(), config.database_path)
     if total_count is not None and get_meta(_KEY_LAST_COUNT, config.database_path) is None:
         set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
 
@@ -87,7 +87,7 @@ def _seed_baseline_if_missing(config: Config, total_count: int | None) -> None:
 def due(config: Config, today: date | None = None) -> CheckinDue | None:
     """Return check-in details if one is due, otherwise None."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
 
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
@@ -217,8 +217,10 @@ def _fallback_message(due_info: CheckinDue, block: Block,
                       reviews: list[LiftReview]) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
-        f"{due_info.workouts_done} sessions logged over "
-        f"{due_info.weeks_elapsed} weeks.",
+        (
+            f"{due_info.workouts_done} sessions logged over "
+            f"{due_info.weeks_elapsed} weeks."
+        ),
     ]
     if reviews:
         lines.append("")
@@ -256,7 +258,7 @@ def record(config: Config, due_info: CheckinDue, message: str,
            today: date | None = None) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     set_meta(_KEY_NUMBER, str(due_info.number), config.database_path)
     set_meta(_KEY_LAST_DATE, today.isoformat(), config.database_path)
     if due_info.total_count is not None:

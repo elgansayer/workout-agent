@@ -68,7 +68,7 @@ class Config:
     self_review_weekday: int
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         missing: list[str] = []
 
         def required(name: str) -> str:

@@ -12,8 +12,8 @@ drop straight into the markup.
 from __future__ import annotations
 
 import html
-from datetime import date, timedelta
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import date, datetime, timedelta, timezone
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -227,7 +227,7 @@ def calendar_heatmap(levels: dict[str, int], *, weeks: int = 18, end: date | Non
 
     ``levels`` maps ISO date strings to an intensity 0-4.
     """
-    end = end or date.today()
+    end = end or datetime.now(tz=timezone.utc).date()
     # Start on the Monday of the earliest visible week.
     start = end - timedelta(days=weeks * 7 - 1)
     start -= timedelta(days=start.weekday())

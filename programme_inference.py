@@ -19,8 +19,7 @@ from __future__ import annotations
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
 from hevy_reader import (
     CompletedWorkout,
@@ -87,7 +86,7 @@ class InferredProgramme:
         """Heuristic: if the user trained yesterday but not today, it's rest."""
         if not self.recent_workout_days:
             return False
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
         return today not in self.recent_workout_days
 
 
@@ -196,7 +195,7 @@ def _compute_frequency(
         return 0.0, {}
 
     # Filter to the window.
-    cutoff = datetime.now() - timedelta(days=window_days)
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=window_days)
     recent = []
     for w in workouts:
         if w.start_time:

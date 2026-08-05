@@ -2,8 +2,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date, timedelta
-from typing import Any
+from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
@@ -26,7 +25,7 @@ def generate_daily_header(config: Config) -> None:
     model = genai.GenerativeModel(config.gemini_model)
 
     # Fetch last 7 days of data
-    cutoff = (date.today() - timedelta(days=7)).isoformat()
+    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
     
     metrics = [m for m in get_body_metrics(limit=14, db_path=config.database_path) if m["date"] >= cutoff]
     logs = [log for log in get_daily_logs(limit=14, db_path=config.database_path) if log["date"] >= cutoff]
@@ -51,10 +50,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
     try:
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
         text = text.strip()
 
         # Validate JSON
@@ -64,7 +61,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
             logger.info("Daily insight generated successfully.")
         else:
             logger.error("Invalid JSON structure returned: %s", text)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
 
 def generate_weekly_correlations(config: Config) -> None:
@@ -73,7 +70,7 @@ def generate_weekly_correlations(config: Config) -> None:
     model = genai.GenerativeModel(config.gemini_model)
 
     # Fetch 60-day trailing window
-    cutoff = (date.today() - timedelta(days=60)).isoformat()
+    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
     
     metrics = [m for m in get_body_metrics(limit=120, db_path=config.database_path) if m["date"] >= cutoff]
     logs = [log for log in get_daily_logs(limit=120, db_path=config.database_path) if log["date"] >= cutoff]
@@ -111,7 +108,7 @@ Use Markdown format. Output the Markdown report directly.
         if text:
             save_deep_correlation(text, db_path=config.database_path)
             logger.info("Weekly deep correlation generated successfully.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
 def main():

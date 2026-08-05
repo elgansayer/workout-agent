@@ -17,63 +17,66 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
 import time
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, StreamingResponse
+import google.generativeai as genai
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from authlib.integrations.starlette_client import OAuth
+from starlette.middleware.sessions import SessionMiddleware
 
-from database import (
-    get_body_metrics,
-    get_checkins,
-    get_daily_logs,
-    get_exercise_volumes,
-    get_meta,
-    get_personal_records,
-    get_programme_start_date,
-    get_progress_history,
-    get_recent_bests,
-    get_session_volumes,
-    get_dashboard_insight,
-    get_reasoning_log,
-    save_reasoning_log,
-    get_chat_messages,
-    save_chat_message,
-    clear_chat_messages,
-    init_db,
-    set_meta,
-    get_or_create_user,
-    get_user_api_keys,
-    get_user_api_key,
-    save_user_api_key,
-    delete_user_api_key,
-    get_user_preferences,
-    save_user_preferences,
-)
-from google_health_auth import build_authorize_url, exchange_code
-import google.generativeai as genai
-from config import Config
-from ai_provider import available_providers
-import json
 import analytics
 import insights
 import lifestyle
-from webapp import charts
-from webapp import ai_widgets
+from ai_provider import available_providers
+from config import Config
+from database import (
+    clear_chat_messages,
+    delete_user_api_key,
+    get_body_metrics,
+    get_chat_messages,
+    get_checkins,
+    get_daily_logs,
+    get_dashboard_insight,
+    get_exercise_volumes,
+    get_meta,
+    get_or_create_user,
+    get_personal_records,
+    get_programme_start_date,
+    get_progress_history,
+    get_reasoning_log,
+    get_recent_bests,
+    get_session_volumes,
+    get_user_api_keys,
+    get_user_preferences,
+    init_db,
+    save_chat_message,
+    save_reasoning_log,
+    save_user_api_key,
+    save_user_preferences,
+    set_meta,
+)
+from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from program import (
-    BLOCKS,
     BLOCK_WEEKS,
+    BLOCKS,
     COACHING_RULES,
     CYCLE_WEEKS,
     SPLIT_NAME,
@@ -83,15 +86,13 @@ from program import (
     today_day,
     week_in_cycle,
 )
-
-from functools import lru_cache
+from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def get_config():
-    from config import Config
     return Config.load()
 
 _RATE_LIMITS: dict[str, list[float]] = {}
@@ -240,7 +241,7 @@ async def auth(request: Request):
         return RedirectResponse("/")
     try:
         token = await oauth.google.authorize_access_token(request)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning("OAuth token exchange failed: %s", e)
         return RedirectResponse("/login")
     user = token.get("userinfo")
@@ -279,7 +280,7 @@ _QUOTES = [
 
 
 def _daily_quote(today: date | None = None) -> str:
-    today = today or date.today()
+    today = today or datetime.now(tz=timezone.utc).date()
     return _QUOTES[today.toordinal() % len(_QUOTES)]
 
 
@@ -358,7 +359,7 @@ def _training_levels() -> dict[str, int]:
 def _current_streak(levels: dict[str, int]) -> int:
     """Count consecutive recent days that had any logged activity."""
     streak = 0
-    day = date.today()
+    day = datetime.now(tz=timezone.utc).date()
     # Allow today to be empty (the morning run may not have happened yet).
     if levels.get(day.isoformat(), 0) == 0:
         day -= timedelta(days=1)
@@ -370,7 +371,7 @@ def _current_streak(levels: dict[str, int]) -> int:
 
 def _dashboard_context(today: date | None = None) -> dict:
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
@@ -515,7 +516,7 @@ def stats(request: Request):
     logs = get_daily_logs(limit=400, db_path=DB_PATH)
     start = get_programme_start_date(DB_PATH)
     series = get_progress_history(db_path=DB_PATH)
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
     # Headline totals.
@@ -654,7 +655,7 @@ def _project_lift(
 
 @app.get("/plan")
 def plan(request: Request):
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
@@ -783,12 +784,10 @@ def project_peak(request: Request):
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
         return json.loads(text.strip())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
 
 @app.get("/chat")
@@ -868,7 +867,7 @@ Respond naturally as Coach. If the question is about their training data, refere
                 if chunk.text:
                     collected.append(chunk.text)
                     yield chunk.text
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
             collected.append(error_msg)

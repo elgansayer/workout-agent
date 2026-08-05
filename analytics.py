@@ -7,7 +7,7 @@ so training volume can be broken down by body part.
 
 from __future__ import annotations
 
-from typing import Iterable, Sequence
+from collections.abc import Iterable, Sequence
 
 # DOTS coefficients for men (Open Powerlifting). DOTS expresses strength
 # relative to bodyweight on a single scale, so progress shows even as weight

@@ -14,25 +14,25 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import datetime, timezone
 
+import checkin
+import google_health_client
+import insights as insights_engine
+import lifestyle
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
+    get_daily_logs,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
-    get_daily_logs,
     init_db,
     save_body_metrics,
     save_daily_log,
     save_progress,
     save_workout,
 )
-import checkin
-import google_health_client
-import insights as insights_engine
-import lifestyle
 from gemini_engine import generate_next_workout, generate_rest_day_message
 from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
@@ -88,7 +88,7 @@ def _sync_hevy_routines(config: Config) -> list[str]:
         for status in statuses:
             logger.info("Hevy routine %s", status)
         return statuses
-    except Exception as exc:  # never let a sync issue block the daily message
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Hevy routine sync failed: %s", exc)
         return []
 
@@ -98,7 +98,7 @@ def _changes_footer(statuses: list[str]) -> str:
     changed = [
         status.split(":", 1)[0]
         for status in statuses
-        if status.endswith(": updated") or status.endswith(": created")
+        if status.endswith((": updated", ": created"))
     ]
     if not changed:
         return ""
@@ -111,7 +111,7 @@ def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
         return
     try:
         due_info = checkin.due(config)
-    except Exception as exc:  # a check-in must never block the daily message
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
     if due_info is None:
@@ -138,7 +138,7 @@ def _maybe_self_review(
     """On the configured weekday, send a self-review of how training is going."""
     if not config.self_review_enabled:
         return
-    if date.today().weekday() != config.self_review_weekday:
+    if datetime.now(tz=timezone.utc).date().weekday() != config.self_review_weekday:
         return
     review = insights_engine.build_insights(
         get_progress_history(db_path=config.database_path),
@@ -172,7 +172,7 @@ def run(preview: bool = False) -> int:
     statuses = _sync_hevy_routines(config)
     footer = _changes_footer(statuses)
 
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
     when = today.isoformat()
     week = week_in_cycle(get_programme_start_date(config.database_path), today)
     block = block_for_week(week)
