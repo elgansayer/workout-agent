@@ -18,6 +18,15 @@ from program import (
     format_day,
 )
 
+__all__ = [
+    "apply_autonomous_adjustments",
+    "create_provider",
+    "generate_checkin_message",
+    "generate_next_workout",
+    "generate_rest_day_message",
+    "get_provider",
+]
+
 try:
     from weather import WeatherConditions
 except ImportError:
@@ -405,3 +414,4 @@ def create_provider(
         ImportError: The provider's SDK is not installed.
     """
     return get_provider(provider_name, api_key, model)
+
