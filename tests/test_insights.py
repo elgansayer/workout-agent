@@ -15,7 +15,7 @@ def _sets(*pairs: tuple[float | None, int | None]) -> list[dict]:
                 "top_reps": reps,
                 "sets": 3,
                 "date": f"2026-01-{i + 1:02d}",
-            }
+            },
         )
     return rows
 

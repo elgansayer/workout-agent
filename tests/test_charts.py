@@ -44,7 +44,7 @@ def test_donut_renders_segments_and_legend():
         [
             {"label": "Legs", "value": 3},
             {"label": "Back", "value": 2},
-        ]
+        ],
     )
     assert "Legs" in out
     assert "legend" in out

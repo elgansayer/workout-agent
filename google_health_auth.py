@@ -61,7 +61,7 @@ def build_authorize_url(
             # offline + consent guarantee a refresh token is returned.
             "access_type": "offline",
             "prompt": "consent",
-        }
+        },
     )
     return f"{AUTHORIZE_URL}?{query}"
 
@@ -120,7 +120,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body.encode("utf-8"))
 
     def log_message(
-        self, *args: Any, **kwargs: Any
+        self, *args: Any, **kwargs: Any,
     ) -> None:  # silence the default logging
         pass
 
@@ -128,7 +128,7 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 def _wait_for_code(redirect_uri: str) -> tuple[str | None, str | None]:
     parsed = urllib.parse.urlparse(redirect_uri)
     server = HTTPServer(
-        (parsed.hostname or "localhost", parsed.port or 80), _CallbackHandler
+        (parsed.hostname or "localhost", parsed.port or 80), _CallbackHandler,
     )
     print("Waiting for Google to redirect back...")
     server.handle_request()  # blocks until the single callback arrives

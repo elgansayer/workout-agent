@@ -204,7 +204,7 @@ def _parse_routine(
                 target_weight_kg=target_weight,
                 target_reps=target_reps,
                 target_rep_range=target_range,
-            )
+            ),
         )
 
     return Routine(
@@ -268,7 +268,7 @@ def _parse_workout(
                 top_weight_kg=top_w,
                 top_reps=top_r,
                 total_sets=len(sets_raw),
-            )
+            ),
         )
 
     # Duration.
@@ -322,7 +322,7 @@ def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainin
             tmpl = _parse_exercise_template(raw)
             data.exercise_templates[tmpl.id] = tmpl
         logger.info(
-            "Fetched %d exercise templates from Hevy.", len(data.exercise_templates)
+            "Fetched %d exercise templates from Hevy.", len(data.exercise_templates),
         )
     else:
         logger.warning("Could not fetch exercise templates from Hevy.")

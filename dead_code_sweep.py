@@ -108,7 +108,7 @@ def _discover_modules() -> list[ModuleInfo]:
                 name=p.stem,
                 path=p,
                 is_entry_point=p.name in ENTRY_POINTS,
-            )
+            ),
         )
 
     # webapp/ sub-package
@@ -122,7 +122,7 @@ def _discover_modules() -> list[ModuleInfo]:
                     name=f"webapp.{p.stem}",
                     path=p,
                     is_entry_point=False,  # webapp modules are never entry points
-                )
+                ),
             )
 
     return modules
@@ -235,7 +235,7 @@ def find_orphans() -> list[OrphanReport]:
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
-                "%s: AST missed but grep found imports in %s", mi.name, grep_hits
+                "%s: AST missed but grep found imports in %s", mi.name, grep_hits,
             )
             continue
 
@@ -243,7 +243,7 @@ def find_orphans() -> list[OrphanReport]:
             OrphanReport(
                 module=mi,
                 evidence=f"No imports of '{mi.name}' found in any reachable module.",
-            )
+            ),
         )
 
     return orphans
@@ -380,7 +380,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
                         f"git log shows replacement/supersession: {log_lines[0] if log_lines else 'N/A'}. "
                         "No documentation references remain."
                     ),
-                )
+                ),
             )
 
     return truly_dead
@@ -471,7 +471,7 @@ def create_github_issues(reports: list[OrphanReport]) -> list[str]:
     if not token:
         logger.warning(
             "No GitHub token found (set GITHUB_TOKEN or configure git remote credentials). "
-            "Skipping issue creation."
+            "Skipping issue creation.",
         )
         return []
 
@@ -490,7 +490,7 @@ def create_github_issues(reports: list[OrphanReport]) -> list[str]:
         labels = ["orphaned-module", "dead-code-sweep"]
 
         payload = json.dumps({"title": title, "body": body, "labels": labels}).encode(
-            "utf-8"
+            "utf-8",
         )
 
         req = urllib.request.Request(
@@ -663,7 +663,7 @@ def main() -> int:
             for r in truly_dead:
                 if not args.json_output:
                     logger.warning(
-                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT)
+                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT),
                     )
                     logger.warning("    %s", r.evidence)
             exit_code = 1

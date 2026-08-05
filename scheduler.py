@@ -189,7 +189,7 @@ def run_scheduler() -> None:
                     _run_coaching(user["id"])
             except Exception:
                 logger.exception(
-                    "Unhandled error dispatching coaching for user %s", user["id"]
+                    "Unhandled error dispatching coaching for user %s", user["id"],
                 )
 
         # --- Daily insight job (fires once per UTC day, at the earliest RUN_AT) ---

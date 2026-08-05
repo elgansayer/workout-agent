@@ -31,7 +31,7 @@ def test_compose_with_guidance_and_footer() -> None:
         protein_target=None,
     )
     result = _compose(
-        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1."
+        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1.",
     )
     assert result.startswith("Workout plan here")
     assert "Today's lifestyle:" in result
@@ -212,7 +212,7 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
                 slope_per_session=1.25,
                 sessions_since_best=0,
                 intervention=None,
-            )
+            ),
         ],
         recovery=RecoveryInsight(
             sleep_hours=7.5,
@@ -230,7 +230,7 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -496,7 +496,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
                 slope_per_session=1.25,
                 sessions_since_best=0,
                 intervention=None,
-            )
+            ),
         ],
         recovery=RecoveryInsight(
             sleep_hours=7.5,
@@ -514,7 +514,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -763,8 +763,8 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
         "main.get_progress_history",
         lambda **kw: {
             "Deadlift (Barbell)": [
-                {"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}
-            ]
+                {"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5},
+            ],
         },
     )
     monkeypatch.setattr(

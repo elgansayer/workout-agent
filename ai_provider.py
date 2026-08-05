@@ -78,7 +78,7 @@ class ClaudeProvider(AIProvider):
         except ImportError:
             raise ImportError(
                 "The `anthropic` package is required for Claude. "
-                "Install it with: pip install anthropic"
+                "Install it with: pip install anthropic",
             )
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
@@ -122,7 +122,7 @@ class OpenAIProvider(AIProvider):
         except ImportError:
             raise ImportError(
                 "The `openai` package is required for OpenAI. "
-                "Install it with: pip install openai"
+                "Install it with: pip install openai",
             )
         self._client = openai.OpenAI(api_key=api_key)
         self._model = model
@@ -172,7 +172,7 @@ class DeepSeekProvider(AIProvider):
         except ImportError:
             raise ImportError(
                 "The `openai` package is required for DeepSeek (it uses an "
-                "OpenAI-compatible API). Install it with: pip install openai"
+                "OpenAI-compatible API). Install it with: pip install openai",
             )
         self._client = openai.OpenAI(api_key=api_key, base_url=self.BASE_URL)
         self._model = model
@@ -215,7 +215,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 
 def get_provider(
-    provider_name: str, api_key: str, model: str | None = None
+    provider_name: str, api_key: str, model: str | None = None,
 ) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 
@@ -227,7 +227,7 @@ def get_provider(
     if spec is None:
         raise ValueError(
             f"Unknown AI provider '{provider_name}'. "
-            f"Choose from: {', '.join(PROVIDERS)}"
+            f"Choose from: {', '.join(PROVIDERS)}",
         )
     cls = spec["class"]
     effective_model = model or spec["default_model"]
@@ -279,7 +279,7 @@ def resolve_provider(
         if provider_name != "gemini":
             raise ValueError(
                 f"No {provider_name} API key configured. "
-                "Add a key in Settings -> AI Providers."
+                "Add a key in Settings -> AI Providers.",
             )
 
         # Fall through to server-fallback for the default provider.
@@ -292,7 +292,7 @@ def resolve_provider(
     if not api_key:
         raise ValueError(
             "No AI provider key available. Set GEMINI_API_KEY in the "
-            "environment or store a key in Settings."
+            "environment or store a key in Settings.",
         )
 
     return get_provider("gemini", api_key, effective_model)

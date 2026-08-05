@@ -123,11 +123,11 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
-        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db,
     )
     # A re-run on the same day replaces the earlier entry.
     save_daily_log(
-        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db,
     )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
@@ -187,13 +187,13 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]
+            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)],
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]
+            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)],
         ),
         db,
     )
@@ -264,7 +264,7 @@ def test_workout_history_migration_adds_user_id_column(tmp_path: Any) -> None:
             date TEXT NOT NULL,
             hevy_payload TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
@@ -282,7 +282,7 @@ def test_workout_history_migration_adds_user_id_column(tmp_path: Any) -> None:
         }
         assert "user_id" in cols
         rows = conn2.execute(
-            "SELECT user_id FROM workout_history WHERE date = '2026-08-01'"
+            "SELECT user_id FROM workout_history WHERE date = '2026-08-01'",
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] is not None  # backfilled to the legacy user
@@ -362,7 +362,7 @@ def test_init_db_migration_idempotent(tmp_path: Any) -> None:
 
 
 def _exercise_summary(
-    name: str, weight: float, reps: int, sets: int = 3
+    name: str, weight: float, reps: int, sets: int = 3,
 ) -> WorkoutSummary:
     return WorkoutSummary(
         f"S-{name}",
@@ -390,11 +390,11 @@ def test_exercise_progress_migration_adds_user_id_column(tmp_path: Any) -> None:
             top_reps INTEGER,
             sets INTEGER NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO exercise_progress (date, exercise_name, top_weight_kg, top_reps, sets) "
-        "VALUES ('2026-08-01', 'Squat', 100.0, 10, 3)"
+        "VALUES ('2026-08-01', 'Squat', 100.0, 10, 3)",
     )
     conn.commit()
     conn.close()
@@ -408,7 +408,7 @@ def test_exercise_progress_migration_adds_user_id_column(tmp_path: Any) -> None:
         }
         assert "user_id" in cols
         rows = conn2.execute(
-            "SELECT user_id FROM exercise_progress WHERE exercise_name = 'Squat'"
+            "SELECT user_id FROM exercise_progress WHERE exercise_name = 'Squat'",
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] is not None  # backfilled
@@ -538,10 +538,10 @@ def test_body_metrics_migration_adds_user_id_column(tmp_path: Any) -> None:
             resting_hr INTEGER,
             hrv REAL
         )
-        """
+        """,
     )
     conn.execute(
-        "INSERT INTO body_metrics (date, weight_kg) VALUES ('2026-08-01', 82.0)"
+        "INSERT INTO body_metrics (date, weight_kg) VALUES ('2026-08-01', 82.0)",
     )
     conn.commit()
     conn.close()
@@ -555,7 +555,7 @@ def test_body_metrics_migration_adds_user_id_column(tmp_path: Any) -> None:
         }
         assert "user_id" in cols
         rows = conn2.execute(
-            "SELECT user_id FROM body_metrics WHERE date = '2026-08-01'"
+            "SELECT user_id FROM body_metrics WHERE date = '2026-08-01'",
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] is not None  # backfilled
@@ -634,7 +634,7 @@ def test_chat_messages_migration_adds_user_id_column(tmp_path: Any) -> None:
             content TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO chat_messages (role, content, created_at) VALUES (?, ?, ?)",
@@ -652,7 +652,7 @@ def test_chat_messages_migration_adds_user_id_column(tmp_path: Any) -> None:
         }
         assert "user_id" in cols
         rows = conn2.execute(
-            "SELECT user_id FROM chat_messages WHERE content = 'hello'"
+            "SELECT user_id FROM chat_messages WHERE content = 'hello'",
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] is not None  # backfilled
@@ -722,7 +722,7 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
             date TEXT NOT NULL,
             insight_json TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO dashboard_insights (id, date, insight_json) VALUES (1, '2026-08-01', ?)",
@@ -781,11 +781,11 @@ def test_daily_log_migration_adds_user_id_column(tmp_path: Any) -> None:
             plan TEXT NOT NULL,
             lifestyle TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle) "
-        "VALUES ('2026-08-01', 1, 'Deadlift', 'high', 'Plan A', 'Walk')"
+        "VALUES ('2026-08-01', 1, 'Deadlift', 'high', 'Plan A', 'Walk')",
     )
     conn.commit()
     conn.close()
@@ -927,11 +927,11 @@ def test_check_ins_migration_adds_user_id_column(tmp_path: Any) -> None:
             weeks INTEGER NOT NULL,
             message TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO check_ins (number, date, workouts_done, weeks, message) "
-        "VALUES (1, '2026-08-01', 5, 2, 'Good progress')"
+        "VALUES (1, '2026-08-01', 5, 2, 'Good progress')",
     )
     conn.commit()
     conn.close()
@@ -991,7 +991,7 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
             date TEXT NOT NULL,
             insight_markdown TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT INTO deep_correlations (id, date, insight_markdown) VALUES (1, '2026-08-01', ?)",
@@ -1039,11 +1039,11 @@ def test_programme_state_migration_and_isolation(tmp_path: Any) -> None:
             current_day INTEGER NOT NULL,
             split_name TEXT NOT NULL
         )
-        """
+        """,
     )
     conn.execute(
         "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
-        "VALUES (1, 3, 'Legacy Split')"
+        "VALUES (1, 3, 'Legacy Split')",
     )
     conn.commit()
     conn.close()
@@ -1058,7 +1058,7 @@ def test_programme_state_migration_and_isolation(tmp_path: Any) -> None:
         assert "user_id" in cols
         assert "id" not in cols  # old singleton id column is gone
         rows = conn2.execute(
-            "SELECT user_id, current_day, split_name FROM programme_state"
+            "SELECT user_id, current_day, split_name FROM programme_state",
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][1] == 3  # current_day preserved
