@@ -96,8 +96,11 @@ def sync_all(
 
 if __name__ == "__main__":
     config = Config.load()
-    result = sync_all(config.hevy_api_key, config.database_path)
-    if "error" in result:
-        logger.error("%s", result["error"])
+    if not config.hevy_api_key:
+        logger.error("HEVY_API_KEY is not set in .env")
     else:
-        logger.info("%s", result)
+        result = sync_all(config.hevy_api_key, config.database_path)
+        if "error" in result:
+            logger.error("%s", result["error"])
+        else:
+            logger.info("%s", result)

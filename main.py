@@ -302,7 +302,11 @@ if __name__ == "__main__":
     if args.sync_history:
         from sync_history import sync_all
 
-        result = sync_all(Config.load().hevy_api_key)
+        api_key = Config.load().hevy_api_key
+        if not api_key:
+            logger.error("HEVY_API_KEY is not set in .env")
+            sys.exit(1)
+        result = sync_all(api_key)
         if "error" in result:
             logger.error("%s", result["error"])
             sys.exit(1)
