@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 from gemini_engine import (
     _build_autonomous_prompt,
@@ -13,6 +14,7 @@ from gemini_engine import (
     _fallback_plan,
     _fallback_rest_message,
     _format_history,
+    _server_gemini_provider,
     apply_autonomous_adjustments,
     generate_checkin_message,
     generate_next_workout,
@@ -400,3 +402,36 @@ def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
         hevy_logs=[],
     )
     assert result is base
+
+
+# ---------------------------------------------------------------------------
+# _server_gemini_provider
+# ---------------------------------------------------------------------------
+
+
+def test_server_gemini_provider_creates_gemini_provider() -> None:
+    with patch.dict(
+        os.environ,
+        {"GEMINI_API_KEY": "test-key-123", "GEMINI_MODEL": "gemini-2.0-flash"},
+        clear=True,
+    ):
+        provider = _server_gemini_provider()
+        assert "Gemini" in provider.name()
+        assert "gemini-2.0-flash" in provider.name()
+
+
+def test_server_gemini_provider_default_model() -> None:
+    with patch.dict(
+        os.environ, {"GEMINI_API_KEY": "test-key-123"}, clear=True
+    ):
+        provider = _server_gemini_provider()
+        assert "gemini-2.5-flash" in provider.name()
+
+
+def test_server_gemini_provider_raises_without_key() -> None:
+    with patch.dict(os.environ, {}, clear=True):
+        try:
+            _server_gemini_provider()
+            assert False, "Should have raised ValueError"
+        except ValueError as exc:
+            assert "GEMINI_API_KEY" in str(exc)
