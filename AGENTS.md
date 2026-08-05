@@ -164,10 +164,10 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the same programme/history/chat as
   everyone else. This is the top-priority backlog item.
-  *Progress:* `workout_history`, `exercise_progress`, and `body_metrics` now
-  have `user_id` scoping (PRs #70, #78 merged). `programme_state` and
-  `daily_log` (#77), plus `chat_messages`, `dashboard_insights`, and
-  `deep_correlations` (#79) are in flight.
+  *Progress:* `workout_history`, `exercise_progress`, `body_metrics`,
+  `chat_messages`, `dashboard_insights`, and `deep_correlations` now have
+  `user_id` scoping (PRs #70, #78, #79 merged). `programme_state` and
+  `daily_log` (PR #77) are still in flight.
 - **`ai_provider.py`'s multi-provider abstraction is built but unwired.**
   `get_provider()` is never called anywhere outside `ai_provider.py` itself;
   every actual generation call in `gemini_engine.py`, `insight_cron.py`, and
@@ -192,12 +192,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - ~~**Docs drift from code**: README.md claims the dashboard "has no login"~~ —
   *Resolved 2026-08-05: README and `webapp/app.py` docstring now document the
   real Google OAuth behaviour. Port docs are consistent.*
+  ~~**README referenced non-existent `SWARM.md`/`swarmctl` files**~~ —
+  *Resolved 2026-08-05: removed stale references; replaced with accurate
+  OpenHands + GitHub Issues description.*
 - **Zero test coverage** on the newest/most product-relevant modules:
   `ai_provider.py`, `gemini_engine.py`, `programme_inference.py`,
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
   `encryption.py`, `sync_history.py`, `ai_widgets.py`, `config.py`,
   `weather.py`. Any task that touches these should add tests as part of the
   same change, not as a follow-up.
+- **Missing `WEB_PORT` in `.env.example`.** Both compose files read
+  `${WEB_PORT:-...}` but `.env.example` doesn't document it.
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
   performance) the moment the web app runs as more than one instance behind

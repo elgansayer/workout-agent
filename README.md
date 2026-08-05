@@ -286,7 +286,7 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
-Then open `http://<host-ip>:8770` from any device on your network. To run it
+Then open `http://<host-ip>:8088` from any device on your network. To run it
 directly instead:
 
 ```bash
@@ -511,16 +511,14 @@ without it.
 
 ---
 
-## Continuous AI development (the swarm)
+## Continuous AI development (OpenHands + GitHub Issues)
 
-This repo also runs an autonomous coding swarm that continuously works
-through a task backlog (bug fixes, the multi-tenant migration, wiring "bring
-your own AI" all the way through, the workout-programme builder UI, and
-routine maintenance) using a rotating fallback across Claude, Gemini
-(Antigravity), GitHub Copilot, and DeepSeek. See `AGENTS.md` for the rules it
-follows and `SWARM.md` for how to start/stop/monitor it (`./swarmctl start`,
-`./swarmctl status`). It is off by default — nothing runs or auto-commits
-until you explicitly start it.
+This repo uses OpenHands to autonomously build and maintain the project,
+controlled entirely via GitHub Issues. Tasks are scheduled through GitHub
+Actions workflows (`.github/workflows/`) and processed by OpenHands agents
+following the rules in `AGENTS.md`. Every issue labelled `ai-agent-task` is a
+direct instruction to the AI that gets worked on and shipped unattended.
+When you encounter a bug or need a feature, open a GitHub issue.
 
 ---
 
