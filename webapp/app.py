@@ -28,6 +28,10 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from programme_inference import InferredProgramme
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -398,10 +402,35 @@ def _dashboard_context(
     bests = get_recent_bests(DB_PATH)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
+    # Check for a user-selected active programme.
+    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
+    active_defn = active.get("definition") if active else None
+
     day = today_day(today)
     rows: list[dict] = []
     focus = "Rest & Recovery"
-    if day is not None:
+
+    if active_defn:
+        days_data = active_defn.get("days", [])
+        total_days = len(days_data) or 1
+        current_day = ((today - start).days % total_days) + 1
+        active_day = next(
+            (d for d in days_data if d.get("number") == current_day), None
+        )
+        if active_day:
+            focus = active_day.get("focus", "Training")
+            for ex in active_day.get("exercises", []):
+                best = bests_norm.get(normalise_name(ex.get("name", "")))
+                rows.append(
+                    {
+                        "name": ex.get("name", "?"),
+                        "planned": f"{ex.get('sets', 0)} x {ex.get('rep_range', '?')}",
+                        "note": ex.get("note", ""),
+                        "last": _format_best(best),
+                        "nudge": _overload_nudge(ex.get("rep_range", ""), best),
+                    }
+                )
+    elif day is not None:
         focus = day_focus(day)
         for ex in day_exercises(day, block):
             best = bests_norm.get(normalise_name(ex.name))
@@ -697,7 +726,14 @@ def _project_lift(
 
 @app.get("/plan")
 def plan(request: Request):
+    user_id = request.session.get("user_id")
     today = datetime.now(tz=timezone.utc).date()
+
+    # Check for a user-selected active programme first.
+    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
+    if active and active.get("definition"):
+        return _render_active_plan(request, active, today)
+
     week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
@@ -750,6 +786,83 @@ def plan(request: Request):
     )
 
 
+def _render_active_plan(request: Request, active: dict, today: date):
+    """Render /plan from a user's active programme definition (DB-stored)."""
+    defn = active.get("definition", {})
+    split_name = defn.get("name", "Active Programme")
+    cycle_weeks = defn.get("cycle_weeks", 4)
+    days_data = defn.get("days", [])
+    blocks_data = defn.get("blocks", [])
+    rules = defn.get("rules", [])
+
+    # Determine today's day in the split (simple round-robin based on start date).
+    start = get_programme_start_date(DB_PATH)
+    # current_day is the 1-based day index in the split, wrapping
+    total_days = len(days_data) or 1
+    current_day = ((today - start).days % total_days) + 1
+
+    days = []
+    for d in days_data:
+        day_num = d.get("number", 0)
+        exercises = [
+            {
+                "name": ex.get("name", "?"),
+                "scheme": f"{ex.get('sets', 0)} x {ex.get('rep_range', '?')}",
+                "note": ex.get("note", ""),
+            }
+            for ex in d.get("exercises", [])
+        ]
+        days.append(
+            {
+                "number": day_num,
+                "focus": d.get("focus", f"Day {day_num}"),
+                "is_today": day_num == current_day,
+                "exercises": exercises,
+            }
+        )
+
+    blocks = []
+    for b in blocks_data:
+        blocks.append(
+            {
+                "number": b.get("number", 1),
+                "name": b.get("name", "Block"),
+                "weeks": b.get("weeks", "1-4"),
+                "focus": b.get("focus", ""),
+                "deadlift": _block_lift_str(b.get("deadlift")),
+                "pullups": _block_lift_str(b.get("pullups")),
+                "accessory": b.get("accessory_emphasis", ""),
+                "is_current": True,
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "plan.html",
+        {
+            "active": "plan",
+            "split_name": split_name,
+            "week": current_day,
+            "cycle_weeks": cycle_weeks,
+            "current_block": None,
+            "blocks": blocks,
+            "days": days,
+            "rules": rules,
+        },
+    )
+
+
+def _block_lift_str(lift: dict | None) -> str:
+    """Format a lift dict as 'sets x rep_range' or empty string."""
+    if not lift:
+        return ""
+    sets = lift.get("sets", 0)
+    rep_range = lift.get("rep_range", "")
+    if not sets or not rep_range:
+        return ""
+    return f"{sets} x {rep_range}"
+
+
 @app.get("/programmes")
 def programmes_page(request: Request):
     """Page where users select or switch their workout programme."""
@@ -790,8 +903,20 @@ async def select_programme(request: Request):
         )
 
     source = "template"
+    definition = body.get("definition")
+
     if template_key == "infer_from_hevy":
         source = "inferred"
+        try:
+            definition = _run_hevy_inference(user_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.exception("Hevy inference failed for user %s.", user_id)
+            raise HTTPException(
+                status_code=500,
+                detail="Could not infer programme from Hevy. Check your API key in Settings.",
+            ) from exc
     elif template_key == "custom":
         source = "custom"
 
@@ -799,10 +924,98 @@ async def select_programme(request: Request):
         user_id,
         source=source,
         template_key=template_key,
-        definition=body.get("definition"),
+        definition=definition,
         db_path=DB_PATH,
     )
     return {"status": "ok", "template_key": template_key}
+
+
+def _build_inferred_definition(
+    inferred: InferredProgramme,
+) -> dict:
+    """Build a programme definition dict from an InferredProgramme.
+
+    Produces a structure compatible with the programme templates system
+    so the programmes.html preview and /plan page render correctly.
+    """
+    days: list[dict] = []
+    for i, day in enumerate(inferred.training_days):
+        exercises = []
+        for ex in day.exercises:
+            exercises.append(
+                {
+                    "name": ex.title,
+                    "sets": ex.sets,
+                    "rep_range": f"{ex.target_reps or 8}-{ex.target_reps or 12}",
+                    "note": ex.notes or "",
+                    "template_id": ex.template_id,
+                }
+            )
+        days.append(
+            {
+                "number": i + 1,
+                "focus": day.focus_summary(),
+                "exercises": exercises,
+            }
+        )
+
+    # Build a simple block structure from the inferred data.
+    blocks: list[dict] = [
+        {
+            "number": 1,
+            "name": "Inferred",
+            "weeks": f"1-{len(inferred.training_days) or 6}",
+            "focus": (
+                f"Data-driven {inferred.split_type.replace('_', ' ').title()} split "
+                f"at {inferred.sessions_per_week} sessions/week."
+            ),
+            "deadlift": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
+            "pullups": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
+            "accessory_emphasis": "",
+        }
+    ]
+
+    return {
+        "name": f"Inferred: {inferred.split_type.replace('_', ' ').title()}",
+        "cycle_weeks": 4,
+        "total_days": len(inferred.training_days),
+        "blocks": blocks,
+        "days": days,
+        "rules": [
+            f"Inferred split type: {inferred.split_type.replace('_', ' ').title()}.",
+            f"Training {inferred.sessions_per_week} sessions per week.",
+            f"Next suggested routine: {inferred.next_routine.title if inferred.next_routine else 'none'}.",
+            "Derived from your Hevy routine templates and workout history.",
+        ],
+    }
+
+
+def _run_hevy_inference(user_id: str) -> dict:
+    """Fetch Hevy data and infer the user's training programme.
+
+    Raises HTTPException if the user has no Hevy API key configured or if
+    the inference fails.
+    """
+    from hevy_reader import fetch_user_training
+    from programme_inference import infer_programme
+
+    keys = get_user_api_keys(user_id, db_path=DB_PATH)
+    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    if not hevy_key:
+        raise HTTPException(
+            status_code=400,
+            detail="No Hevy API key configured. Add your key in Settings first.",
+        )
+
+    training_data = fetch_user_training(hevy_key)
+    if not training_data.routines and not training_data.recent_workouts:
+        raise HTTPException(
+            status_code=400,
+            detail="No routines or workouts found in your Hevy account. Create some routines first.",
+        )
+
+    inferred = infer_programme(training_data)
+    return _build_inferred_definition(inferred)
 
 
 @app.get("/history")
