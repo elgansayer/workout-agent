@@ -184,24 +184,23 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `tests/test_gemini_engine.py` covers the prompt/fallback functions
   (32 tests).
 
-- **`hevy_reader.py` and `programme_inference.py` are now wired** into
+- **`hevy_reader.py` and `programme_inference.py` are wired** into
   `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
-- **`sync_history.py` has zero callers outside itself.** It is never
-  imported by any module, referenced by any shell script, or invoked from
-  any Dockerfile/compose file. It is a standalone utility script for
-  one-off historical Hevy backfills (`python sync_history.py`) and
-  could be moved to a `scripts/` directory or documented in README.
+- **`sync_history.py` is wired** — it is imported by `main.py`
+  (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
+  endpoint). It is also executable standalone (`python sync_history.py`).
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Scheduling consolidated.** `scheduler.py` replaced the old dual
-  sleep-loop design (`docker-entrypoint.sh` bash loop + Python
-  `insight_scheduler.py`). It provides a single unified scheduler with
-  per-user timezone support, dispatching coaching runs and insight jobs
-  from one long-running process.
+- **Scheduling has been consolidated** into a single unified `scheduler.py`
+  (PR #142). `insight_scheduler.py` has been removed. The dual bash/Python
+  sleep-loops described in prior audits no longer exist — `scheduler.py` is
+  the single long-running process in the agent container, dispatching both
+  coaching runs (`main.py`) and insight jobs (`insight_cron.py`) on one
+  per-minute wake loop, with per-user timezone support.
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
@@ -237,8 +236,7 @@ re-deriving conventions from scratch:
   Hevy/Google-Health/Health-Connect patterns.
 - `programme-builder-ui` — building the workout programme selection/creation
   UI described in §6.3.
-- `scheduler-job` — adding or consolidating a periodic job (replacing the
-  dual sleep-loops described in §7).
+- `scheduler-job` — adding a new periodic job to the unified `scheduler.py`.
 - `secrets-and-encryption` — storing/reading anything through
   `encryption.py`/`user_api_keys` safely.
 - `verification-gate` — the exact command sequence and pass criteria to run
