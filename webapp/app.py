@@ -314,7 +314,9 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
+def _find_lift_series(
+    series: dict[str, Any], *keywords: str
+) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
