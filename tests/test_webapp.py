@@ -213,3 +213,47 @@ def test_google_health_callback_rejects_bad_state(tmp_path, monkeypatch):
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"
     assert not get_meta("google_health_refresh_token", db_path)
+
+
+def test_programmes_page_ok(client):
+    """The /programmes page renders the selection UI."""
+    response = client.get("/programmes")
+    assert response.status_code == 200
+    assert "Programme Builder" in response.text
+    assert "Hybrid Powerbuilding" in response.text
+    assert "Infer from my Hevy history" in response.text
+
+
+def test_programmes_page_shows_available_templates(client):
+    """The /programmes page lists all available templates."""
+    response = client.get("/programmes")
+    assert response.status_code == 200
+    assert "programme-card" in response.text
+    assert "Select Programme" in response.text
+
+
+def test_api_programmes_select_requires_auth(client):
+    """POST /api/programmes/select without a session returns 401."""
+    resp = client.post(
+        "/api/programmes/select",
+        json={"template_key": "hybrid_powerbuilding"},
+    )
+    assert resp.status_code == 401
+
+
+def test_api_programmes_select_rejects_unknown_template(client):
+    """Selecting an unknown template key is rejected (auth first, then validation)."""
+    resp = client.post(
+        "/api/programmes/select",
+        json={"template_key": "nonexistent_template"},
+    )
+    assert resp.status_code in (400, 401)
+
+
+def test_api_programmes_select_requires_template_key(client):
+    """POST without template_key is rejected (auth first, then validation)."""
+    resp = client.post(
+        "/api/programmes/select",
+        json={},
+    )
+    assert resp.status_code in (400, 401)

@@ -308,6 +308,21 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
 .block-schemes li { display: flex; justify-content: space-between; gap: 0.6rem; font-size: 0.85rem; border-top: 1px solid var(--border); padding-top: 0.4rem; }
 .block-schemes li span { color: var(--muted); }
 
+.programme-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.9rem; }
+.programme-card {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.programme-card.active-card { border-color: var(--accent); }
+.programme-card h3 { margin: 0; font-size: 1rem; }
+.programme-card p { margin: 0; font-size: 0.85rem; }
+.programme-card .select-form { margin-top: auto; padding-top: 0.5rem; }
+
 .day-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0.9rem; }
 .day-card {
     background: var(--panel-2);

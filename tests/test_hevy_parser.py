@@ -53,7 +53,6 @@ def test_parse_top_set_is_heaviest():
 
 def test_parse_bodyweight_uses_reps():
     summary = parse_workout(_payload())
-    assert summary is not None
     raises = summary.exercises[1]
     assert raises.top_weight_kg is None
     assert raises.top_reps == 15
@@ -62,7 +61,6 @@ def test_parse_bodyweight_uses_reps():
 def test_hit_top_of_range_flag():
     targets = {"leg press": 12, "hanging leg raises": 15}
     summary = parse_workout(_payload(), targets)
-    assert summary is not None
     assert summary.exercises[0].hit_top_of_range is True
     assert summary.exercises[1].hit_top_of_range is True
 
@@ -70,7 +68,6 @@ def test_hit_top_of_range_flag():
 def test_below_top_of_range_flag():
     targets = {"leg press": 15}
     summary = parse_workout(_payload(), targets)
-    assert summary is not None
     assert summary.exercises[0].hit_top_of_range is False
 
 
@@ -83,7 +80,6 @@ def test_parse_accepts_single_workout_dict():
 
 def test_as_text_renders_lines():
     summary = parse_workout(_payload(), {"leg press": 12})
-    assert summary is not None
     text = summary.as_text()
     assert "Legs & Abs" in text
     assert "Leg Press: 120 kg x 12" in text

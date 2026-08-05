@@ -50,6 +50,7 @@ from config import Config
 from database import (
     clear_chat_messages,
     delete_user_api_key,
+    get_active_programme,
     get_body_metrics,
     get_chat_messages,
     get_checkins,
@@ -60,6 +61,7 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
+    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -71,6 +73,7 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
+    set_active_programme,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
@@ -747,6 +750,61 @@ def plan(request: Request):
     )
 
 
+@app.get("/programmes")
+def programmes_page(request: Request):
+    """Page where users select or switch their workout programme."""
+    user_id = request.session.get("user_id")
+    templates_list = get_programme_templates()
+    active = None
+    if user_id:
+        active = get_active_programme(user_id, db_path=DB_PATH)
+    return templates.TemplateResponse(
+        request,
+        "programmes.html",
+        {
+            "active": "programmes",
+            "templates": templates_list,
+            "active_programme": active,
+        },
+    )
+
+
+@app.post("/api/programmes/select")
+async def select_programme(request: Request):
+    """Activate a programme template for the current user."""
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    template_key = body.get("template_key", "").strip()
+    if not template_key:
+        raise HTTPException(status_code=400, detail="template_key is required")
+
+    # Validate against known templates.
+    known_keys = {t["key"] for t in get_programme_templates()}
+    if template_key not in known_keys and template_key != "custom":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown template '{template_key}'. Available: {', '.join(sorted(known_keys))}",
+        )
+
+    source = "template"
+    if template_key == "infer_from_hevy":
+        source = "inferred"
+    elif template_key == "custom":
+        source = "custom"
+
+    set_active_programme(
+        user_id,
+        source=source,
+        template_key=template_key,
+        definition=body.get("definition"),
+        db_path=DB_PATH,
+    )
+    return {"status": "ok", "template_key": template_key}
+
+
 @app.get("/history")
 def history(request: Request):
     logs = get_daily_logs(limit=60, db_path=DB_PATH)
@@ -807,9 +865,7 @@ def xai_reasoning(context_id: str, request: Request):
     history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = (
-        str(provider.generate(prompt)).strip() or "Could not determine reasoning."
-    )
+    reasoning = str(provider.generate(prompt)).strip() or "Could not determine reasoning."
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}

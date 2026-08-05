@@ -38,7 +38,6 @@ def test_exchange_code_posts_and_returns_json(monkeypatch):
 
     monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
     tokens = google_health_auth.exchange_code("CID", "SECRET", "CODE")
-    assert tokens is not None
     assert tokens["refresh_token"] == "RT"
     assert captured["url"] == google_health_auth.TOKEN_URL
     assert captured["data"]["grant_type"] == "authorization_code"
