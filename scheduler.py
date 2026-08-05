@@ -6,7 +6,7 @@ RUN_AT times, and dispatches due coaching runs (`main.py`) and insight jobs
 one user's failures do not block another's.
 
 Also runs the hourly dead-code & orphaned-module sweep (`dead_code_sweep.py`)
-once per hour to catch orphaned modules early.
+and commit-hygiene audit (`commit_hygiene.py`) once per hour.
 
 Designed to be the single long-running process inside the agent container.
 MODE=once / MODE=preview are handled by docker-entrypoint.sh before this
@@ -111,6 +111,26 @@ def _run_insight_job(flag: str) -> bool:
         return False
 
 
+def _run_commit_hygiene() -> bool:
+    """Run the hourly commit-hygiene audit.
+
+    Uses ``--create-issues`` to file GitHub issues for any hygiene findings
+    (security issues, missing .gitignore entries, large files).  Returns True
+    on success (exit 0 from the audit).
+    """
+    logger.info("Running commit-hygiene audit ...")
+    try:
+        subprocess.run(
+            [sys.executable, "commit_hygiene.py", "--create-issues"],
+            check=False,  # exit 1 means issues found, which is informational
+            timeout=120,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("Commit-hygiene audit timed out")
+        return False
+
+
 def _run_dead_code_sweep() -> bool:
     """Run the hourly dead-code & orphaned-module sweep.
 
@@ -169,13 +189,17 @@ def run_scheduler() -> None:
     while True:
         now_utc = datetime.now(ZoneInfo("UTC"))
 
-        # --- Dead-code & orphaned-module sweep (fires once per hour) ---
+        # --- Hourly housekeeping (fires once per hour) ---
         current_hour = now_utc.strftime("%Y-%m-%dT%H")
         if current_hour != last_sweep_hour:
             try:
                 _run_dead_code_sweep()
             except Exception:
                 logger.exception("Unhandled error in dead-code sweep")
+            try:
+                _run_commit_hygiene()
+            except Exception:
+                logger.exception("Unhandled error in commit-hygiene audit")
             last_sweep_hour = current_hour
 
         # --- Per-user coaching runs ---
