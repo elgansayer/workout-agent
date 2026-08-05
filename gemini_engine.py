@@ -138,10 +138,12 @@ def generate_next_workout(
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    *,
+    provider_name: str = "gemini",
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
+        provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_prompt(
             day, week, block, workout_summary, recovery, history, insights, last_plan
         )
@@ -191,10 +193,12 @@ def generate_rest_day_message(
     api_key: str,
     model_name: str,
     recovery: dict[str, Any] | None = None,
+    *,
+    provider_name: str = "gemini",
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
+        provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -259,10 +263,12 @@ def generate_checkin_message(
     weeks: int,
     analysis_text: str,
     fallback: str,
+    *,
+    provider_name: str = "gemini",
 ) -> str:
     """Generate a periodic check-in message, falling back on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
+        provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_checkin_prompt(
             number, week, block, workouts_done, weeks, analysis_text
         )
@@ -334,10 +340,12 @@ def apply_autonomous_adjustments(
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
     is_catabolic: bool = False,
+    *,
+    provider_name: str = "gemini",
 ) -> dict[str, list[dict[str, Any]]]:
     """Applies the unified autonomous progression and returns updated JSON routines."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
+        provider = get_provider(provider_name, api_key, model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
