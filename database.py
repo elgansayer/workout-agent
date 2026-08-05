@@ -1646,7 +1646,7 @@ def get_active_programme(
         "user_id": row[1],
         "source": row[2],
         "template_key": row[3],
-        "definition": json.loads(row[4]) if row[4] else {},
+        "definition": (json.loads(row[4]) if row[4] else {}) or {},
         "active": bool(row[5]),
         "created_at": row[6],
         "updated_at": row[7],
@@ -1666,8 +1666,11 @@ def set_active_programme(
     program.py if not provided.
     """
     now = datetime.now(tz=timezone.utc).isoformat()
-    if definition is None and source == "template":
-        definition = _build_template_definition()
+    if definition is None:
+        if source == "template":
+            definition = _build_template_definition()
+        else:
+            definition = {}
 
     with _connect(db_path) as conn:
         # Deactivate all existing programmes for this user.
