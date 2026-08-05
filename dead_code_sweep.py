@@ -155,7 +155,9 @@ def _build_import_graph() -> dict[str, set[str]]:
     for py_file in sorted(ROOT.rglob("*.py")):
         # Skip virtual envs, caches, etc.
         parts = py_file.parts
-        if any(p.startswith(".") or p in ("__pycache__", ".venv", "venv") for p in parts):
+        if any(
+            p.startswith(".") or p in ("__pycache__", ".venv", "venv") for p in parts
+        ):
             continue
 
         rel = str(py_file.relative_to(ROOT))
@@ -192,8 +194,7 @@ def find_orphans() -> list[OrphanReport]:
     # BFS from entry-point files: anything they import is reachable, and
     # anything *those* import is reachable, etc.
     entry_point_files = {
-        f for f in import_graph
-        if f in ENTRY_POINTS or f == _WEB_ENTRY
+        f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
     }
 
     # Also seed wired with webapp.app so it's never flagged as orphan
@@ -228,7 +229,9 @@ def find_orphans() -> list[OrphanReport]:
         # patterns that AST can't catch (e.g. __import__ or importlib)?
         grep_hits = _grep_import(mi.name)
         if grep_hits:
-            logger.debug("%s: AST missed but grep found imports in %s", mi.name, grep_hits)
+            logger.debug(
+                "%s: AST missed but grep found imports in %s", mi.name, grep_hits
+            )
             continue
 
         orphans.append(
@@ -524,7 +527,9 @@ def main() -> None:
                 )
             for r in truly_dead:
                 if not args.json_output:
-                    logger.warning("  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT))
+                    logger.warning(
+                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT)
+                    )
                     logger.warning("    %s", r.evidence)
             exit_code = 1
 
