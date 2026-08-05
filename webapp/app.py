@@ -27,7 +27,6 @@ from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
-import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
@@ -44,7 +43,8 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers
+from ai_provider import AIProvider, available_providers
+from ai_resolver import resolve_provider
 from config import Config
 from database import (
     clear_chat_messages,
@@ -93,6 +93,16 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
+
+def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
+    user_id = request.session.get("user_id") if hasattr(request, "session") else None
+    return resolve_provider(
+        user_id=user_id,
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
+
+
 def get_config():
     return Config.load()
 
@@ -796,14 +806,15 @@ def xai_reasoning(context_id: str, request: Request):
     when, ex_name = parts
 
     config = get_config()
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _resolve_provider_for_request(request, config)
 
     history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    response = model.generate_content(prompt)
-    reasoning = (response.text or "Could not determine reasoning.").strip()
+    reasoning = str(provider.generate(prompt)).strip()
+    if not reasoning:
+        reasoning = "Could not determine reasoning."
+
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}
@@ -813,8 +824,7 @@ def xai_reasoning(context_id: str, request: Request):
 def project_peak(request: Request):
     _check_rate_limit(request, limit=5)
     config = get_config()
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _resolve_provider_for_request(request, config)
 
     series = get_progress_history(db_path=DB_PATH)
     dl_entries = series.get("Deadlift", [])
@@ -822,8 +832,7 @@ def project_peak(request: Request):
 
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
-        response = model.generate_content(prompt)
-        text = response.text.strip()
+        text = str(provider.generate(prompt)).strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         return json.loads(text.strip())
@@ -860,8 +869,7 @@ def rag_search(request: Request, q: str = Query(...)):
     _check_rate_limit(request, limit=15)
     user_id = request.session.get("user_id")
     config = get_config()
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH)
@@ -914,13 +922,13 @@ Respond naturally as Coach. If the question is about their training data, refere
     def generate():
         collected = []
         try:
-            response = model.generate_content(prompt, stream=True)
+            response = provider.generate(prompt, stream=True)
             for chunk in response:
-                if chunk.text:
-                    collected.append(chunk.text)
-                    yield chunk.text
+                if chunk:
+                    collected.append(chunk)
+                    yield chunk
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Error during Gemini streaming: {e}")
+            logger.error(f"Error during AI streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
             collected.append(error_msg)
             yield error_msg

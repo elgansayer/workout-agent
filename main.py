@@ -20,6 +20,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -199,11 +200,15 @@ def run(preview: bool = False) -> int:
 
     day = today_day(today)
 
+    provider = resolve_provider(
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
+
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
         message = generate_rest_day_message(
-            api_key=config.gemini_api_key,
-            model_name=config.gemini_model,
+            provider=provider,
             recovery=recovery,
         )
         guidance = (
@@ -250,8 +255,7 @@ def run(preview: bool = False) -> int:
             break
 
     plan = generate_next_workout(
-        api_key=config.gemini_api_key,
-        model_name=config.gemini_model,
+        provider=provider,
         day=day,
         week=week,
         block=block,

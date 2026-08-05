@@ -311,6 +311,7 @@ def sync_routines(config: Config) -> list[str]:
     updated_routines = base_routines
     if config.gemini_api_key:
         try:
+            from ai_resolver import resolve_provider as _resolve
             from database import get_body_metrics, get_recent_hevy_logs
             from gemini_engine import apply_autonomous_adjustments
             from health_connect import read_recovery_metrics
@@ -328,10 +329,16 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            logger.info("Requesting autonomous routine adjustments from Gemini...")
+            ai_provider = _resolve(
+                fallback_api_key=config.gemini_api_key,
+                fallback_model=config.gemini_model,
+            )
+            logger.info(
+                "Requesting autonomous routine adjustments from %s...",
+                ai_provider.name(),
+            )
             updated_routines = apply_autonomous_adjustments(
-                api_key=config.gemini_api_key,
-                model_name=config.gemini_model,
+                provider=ai_provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
