@@ -197,24 +197,23 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Two independent, hand-rolled scheduling loops in one container**
-  (`docker-entrypoint.sh`'s bash sleep-loop and `insight_scheduler.py`'s
-  Python sleep-loop), each single-timezone/single-recipient by construction.
-  Needs consolidating into one scheduler that can support per-user run times
-  once multi-tenancy lands.
+- **Scheduling consolidated.** `scheduler.py` replaced the old dual
+  sleep-loop design (`docker-entrypoint.sh` bash loop + Python
+  `insight_scheduler.py`). It provides a single unified scheduler with
+  per-user timezone support, dispatching coaching runs and insight jobs
+  from one long-running process.
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
 
-- **Test coverage gaps** remain on the following modules (any task that
-  touches these should add tests as part of the same change, not as a
-  follow-up): `programme_inference.py`, `hevy_reader.py`,
-  `insight_cron.py`, `insight_scheduler.py`, `main.py`, `sync_history.py`,
-  `ai_widgets.py`, `weather.py`. Now-covered modules:
-  `tests/test_ai_provider.py` (7 tests, PR #85),
-  `tests/test_gemini_engine.py` (32 tests, PR #164),
-  `tests/test_encryption.py` (PR #146),
-  `tests/test_config.py` (PR #146).
+- **Test coverage audit** (last updated 2026-08-05): all source modules
+  now have corresponding test files. The full test suite stands at 418
+  passing tests covering 27 test modules. Previously-uncovered modules now
+  with tests: `programme_inference.py` (16 tests),
+  `hevy_reader.py` (20 tests), `insight_cron.py` (9 tests),
+  `main.py` (20 tests), `sync_history.py` (9 tests),
+  `webapp/ai_widgets.py` (14 tests), `weather.py` (7 tests).
+  `insight_scheduler.py` was replaced by `scheduler.py` (18 tests).
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
