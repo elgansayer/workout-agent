@@ -185,17 +185,20 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   Python sleep-loop), each single-timezone/single-recipient by construction.
   Needs consolidating into one scheduler that can support per-user run times
   once multi-tenancy lands.
-- **Docs drift from code**: README.md claims the dashboard "has no login" —
-  it has a working Google OAuth login (`webapp/app.py`). README's documented
-  web port (8088/8080/8770 appear inconsistently across README and the two
-  compose files) needs reconciling. `SWARM_RELAXED_TESTS`-style "aspirational
-  comment" drift is exactly the kind of thing `task-daily-documentation-sync`
-  (§9) exists to catch — don't let it recur here.
+- **Docs drift from code**: ~~README.md claims the dashboard "has no login" —~~ 
+  *Resolved 2026-08-05: README and docker-compose comments updated to reflect
+  the working Google OAuth login and consistent port `8088`.*
+  README's documented web port is now consistent at `8088` across
+  README.md, `docker-compose.yml`, and `docker-compose.portainer.yml`.
+  `SWARM_RELAXED_TESTS`-style "aspirational comment" drift is exactly the
+  kind of thing `task-daily-documentation-sync` (§9) exists to catch —
+  don't let it recur here.
 - **Zero test coverage** on the newest/most product-relevant modules:
-  `ai_provider.py`, `gemini_engine.py`, `programme_inference.py`,
+  `gemini_engine.py`, `programme_inference.py`,
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
   `encryption.py`, `sync_history.py`, `ai_widgets.py`, `config.py`,
-  `weather.py`. Any task that touches these should add tests as part of the
+  `weather.py`. (Modules `ai_provider.py` and `telegram_notifier.py` now have
+  test coverage.) Any task that touches these should add tests as part of the
   same change, not as a follow-up.
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just

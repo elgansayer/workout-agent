@@ -1,14 +1,15 @@
 """Internal progressive-overload web app (FastAPI).
 
 A self-hosted dashboard for the workout agent. It reads the same SQLite database
-the agent writes and renders it as a rich, read-only control centre: today's
-session and progressive-overload targets, server-rendered SVG charts of every
-lift and your body composition, all-time personal records, training-load trends,
-a consistency calendar, the full periodisation plan, and programme check-ins.
+the agent writes and renders it as a rich control centre: today's session and
+progressive-overload targets, server-rendered SVG charts of every lift and your
+body composition, all-time personal records, training-load trends, a consistency
+calendar, the full periodisation plan, and programme check-ins.
 
-There is no login: it is read-only and meant to sit behind a reverse proxy on a
-trusted host (e.g. Apache -> Docker -> gym.example.com). All motivation is
-automated; nothing here calls out to an API on a page view.
+Authentication is handled by Google OAuth: users sign in via /login, and the
+app creates their account on first login. All motivation is automated; nothing
+here calls out to an AI API on a page view (generation calls are server-side
+only).
 
 Run locally:   uvicorn webapp.app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml

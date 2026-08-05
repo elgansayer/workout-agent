@@ -21,7 +21,7 @@ services:
       # - /absolute/path/on/host/health:/health:ro
     restart: unless-stopped
 
-  # Internal web dashboard. Reach it on the LAN at http://<host-ip>:8770
+  # Internal web dashboard. Reach it on the LAN at http://<host-ip>:8088 (override with WEB_PORT)
   web:
     build:
       context: .

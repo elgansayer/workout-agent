@@ -274,7 +274,7 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
-Then open `http://<host-ip>:8770` from any device on your network. To run it
+Then open `http://<host-ip>:8088` from any device on your network. To run it
 directly instead:
 
 ```bash
@@ -288,22 +288,24 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
-The app is read-only and has no login, so it sits cleanly behind Apache, nginx,
-or Caddy. Point the proxy at the container's published port. Example Apache
-virtual host mapping `gym.example.com` to the dashboard:
+The dashboard has a working Google OAuth login (`/login` → Sign in with Google),
+so it supports multi-user access on a public domain. Point the proxy at the
+container's published port. Example Apache virtual host mapping
+`gym.example.com` to the dashboard:
 
 ```apache
 <VirtualHost *:443>
     ServerName gym.example.com
     ProxyPreserveHost On
-    ProxyPass        / http://127.0.0.1:8770/
-    ProxyPassReverse / http://127.0.0.1:8770/
+    ProxyPass        / http://127.0.0.1:8088/
+    ProxyPassReverse / http://127.0.0.1:8088/
     # ... your TLS configuration ...
 </VirtualHost>
 ```
 
-Because there is no authentication, only expose data you are happy to be public,
-or add HTTP basic auth at the proxy if you want to gate it.
+Set `WEB_AUTH_SECRET` to a random string (used to sign session cookies). The
+Google OAuth flow is self-service: users sign in, and the app creates their
+account on first login.
 
 ---
 
@@ -423,8 +425,10 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
-   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
-   from any device on your LAN. Keep it on a trusted network: there is no auth.
+   By default it listens on `http://<host-ip>:8088` (override with `WEB_PORT`
+   in `.env`). Host it on a Proxmox LXC and reach it from any device on your
+   LAN. Sign in with Google when you open it — the dashboard uses OAuth to
+   identify you.
 
 ---
 
@@ -440,7 +444,7 @@ Pre-built images are published to the GitHub Container Registry (GHCR) by the
 The [Portainer stack](docker-compose.portainer.yml) runs **both**: the agent
 wakes at `RUN_AT` every day (default midnight and 5am in your `TZ`), builds the plan, syncs
 Hevy routines and Google Health body composition, and messages you on Telegram;
-the dashboard serves a live view of the same data on port `8770`.
+the dashboard serves a live view of the same data on port `8088`.
 
 **Credentials live only in Portainer, never in git** — the compose references
 variable names (`${...}`) and you supply the values in the stack's
@@ -480,16 +484,19 @@ without it.
    | `GEMINI_API_KEY` | ✅ | https://aistudio.google.com/app/apikey |
    | `TELEGRAM_BOT_TOKEN` | ✅ | from @BotFather |
    | `TELEGRAM_CHAT_ID` | ✅ | your chat id |
+   | `WEB_GOOGLE_CLIENT_ID` | ✅ (web) | Google OAuth client for dashboard login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | ✅ (web) | Google OAuth client secret |
+   | `WEB_AUTH_SECRET` | ✅ (web) | random string to sign session cookies |
    | `HEVY_API_KEY` | optional | reference your last logged session |
    | `GOOGLE_HEALTH_CLIENT_ID` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
-   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8088` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
-   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, there is
-   no auth.
+   `http://<vps-ip>:8088` — keep it behind a reverse proxy / firewall. Sign in
+   with Google when you open it; the OAuth flow creates your account automatically.
 
 > Want the agent to message you immediately to confirm it works? Temporarily set
 > `MODE=once` as an env var and redeploy, then set it back to `schedule`.
