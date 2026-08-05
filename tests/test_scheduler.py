@@ -155,6 +155,7 @@ def test_run_scheduler_dispatches_due_users(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
     monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
@@ -192,6 +193,7 @@ def test_run_scheduler_user_failure_isolated(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(scheduler, "_run_coaching", _failing_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: True)
     monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
