@@ -241,7 +241,9 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
     # Mock Gemini — return a canned plan
     monkeypatch.setattr(
         "main.generate_next_workout",
-        lambda *args, **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
+        lambda *args, **kw: (
+            "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8"
+        ),
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
 
@@ -519,7 +521,9 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.get_daily_logs", lambda **kw: [])
     monkeypatch.setattr(
         "main.generate_next_workout",
-        lambda *args, **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
+        lambda *args, **kw: (
+            "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8"
+        ),
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(

@@ -10,6 +10,7 @@ from webapp.ai_widgets import (
 
 # ── block_phase_tracker ──────────────────────────────────────────────
 
+
 def test_block_phase_tracker_insufficient_data():
     """Returns a placeholder when fewer than 2 sessions."""
     result = block_phase_tracker([{"volume": 1000, "date": "2025-01-01"}])
@@ -47,14 +48,13 @@ def test_block_phase_tracker_all_same_volume():
 
 def test_block_phase_tracker_truncates_to_30_sessions():
     """Only last 30 sessions are plotted."""
-    sessions = [
-        {"volume": i * 100, "date": f"2025-01-{i:02d}"} for i in range(1, 51)
-    ]
+    sessions = [{"volume": i * 100, "date": f"2025-01-{i:02d}"} for i in range(1, 51)]
     result = block_phase_tracker(sessions)
     assert "<svg" in result
 
 
 # ── systemic_recovery_correlation ────────────────────────────────────
+
 
 def test_correlation_insufficient_data():
     """Returns placeholder when fewer than 3 overlapping data points."""
@@ -134,6 +134,7 @@ def test_correlation_highlights_anomalies():
 
 # ── volume_distribution ──────────────────────────────────────────────
 
+
 def test_volume_distribution_empty():
     """Returns empty string for empty input."""
     assert volume_distribution({}) == ""
@@ -146,7 +147,13 @@ def test_volume_distribution_zero_total():
 
 def test_volume_distribution_renders_svg():
     """Produces a valid SVG bar chart."""
-    groups = {"Chest": 3000, "Back": 4000, "Legs": 5000, "Shoulders": 2000, "Arms": 1000}
+    groups = {
+        "Chest": 3000,
+        "Back": 4000,
+        "Legs": 5000,
+        "Shoulders": 2000,
+        "Arms": 1000,
+    }
     result = volume_distribution(groups)
     assert "<svg" in result
     assert 'class="svg-chart"' in result

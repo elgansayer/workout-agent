@@ -87,9 +87,7 @@ def test_sync_all_respects_user_id(tmp_path) -> None:
         result = sync_history.sync_all("fake-key", db_path, user_id="user-1")
     assert result == {"workouts_found": 2, "processed": 2}
     conn = sqlite3.connect(db_path, timeout=10)
-    user_ids = conn.execute(
-        "SELECT DISTINCT user_id FROM workout_history"
-    ).fetchall()
+    user_ids = conn.execute("SELECT DISTINCT user_id FROM workout_history").fetchall()
     conn.close()
     assert user_ids == [("user-1",)]
 
