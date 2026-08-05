@@ -29,19 +29,24 @@ Usage
 -----
 ::
 
-    python dead_code_sweep.py           # report only; exit 1 if orphans found
-    python dead_code_sweep.py --prune   # also remove confirmed-dead modules
-    python dead_code_sweep.py --json    # machine-readable output
+    python dead_code_sweep.py               # report only; exit 1 if orphans found
+    python dead_code_sweep.py --prune       # also remove confirmed-dead modules
+    python dead_code_sweep.py --json        # machine-readable output
+    python dead_code_sweep.py --create-issues  # file GitHub issues for orphans
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
+import json
 import logging
 import os
+import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
@@ -404,6 +409,127 @@ def _task_add_text(report: OrphanReport) -> str:
     )
 
 
+def _get_github_repo() -> tuple[str, str] | None:
+    """Parse `owner/repo` from the git remote origin URL.
+
+    Returns a ``(owner, repo)`` tuple on success, or ``None`` if the remote
+    cannot be identified (e.g. non-GitHub hosting).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(ROOT),
+            check=False,
+        )
+        url = result.stdout.strip()
+        # Handles both https://github.com/owner/repo.git and
+        # https://x-access-token:TOKEN@github.com/owner/repo.git
+        m = re.search(r"github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?$", url)
+        if m:
+            return m.group(1), m.group(2)
+        return None
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _get_github_token() -> str | None:
+    """Return a GitHub token from env or the git remote URL credential."""
+    # Check GITHUB_TOKEN env var first
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        return token
+
+    # Fall back to extracting from the remote URL
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            cwd=str(ROOT),
+            check=False,
+        )
+        url = result.stdout.strip()
+        # x-access-token:TOKEN@github.com/...
+        m = re.search(r"://x-access-token:([^@]+)@", url)
+        if m:
+            return m.group(1)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    return None
+
+
+def create_github_issues(reports: list[OrphanReport]) -> list[str]:
+    """Create a GitHub issue for each orphaned module.
+
+    Returns a list of created issue URLs (or error strings).
+    """
+    token = _get_github_token()
+    if not token:
+        logger.warning(
+            "No GitHub token found (set GITHUB_TOKEN or configure git remote credentials). "
+            "Skipping issue creation."
+        )
+        return []
+
+    repo = _get_github_repo()
+    if not repo:
+        logger.warning("Could not determine GitHub owner/repo from git remote.")
+        return []
+
+    owner, repo_name = repo
+    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/issues"
+    created: list[str] = []
+
+    for report in reports:
+        title = f"Orphaned module: `{report.module.name}` needs wiring or removal"
+        body = _task_add_text(report)
+        labels = ["orphaned-module", "dead-code-sweep"]
+
+        payload = json.dumps({"title": title, "body": body, "labels": labels}).encode(
+            "utf-8"
+        )
+
+        req = urllib.request.Request(
+            api_url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "Content-Type": "application/json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                issue_data = json.loads(resp.read().decode("utf-8"))
+                issue_url = issue_data.get("html_url", "unknown")
+                logger.info(
+                    "Created issue for '%s': %s",
+                    report.module.name,
+                    issue_url,
+                )
+                created.append(issue_url)
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="replace")
+            msg = f"Failed to create issue for '{report.module.name}': HTTP {e.code} — {err_body[:300]}"
+            logger.error(msg)
+            created.append(f"ERROR: {msg}")
+        except (urllib.error.URLError, OSError, ValueError, TypeError) as e:
+            msg = (
+                f"Failed to create issue for '{report.module.name}': {e}"
+            )
+            logger.error(msg)
+            created.append(f"ERROR: {msg}")
+
+    return created
+
+
 def _rel_path(p: Path) -> str:
     """Return *p* relative to ROOT if possible, else its string representation."""
     try:
@@ -484,10 +610,16 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit machine-readable JSON to stdout.",
     )
+    parser.add_argument(
+        "--create-issues",
+        action="store_true",
+        dest="create_issues",
+        help="Create GitHub issues for orphaned modules via the GitHub API.",
+    )
     return parser
 
 
-def main() -> None:
+def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
@@ -497,7 +629,7 @@ def main() -> None:
 
     if not orphans:
         report_orphans([], json_output=args.json_output)
-        sys.exit(0)
+        return 0
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
@@ -514,6 +646,11 @@ def main() -> None:
                     r.module.name,
                 )
                 logger.info("  Suggested issue body:\n%s", _task_add_text(r))
+
+        if args.create_issues:
+            created = create_github_issues(merely_orphaned)
+            if created:
+                logger.info("Created %d GitHub issue(s).", len(created))
 
     if truly_dead:
         if args.prune:
@@ -533,8 +670,8 @@ def main() -> None:
                     logger.warning("    %s", r.evidence)
             exit_code = 1
 
-    sys.exit(exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
