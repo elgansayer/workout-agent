@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -129,7 +131,7 @@ Use Markdown format. Output the Markdown report directly.
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--daily", action="store_true", help="Generate daily insight header"

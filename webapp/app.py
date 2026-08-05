@@ -1,15 +1,13 @@
 """Internal progressive-overload web app (FastAPI).
 
 A self-hosted dashboard for the workout agent. It reads the same SQLite database
-the agent writes and renders it as a rich control centre: today's session and
-progressive-overload targets, server-rendered SVG charts of every lift and your
-body composition, all-time personal records, training-load trends, a consistency
-calendar, the full periodisation plan, and programme check-ins.
+the agent writes and renders it as a rich, read-only control centre: today's
+session and progressive-overload targets, server-rendered SVG charts of every
+lift and your body composition, all-time personal records, training-load trends,
+a consistency calendar, the full periodisation plan, and programme check-ins.
 
-Google OAuth login is available when WEB_GOOGLE_CLIENT_ID,
-WEB_GOOGLE_CLIENT_SECRET, WEB_AUTH_SECRET, and ALLOWED_EMAILS are configured.
-Without them the dashboard is open and read-only, suitable for a reverse proxy
-on a trusted host (e.g. Apache -> Docker -> gym.example.com). All motivation is
+There is no login: it is read-only and meant to sit behind a reverse proxy on a
+trusted host (e.g. Apache -> Docker -> gym.example.com). All motivation is
 automated; nothing here calls out to an API on a page view.
 
 Run locally:   uvicorn webapp.app:app --reload
@@ -383,7 +381,11 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(today: date | None = None) -> dict:
+def _dashboard_context(
+    today: date | None = None,
+    *,
+    user_id: str | None = None,
+) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH)
@@ -461,13 +463,16 @@ def _dashboard_context(today: date | None = None) -> dict:
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
     }
 
 
 @app.get("/")
 def dashboard(request: Request):
-    return templates.TemplateResponse(request, "dashboard.html", _dashboard_context())
+    user_id = request.session.get("user_id")
+    return templates.TemplateResponse(
+        request, "dashboard.html", _dashboard_context(user_id=user_id)
+    )
 
 
 @app.get("/progress")
@@ -828,7 +833,8 @@ def project_peak(request: Request):
 
 @app.get("/chat")
 def chat_page(request: Request):
-    messages = get_chat_messages(limit=50, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+    messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
         request,
         "chat.html",
@@ -837,19 +843,22 @@ def chat_page(request: Request):
 
 
 @app.get("/api/chat/history")
-def chat_history():
-    return get_chat_messages(limit=50, db_path=DB_PATH)
+def chat_history(request: Request):
+    user_id = request.session.get("user_id")
+    return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
-def chat_clear():
-    clear_chat_messages(db_path=DB_PATH)
+def chat_clear(request: Request):
+    user_id = request.session.get("user_id")
+    clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
 
 
 @app.get("/api/rag_search")
 def rag_search(request: Request, q: str = Query(...)):
     _check_rate_limit(request, limit=15)
+    user_id = request.session.get("user_id")
     config = get_config()
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
@@ -871,7 +880,7 @@ def rag_search(request: Request, q: str = Query(...)):
     )
 
     # Build multi-turn conversation from chat history
-    chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH)
+    chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
     conversation_lines = []
     for msg in chat_history_msgs:
         role_label = "User" if msg["role"] == "user" else "Coach"
@@ -881,7 +890,7 @@ def rag_search(request: Request, q: str = Query(...)):
     )
 
     # Save user message
-    save_chat_message("user", q, db_path=DB_PATH)
+    save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in Elgan's training dashboard.
 You have full access to his training logs, body composition data, personal records, and programme history.
@@ -919,7 +928,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             # Save the full assistant response
             full_response = "".join(collected)
             if full_response:
-                save_chat_message("assistant", full_response, db_path=DB_PATH)
+                save_chat_message("assistant", full_response, db_path=DB_PATH, user_id=user_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
 

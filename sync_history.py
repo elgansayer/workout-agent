@@ -4,6 +4,8 @@ This is useful if you have lost your local database or want to sync to a
 new device without losing your PRs and training history.
 """
 
+from __future__ import annotations
+
 import logging
 
 from config import Config
@@ -15,7 +17,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def sync_all():
+def sync_all() -> None:
     config = Config.load()
     if not config.hevy_api_key:
         logger.error("HEVY_API_KEY is not set in .env")

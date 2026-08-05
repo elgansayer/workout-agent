@@ -162,12 +162,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-05)
 
 - **No real data isolation between users** (§2). Logging in as a different
-  Google account today shares the same programme/history/chat as
+  Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
-  *Progress:* `workout_history`, `exercise_progress`, and `body_metrics` now
-  have `user_id` scoping (PRs #70, #78 merged). `programme_state` and
-  `daily_log` (#77), plus `chat_messages`, `dashboard_insights`, and
-  `deep_correlations` (#79) are in flight.
 - **`ai_provider.py`'s multi-provider abstraction is built but unwired.**
   `get_provider()` is never called anywhere outside `ai_provider.py` itself;
   every actual generation call in `gemini_engine.py`, `insight_cron.py`, and
@@ -189,9 +185,12 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   Python sleep-loop), each single-timezone/single-recipient by construction.
   Needs consolidating into one scheduler that can support per-user run times
   once multi-tenancy lands.
-- ~~**Docs drift from code**: README.md claims the dashboard "has no login"~~ —
-  *Resolved 2026-08-05: README and `webapp/app.py` docstring now document the
-  real Google OAuth behaviour. Port docs are consistent.*
+- **Docs drift from code**: README.md claims the dashboard "has no login" —
+  it has a working Google OAuth login (`webapp/app.py`). README's documented
+  web port (8088/8080/8770 appear inconsistently across README and the two
+  compose files) needs reconciling. `SWARM_RELAXED_TESTS`-style "aspirational
+  comment" drift is exactly the kind of thing `task-daily-documentation-sync`
+  (§9) exists to catch — don't let it recur here.
 - **Zero test coverage** on the newest/most product-relevant modules:
   `ai_provider.py`, `gemini_engine.py`, `programme_inference.py`,
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
