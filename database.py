@@ -1623,7 +1623,9 @@ def save_programme(
             (user_id, source, template_key, name,
              json.dumps(definition), int(active), now),
         )
-        return cursor.lastrowid
+        row_id: int | None = cursor.lastrowid
+        assert row_id is not None, "INSERT did not return a row id"
+        return row_id
 
 
 def get_active_programme(
