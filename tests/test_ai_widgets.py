@@ -81,13 +81,13 @@ def test_correlation_no_matching_dates():
 
 def test_correlation_missing_resting_hr():
     """Biometrics without resting_hr are skipped."""
-    biometrics = [
+    biometrics: list[dict] = [
         {"date": "2025-01-01", "resting_hr": None},
         {"date": "2025-01-02", "resting_hr": 60},
         {"date": "2025-01-03", "resting_hr": 62},
         {"date": "2025-01-04", "resting_hr": 58},
     ]
-    sessions = [
+    sessions: list[dict] = [
         {"volume": 5000, "date": "2025-01-02"},
         {"volume": 5200, "date": "2025-01-03"},
         {"volume": 4800, "date": "2025-01-04"},
