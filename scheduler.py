@@ -63,7 +63,9 @@ def _next_run_time(user_tz: str, run_times: list[str]) -> datetime:
             hour, minute = map(int, hhmm.split(":"))
         except ValueError:
             continue
-        dt = datetime(today.year, today.month, today.day, hour, minute, tzinfo=now.tzinfo)
+        dt = datetime(
+            today.year, today.month, today.day, hour, minute, tzinfo=now.tzinfo
+        )
         if dt <= now:
             dt += timedelta(days=1)
         candidates.append(dt)
