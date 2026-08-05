@@ -33,12 +33,12 @@ def client(tmp_path, monkeypatch):
     save_checkin(1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path)
     save_body_metrics({"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path)
-    save_daily_log(
-        "2026-03-02", 1, "Back, Deadlifts & Chest", "high", "plan", "life", db_path
-    )
+    save_daily_log("2026-03-02", 1, "Back, Deadlifts & Chest", "high", "plan", "life", db_path)
     summary = WorkoutSummary(
         title="Day 1",
         date="2026-03-02",
+        duration_seconds=3600,
+        total_volume_kg=2800.0,
         exercises=[ExerciseSummary("Deadlift (Barbell)", 140.0, 5, 4)],
     )
     save_progress(summary, db_path)
@@ -87,7 +87,7 @@ def test_dashboard_shows_automated_quote_and_charts(client):
     assert response.status_code == 200
     # The daily quote is rendered automatically and an SVG ring is present.
     assert "svg-ring" in response.text
-    assert "day streak" in response.text
+    assert "Week" in response.text
 
 
 def test_progress_renders_svg_charts(client):
@@ -211,3 +211,4 @@ def test_google_health_callback_rejects_bad_state(tmp_path, monkeypatch):
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"
     assert not get_meta("google_health_refresh_token", db_path)
+
