@@ -153,6 +153,26 @@ def _extract_imports(source: str) -> set[str]:
     return imports
 
 
+def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str]:
+    """Return dot-separated sub-module names from intra-package imports.
+
+    Example: ``from webapp import charts`` → ``{"webapp.charts"}`` when
+    ``"webapp"`` is in *local_packages*.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module is not None:
+            if node.level == 0 and node.module in local_packages:
+                for alias in node.names:
+                    imports.add(f"{node.module}.{alias.name}")
+    return imports
+
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -161,6 +181,16 @@ def _extract_imports(source: str) -> set[str]:
 def _build_import_graph() -> dict[str, set[str]]:
     """Return {importing_file_stem -> {module_names_it_imports}}."""
     graph: dict[str, set[str]] = {}
+
+    # Discover local packages (directories with __init__.py) so we can
+    # resolve intra-package imports like ``from webapp import charts`` to the
+    # full ``webapp.charts`` module name directly via AST, without relying on
+    # the grep fallback.
+    local_packages: set[str] = set()
+    for d in ROOT.rglob("__init__.py"):
+        pkg = d.parent.relative_to(ROOT)
+        if not any(part.startswith(".") for part in pkg.parts):
+            local_packages.add(str(pkg).replace("/", "."))
 
     for py_file in sorted(ROOT.rglob("*.py")):
         # Skip virtual envs, caches, etc.
@@ -172,7 +202,9 @@ def _build_import_graph() -> dict[str, set[str]]:
 
         rel = str(py_file.relative_to(ROOT))
         source = py_file.read_text(encoding="utf-8")
-        graph[rel] = _extract_imports(source)
+        graph[rel] = _extract_imports(source) | _extract_submodule_imports(
+            source, local_packages
+        )
 
     return graph
 
