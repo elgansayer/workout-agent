@@ -14,15 +14,10 @@ import os
 import sys
 import time
 from datetime import datetime
-from datetime import timezone as dt_timezone
+from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
 from database import init_db
-
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    ZoneInfo = None  # type: ignore[assignment]
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,9 +45,7 @@ def _parse_times(raw: str) -> list[tuple[int, int]]:
 
 def _now_in_zone(tz_name: str) -> datetime:
     """Return the current local time in the given timezone name."""
-    if ZoneInfo is not None:
-        return datetime.now(tz=ZoneInfo(tz_name))
-    return datetime.now(tz=dt_timezone.utc)
+    return datetime.now(tz=ZoneInfo(tz_name))
 
 
 def run_coaching(config: Config) -> int:
