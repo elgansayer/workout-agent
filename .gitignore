@@ -31,3 +31,8 @@ agent.log
 # OS / editor cruft
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
