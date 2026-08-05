@@ -127,6 +127,29 @@ def test_classify_split_bro_split():
     assert _classify_split(days) == "bro_split"
 
 
+def test_classify_split_ppl_six_days():
+    """A 6-day PPL (two cycles) is classified as PPL, not bro_split."""
+    days = [
+        _make_training_day("Push A", "r1", ["chest", "shoulders"]),
+        _make_training_day("Pull A", "r2", ["lats", "biceps"]),
+        _make_training_day("Legs A", "r3", ["quads", "hamstrings"]),
+        _make_training_day("Push B", "r4", ["chest", "triceps"]),
+        _make_training_day("Pull B", "r5", ["lats", "upper_back"]),
+        _make_training_day("Legs B", "r6", ["quads", "glutes"]),
+    ]
+    assert _classify_split(days) == "push_pull_legs"
+
+
+def test_classify_split_ppl_three_days():
+    """A 3-day PPL is classified as PPL."""
+    days = [
+        _make_training_day("Push", "r1", ["chest", "triceps"]),
+        _make_training_day("Pull", "r2", ["lats", "upper_back"]),
+        _make_training_day("Legs", "r3", ["quads", "hamstrings"]),
+    ]
+    assert _classify_split(days) == "push_pull_legs"
+
+
 # ---------------------------------------------------------------------------
 # _compute_frequency
 # ---------------------------------------------------------------------------

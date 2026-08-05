@@ -188,23 +188,28 @@ def _classify_split(days: list[TrainingDay]) -> str:
     ):
         return "upper_lower"
 
+    # PPL: every day is a pure push, pull, OR legs day — no single day
+    # mixes two movement categories (e.g. push+pull = "Arms" day in a bro
+    # split).  Checked before bro_split so a PPL run twice per week
+    # (6 days) is not misclassified.
+    mixed_days = sum(
+        1 for cats in day_categories
+        if len(cats & {"push", "pull", "legs"}) >= 2
+    )
+    all_ppl_cats: set[str] = set()
+    for cats in day_categories:
+        all_ppl_cats |= cats & {"push", "pull", "legs"}
+    if (
+        mixed_days == 0
+        and len(all_ppl_cats) >= 3
+        and len(day_categories) >= 3
+    ):
+        return "push_pull_legs"
+
     # Bro split: 4+ days, each day is tightly focused on ≤3 muscle groups.
     specific_days = sum(1 for d in days if len(d.primary_muscles) <= 3)
     if specific_days >= len(days) * 0.7 and len(days) >= 4:
         return "bro_split"
-
-    # PPL: distinct push, pull, and legs days (each day focuses on a
-    # single movement category — this catches the simplest 3-day PPL
-    # and is checked last because it is the least restrictive).
-    has_push = any(
-        "push" == max(cats, key=lambda c: c, default="")
-        for cats in day_categories
-        if "push" in cats
-    )
-    has_pull = any("pull" in cats for cats in day_categories)
-    has_legs = any("legs" in cats for cats in day_categories)
-    if has_push and has_pull and has_legs and len(days) >= 3:
-        return "push_pull_legs"
 
     return "custom"
 
