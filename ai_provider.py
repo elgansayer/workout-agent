@@ -252,3 +252,58 @@ def available_providers() -> list[dict[str, str]]:
         }
         for key, spec in PROVIDERS.items()
     ]
+
+
+def resolve_provider(
+    user_id: str | None = None,
+    *,
+    fallback_api_key: str | None = None,
+    fallback_model: str | None = None,
+    db_path: str = "workout_agent.db",
+) -> AIProvider:
+    """Resolve a user's preferred AI provider from their settings.
+
+    When *user_id* is provided, preferences and stored API keys are read from
+    the database.  Falls back to *fallback_api_key* / *fallback_model*
+    (typically the server's shared ``GEMINI_API_KEY``) when the user has
+    chosen the default provider ("gemini") but has not stored their own key.
+
+    When *user_id* is ``None`` (e.g. single-tenant cron jobs), the function
+    returns a Gemini provider built from *fallback_api_key* /
+    *fallback_model* directly — no database lookup is attempted.
+
+    Raises ``ValueError`` when a non-default provider is selected but no key
+    is configured, or when no fallback key is available.
+    """
+    from database import get_user_api_key, get_user_preferences
+
+    if user_id is not None:
+        prefs = get_user_preferences(user_id, db_path=db_path)
+        provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
+        model = prefs and prefs.get("ai_model") or None
+        record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        api_key = record["api_key"] if record else None
+
+        if api_key:
+            return get_provider(provider_name, api_key, model)
+
+        if provider_name != "gemini":
+            raise ValueError(
+                f"No {provider_name} key configured for this user. "
+                "Add one in Settings or switch back to Gemini."
+            )
+
+        # Fall through to server-fallback for the default provider.
+        api_key = fallback_api_key
+        effective_model = model or fallback_model
+    else:
+        api_key = fallback_api_key
+        effective_model = fallback_model
+
+    if not api_key:
+        raise ValueError(
+            "No AI provider key available. Set GEMINI_API_KEY in the "
+            "environment or store a key in Settings."
+        )
+
+    return get_provider("gemini", api_key, effective_model)
