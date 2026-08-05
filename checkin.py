@@ -249,8 +249,6 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
     reviews = _analyse(config, block)
     fallback = _fallback_message(due_info, block, reviews)
     return generate_checkin_message(
-        api_key=config.gemini_api_key,
-        model_name=config.gemini_model,
         number=due_info.number,
         week=week,
         block=block,
@@ -258,6 +256,9 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),
         fallback=fallback,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
 
 
