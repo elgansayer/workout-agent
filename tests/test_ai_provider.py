@@ -135,12 +135,16 @@ def test_resolve_provider_user_prefers_gemini_no_user_key_falls_back(
 
 def test_resolve_provider_user_prefers_claude_with_key():
     """User has a stored Claude key → returns a Claude provider."""
-    with patch("ai_provider.PROVIDERS", _register_fake_providers()), patch(
-        "database.get_user_preferences",
-        return_value={"preferred_ai": "claude", "ai_model": None},
-    ), patch(
-        "database.get_user_api_key",
-        return_value={"api_key": "user-claude-key"},
+    with (
+        patch("ai_provider.PROVIDERS", _register_fake_providers()),
+        patch(
+            "database.get_user_preferences",
+            return_value={"preferred_ai": "claude", "ai_model": None},
+        ),
+        patch(
+            "database.get_user_api_key",
+            return_value={"api_key": "user-claude-key"},
+        ),
     ):
         provider = resolve_provider(
             user_id="user-1",
@@ -151,13 +155,18 @@ def test_resolve_provider_user_prefers_claude_with_key():
 
 def test_resolve_provider_user_prefers_claude_no_key_raises():
     """User picks Claude but has no key → error (never bill server key)."""
-    with patch("ai_provider.PROVIDERS", _register_fake_providers()), patch(
-        "database.get_user_preferences",
-        return_value={"preferred_ai": "claude", "ai_model": None},
-    ), patch(
-        "database.get_user_api_key",
-        return_value=None,
-    ), pytest.raises(ValueError, match="No claude key"):
+    with (
+        patch("ai_provider.PROVIDERS", _register_fake_providers()),
+        patch(
+            "database.get_user_preferences",
+            return_value={"preferred_ai": "claude", "ai_model": None},
+        ),
+        patch(
+            "database.get_user_api_key",
+            return_value=None,
+        ),
+        pytest.raises(ValueError, match="No claude key"),
+    ):
         resolve_provider(
             user_id="user-1",
             fallback_api_key="server-key",
@@ -166,12 +175,16 @@ def test_resolve_provider_user_prefers_claude_no_key_raises():
 
 def test_resolve_provider_user_prefers_deepseek_with_model():
     """User picks DeepSeek with a custom model."""
-    with patch("ai_provider.PROVIDERS", _register_fake_providers()), patch(
-        "database.get_user_preferences",
-        return_value={"preferred_ai": "deepseek", "ai_model": "deepseek-coder"},
-    ), patch(
-        "database.get_user_api_key",
-        return_value={"api_key": "user-ds-key"},
+    with (
+        patch("ai_provider.PROVIDERS", _register_fake_providers()),
+        patch(
+            "database.get_user_preferences",
+            return_value={"preferred_ai": "deepseek", "ai_model": "deepseek-coder"},
+        ),
+        patch(
+            "database.get_user_api_key",
+            return_value={"api_key": "user-ds-key"},
+        ),
     ):
         provider = resolve_provider(
             user_id="user-1",
@@ -183,12 +196,16 @@ def test_resolve_provider_user_prefers_deepseek_with_model():
 
 def test_resolve_provider_user_no_prefs_defaults_to_gemini():
     """No prefs row at all → defaults to gemini, falls back to server key."""
-    with patch("ai_provider.PROVIDERS", _register_fake_providers()), patch(
-        "database.get_user_preferences",
-        return_value={},
-    ), patch(
-        "database.get_user_api_key",
-        return_value=None,
+    with (
+        patch("ai_provider.PROVIDERS", _register_fake_providers()),
+        patch(
+            "database.get_user_preferences",
+            return_value={},
+        ),
+        patch(
+            "database.get_user_api_key",
+            return_value=None,
+        ),
     ):
         provider = resolve_provider(
             user_id="user-1",
