@@ -308,6 +308,3 @@ def available_providers() -> list[dict[str, str]]:
         }
         for key, spec in PROVIDERS.items()
     ]
-
-
-
