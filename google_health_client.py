@@ -124,7 +124,13 @@ def _latest_value(
         value = payload.get(value_field)
         if value is None:
             continue
-        sample_time = (payload.get("sampleTime") or {}).get("physicalTime") or ""
+        sample_time_raw = payload.get("sampleTime")
+        if isinstance(sample_time_raw, dict):
+            sample_time = sample_time_raw.get("physicalTime") or ""
+        elif isinstance(sample_time_raw, str):
+            sample_time = sample_time_raw
+        else:
+            sample_time = ""
         if best_value is None or sample_time > best_time:
             try:
                 best_value = float(value)
