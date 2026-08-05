@@ -14,16 +14,16 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
-from database import (  # noqa: E402
+from database import (
     init_db,
     save_body_metrics,
     save_checkin,
     save_daily_log,
     save_progress,
 )
-from hevy_parser import ExerciseSummary, WorkoutSummary  # noqa: E402
+from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
 @pytest.fixture()
@@ -37,6 +37,8 @@ def client(tmp_path, monkeypatch):
     summary = WorkoutSummary(
         title="Day 1",
         date="2026-03-02",
+        duration_seconds=3600,
+        total_volume_kg=2800.0,
         exercises=[ExerciseSummary("Deadlift (Barbell)", 140.0, 5, 4)],
     )
     save_progress(summary, db_path)
