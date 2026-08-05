@@ -198,23 +198,26 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   split read-only. No route lets a user choose a template or build a custom
   one.
 - **Two independent, hand-rolled scheduling loops in one container**
-  (`docker-entrypoint.sh`'s bash sleep-loop and `insight_scheduler.py`'s
-  Python sleep-loop), each single-timezone/single-recipient by construction.
-  Needs consolidating into one scheduler that can support per-user run times
-  once multi-tenancy lands.
+  (`docker-entrypoint.sh`'s bash sleep-loop and the old `insight_scheduler.py`
+  Python sleep-loop) have been consolidated into a single unified `scheduler.py`
+  that supports per-user timezones (PR #TBD).
+  `tests/test_scheduler.py` covers the scheduler (18 tests).
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
 
-- **Test coverage gaps** remain on the following modules (any task that
-  touches these should add tests as part of the same change, not as a
-  follow-up): `programme_inference.py`, `hevy_reader.py`,
-  `insight_cron.py`, `insight_scheduler.py`, `main.py`, `sync_history.py`,
-  `ai_widgets.py`, `weather.py`. Now-covered modules:
+- **Test coverage gaps** are now closed on all previously-uncovered modules.
+  Every module in the codebase has a corresponding `tests/test_*.py` file
+  (28 test modules, 418 tests passing as of 2026-08-05). Previously-gapped
+  modules that are now covered: `programme_inference.py`, `hevy_reader.py`,
+  `insight_cron.py`, `scheduler.py` (was `insight_scheduler.py`), `main.py`,
+  `sync_history.py`, `ai_widgets.py`, `weather.py`.
+  Now-covered modules:
   `tests/test_ai_provider.py` (7 tests, PR #85),
   `tests/test_gemini_engine.py` (32 tests, PR #164),
   `tests/test_encryption.py` (PR #146),
-  `tests/test_config.py` (PR #146).
+  `tests/test_config.py` (PR #146),
+  `tests/test_scheduler.py` (18 tests, PR #227).
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
