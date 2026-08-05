@@ -253,11 +253,12 @@ the route to also bring in sleep and resting heart rate.
 
 ## Internal web dashboard
 
-A **FastAPI + Jinja2** web app turns the agent's database into a rich, read-only
-control centre. Every chart is **server-rendered SVG** (no JavaScript, no chart
-library, no external calls), so pages load instantly and work fully offline
-behind a reverse proxy. All motivation is automated: the dashboard shows a daily
-hype line chosen from the date, with no buttons to press.
+A **FastAPI + Jinja2** web app turns the agent's database into a rich,
+control centre. Charts are **server-rendered SVG** (no chart library, no
+external calls), so pages load instantly and work fully offline behind a
+reverse proxy. A lightweight service worker and progressive enhancement
+make the chat and settings pages interactive while keeping the core
+dashboard usable with JavaScript disabled.
 
 | Route        | Shows                                                          |
 | ------------ | -------------------------------------------------------------- |
@@ -267,6 +268,8 @@ hype line chosen from the date, with no buttons to press.
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
+| `/chat`      | RAG-enabled AI chat (streaming) for digging into your training history |
+| `/settings`  | Profile, AI provider/key/model, connectors, and programme setup |
 
 Run it with Docker alongside the agent (it shares the same SQLite volume):
 
@@ -274,8 +277,10 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
-Then open `http://<host-ip>:8770` from any device on your network. To run it
-directly instead:
+Then open `http://<host-ip>:${WEB_PORT:-8088}` from any device on your
+network. (The Portainer compose defaults to port 8770; the plain compose
+defaults to 8088 — both map to the container's internal port 8000.) To run
+it directly instead:
 
 ```bash
 pip install -r requirements.txt -r requirements-web.txt
@@ -288,12 +293,20 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
-The dashboard supports optional Google OAuth login. Set `WEB_AUTH_SECRET`,
-`WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET` in your environment
-(and optionally `ALLOWED_EMAILS` to restrict which Google accounts can sign in).
+The dashboard supports **Google OAuth login** for multi-user access. The
+login page and authentication flow are built into `webapp/app.py`, backed by
+a `users` table in SQLite with Fernet-encrypted API keys. To enable it, set:
+
+| Variable | Description |
+|---|---|
+| `WEB_AUTH_SECRET` | A long random string for session-signing |
+| `WEB_GOOGLE_CLIENT_ID` | OAuth web client ID |
+| `WEB_GOOGLE_CLIENT_SECRET` | OAuth web client secret |
+| `ALLOWED_EMAILS` | Optional: comma-separated list of emails to restrict login |
+
 When configured, every page requires authentication. Without those variables
-the dashboard runs without auth — point it at a reverse proxy and add HTTP basic
-auth there if you want to gate it on a public network.
+the dashboard runs without auth — point it at a reverse proxy and add HTTP
+basic auth there if you want to gate it on a private network.
 
 Example Apache virtual host mapping `gym.example.com` to the dashboard:
 
@@ -510,11 +523,8 @@ without it.
 This repo also runs an autonomous coding swarm that continuously works
 through a task backlog (bug fixes, the multi-tenant migration, wiring "bring
 your own AI" all the way through, the workout-programme builder UI, and
-routine maintenance) using a rotating fallback across Claude, Gemini
-(Antigravity), GitHub Copilot, and DeepSeek. See `AGENTS.md` for the rules it
-follows and `SWARM.md` for how to start/stop/monitor it (`./swarmctl start`,
-`./swarmctl status`). It is off by default — nothing runs or auto-commits
-until you explicitly start it.
+routine maintenance) via OpenHands driven by GitHub Issues. See `AGENTS.md`
+for the full rules it follows.
 
 ---
 
