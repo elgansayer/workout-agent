@@ -1,4 +1,8 @@
-"""Uses Google Gemini to apply progressive overload and write today's plan."""
+"""Applies progressive overload and writes today's plan via any AI provider.
+
+This module builds the prompt and delegates generation to an ``AIProvider``
+instance supplied by the caller, so a user can bring their own key/model.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +10,7 @@ import json
 import logging
 from typing import Any
 
-import google.generativeai as genai
-
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -129,8 +132,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_next_workout(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     day: int,
     week: int,
     block: Block,
@@ -142,18 +144,19 @@ def generate_next_workout(
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error."""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_prompt(
             day, week, block, workout_summary, recovery, history, insights, last_plan
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
-        if text:
-            return text
-        logger.warning("Gemini returned an empty response; using baseline plan.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
+        )
 
     return _fallback_plan(day, week, block)
 
@@ -191,22 +194,22 @@ Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     recovery: dict[str, Any] | None = None,
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error."""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_rest_prompt(recovery)
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
-        if text:
-            return text
-        logger.warning("Gemini returned an empty rest-day response; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty rest-day response; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s rest-day generation failed (%s); using fallback.", provider.name(), exc
+        )
 
     return _fallback_rest_message()
 
@@ -255,8 +258,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     number: int,
     week: int,
     block: Block,
@@ -267,18 +269,19 @@ def generate_checkin_message(
 ) -> str:
     """Generate a periodic check-in message, falling back on error."""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_checkin_prompt(
             number, week, block, workouts_done, weeks, analysis_text
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
-        if text:
-            return text
-        logger.warning("Gemini returned an empty check-in; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
+        )
 
     return fallback
 
@@ -335,8 +338,7 @@ Do not wrap it in markdown block quotes. Output raw JSON only."""
 
 
 def apply_autonomous_adjustments(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     base_routines: dict[str, list[dict[str, Any]]],
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
@@ -344,13 +346,12 @@ def apply_autonomous_adjustments(
 ) -> dict[str, list[dict[str, Any]]]:
     """Applies the unified autonomous progression and returns updated JSON routines."""
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = provider.generate(prompt)
+        if not isinstance(text, str) or not text:
+            raise ValueError("Empty response from AI provider")
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
@@ -366,11 +367,14 @@ def apply_autonomous_adjustments(
             return updated
 
         logger.warning(
-            "Gemini autonomous routines did not return a dict; using baseline."
+            "%s autonomous routines did not return a dict; using baseline.",
+            provider.name(),
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "Gemini autonomous adjustment failed (%s); using baseline routines.", exc
+            "%s autonomous adjustment failed (%s); using baseline routines.",
+            provider.name(),
+            exc,
         )
 
     return base_routines
