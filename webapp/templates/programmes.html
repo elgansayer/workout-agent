@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %} | Programmes{% endblock %}
+{% block content %}
+<h1>Programme Builder</h1>
+<p class="muted">Choose the workout plan that fits your goals. Switching programmes keeps all your historical data safe — only your active plan changes.</p>
+
+{% if active_programme %}
+<section class="panel" style="border-color: var(--accent);">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem;">
+        <div>
+            <h2 style="margin:0;">📋 Active Programme</h2>
+            {% set defn = active_programme.definition %}
+            <p class="muted" style="margin:0.3rem 0 0;">
+                <strong>{{ defn.get('name', active_programme.template_key|title) }}</strong>
+                &middot; {{ active_programme.source|title }}
+                {% if defn.get('cycle_weeks') %}&middot; {{ defn.cycle_weeks }}-week cycle{% endif %}
+                {% if defn.get('total_days') %}&middot; {{ defn.total_days }}-day split{% endif %}
+            </p>
+        </div>
+    </div>
+</section>
+{% endif %}
+
+<section class="panel">
+    <h2>Available Templates</h2>
+    <div class="programme-grid">
+        {% for tpl in templates %}
+        <article class="programme-card {% if active_programme and active_programme.template_key == tpl.key %}active-card{% endif %}">
+            <h3>{{ tpl.name }}</h3>
+            <p class="muted">{{ tpl.description }}</p>
+            {% if active_programme and active_programme.template_key == tpl.key %}
+            <span class="badge" style="background:var(--accent);color:#000;">Currently Active</span>
+            {% else %}
+            <form method="post" action="/api/programmes/select" class="select-form" onsubmit="selectProgramme(event, '{{ tpl.key }}')">
+                <button type="submit" class="btn btn-sm">Select Programme</button>
+            </form>
+            {% endif %}
+        </article>
+        {% endfor %}
+    </div>
+</section>
+
+{% if active_programme and active_programme.definition and active_programme.definition.get('days') %}
+<section class="panel">
+    <h2>Active Split Preview</h2>
+    <div class="day-grid">
+        {% for day in active_programme.definition.days %}
+        <article class="day-card">
+            <div class="day-head">
+                <span class="day-num">Day {{ day.number }}</span>
+            </div>
+            <h3>{{ day.focus }}</h3>
+            <ul class="day-ex">
+                {% for ex in day.exercises %}
+                <li>
+                    <span class="ex-n">{{ ex.name }}</span>
+                    <span class="ex-s">{{ ex.sets }} x {{ ex.rep_range }}</span>
+                </li>
+                {% endfor %}
+            </ul>
+        </article>
+        {% endfor %}
+        <article class="day-card rest">
+            <div class="day-head"><span class="day-num">Sunday</span></div>
+            <h3>Rest &amp; Recovery</h3>
+            <p class="muted">Sleep, protein, light movement only.</p>
+        </article>
+    </div>
+</section>
+{% endif %}
+
+{% if active_programme and active_programme.definition and active_programme.definition.get('blocks') %}
+<section class="panel">
+    <h2>Periodisation Blocks</h2>
+    <div class="block-grid">
+        {% for b in active_programme.definition.blocks %}
+        <article class="block-card">
+            <h3>Block {{ b.number }}: {{ b.name }}</h3>
+            <p class="muted">Weeks {{ b.weeks }} | {{ b.focus }}</p>
+            <ul class="block-schemes">
+                <li><span>Deadlift</span><strong>{{ b.deadlift.sets }} x {{ b.deadlift.rep_range }}</strong></li>
+                <li><span>Pull-ups</span><strong>{{ b.pullups.sets }} x {{ b.pullups.rep_range }}</strong></li>
+                <li><span>Accessories</span><strong>{{ b.accessory_emphasis }}</strong></li>
+            </ul>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if active_programme and active_programme.definition and active_programme.definition.get('rules') %}
+<section class="panel">
+    <h2>Coaching Rules</h2>
+    <ul class="rules">
+        {% for rule in active_programme.definition.rules %}<li>{{ rule }}</li>{% endfor %}
+    </ul>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    async function selectProgramme(event, templateKey) {
+        event.preventDefault();
+        const btn = event.target.querySelector('button');
+        const originalText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Activating…';
+
+        try {
+            const resp = await fetch('/api/programmes/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ template_key: templateKey }),
+            });
+            if (!resp.ok) {
+                const detail = await resp.json();
+                alert(detail.detail || 'Failed to select programme.');
+                btn.disabled = false;
+                btn.textContent = originalText;
+                return;
+            }
+            window.location.reload();
+        } catch (err) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+            alert('Failed to reach the server. Please try again.');
+        }
+    }
+</script>
+{% endblock %}
