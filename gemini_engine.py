@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ai_provider import get_provider
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -128,8 +128,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_next_workout(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     day: int,
     week: int,
     block: Block,
@@ -141,7 +140,6 @@ def generate_next_workout(
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
         prompt = _build_prompt(
             day, week, block, workout_summary, recovery, history, insights, last_plan
         )
@@ -188,13 +186,11 @@ Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     recovery: dict[str, Any] | None = None,
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -250,8 +246,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     number: int,
     week: int,
     block: Block,
@@ -262,7 +257,6 @@ def generate_checkin_message(
 ) -> str:
     """Generate a periodic check-in message, falling back on error."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
         prompt = _build_checkin_prompt(
             number, week, block, workouts_done, weeks, analysis_text
         )
@@ -328,8 +322,7 @@ Do not wrap it in markdown block quotes. Output raw JSON only."""
 
 
 def apply_autonomous_adjustments(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     base_routines: dict[str, list[dict[str, Any]]],
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
@@ -337,7 +330,6 @@ def apply_autonomous_adjustments(
 ) -> dict[str, list[dict[str, Any]]]:
     """Applies the unified autonomous progression and returns updated JSON routines."""
     try:
-        provider = get_provider("gemini", api_key, model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
