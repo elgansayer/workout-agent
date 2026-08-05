@@ -436,4 +436,3 @@ def test_create_provider_unknown_raises() -> None:
 
     with pytest.raises(ValueError, match="Unknown AI provider"):
         create_provider("nonexistent", "key")
-
