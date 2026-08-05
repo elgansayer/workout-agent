@@ -313,7 +313,9 @@ def test_get_exercise_history_with_date_filter() -> None:
         mock_get.return_value.json.return_value = {"exercise_history": []}
         mock_get.return_value.raise_for_status.return_value = None
         result = hevy_client.get_exercise_history(
-            "fake-key", "001", start_date="2025-01-01",
+            "fake-key",
+            "001",
+            start_date="2025-01-01",
         )
         assert result == []
         assert mock_get.call_args[1]["params"] == {"start_date": "2025-01-01"}

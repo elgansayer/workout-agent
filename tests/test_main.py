@@ -31,7 +31,9 @@ def test_compose_with_guidance_and_footer() -> None:
         protein_target=None,
     )
     result = _compose(
-        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1.",
+        "Workout plan here",
+        guidance,
+        "\n\nHevy routines refreshed: Day 1.",
     )
     assert result.startswith("Workout plan here")
     assert "Today's lifestyle:" in result
@@ -230,7 +232,8 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights",
+        lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -514,7 +517,8 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights",
+        lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])

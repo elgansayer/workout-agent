@@ -282,12 +282,15 @@ class TestFindTrulyDead:
         assert find_truly_dead([]) == []
 
     def test_orphan_without_replacement_evidence_not_truly_dead(
-        self, tmp_path: Path,
+        self,
+        tmp_path: Path,
     ) -> None:
         """A freshly orphaned module with no replacement evidence is NOT truly dead."""
         (tmp_path / "new_module.py").write_text("x = 1\n")
         mi = ModuleInfo(
-            name="new_module", path=tmp_path / "new_module.py", is_entry_point=False,
+            name="new_module",
+            path=tmp_path / "new_module.py",
+            is_entry_point=False,
         )
         report = OrphanReport(module=mi, evidence="no imports")
         with patch("dead_code_sweep.ROOT", tmp_path):
@@ -298,7 +301,9 @@ class TestFindTrulyDead:
     def test_orphan_in_test_dir_handled(self, tmp_path: Path) -> None:
         """Even in a temp dir without git, function should not crash."""
         mi = ModuleInfo(
-            name="some_mod", path=tmp_path / "some_mod.py", is_entry_point=False,
+            name="some_mod",
+            path=tmp_path / "some_mod.py",
+            is_entry_point=False,
         )
         report = OrphanReport(module=mi, evidence="no imports")
         with patch("dead_code_sweep.ROOT", tmp_path):

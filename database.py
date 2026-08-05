@@ -276,7 +276,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
+                "SELECT id FROM users WHERE email = ?",
+                ("legacy@local",),
             ).fetchone()
             if legacy_row:
                 legacy_id = legacy_row[0]
@@ -361,7 +362,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             from uuid import uuid4
 
             row = cur.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
+                "SELECT id FROM users WHERE email = ?",
+                ("legacy@local",),
             ).fetchone()
             if row:
                 return row[0]
@@ -921,7 +923,8 @@ def get_personal_records(
 
 
 def get_routine_record(
-    routine_key: str, db_path: str = DEFAULT_DB_PATH,
+    routine_key: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> tuple[str, str] | None:
     """Return (routine_id, content_hash) for a synced routine, or None."""
     with _connect(db_path) as conn:
@@ -956,7 +959,8 @@ def get_meta(key: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
     """Return a stored metadata value, or None if absent."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT value FROM hevy_meta WHERE key = ?", (key,),
+            "SELECT value FROM hevy_meta WHERE key = ?",
+            (key,),
         ).fetchone()
     return row[0] if row else None
 
@@ -974,7 +978,11 @@ def set_meta(key: str, value: str, db_path: str = DEFAULT_DB_PATH) -> None:
 
 
 def check_rate_limit(
-    ip: str, limit: int = 10, window: int = 60, *, db_path: str = DEFAULT_DB_PATH,
+    ip: str,
+    limit: int = 10,
+    window: int = 60,
+    *,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> bool:
     """Return True if the IP is within the rate-limit window, inserting a new entry.
 
@@ -987,7 +995,8 @@ def check_rate_limit(
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
         count = conn.execute(
-            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?", (ip,),
+            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?",
+            (ip,),
         ).fetchone()[0]
         if count >= limit:
             return True
@@ -1303,7 +1312,10 @@ def get_dashboard_insight(
 
 
 def save_reasoning_log(
-    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH,
+    context_id: str,
+    exercise_name: str,
+    reasoning: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Save an AI reasoning log for an exercise change."""
     with _connect(db_path) as conn:
@@ -1327,7 +1339,8 @@ def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | 
     """Get the reasoning log by context_id."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,),
+            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
+            (context_id,),
         ).fetchone()
     return row[0] if row else None
 
@@ -1501,7 +1514,8 @@ def get_or_create_user(
 
 
 def get_user_by_id(
-    user_id: str, db_path: str = DEFAULT_DB_PATH,
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
@@ -1594,7 +1608,9 @@ def save_user_api_key(
 
 
 def get_user_api_key(
-    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH,
+    user_id: str,
+    provider: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     """Return the decrypted API key record for a user + provider, or None."""
     with _connect(db_path) as conn:
@@ -1620,7 +1636,8 @@ def get_user_api_key(
 
 
 def get_user_api_keys(
-    user_id: str, db_path: str = DEFAULT_DB_PATH,
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
     """Return all API key records for a user, keyed by provider name.
 
@@ -1651,7 +1668,9 @@ def get_user_api_keys(
 
 
 def delete_user_api_key(
-    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH,
+    user_id: str,
+    provider: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Remove a stored API key for a user + provider."""
     with _connect(db_path) as conn:
@@ -1712,7 +1731,8 @@ def save_user_preferences(
 
 
 def get_user_preferences(
-    user_id: str, db_path: str = DEFAULT_DB_PATH,
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
     defaults: dict[str, Any] = {

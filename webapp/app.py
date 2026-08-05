@@ -315,7 +315,8 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
 
 
 def _find_lift_series(
-    series: dict[str, Any], *keywords: str,
+    series: dict[str, Any],
+    *keywords: str,
 ) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
@@ -412,7 +413,8 @@ def _dashboard_context(
         total_days = len(days_data) or 1
         current_day = ((today - start).days % total_days) + 1
         active_day = next(
-            (d for d in days_data if d.get("number") == current_day), None,
+            (d for d in days_data if d.get("number") == current_day),
+            None,
         )
         if active_day:
             focus = active_day.get("focus", "Training")
@@ -452,14 +454,18 @@ def _dashboard_context(
 
     weight_spark = charts.sparkline([m["weight_kg"] for m in metrics if m["weight_kg"]])
     fat_spark = charts.sparkline(
-        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]], colour=charts.WARN,
+        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]],
+        colour=charts.WARN,
     )
     latest_fat = next(
-        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]), None,
+        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]),
+        None,
     )
 
     review = insights.build_insights(
-        get_progress_history(db_path=DB_PATH, user_id=user_id), metrics, None,
+        get_progress_history(db_path=DB_PATH, user_id=user_id),
+        metrics,
+        None,
     )
 
     return {
@@ -476,7 +482,9 @@ def _dashboard_context(
         "rows": rows,
         "lifestyle": guidance.as_lines(),
         "cycle_ring": charts.progress_ring(
-            week / CYCLE_WEEKS * 100, label=f"Wk {week}", sub=f"of {CYCLE_WEEKS}",
+            week / CYCLE_WEEKS * 100,
+            label=f"Wk {week}",
+            sub=f"of {CYCLE_WEEKS}",
         ),
         "block_ring": charts.progress_ring(
             week_in_block / BLOCK_WEEKS * 100,
@@ -501,7 +509,9 @@ def _dashboard_context(
 def dashboard(request: Request) -> Any:
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
-        request, "dashboard.html", _dashboard_context(user_id=user_id),
+        request,
+        "dashboard.html",
+        _dashboard_context(user_id=user_id),
     )
 
 
@@ -694,7 +704,11 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto",
+    label: str,
+    entries: list[Any],
+    target_ordinal: int,
+    *,
+    metric: str = "auto",
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
@@ -1226,7 +1240,10 @@ Respond naturally as Coach. If the question is about their training data, refere
             full_response = "".join(collected)
             if full_response:
                 save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id,
+                    "assistant",
+                    full_response,
+                    db_path=DB_PATH,
+                    user_id=user_id,
                 )
 
     return StreamingResponse(generate(), media_type="text/plain")
@@ -1406,7 +1423,9 @@ def google_health_connect(request: Request) -> RedirectResponse:
     state = secrets.token_urlsafe(16)
     set_meta(_GH_STATE_KEY, state, DB_PATH)
     url = build_authorize_url(
-        GH_CLIENT_ID, state, redirect_uri=_gh_redirect_uri(request),
+        GH_CLIENT_ID,
+        state,
+        redirect_uri=_gh_redirect_uri(request),
     )
     return RedirectResponse(url, status_code=303)
 
@@ -1425,7 +1444,10 @@ def google_health_callback(request: Request) -> RedirectResponse:
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
-        GH_CLIENT_ID, GH_CLIENT_SECRET, code, redirect_uri=_gh_redirect_uri(request),
+        GH_CLIENT_ID,
+        GH_CLIENT_SECRET,
+        code,
+        redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)

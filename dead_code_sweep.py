@@ -235,7 +235,9 @@ def find_orphans() -> list[OrphanReport]:
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
-                "%s: AST missed but grep found imports in %s", mi.name, grep_hits,
+                "%s: AST missed but grep found imports in %s",
+                mi.name,
+                grep_hits,
             )
             continue
 
@@ -663,7 +665,9 @@ def main() -> int:
             for r in truly_dead:
                 if not args.json_output:
                     logger.warning(
-                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT),
+                        "  %s  (%s)",
+                        r.module.name,
+                        r.module.path.relative_to(ROOT),
                     )
                     logger.warning("    %s", r.evidence)
             exit_code = 1

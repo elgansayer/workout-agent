@@ -215,7 +215,9 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 
 def get_provider(
-    provider_name: str, api_key: str, model: str | None = None,
+    provider_name: str,
+    api_key: str,
+    model: str | None = None,
 ) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 

@@ -123,11 +123,23 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
-        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db,
+        "2026-06-17",
+        1,
+        "Back, Deadlifts & Chest",
+        "high",
+        "plan A",
+        "life A",
+        db,
     )
     # A re-run on the same day replaces the earlier entry.
     save_daily_log(
-        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db,
+        "2026-06-17",
+        1,
+        "Back, Deadlifts & Chest",
+        "high",
+        "plan B",
+        "life B",
+        db,
     )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
@@ -187,13 +199,21 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)],
+            "S1",
+            "2026-06-10",
+            3600,
+            3000,
+            [ExerciseSummary("Deadlift", 100.0, 5, 4)],
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)],
+            "S2",
+            "2026-06-17",
+            3600,
+            3000,
+            [ExerciseSummary("Deadlift", 120.0, 3, 5)],
         ),
         db,
     )
@@ -362,7 +382,10 @@ def test_init_db_migration_idempotent(tmp_path: Any) -> None:
 
 
 def _exercise_summary(
-    name: str, weight: float, reps: int, sets: int = 3,
+    name: str,
+    weight: float,
+    reps: int,
+    sets: int = 3,
 ) -> WorkoutSummary:
     return WorkoutSummary(
         f"S-{name}",

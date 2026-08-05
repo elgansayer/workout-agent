@@ -79,7 +79,8 @@ def _build_set(rep_range: str, weight_kg: float | None = None) -> dict[str, Any]
 
 
 def _build_exercise(
-    exercise: Exercise, weight_kg: float | None = None,
+    exercise: Exercise,
+    weight_kg: float | None = None,
 ) -> dict[str, Any] | None:
     template_id = exercise.template_id
     if template_id is None:
@@ -100,7 +101,8 @@ def _build_exercise(
 
 
 def _build_exercises(
-    exercises: list[Exercise], weights: dict[str, float] | None = None,
+    exercises: list[Exercise],
+    weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     weights = weights or {}
     built = [_build_exercise(ex, weights.get(ex.name)) for ex in exercises]
@@ -335,7 +337,8 @@ def sync_routines(config: Config) -> list[str]:
                 server_gemini_model=config.gemini_model,
             )
             logger.info(
-                "Requesting autonomous routine adjustments from %s...", provider.name(),
+                "Requesting autonomous routine adjustments from %s...",
+                provider.name(),
             )
             updated_routines = apply_autonomous_adjustments(
                 provider,
@@ -346,7 +349,8 @@ def sync_routines(config: Config) -> list[str]:
             )
         except ImportError as exc:
             logger.warning(
-                "Failed to import a module for autonomous adjustments: %s", exc,
+                "Failed to import a module for autonomous adjustments: %s",
+                exc,
             )
         except (ValueError, TypeError, RuntimeError, KeyError, AttributeError) as exc:
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
