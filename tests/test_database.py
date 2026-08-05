@@ -9,6 +9,7 @@ from database import (
     get_daily_logs,
     get_exercise_volumes,
     get_personal_records,
+    get_progress_history,
     get_recent_bests,
     get_recent_hevy_logs,
     get_session_volumes,
@@ -332,4 +333,249 @@ def test_init_db_migration_idempotent(tmp_path):
         # user_id column still exists
         col_names = {r[1] for r in row}
         assert "user_id" in col_names
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: exercise_progress user_id scoping
+# ---------------------------------------------------------------------------
+
+
+def _exercise_summary(name: str, weight: float, reps: int, sets: int = 3) -> WorkoutSummary:
+    return WorkoutSummary(
+        f"S-{name}", "2026-08-01", duration_seconds=3600, total_volume_kg=3000.0,
+        exercises=[ExerciseSummary(name, weight, reps, sets)],
+    )
+
+
+def test_exercise_progress_migration_adds_user_id_column(tmp_path):
+    """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
+    db = _db(tmp_path)
+    import sqlite3
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS exercise_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            exercise_name TEXT NOT NULL,
+            top_weight_kg REAL,
+            top_reps INTEGER,
+            sets INTEGER NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO exercise_progress (date, exercise_name, top_weight_kg, top_reps, sets) "
+        "VALUES ('2026-08-01', 'Squat', 100.0, 10, 3)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn2:
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(exercise_progress)").fetchall()}
+        assert "user_id" in cols
+        rows = conn2.execute(
+            "SELECT user_id FROM exercise_progress WHERE exercise_name = 'Squat'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] is not None  # backfilled
+
+
+def test_exercise_progress_user_isolation(tmp_path):
+    """Two users writing exercise_progress do not see each other's rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_progress(_exercise_summary("Squat", 100.0, 10), db, user_id=user_a)
+    save_progress(_exercise_summary("Squat", 120.0, 8), db, user_id=user_b)
+
+    bests_a = get_recent_bests(db, user_id=user_a)
+    bests_b = get_recent_bests(db, user_id=user_b)
+
+    assert bests_a["Squat"]["top_weight_kg"] == 100.0
+    assert bests_b["Squat"]["top_weight_kg"] == 120.0
+
+
+def test_progress_history_user_isolation(tmp_path):
+    """get_progress_history scopes by user_id."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_progress(_exercise_summary("Bench Press", 80.0, 10), db, user_id=user_a)
+    save_progress(_exercise_summary("Bench Press", 90.0, 8), db, user_id=user_b)
+
+    history_a = get_progress_history(db_path=db, user_id=user_a)
+    history_b = get_progress_history(db_path=db, user_id=user_b)
+
+    assert "Bench Press" in history_a
+    assert history_a["Bench Press"][0]["top_weight_kg"] == 80.0
+    assert history_b["Bench Press"][0]["top_weight_kg"] == 90.0
+
+
+def test_session_volumes_user_isolation(tmp_path):
+    """get_session_volumes scopes by user_id."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_progress(_exercise_summary("Deadlift", 100.0, 5, 4), db, user_id=user_a)
+    save_progress(_exercise_summary("Deadlift", 140.0, 3, 5), db, user_id=user_b)
+
+    vols_a = get_session_volumes(db, user_id=user_a)
+    vols_b = get_session_volumes(db, user_id=user_b)
+
+    assert vols_a[0]["volume"] == 2000.0  # 100*5*4
+    assert vols_b[0]["volume"] == 2100.0  # 140*3*5
+
+
+def test_exercise_volumes_user_isolation(tmp_path):
+    """get_exercise_volumes scopes by user_id."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_progress(_exercise_summary("Leg Press", 100.0, 10, 3), db, user_id=user_a)
+    save_progress(_exercise_summary("Leg Press", 200.0, 8, 3), db, user_id=user_b)
+
+    vols_a = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_a)}
+    vols_b = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_b)}
+
+    assert vols_a["Leg Press"]["volume"] == 3000.0
+    assert vols_b["Leg Press"]["volume"] == 4800.0
+
+
+def test_personal_records_user_isolation(tmp_path):
+    """get_personal_records scopes by user_id."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_progress(_exercise_summary("Squat", 100.0, 5), db, user_id=user_a)
+    save_progress(_exercise_summary("Squat", 150.0, 3), db, user_id=user_b)
+
+    prs_a = get_personal_records(db, user_id=user_a)
+    prs_b = get_personal_records(db, user_id=user_b)
+
+    assert prs_a[0]["weight_kg"] == 100.0
+    assert prs_b[0]["weight_kg"] == 150.0
+
+
+def test_exercise_progress_null_user_id_backward_compat(tmp_path):
+    """Calling save_progress without user_id still works."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    save_progress(_exercise_summary("Curls", 20.0, 12), db)
+    bests = get_recent_bests(db)
+    assert bests["Curls"]["top_weight_kg"] == 20.0
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: body_metrics user_id scoping
+# ---------------------------------------------------------------------------
+
+
+def test_body_metrics_migration_adds_user_id_column(tmp_path):
+    """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
+    db = _db(tmp_path)
+    import sqlite3
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS body_metrics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            weight_kg REAL,
+            body_fat_pct REAL,
+            muscle_pct REAL,
+            resting_hr INTEGER,
+            hrv REAL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO body_metrics (date, weight_kg) VALUES ('2026-08-01', 82.0)"
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn2:
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(body_metrics)").fetchall()}
+        assert "user_id" in cols
+        rows = conn2.execute(
+            "SELECT user_id FROM body_metrics WHERE date = '2026-08-01'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] is not None  # backfilled
+
+
+def test_body_metrics_user_isolation(tmp_path):
+    """Two users writing body_metrics do not see each other's rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
+    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
+
+    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
+    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
+
+    assert len(metrics_a) == 1
+    assert metrics_a[0]["weight_kg"] == 80.0
+    assert len(metrics_b) == 1
+    assert metrics_b[0]["weight_kg"] == 90.0
+
+
+def test_body_metrics_same_date_different_users_preserved(tmp_path):
+    """Dedup only within the same user_id."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
+    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
+    # A second reading from user A on the same day should replace theirs
+    save_body_metrics({"weight_kg": 80.5}, "2026-08-01", db, user_id=user_a)
+
+    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
+    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
+
+    assert len(metrics_a) == 1
+    assert metrics_a[0]["weight_kg"] == 80.5
+    assert len(metrics_b) == 1
+    assert metrics_b[0]["weight_kg"] == 90.0
+
+
+def test_body_metrics_null_user_id_backward_compat(tmp_path):
+    """Calling save_body_metrics/get_body_metrics without user_id still works."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    save_body_metrics({"weight_kg": 75.0}, "2026-08-01", db)
+    readings = get_body_metrics(db_path=db)
+    assert len(readings) == 1
+    assert readings[0]["weight_kg"] == 75.0
 
