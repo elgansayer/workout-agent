@@ -14,11 +14,19 @@ __pycache__/
 .ruff_cache/
 
 # Local data & logs
+data/
 *.db
 *.sqlite
 *.sqlite3
 agent.log
 *.log
+
+# Binary images — never commit stray image files
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
 
 # OS / editor cruft
 .DS_Store

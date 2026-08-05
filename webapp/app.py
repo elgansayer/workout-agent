@@ -482,9 +482,9 @@ def progress(request: Request):
             }
             for e in entries
         ]
-        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms_filtered: list[float] = [v for v in e1rms if v is not None]
-        best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
+        e1rms_raw = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
+        e1rms: list[float] = [v for v in e1rms_raw if v is not None]
+        best_e1rm = max(e1rms) if e1rms else None
         charts_data.append(
             {
                 "name": name,
