@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+import time
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -236,6 +237,19 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)"
+        )
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_preferences (
@@ -887,6 +901,30 @@ def set_meta(key: str, value: str, db_path: str = DEFAULT_DB_PATH) -> None:
             """,
             (key, value),
         )
+
+
+def check_rate_limit(
+    ip: str, limit: int = 10, window: int = 60, *, db_path: str = DEFAULT_DB_PATH
+) -> bool:
+    """Return True if the IP is within the rate-limit window, inserting a new entry.
+
+    Old entries outside the window are cleaned up on each call. When the number
+    of remaining entries for this IP within *window* seconds exceeds *limit*,
+    the function returns True (rate-limited) without inserting a new row.
+    """
+    now = time.time()
+    cutoff = now - window
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
+        count = conn.execute(
+            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?", (ip,)
+        ).fetchone()[0]
+        if count >= limit:
+            return True
+        conn.execute(
+            "INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)", (ip, now)
+        )
+        return False
 
 
 def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> None:

@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import secrets
-import time
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -52,6 +51,7 @@ import lifestyle
 from ai_provider import available_providers, resolve_provider
 from config import Config
 from database import (
+    check_rate_limit,
     clear_chat_messages,
     delete_user_api_key,
     get_active_programme,
@@ -105,26 +105,20 @@ def get_config():
     return Config.load()
 
 
-_RATE_LIMITS: dict[str, list[float]] = {}
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    now = time.time()
-    forwarded = request.headers.get("x-forwarded-for")
-    real_ip = request.headers.get("x-real-ip")
-    if forwarded:
-        ip = forwarded.split(",")[0].strip()
-    elif real_ip:
-        ip = real_ip.strip()
-    else:
-        ip = request.client.host if request.client else "unknown"
-
-    if ip not in _RATE_LIMITS:
-        _RATE_LIMITS[ip] = []
-    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
-    if len(_RATE_LIMITS[ip]) >= limit:
+    ip = _client_ip(request)
+    if check_rate_limit(ip, limit, window, db_path=DB_PATH):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
-    _RATE_LIMITS[ip].append(now)
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
