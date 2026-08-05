@@ -6,8 +6,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
-import google.generativeai as genai
-
+from ai_provider import AIProvider, resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -22,10 +21,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger("insight_cron")
 
 
+def _resolve_provider(config: Config) -> AIProvider:
+    return resolve_provider(
+        db_path=config.database_path,
+        server_gemini_key=config.gemini_api_key,
+    )
+
+
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _resolve_provider(config)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
@@ -56,8 +61,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 {{"fatigue": "string", "wins_stalls": "string", "advice": "string"}}"""
 
     try:
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         text = text.strip()
@@ -66,7 +70,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
             save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
-            logger.info("Daily insight generated successfully.")
+            logger.info(
+                "Daily insight generated successfully via %s.", provider.name()
+            )
         else:
             logger.error("Invalid JSON structure returned: %s", text)
     except Exception as e:  # noqa: BLE001
@@ -75,8 +81,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _resolve_provider(config)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
@@ -122,11 +127,13 @@ Use Markdown format. Output the Markdown report directly.
 """
 
     try:
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         if text:
             save_deep_correlation(text, db_path=config.database_path)
-            logger.info("Weekly deep correlation generated successfully.")
+            logger.info(
+                "Weekly deep correlation generated successfully via %s.",
+                provider.name(),
+            )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
