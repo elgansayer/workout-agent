@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import subprocess
 import time
@@ -7,7 +9,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger("insight_scheduler")
 
 
-def run_daily():
+def run_daily() -> None:
     logger.info("Running daily insights...")
     try:
         subprocess.run(["python", "insight_cron.py", "--daily"], check=True)
@@ -15,7 +17,7 @@ def run_daily():
         logger.error("Daily insights failed with exit code %s", e.returncode)
 
 
-def run_weekly():
+def run_weekly() -> None:
     logger.info("Running weekly deep correlations...")
     try:
         subprocess.run(["python", "insight_cron.py", "--weekly"], check=True)
@@ -23,7 +25,7 @@ def run_weekly():
         logger.error("Weekly insights failed with exit code %s", e.returncode)
 
 
-def get_next_run(hour=6, minute=0):
+def get_next_run(hour: int = 6, minute: int = 0) -> datetime:
     now = datetime.now(tz=timezone.utc)
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
