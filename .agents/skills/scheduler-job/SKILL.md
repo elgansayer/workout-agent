@@ -1,25 +1,27 @@
 ---
 name: scheduler-job
-description: 'Add or consolidate a periodic background job (daily coaching run, insight generation, connector polling) instead of adding a third hand-rolled sleep loop. Use when touching docker-entrypoint.sh, insight_scheduler.py, or adding any new recurring job.'
+description: 'Add or consolidate a periodic background job (daily coaching run, insight generation, connector polling) instead of adding a second hand-rolled sleep loop. Use when touching docker-entrypoint.sh, scheduler.py, or adding any new recurring job.'
 ---
 
 # Scheduler Job
 
 ## Why This Exists
 
-There are currently **two independent, hand-rolled sleep loops** in the
-`agent` container: `docker-entrypoint.sh`'s bash loop (runs `main.py` at
-`RUN_AT` times, default `00:00,05:00`) and `insight_scheduler.py`'s Python
-`while True` loop (runs `insight_cron.py --daily`/`--weekly` at hardcoded
-times), started as a background process by the same entrypoint script. Both
-are single-timezone, single-run-time by construction — that breaks the
-moment different users need different schedules (`AGENTS.md` §7).
+There was previously **two independent, hand-rolled sleep loops** in the
+`agent` container: `docker-entrypoint.sh`'s bash loop (ran `main.py` at
+`RUN_AT` times) and a separate Python `while True` loop for insight jobs.
+These have been **consolidated** into a single `scheduler.py` process that
+wakes every minute, iterates over all users, and dispatches both coaching
+runs (`main.py`) and insight jobs (`insight_cron.py --daily`/`--weekly`) at
+the configured `RUN_AT` times. Per-user schedule isolation (different users
+at different run times) still needs per-user timezone/run-time preferences
+once multi-tenancy lands.
 
 ## When to Use
 
 - Adding a new recurring job (e.g. periodic connector re-sync, a weekly
   digest email).
-- Touching `docker-entrypoint.sh` or `insight_scheduler.py`.
+- Touching `docker-entrypoint.sh` or `scheduler.py`.
 - Doing the actual consolidation work described below (a good first task
   once multi-tenancy has landed for at least one domain table).
 
