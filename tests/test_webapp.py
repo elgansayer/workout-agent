@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
