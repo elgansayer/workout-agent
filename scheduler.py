@@ -26,7 +26,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger = logging.getLogger("scheduler")
+logger: logging.Logger = logging.getLogger("scheduler")
 
 # ---------------------------------------------------------------------------
 # Time helpers
