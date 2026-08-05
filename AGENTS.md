@@ -159,7 +159,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-04)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-05)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -174,8 +174,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Two orphaned modules**: `programme_inference.py` and `hevy_reader.py`
   implement a data-driven "infer the user's real training split from their
   Hevy history" path but are never imported by `main.py` or
-  `webapp/app.py`. Either wire them in or explicitly document why not before
-  building further on top of the static `program.py` split.
+  `webapp/app.py`. Tracked by GitHub Issue #37
+  ("[TASK] Programme Inference: Wire hevy_reader.py into the app") —
+  deliberate wiring belongs in a dedicated task, not a drive-by sweep.
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
