@@ -6,9 +6,11 @@ session and progressive-overload targets, server-rendered SVG charts of every
 lift and your body composition, all-time personal records, training-load trends,
 a consistency calendar, the full periodisation plan, and programme check-ins.
 
-There is no login: it is read-only and meant to sit behind a reverse proxy on a
-trusted host (e.g. Apache -> Docker -> gym.example.com). All motivation is
-automated; nothing here calls out to an API on a page view.
+Google OAuth login is available when WEB_AUTH_SECRET is configured, providing
+user-scoped data isolation. When auth is disabled, it is read-only and meant to
+sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
+gym.example.com). All motivation is automated; nothing here calls out to an API
+on a page view.
 
 Run locally:   uvicorn webapp.app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
