@@ -245,42 +245,57 @@ _DISPLAY_NAMES = {
 def resolve_provider(
     user_id: str | None = None,
     *,
-    db_path: str | None = None,
     server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> AIProvider:
-    """Resolve the right AI provider for *user_id*.
+    """Resolve a user's preferred AI provider from their settings.
 
-    Looks up the user's preferred AI provider and API key from the database,
-    falling back to the server's ``GEMINI_API_KEY`` only when the default
-    provider (Gemini) is requested and no user-specific key exists.
+    When *user_id* is provided, preferences and stored API keys are read from
+    the database.  Falls back to *server_gemini_key* / *server_gemini_model*
+    (typically the server's shared GEMINI_API_KEY) when the user has
+    chosen the default provider ("gemini") but has not stored their own key.
 
-    When *user_id* is ``None`` (e.g. pre-multitenancy cron runs), Gemini is
-    assumed and *server_gemini_key* must be supplied.
+    When *user_id* is None (e.g. single-tenant cron jobs), the function
+    returns a Gemini provider built from *server_gemini_key* /
+    *server_gemini_model* directly -- no database lookup is attempted.
+
+    Raises ValueError when a non-default provider is selected but no key
+    is configured, or when no server key is available.
     """
-    from database import DEFAULT_DB_PATH, get_user_api_key, get_user_preferences
+    from database import get_user_api_key, get_user_preferences
 
-    effective_db = db_path or DEFAULT_DB_PATH
-    prefs = get_user_preferences(user_id, db_path=effective_db) if user_id else {}
-    provider_name: str = (prefs.get("preferred_ai") or "gemini").lower().strip()
-    model: str | None = prefs.get("ai_model")
+    if user_id is not None:
+        prefs = get_user_preferences(user_id, db_path=db_path)
+        provider_name: str = (prefs and prefs.get("preferred_ai")) or "gemini"
+        provider_name = provider_name.lower().strip()
+        model: str | None = prefs and prefs.get("ai_model") or None
+        record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        api_key: str | None = record["api_key"] if record else None
 
-    api_key: str | None = None
-    if user_id:
-        record = get_user_api_key(user_id, provider_name, db_path=effective_db)
-        if record:
-            api_key = record.get("api_key") or None
+        if api_key:
+            return get_provider(provider_name, api_key, model)
 
-    # Fall back to the server key **only** for the default provider (Gemini).
-    if api_key is None and provider_name == "gemini":
+        if provider_name != "gemini":
+            raise ValueError(
+                f"No {provider_name} API key configured. "
+                "Add a key in Settings -> AI Providers."
+            )
+
+        # Fall through to server-fallback for the default provider.
         api_key = server_gemini_key
+        effective_model: str | None = model or server_gemini_model
+    else:
+        api_key = server_gemini_key
+        effective_model = server_gemini_model
 
-    if api_key is None:
+    if not api_key:
         raise ValueError(
-            f"No {provider_name} API key configured. "
-            "Add a key in Settings -> AI Providers."
+            "No AI provider key available. Set GEMINI_API_KEY in the "
+            "environment or store a key in Settings."
         )
 
-    return get_provider(provider_name, api_key, model)
+    return get_provider("gemini", api_key, effective_model)
 
 
 def available_providers() -> list[dict[str, str]]:
