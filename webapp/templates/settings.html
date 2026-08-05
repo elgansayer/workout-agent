@@ -51,6 +51,7 @@
                 class="key-input"
                 placeholder="{{ user_keys.get('hevy', {}).get('masked', 'Paste your Hevy API key') }}"
                 autocomplete="off"
+                aria-label="Hevy API key"
             >
             <button class="btn btn-sm" onclick="saveKey('hevy')" id="hevy-save-btn">
                 {{ 'Update' if user_keys.get('hevy', {}).get('has_key') else 'Connect' }}
@@ -103,6 +104,7 @@
                     class="key-input"
                     placeholder="{{ user_keys.get(p.id, {}).get('masked', 'Paste your ' + p.name + ' API key') }}"
                     autocomplete="off"
+                    aria-label="{{ p.name }} API key"
                 >
                 <button class="btn btn-sm" onclick="saveKey('{{ p.id }}')">
                     {{ 'Update' if user_keys.get(p.id, {}).get('has_key') else 'Save' }}
