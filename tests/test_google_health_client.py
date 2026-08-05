@@ -29,9 +29,7 @@ def _db(tmp_path: Any) -> str:
     return db
 
 
-def _points(
-    point_key: str, value_field: str, samples: list[tuple[str, float]]
-) -> dict[str, list[dict[str, Any]]]:
+def _points(point_key: str, value_field: str, samples: list[tuple[str, float]]) -> dict[str, list[dict[str, Any]]]:
     return {
         "dataPoints": [
             {point_key: {value_field: value, "sampleTime": {"physicalTime": when}}}
@@ -69,9 +67,7 @@ def test_fetch_body_metrics_reads_latest(monkeypatch: pytest.MonkeyPatch) -> Non
     assert metrics == {"weight_kg": 81.5, "body_fat_pct": 14.6}
 
 
-def test_fetch_body_metrics_picks_latest_regardless_of_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_fetch_body_metrics_picks_latest_regardless_of_order(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_get(url: str, **kwargs: Any) -> _FakeResponse:
         if "body-fat" in url:
             return _FakeResponse({"dataPoints": []})
@@ -105,9 +101,7 @@ def test_sync_disabled_without_credentials(tmp_path: Any) -> None:
     assert google_health_client.sync_body_metrics(None, None, None, db) is None
 
 
-def test_sync_persists_refresh_token(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sync_persists_refresh_token(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _db(tmp_path)
 
     def fake_post(url: str, **kwargs: Any) -> _FakeResponse:
@@ -134,9 +128,7 @@ def test_sync_persists_refresh_token(
     assert get_meta("google_health_refresh_token", db) == "rotated-token"
 
 
-def test_sync_keeps_refresh_token_when_not_rotated(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sync_keeps_refresh_token_when_not_rotated(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _db(tmp_path)
 
     # Google usually omits the refresh token on refresh; we should keep the old one.
@@ -155,9 +147,7 @@ def test_sync_keeps_refresh_token_when_not_rotated(
     assert get_meta("google_health_refresh_token", db) == "env-token"
 
 
-def test_sync_uses_stored_token_when_present(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sync_uses_stored_token_when_present(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     db = _db(tmp_path)
     set_meta("google_health_refresh_token", "stored-token", db)
 
@@ -179,9 +169,7 @@ def test_sync_uses_stored_token_when_present(
     assert get_meta("google_health_refresh_token", db) == "next-token"
 
 
-def test_sync_uses_stored_token_without_env_token(
-    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_sync_uses_stored_token_without_env_token(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # When the user linked Google Health from the web dashboard, only the stored
     # token exists (no GOOGLE_HEALTH_REFRESH_TOKEN env var) and sync must work.
     db = _db(tmp_path)
@@ -205,9 +193,7 @@ def test_sync_uses_stored_token_without_env_token(
     assert get_meta("google_health_refresh_token", db) == "rotated"
 
 
-def test_latest_value_handles_non_dict_sample_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_latest_value_handles_non_dict_sample_time(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: sampleTime as a string (not dict) must not crash _latest_value."""
     points: dict[str, list[dict[str, Any]]] = {
         "dataPoints": [
@@ -234,9 +220,7 @@ def test_latest_value_handles_non_dict_sample_time(
     assert result == 14.0  # value still readable without a parseable time
 
 
-def test_latest_value_handles_missing_sample_time(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_latest_value_handles_missing_sample_time(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression: missing sampleTime must not crash _latest_value."""
     points: dict[str, list[dict[str, Any]]] = {
         "dataPoints": [
@@ -261,9 +245,7 @@ def test_latest_value_handles_missing_sample_time(
     assert result == 14.0  # value still readable without a sample time
 
 
-def test_fetch_body_metrics_graceful_on_http_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_fetch_body_metrics_graceful_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connector must return None on a 5xx/connection error, not raise."""
     monkeypatch.setattr(
         google_health_client.requests,
@@ -274,9 +256,7 @@ def test_fetch_body_metrics_graceful_on_http_error(
     assert metrics is None
 
 
-def test_fetch_body_metrics_graceful_on_malformed_json(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_fetch_body_metrics_graceful_on_malformed_json(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connector must return None on malformed JSON, not raise."""
 
     class _Bad:

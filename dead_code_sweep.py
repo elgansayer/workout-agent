@@ -81,11 +81,16 @@ class OrphanReport(NamedTuple):
 ROOT = Path(__file__).resolve().parent
 
 # Scripts invoked directly (not imported by another Python module).
+# Included in this set are scripts called via subprocess by scheduled
+# processes (e.g. scheduler.py) — they are not ``import``-ed but are
+# reachable at runtime.
 ENTRY_POINTS: set[str] = {
     "main.py",
     "scheduler.py",
     "sync_history.py",
     "insight_cron.py",
+    "dead_code_sweep.py",
+    "commit_hygiene.py",
 }
 
 # Files that are not modules in the import sense.
@@ -276,7 +281,7 @@ def _grep_import(module_name: str) -> list[str]:
                 "grep",
                 "-rn",
                 "-E",
-                f"^(import {module_name}|from {module_name}( |\\.))",
+                f"^\\s*(import {module_name}|from {module_name}( |\\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -301,7 +306,7 @@ def _grep_import(module_name: str) -> list[str]:
                 [
                     "grep",
                     "-rn",
-                    f"from webapp import .*{short}",
+                    f"^\\s*from webapp import .*{short}",
                     "--include=*.py",
                     str(ROOT),
                 ],

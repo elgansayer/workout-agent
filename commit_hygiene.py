@@ -240,9 +240,9 @@ def check_large_files() -> list[HygieneFinding]:
                 HygieneFinding(
                     severity="error",
                     category="large-file",
-                    message=f"Large tracked file: {f} ({size / (1024 * 1024):.1f} MB)",
+                    message=f"Large tracked file: {f} ({size / (1024*1024):.1f} MB)",
                     details=(
-                        f"File '{f}' is {size / (1024 * 1024):.1f} MB — "
+                        f"File '{f}' is {size / (1024*1024):.1f} MB — "
                         "larger than the {MAX_FILE_SIZE / (1024*1024):.0f} MB limit. "
                         "Consider gitignoring or storing externally."
                     ),
@@ -358,13 +358,11 @@ def create_github_issues(report: HygieneReport) -> list[str]:
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps(
-                    {
-                        "title": "SECURITY: secret possibly committed, needs human-supervised history rewrite",
-                        "body": body,
-                        "labels": ["security", "ai-agent-task"],
-                    }
-                ).encode(),
+                data=json.dumps({
+                    "title": "SECURITY: secret possibly committed, needs human-supervised history rewrite",
+                    "body": body,
+                    "labels": ["security", "ai-agent-task"],
+                }).encode(),
                 headers=headers,
                 method="POST",
             )
@@ -387,13 +385,11 @@ def create_github_issues(report: HygieneReport) -> list[str]:
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps(
-                    {
-                        "title": "Commit hygiene: issues found",
-                        "body": body,
-                        "labels": ["ai-agent-task", "hourly"],
-                    }
-                ).encode(),
+                data=json.dumps({
+                    "title": "Commit hygiene: issues found",
+                    "body": body,
+                    "labels": ["ai-agent-task", "hourly"],
+                }).encode(),
                 headers=headers,
                 method="POST",
             )
@@ -427,9 +423,7 @@ def print_report(report: HygieneReport) -> None:
         return
 
     severity_order = {"security": 0, "error": 1, "warning": 2, "info": 3}
-    sorted_findings = sorted(
-        report.findings, key=lambda f: severity_order.get(f.severity, 99)
-    )
+    sorted_findings = sorted(report.findings, key=lambda f: severity_order.get(f.severity, 99))
 
     for f in sorted_findings:
         tag = f"[{f.severity.upper()}]"
