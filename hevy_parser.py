@@ -42,10 +42,14 @@ class ExerciseSummary:
 @dataclass(frozen=True)
 class WorkoutSummary:
     title: str
-    date: str | None
-    duration_seconds: int | None
-    total_volume_kg: float
-    exercises: list[ExerciseSummary]
+    date: str | None = None
+    duration_seconds: int | None = None
+    total_volume_kg: float = 0.0
+    exercises: list[ExerciseSummary] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.exercises is None:
+            object.__setattr__(self, "exercises", [])
 
     def as_text(self) -> str:
         header = self.title
