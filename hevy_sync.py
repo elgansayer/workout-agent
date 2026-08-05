@@ -328,14 +328,15 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            logger.info("Requesting autonomous routine adjustments from Gemini...")
+            logger.info("Requesting autonomous routine adjustments...")
             updated_routines = apply_autonomous_adjustments(
-                api_key=config.gemini_api_key,
-                model_name=config.gemini_model,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, "is_catabolic", False),
+                server_gemini_key=config.gemini_api_key,
+                server_gemini_model=config.gemini_model,
+                db_path=config.database_path,
             )
         except ImportError as exc:
             logger.warning(

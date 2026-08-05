@@ -202,9 +202,10 @@ def run(preview: bool = False) -> int:
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
         message = generate_rest_day_message(
-            api_key=config.gemini_api_key,
-            model_name=config.gemini_model,
             recovery=recovery,
+            server_gemini_key=config.gemini_api_key,
+            server_gemini_model=config.gemini_model,
+            db_path=config.database_path,
         )
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
@@ -250,8 +251,6 @@ def run(preview: bool = False) -> int:
             break
 
     plan = generate_next_workout(
-        api_key=config.gemini_api_key,
-        model_name=config.gemini_model,
         day=day,
         week=week,
         block=block,
@@ -260,6 +259,9 @@ def run(preview: bool = False) -> int:
         history=history,
         insights=review,
         last_plan=last_plan,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)
