@@ -1017,7 +1017,6 @@ def test_deep_correlations_migration_and_isolation(tmp_path):
     assert get_deep_correlation(db_path=db, user_id=None) is None
 
 
-
 # ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: programme_state user_id scoping
 # ---------------------------------------------------------------------------
@@ -1124,4 +1123,3 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path):
     from database import get_current_day
 
     assert get_current_day(db) == 1
-

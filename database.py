@@ -487,7 +487,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON check_ins (user_id, id DESC)"
         )
 
-
         # Migration: Migrate programme_state from singleton to user_id-scoped
         cursor.execute("PRAGMA table_info(programme_state)")
         ps_columns = {row[1] for row in cursor.fetchall()}
@@ -521,9 +520,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     (ps_legacy_id, SPLIT_NAME),
                 )
             cursor.execute("DROP TABLE programme_state")
-            cursor.execute(
-                "ALTER TABLE programme_state_new RENAME TO programme_state"
-            )
+            cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
 
 
 def get_current_day(
@@ -994,9 +991,7 @@ def check_rate_limit(
         ).fetchone()[0]
         if count >= limit:
             return True
-        conn.execute(
-            "INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)", (ip, now)
-        )
+        conn.execute("INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)", (ip, now))
         return False
 
 
@@ -1531,8 +1526,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units "
-            "FROM users"
+            "SELECT id, email, display_name, created_at, timezone, units FROM users"
         ).fetchall()
     return [
         {
@@ -1923,4 +1917,3 @@ def set_active_programme(
             "UPDATE programme_state SET current_day = 1 WHERE user_id = ?",
             (user_id,),
         )
-
