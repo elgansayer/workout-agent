@@ -33,15 +33,15 @@ def _payload() -> dict:
     }
 
 
-def test_parse_none_returns_none() -> None:
+def test_parse_none_returns_none():
     assert parse_workout(None) is None
 
 
-def test_parse_empty_workouts_returns_none() -> None:
+def test_parse_empty_workouts_returns_none():
     assert parse_workout({"workouts": []}) is None
 
 
-def test_parse_top_set_is_heaviest() -> None:
+def test_parse_top_set_is_heaviest():
     summary = parse_workout(_payload())
     assert summary is not None
     leg_press = summary.exercises[0]
@@ -51,7 +51,7 @@ def test_parse_top_set_is_heaviest() -> None:
     assert leg_press.sets == 3
 
 
-def test_parse_bodyweight_uses_reps() -> None:
+def test_parse_bodyweight_uses_reps():
     summary = parse_workout(_payload())
     assert summary is not None
     raises = summary.exercises[1]
@@ -59,7 +59,7 @@ def test_parse_bodyweight_uses_reps() -> None:
     assert raises.top_reps == 15
 
 
-def test_hit_top_of_range_flag() -> None:
+def test_hit_top_of_range_flag():
     targets = {"leg press": 12, "hanging leg raises": 15}
     summary = parse_workout(_payload(), targets)
     assert summary is not None
@@ -67,21 +67,21 @@ def test_hit_top_of_range_flag() -> None:
     assert summary.exercises[1].hit_top_of_range is True
 
 
-def test_below_top_of_range_flag() -> None:
+def test_below_top_of_range_flag():
     targets = {"leg press": 15}
     summary = parse_workout(_payload(), targets)
     assert summary is not None
     assert summary.exercises[0].hit_top_of_range is False
 
 
-def test_parse_accepts_single_workout_dict() -> None:
+def test_parse_accepts_single_workout_dict():
     workout = _payload()["workouts"][0]
     summary = parse_workout(workout)
     assert summary is not None
     assert summary.title == "Legs & Abs"
 
 
-def test_as_text_renders_lines() -> None:
+def test_as_text_renders_lines():
     summary = parse_workout(_payload(), {"leg press": 12})
     assert summary is not None
     text = summary.as_text()
@@ -90,5 +90,5 @@ def test_as_text_renders_lines() -> None:
     assert "hit the top of the rep range" in text
 
 
-def test_normalise_name() -> None:
+def test_normalise_name():
     assert normalise_name("  Leg   PRESS ") == "leg press"
