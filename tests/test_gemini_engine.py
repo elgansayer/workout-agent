@@ -14,6 +14,7 @@ from gemini_engine import (
     _fallback_rest_message,
     _format_history,
     apply_autonomous_adjustments,
+    create_provider,
     generate_checkin_message,
     generate_next_workout,
     generate_rest_day_message,
@@ -400,3 +401,26 @@ def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
         hevy_logs=[],
     )
     assert result is base
+
+
+# ---------------------------------------------------------------------------
+# create_provider
+# ---------------------------------------------------------------------------
+
+
+def test_create_provider_gemini() -> None:
+    provider = create_provider("gemini", "test-key")
+    assert provider.name() == "Gemini (gemini-2.5-flash)"
+
+
+def test_create_provider_custom_model() -> None:
+    provider = create_provider("openai", "sk-test", model="gpt-4o-mini")
+    assert "gpt-4o-mini" in provider.name()
+    assert "OpenAI" in provider.name()
+
+
+def test_create_provider_unknown_raises() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="Unknown AI provider"):
+        create_provider("nonexistent", "key")
