@@ -9,7 +9,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem;">
         <div>
             <h2 style="margin:0;">📋 Active Programme</h2>
-            {% set defn = active_programme.definition %}
+            {% set defn = active_programme.definition or {} %}
             <p class="muted" style="margin:0.3rem 0 0;">
                 <strong>{{ defn.get('name', active_programme.template_key|title) }}</strong>
                 &middot; {{ active_programme.source|title }}
