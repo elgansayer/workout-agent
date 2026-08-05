@@ -30,7 +30,7 @@ except ImportError:
     InvalidToken = Exception  # type: ignore[misc,assignment]
 
 
-def _fernet() -> "Fernet | None":
+def _fernet() -> Fernet | None:
     key = os.environ.get("ENCRYPTION_KEY", "").strip()
     if not key:
         return None

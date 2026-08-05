@@ -10,12 +10,19 @@ import google.generativeai as genai
 
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
-from program import COACHING_RULES, Block, SPLIT_NAME, day_exercises, day_focus, format_day
+from program import (
+    COACHING_RULES,
+    SPLIT_NAME,
+    Block,
+    day_exercises,
+    day_focus,
+    format_day,
+)
 
 try:
     from weather import WeatherConditions
 except ImportError:
-    WeatherConditions = Any
+    WeatherConditions = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 

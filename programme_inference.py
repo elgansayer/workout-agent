@@ -20,7 +20,6 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
 
 from hevy_reader import (
     CompletedWorkout,
@@ -136,7 +135,7 @@ def _classify_routine_muscles(
         if tmpl:
             counts[tmpl.primary_muscle_group] += 1
             for sec in tmpl.secondary_muscle_groups:
-                counts[sec] += 0.5
+                counts[sec] += 0.5  # type: ignore[assignment]
     return [muscle for muscle, _ in counts.most_common()]
 
 

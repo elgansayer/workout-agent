@@ -5,6 +5,7 @@ new device without losing your PRs and training history.
 """
 
 import logging
+
 from config import Config
 from database import init_db, save_progress, save_workout
 from hevy_client import get_all_workouts

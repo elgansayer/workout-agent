@@ -12,8 +12,8 @@ drop straight into the markup.
 from __future__ import annotations
 
 import html
+from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Sequence
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"

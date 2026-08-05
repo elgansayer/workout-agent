@@ -12,8 +12,9 @@ fully unit-testable without a database, network, or model.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from analytics import epley_1rm, linear_fit
 
@@ -270,9 +271,9 @@ def analyse_recovery(
     muscle_pct = latest.get("muscle_pct") or (recovery or {}).get("muscle_pct")
 
     recent = readings[-14:]
-    rhr_trend = _trend_of([r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3)
-    weight_trend = _trend_of([r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05)
-    bf_trend = _trend_of([r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05)
+    rhr_trend = _trend_of([float(r["resting_hr"]) for r in recent[-7:] if r.get("resting_hr") is not None], "rising", "falling", 0.3)
+    weight_trend = _trend_of([float(r["weight_kg"]) for r in recent[-7:] if r.get("weight_kg") is not None], "rising", "falling", 0.05)
+    bf_trend = _trend_of([float(r["body_fat_pct"]) for r in recent[-7:] if r.get("body_fat_pct") is not None], "rising", "falling", 0.05)
 
     is_catabolic = False
     if len(recent) >= 3 and weight_kg is not None and muscle_pct is not None:

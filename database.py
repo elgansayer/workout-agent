@@ -9,12 +9,13 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
-from typing import Any, Iterator, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
-from encryption import encrypt, decrypt
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
@@ -297,7 +298,7 @@ def get_recent_hevy_logs(limit: int = 14, db_path: str = DEFAULT_DB_PATH) -> lis
 
 
 def save_progress(
-    summary: "WorkoutSummary | None", db_path: str = DEFAULT_DB_PATH
+    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary."""
     if summary is None:
@@ -1051,7 +1052,7 @@ def get_user_preferences(
     user_id: str, db_path: str = DEFAULT_DB_PATH
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
-    defaults = {
+    defaults: dict[str, Any] = {
         "goals": [],
         "constraints": [],
         "experience_level": "intermediate",

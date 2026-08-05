@@ -17,8 +17,8 @@ from typing import Any
 from hevy_client import (
     get_exercise_templates,
     get_recent_workouts,
-    get_routines,
     get_routine_folders,
+    get_routines,
     get_user_info,
     get_workout_count,
 )

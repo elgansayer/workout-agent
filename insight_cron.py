@@ -3,7 +3,6 @@ import json
 import logging
 import sys
 from datetime import date, timedelta
-from typing import Any
 
 import google.generativeai as genai
 
@@ -51,10 +50,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
     try:
         response = model.generate_content(prompt)
         text = (response.text or "").strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
         text = text.strip()
 
         # Validate JSON

@@ -16,23 +16,23 @@ import logging
 import sys
 from datetime import date
 
+import checkin
+import google_health_client
+import insights as insights_engine
+import lifestyle
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
+    get_daily_logs,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
-    get_daily_logs,
     init_db,
     save_body_metrics,
     save_daily_log,
     save_progress,
     save_workout,
 )
-import checkin
-import google_health_client
-import insights as insights_engine
-import lifestyle
 from gemini_engine import generate_next_workout, generate_rest_day_message
 from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout

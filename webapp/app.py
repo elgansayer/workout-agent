@@ -17,63 +17,66 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import secrets
 import time
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
+from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request, HTTPException
-from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse, StreamingResponse
+import google.generativeai as genai
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from authlib.integrations.starlette_client import OAuth
+from starlette.middleware.sessions import SessionMiddleware
 
-from database import (
-    get_body_metrics,
-    get_checkins,
-    get_daily_logs,
-    get_exercise_volumes,
-    get_meta,
-    get_personal_records,
-    get_programme_start_date,
-    get_progress_history,
-    get_recent_bests,
-    get_session_volumes,
-    get_dashboard_insight,
-    get_reasoning_log,
-    save_reasoning_log,
-    get_chat_messages,
-    save_chat_message,
-    clear_chat_messages,
-    init_db,
-    set_meta,
-    get_or_create_user,
-    get_user_api_keys,
-    get_user_api_key,
-    save_user_api_key,
-    delete_user_api_key,
-    get_user_preferences,
-    save_user_preferences,
-)
-from google_health_auth import build_authorize_url, exchange_code
-import google.generativeai as genai
-from config import Config
-from ai_provider import available_providers
-import json
 import analytics
 import insights
 import lifestyle
-from webapp import charts
-from webapp import ai_widgets
+from ai_provider import available_providers
+from config import Config
+from database import (
+    clear_chat_messages,
+    delete_user_api_key,
+    get_body_metrics,
+    get_chat_messages,
+    get_checkins,
+    get_daily_logs,
+    get_dashboard_insight,
+    get_exercise_volumes,
+    get_meta,
+    get_or_create_user,
+    get_personal_records,
+    get_programme_start_date,
+    get_progress_history,
+    get_reasoning_log,
+    get_recent_bests,
+    get_session_volumes,
+    get_user_api_keys,
+    get_user_preferences,
+    init_db,
+    save_chat_message,
+    save_reasoning_log,
+    save_user_api_key,
+    save_user_preferences,
+    set_meta,
+)
+from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from program import (
-    BLOCKS,
     BLOCK_WEEKS,
+    BLOCKS,
     COACHING_RULES,
     CYCLE_WEEKS,
     SPLIT_NAME,
@@ -83,15 +86,13 @@ from program import (
     today_day,
     week_in_cycle,
 )
-
-from functools import lru_cache
+from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def get_config():
-    from config import Config
     return Config.load()
 
 _RATE_LIMITS: dict[str, list[float]] = {}
@@ -102,7 +103,7 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
     if forwarded:
         ip = forwarded.split(",")[0].strip()
     elif request.headers.get("x-real-ip"):
-        ip = request.headers.get("x-real-ip").strip()
+        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
     else:
         ip = request.client.host if request.client else "unknown"
         
@@ -470,8 +471,8 @@ def progress(request: Request):
             for e in entries
         ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms = [v for v in e1rms if v]
-        best_e1rm = max(e1rms) if e1rms else None
+        e1rms_filtered = [v for v in e1rms if v is not None]
+        best_e1rm: float | None = max(e1rms_filtered) if e1rms_filtered else None
         charts_data.append(
             {
                 "name": name,
@@ -783,10 +784,8 @@ def project_peak(request: Request):
     try:
         response = model.generate_content(prompt)
         text = response.text.strip()
-        if text.startswith("```json"):
-            text = text[7:]
-        if text.endswith("```"):
-            text = text[:-3]
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
         return json.loads(text.strip())
     except Exception:
         return {"error": "Failed to project peak."}
