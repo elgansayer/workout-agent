@@ -314,7 +314,7 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(series: dict, *keywords: str) -> tuple[str | None, list]:
+def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
@@ -332,7 +332,7 @@ def _rep_top(rep_range: str) -> int | None:
     return digits[-1] if digits else None
 
 
-def _overload_nudge(planned_rep_range: str, best: dict | None) -> str:
+def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
     """Suggest the next progressive-overload step for an exercise."""
     if not best or best.get("top_reps") is None:
         return "Log this lift to start tracking progress."
@@ -348,7 +348,7 @@ def _overload_nudge(planned_rep_range: str, best: dict | None) -> str:
     return "Keep the reps strict and progress when it feels easy."
 
 
-def _format_best(best: dict | None) -> str:
+def _format_best(best: dict[str, Any] | None) -> str:
     if not best:
         return "No data yet"
     weight = best.get("top_weight_kg")
@@ -388,7 +388,7 @@ def _dashboard_context(
     today: date | None = None,
     *,
     user_id: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH)
@@ -402,7 +402,7 @@ def _dashboard_context(
     active_defn = active.get("definition") if active else None
 
     day = today_day(today)
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     focus = "Rest & Recovery"
 
     if active_defn:
@@ -540,7 +540,7 @@ def progress(request: Request) -> Any:
     )
 
 
-def _body_charts(*, user_id: str | None = None) -> dict:
+def _body_charts(*, user_id: str | None = None) -> dict[str, Any]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
@@ -692,8 +692,8 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str, entries: list, target_ordinal: int, *, metric: str = "auto"
-) -> dict | None:
+    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
+) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
     unit = "kg"
@@ -855,7 +855,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     )
 
 
-def _block_lift_str(lift: dict | None) -> str:
+def _block_lift_str(lift: dict[str, Any] | None) -> str:
     """Format a lift dict as 'sets x rep_range' or empty string."""
     if not lift:
         return ""
@@ -938,13 +938,13 @@ async def select_programme(request: Request) -> dict[str, Any]:
 
 def _build_inferred_definition(
     inferred: InferredProgramme,
-) -> dict:
+) -> dict[str, Any]:
     """Build a programme definition dict from an InferredProgramme.
 
     Produces a structure compatible with the programme templates system
     so the programmes.html preview and /plan page render correctly.
     """
-    days: list[dict] = []
+    days: list[dict[str, Any]] = []
     for i, day in enumerate(inferred.training_days):
         exercises = []
         for ex in day.exercises:
@@ -966,7 +966,7 @@ def _build_inferred_definition(
         )
 
     # Build a simple block structure from the inferred data.
-    blocks: list[dict] = [
+    blocks: list[dict[str, Any]] = [
         {
             "number": 1,
             "name": "Inferred",
@@ -1116,7 +1116,8 @@ def project_peak(request: Request) -> dict[str, Any]:
         text = str(provider.generate(prompt)).strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
-        return json.loads(text.strip())
+        result: dict[str, Any] = json.loads(text.strip())
+        return result
     except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
 
@@ -1209,7 +1210,7 @@ Respond naturally as Coach. If the question is about their training data, refere
         collected: list[str] = []
         try:
             stream = provider.generate(prompt, stream=True)
-            for chunk in stream:  # type: ignore[union-attr]
+            for chunk in stream:
                 if chunk:
                     collected.append(str(chunk))
                     yield str(chunk)
@@ -1237,14 +1238,14 @@ def _gh_redirect_uri(request: Request) -> str:
 @app.get("/settings")
 def settings(request: Request) -> Any:
     user_id = request.session.get("user_id")
-    user_keys: dict = {}
-    user_prefs: dict = {}
+    user_keys: dict[str, Any] = {}
+    user_prefs: dict[str, Any] = {}
     if user_id:
         user_keys = get_user_api_keys(user_id, db_path=DB_PATH)
         user_prefs = get_user_preferences(user_id, db_path=DB_PATH)
 
     # Mask keys for display (show last 4 chars only).
-    masked_keys: dict = {}
+    masked_keys: dict[str, Any] = {}
     for provider, data in user_keys.items():
         key = data.get("api_key", "")
         masked_keys[provider] = {
