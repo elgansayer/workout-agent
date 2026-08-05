@@ -22,7 +22,7 @@ from program import (
 try:
     from weather import WeatherConditions
 except ImportError:
-    WeatherConditions = Any
+    WeatherConditions = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 

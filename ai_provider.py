@@ -91,7 +91,10 @@ class ClaudeProvider(AIProvider):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text.strip()
+        return ""
 
     def _stream(self, prompt: str) -> Iterator[str]:
         with self._client.messages.stream(
