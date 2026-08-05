@@ -20,6 +20,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from ai_provider import AIProvider, resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -160,6 +161,15 @@ def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -
     return text + footer
 
 
+def _resolve_provider(config: Config) -> AIProvider:
+    """Resolve the AI provider from the server config (single-tenant cron job)."""
+    return resolve_provider(
+        db_path=config.database_path,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+    )
+
+
 def run(preview: bool = False) -> int:
     try:
         config = Config.load()
@@ -168,6 +178,8 @@ def run(preview: bool = False) -> int:
         return 1
 
     init_db(config.database_path)
+
+    provider = _resolve_provider(config)
 
     statuses = _sync_hevy_routines(config)
     footer = _changes_footer(statuses)
@@ -202,8 +214,7 @@ def run(preview: bool = False) -> int:
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
         message = generate_rest_day_message(
-            api_key=config.gemini_api_key,
-            model_name=config.gemini_model,
+            provider,
             recovery=recovery,
         )
         guidance = (
@@ -250,8 +261,7 @@ def run(preview: bool = False) -> int:
             break
 
     plan = generate_next_workout(
-        api_key=config.gemini_api_key,
-        model_name=config.gemini_model,
+        provider,
         day=day,
         week=week,
         block=block,

@@ -241,7 +241,7 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
     # Mock Gemini — return a canned plan
     monkeypatch.setattr(
         "main.generate_next_workout",
-        lambda **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
+        lambda *args, **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
 
@@ -279,7 +279,7 @@ def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day! Recovery is key.",
+        lambda *args, **kw: "Rest day! Recovery is key.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
 
@@ -351,7 +351,7 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -395,7 +395,7 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -519,7 +519,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.get_daily_logs", lambda **kw: [])
     monkeypatch.setattr(
         "main.generate_next_workout",
-        lambda **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
+        lambda *args, **kw: "Back, Deadlifts & Chest - Week 1 (Hypertrophy)\nDeadlift: 4 x 8",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -561,7 +561,7 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -607,7 +607,7 @@ def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -650,7 +650,7 @@ def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -693,7 +693,7 @@ def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
@@ -769,7 +769,7 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         "main.generate_rest_day_message",
-        lambda **kw: "Rest day.",
+        lambda *args, **kw: "Rest day.",
     )
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
