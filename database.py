@@ -1583,7 +1583,9 @@ def _build_template_definition() -> dict[str, Any]:
                     "template_id": ex.template_id,
                 }
             )
-        days.append({"number": day_num, "focus": day_focus(day_num), "exercises": exercises})
+        days.append(
+            {"number": day_num, "focus": day_focus(day_num), "exercises": exercises}
+        )
 
     return {
         "name": SPLIT_NAME,
@@ -1697,6 +1699,4 @@ def set_active_programme(
             ),
         )
         # Reset current_day to 1 for the new programme.
-        conn.execute(
-            "UPDATE programme_state SET current_day = 1 WHERE id = 1"
-        )
+        conn.execute("UPDATE programme_state SET current_day = 1 WHERE id = 1")
