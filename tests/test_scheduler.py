@@ -137,8 +137,16 @@ def test_run_scheduler_bootstrap_calls_jobs(monkeypatch) -> None:
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
-    monkeypatch.setattr(scheduler, "_run_coaching", lambda uid: coaching_calls.append(uid) or True)
-    monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: insight_calls.append(flag) or True)
+    def _mock_coaching(uid: str) -> bool:
+        coaching_calls.append(uid)
+        return True
+
+    def _mock_insight(flag: str) -> bool:
+        insight_calls.append(flag)
+        return True
+
+    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
+    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
 
     iteration = [0]
 
@@ -164,8 +172,16 @@ def test_run_scheduler_dispatches_due_users(monkeypatch) -> None:
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
-    monkeypatch.setattr(scheduler, "_run_coaching", lambda uid: coaching_calls.append(uid) or True)
-    monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: insight_calls.append(flag) or True)
+    def _mock_coaching(uid: str) -> bool:
+        coaching_calls.append(uid)
+        return True
+
+    def _mock_insight(flag: str) -> bool:
+        insight_calls.append(flag)
+        return True
+
+    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
+    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
