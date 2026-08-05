@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import Any
 
 from ai_provider import resolve_provider
 from config import Config
@@ -120,7 +121,7 @@ def due(config: Config, today: date | None = None) -> CheckinDue | None:
 
 
 def _session_top_sets(
-    history: list[dict],
+    history: list[dict[str, Any]],
 ) -> list[tuple[float | None, int | None]]:
     """Return each session's top set (heaviest, reps tie-break), oldest first."""
     best: dict[str, tuple[float | None, int | None]] = {}
@@ -147,7 +148,7 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict],
+    name: str, planned: str, rep_range: str, history: list[dict[str, Any]],
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
