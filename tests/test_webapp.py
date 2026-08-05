@@ -258,6 +258,7 @@ def test_api_programmes_select_requires_template_key(client):
     )
     assert resp.status_code in (400, 401)
 
+
 # ---------------------------------------------------------------------------
 # AI Provider wiring tests - verify the chat/RAG/XAI endpoints resolve the
 # user's preferred AI provider rather than hardcoding Gemini.
@@ -278,14 +279,21 @@ def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
             saved_prompts.append(prompt)
             return "Causal explanation from fake provider."
 
-    def _fake_resolve(user_id=None, *, server_gemini_key=None,
-                      server_gemini_model=None, db_path="workout_agent.db"):
-        captured.append({
-            "user_id": user_id,
-            "server_gemini_key": server_gemini_key,
-            "server_gemini_model": server_gemini_model,
-            "db_path": db_path,
-        })
+    def _fake_resolve(
+        user_id=None,
+        *,
+        server_gemini_key=None,
+        server_gemini_model=None,
+        db_path="workout_agent.db",
+    ):
+        captured.append(
+            {
+                "user_id": user_id,
+                "server_gemini_key": server_gemini_key,
+                "server_gemini_model": server_gemini_model,
+                "db_path": db_path,
+            }
+        )
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
@@ -294,6 +302,7 @@ def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
         lambda *a, **kw: None,
     )
     from config import Config
+
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/xai_reasoning/2026-03-02_Deadlift (Barbell)")
@@ -316,16 +325,24 @@ def test_project_peak_uses_resolve_provider(client, monkeypatch):
         def generate(self, prompt, *, stream=False):
             return '{"Deadlift_Projected": 200, "Pullups_Projected": 25, "Validation": "ok"}'
 
-    def _fake_resolve(user_id=None, *, server_gemini_key=None,
-                      server_gemini_model=None, db_path="workout_agent.db"):
-        captured.append({
-            "user_id": user_id,
-            "server_gemini_key": server_gemini_key,
-        })
+    def _fake_resolve(
+        user_id=None,
+        *,
+        server_gemini_key=None,
+        server_gemini_model=None,
+        db_path="workout_agent.db",
+    ):
+        captured.append(
+            {
+                "user_id": user_id,
+                "server_gemini_key": server_gemini_key,
+            }
+        )
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
     from config import Config
+
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/project_peak")
@@ -347,16 +364,24 @@ def test_rag_search_uses_resolve_provider(client, monkeypatch):
                 return iter(["Response from fake provider."])
             return "Response from fake provider."
 
-    def _fake_resolve(user_id=None, *, server_gemini_key=None,
-                      server_gemini_model=None, db_path="workout_agent.db"):
-        captured.append({
-            "user_id": user_id,
-            "server_gemini_key": server_gemini_key,
-        })
+    def _fake_resolve(
+        user_id=None,
+        *,
+        server_gemini_key=None,
+        server_gemini_model=None,
+        db_path="workout_agent.db",
+    ):
+        captured.append(
+            {
+                "user_id": user_id,
+                "server_gemini_key": server_gemini_key,
+            }
+        )
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
     from config import Config
+
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/rag_search?q=How+is+my+deadlift+progressing")
@@ -379,6 +404,7 @@ def test_rag_search_rate_limited(client, monkeypatch):
         lambda user_id=None, **kw: _StubProvider(),
     )
     from config import Config
+
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     for i in range(20):
