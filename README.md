@@ -309,8 +309,8 @@ dashboard:
 <VirtualHost *:443>
     ServerName gym.example.com
     ProxyPreserveHost On
-    ProxyPass        / http://127.0.0.1:8770/
-    ProxyPassReverse / http://127.0.0.1:8770/
+    ProxyPass        / http://127.0.0.1:8088/
+    ProxyPassReverse / http://127.0.0.1:8088/
     # ... your TLS configuration ...
 </VirtualHost>
 ```
@@ -436,10 +436,10 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
-   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
-   from any device on your LAN. On a trusted network the dashboard is open; to
-   gate access, set the `WEB_GOOGLE_CLIENT_ID` and related env vars for Google
-   OAuth login.
+   It listens on `http://<host-ip>:8088` (or the `WEB_PORT` you set in `.env`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. On a
+   trusted network the dashboard is open; to gate access, set the
+   `WEB_GOOGLE_CLIENT_ID` and related env vars for Google OAuth login.
 
 ---
 
