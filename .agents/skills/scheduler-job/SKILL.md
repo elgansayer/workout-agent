@@ -1,53 +1,42 @@
 ---
 name: scheduler-job
-description: 'Add or consolidate a periodic background job (daily coaching run, insight generation, connector polling) instead of adding a third hand-rolled sleep loop. Use when touching docker-entrypoint.sh, insight_scheduler.py, or adding any new recurring job.'
+description: 'Add a new periodic background job (daily coaching run, insight generation, connector polling) to the unified scheduler.py. Use when adding any new recurring job dispatch from the scheduler loop.'
 ---
 
 # Scheduler Job
 
 ## Why This Exists
 
-There are currently **two independent, hand-rolled sleep loops** in the
-`agent` container: `docker-entrypoint.sh`'s bash loop (runs `main.py` at
-`RUN_AT` times, default `00:00,05:00`) and `insight_scheduler.py`'s Python
-`while True` loop (runs `insight_cron.py --daily`/`--weekly` at hardcoded
-times), started as a background process by the same entrypoint script. Both
-are single-timezone, single-run-time by construction — that breaks the
-moment different users need different schedules (`AGENTS.md` §7).
+The agent container runs a single unified scheduler (`scheduler.py`) that
+wakes every 60 seconds, checks each user's local time against the configured
+`RUN_AT` times, and dispatches due coaching runs (`main.py`) and insight
+jobs (`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is
+isolated so one user's failures do not block another's. All scheduling is
+consolidated into this one process — do not add additional sleep loops.
 
 ## When to Use
 
 - Adding a new recurring job (e.g. periodic connector re-sync, a weekly
   digest email).
-- Touching `docker-entrypoint.sh` or `insight_scheduler.py`.
-- Doing the actual consolidation work described below (a good first task
-  once multi-tenancy has landed for at least one domain table).
+- Touching the dispatch logic in `scheduler.py`.
 
-## Target Design (consolidate toward this, don't add a third loop)
+## How to Add a New Job
 
-One process, one scheduler, iterating per-user run times:
+The unified `scheduler.py` already handles the main loop. To add a new
+recurring job:
 
-1. Prefer a small, dependency-light approach over pulling in Celery/RQ +
-   Redis for a project this size: either (a) a single Python loop that wakes
-   every minute, loads all users' `user_preferences.timezone` + a per-user
-   run-time preference, and dispatches due jobs, or (b) `APScheduler`
-   (`BackgroundScheduler`) if per-job cron-expression scheduling gets
-   unwieldy to hand-roll. If you add APScheduler, add it to
-   `requirements.txt` and remove the two existing sleep loops in the same
-   change — don't run three schedulers at once.
-2. Each job (daily coaching run, daily insight header, weekly correlations,
-   weekly self-review, weekly check-in) becomes a function taking a
-   `user_id`, called once per due user, not a global script assuming a
-   single implicit user. `main.py`'s `run(preview)` and `insight_cron.py`'s
-   `--daily`/`--weekly` entry points are the functions to adapt — see the
-   `multi-tenant-migration` skill for how their DB calls need to change
-   first.
-3. **Failure isolation between users**: one user's Hevy API being down or
+1. Add a new dispatch function in `scheduler.py` (e.g. `_run_connector_sync()`)
+   following the existing pattern of `_run_coaching()` / `_run_insight_job()`.
+2. If the job is per-user, accept a `user_id` parameter and wrap each user
+   dispatch in a try/except for failure isolation.
+3. Wire it into `run_scheduler()`'s main loop at the appropriate cadence
+   (daily, weekly, per-run-time, etc.).
+4. **Failure isolation between users**: one user's Hevy API being down or
    their AI key being invalid must not stop other users' scheduled runs from
    executing. Wrap each per-user dispatch in a try/except that logs and
    continues, matching the connector-level isolation already required by the
    `connector-integration` skill.
-4. Keep `MODE=once`/`MODE=preview` (manual single-run, dry-run) working —
+5. Keep `MODE=once`/`MODE=preview` (manual single-run, dry-run) working —
    they're useful for local dev and CI and shouldn't require the full
    scheduler to be running.
 
