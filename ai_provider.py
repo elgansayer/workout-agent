@@ -41,7 +41,7 @@ class AIProvider(ABC):
 class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         import google.generativeai as genai
 
         genai.configure(api_key=api_key)
@@ -72,7 +72,7 @@ class GeminiProvider(AIProvider):
 class ClaudeProvider(AIProvider):
     """Anthropic Claude via the ``anthropic`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         try:
             import anthropic
         except ImportError:
@@ -116,7 +116,7 @@ class ClaudeProvider(AIProvider):
 class OpenAIProvider(AIProvider):
     """OpenAI GPT via the ``openai`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+    def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         try:
             import openai
         except ImportError:
@@ -166,7 +166,7 @@ class DeepSeekProvider(AIProvider):
 
     BASE_URL = "https://api.deepseek.com"
 
-    def __init__(self, api_key: str, model: str = "deepseek-chat"):
+    def __init__(self, api_key: str, model: str = "deepseek-chat") -> None:
         try:
             import openai
         except ImportError:
