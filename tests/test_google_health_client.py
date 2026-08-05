@@ -207,7 +207,9 @@ def test_latest_value_handles_non_dict_sample_time(monkeypatch):
         "get",
         lambda url, **kwargs: _FakeResponse(points),
     )
-    result = google_health_client._latest_value("access", "body-fat", "bodyFat", "percentage")
+    result = google_health_client._latest_value(
+        "access", "body-fat", "bodyFat", "percentage"
+    )
     assert result == 14.0  # value still readable without a parseable time
 
 
@@ -227,7 +229,9 @@ def test_latest_value_handles_missing_sample_time(monkeypatch):
         "get",
         lambda url, **kwargs: _FakeResponse(points),
     )
-    result = google_health_client._latest_value("access", "body-fat", "bodyFat", "percentage")
+    result = google_health_client._latest_value(
+        "access", "body-fat", "bodyFat", "percentage"
+    )
     assert result == 14.0  # value still readable without a sample time
 
 
@@ -252,6 +256,8 @@ def test_fetch_body_metrics_graceful_on_malformed_json(monkeypatch):
         def json(self):
             raise ValueError("not json")
 
-    monkeypatch.setattr(google_health_client.requests, "get", lambda url, **kwargs: _Bad())
+    monkeypatch.setattr(
+        google_health_client.requests, "get", lambda url, **kwargs: _Bad()
+    )
     metrics = google_health_client.fetch_body_metrics("access")
     assert metrics is None
