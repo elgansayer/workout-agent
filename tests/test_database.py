@@ -805,12 +805,24 @@ def test_daily_log_user_isolation(tmp_path):
     from database import get_daily_logs, save_daily_log
 
     save_daily_log(
-        "2026-08-01", 1, "Deadlift", "high", "Plan A", "Walk",
-        db_path=db, user_id="user-a",
+        "2026-08-01",
+        1,
+        "Deadlift",
+        "high",
+        "Plan A",
+        "Walk",
+        db_path=db,
+        user_id="user-a",
     )
     save_daily_log(
-        "2026-08-01", 2, "Pull-ups", "med", "Plan B", "Run",
-        db_path=db, user_id="user-b",
+        "2026-08-01",
+        2,
+        "Pull-ups",
+        "med",
+        "Plan B",
+        "Run",
+        db_path=db,
+        user_id="user-b",
     )
 
     logs_a = get_daily_logs(limit=10, db_path=db, user_id="user-a")
@@ -832,7 +844,12 @@ def test_daily_log_backward_compat(tmp_path):
     from database import get_daily_logs, save_daily_log
 
     save_daily_log(
-        "2026-08-01", 1, "Deadlift", "high", "Plan", "Lifestyle",
+        "2026-08-01",
+        1,
+        "Deadlift",
+        "high",
+        "Plan",
+        "Lifestyle",
         db_path=db,
     )
     logs = get_daily_logs(limit=10, db_path=db)
@@ -847,16 +864,34 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path):
     from database import get_daily_logs, save_daily_log
 
     save_daily_log(
-        "2026-08-01", 1, "A", "high", "Plan1", "L1",
-        db_path=db, user_id="u1",
+        "2026-08-01",
+        1,
+        "A",
+        "high",
+        "Plan1",
+        "L1",
+        db_path=db,
+        user_id="u1",
     )
     save_daily_log(
-        "2026-08-01", 1, "A-v2", "high", "Plan1b", "L1b",
-        db_path=db, user_id="u1",
+        "2026-08-01",
+        1,
+        "A-v2",
+        "high",
+        "Plan1b",
+        "L1b",
+        db_path=db,
+        user_id="u1",
     )
     save_daily_log(
-        "2026-08-01", 2, "B", "med", "Plan2", "L2",
-        db_path=db, user_id="u2",
+        "2026-08-01",
+        2,
+        "B",
+        "med",
+        "Plan2",
+        "L2",
+        db_path=db,
+        user_id="u2",
     )
 
     logs_u1 = get_daily_logs(limit=10, db_path=db, user_id="u1")
