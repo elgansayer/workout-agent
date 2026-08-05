@@ -176,7 +176,9 @@ def _configured_app(tmp_path: Any, monkeypatch: Any) -> tuple[Any, str]:
     return app_module, db_path
 
 
-def test_google_health_connect_redirects_to_google(tmp_path: Any, monkeypatch: Any) -> None:
+def test_google_health_connect_redirects_to_google(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
     app_module, _ = _configured_app(tmp_path, monkeypatch)
     with TestClient(app_module.app) as c:
         resp = c.get("/google-health/connect", follow_redirects=False)
@@ -186,7 +188,9 @@ def test_google_health_connect_redirects_to_google(tmp_path: Any, monkeypatch: A
     assert "client_id=cid" in location
 
 
-def test_google_health_callback_stores_refresh_token(tmp_path: Any, monkeypatch: Any) -> None:
+def test_google_health_callback_stores_refresh_token(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
@@ -203,7 +207,9 @@ def test_google_health_callback_stores_refresh_token(tmp_path: Any, monkeypatch:
     assert get_meta("google_health_refresh_token", db_path) == "rt-123"
 
 
-def test_google_health_callback_rejects_bad_state(tmp_path: Any, monkeypatch: Any) -> None:
+def test_google_health_callback_rejects_bad_state(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
@@ -281,7 +287,13 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
             saved_prompts.append(prompt)
             return "Causal explanation from fake provider."
 
-    def _fake_resolve(user_id: Any = None, *, server_gemini_key: Any = None, server_gemini_model: Any = None, db_path: str = "workout_agent.db") -> Any:
+    def _fake_resolve(
+        user_id: Any = None,
+        *,
+        server_gemini_key: Any = None,
+        server_gemini_model: Any = None,
+        db_path: str = "workout_agent.db",
+    ) -> Any:
         captured.append(
             {
                 "user_id": user_id,
@@ -321,7 +333,13 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
         def generate(self, prompt: Any, *, stream: bool = False) -> Any:
             return '{"Deadlift_Projected": 200, "Pullups_Projected": 25, "Validation": "ok"}'
 
-    def _fake_resolve(user_id: Any = None, *, server_gemini_key: Any = None, server_gemini_model: Any = None, db_path: str = "workout_agent.db") -> Any:
+    def _fake_resolve(
+        user_id: Any = None,
+        *,
+        server_gemini_key: Any = None,
+        server_gemini_model: Any = None,
+        db_path: str = "workout_agent.db",
+    ) -> Any:
         captured.append(
             {
                 "user_id": user_id,
@@ -354,7 +372,13 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
                 return iter(["Response from fake provider."])
             return "Response from fake provider."
 
-    def _fake_resolve(user_id: Any = None, *, server_gemini_key: Any = None, server_gemini_model: Any = None, db_path: str = "workout_agent.db") -> Any:
+    def _fake_resolve(
+        user_id: Any = None,
+        *,
+        server_gemini_key: Any = None,
+        server_gemini_model: Any = None,
+        db_path: str = "workout_agent.db",
+    ) -> Any:
         captured.append(
             {
                 "user_id": user_id,
@@ -384,8 +408,7 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
             return "ok"
 
     monkeypatch.setattr(
-        "webapp.app.resolve_provider",
-        lambda user_id=None, **kw: _StubProvider()
+        "webapp.app.resolve_provider", lambda user_id=None, **kw: _StubProvider()
     )
     from config import Config
 

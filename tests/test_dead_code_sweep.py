@@ -176,9 +176,7 @@ class TestFindOrphansWithMockRepo:
 
     def test_grep_fallback_catches_dynamic_import(self, tmp_path: Path) -> None:
         """If AST misses an import but grep finds it, the module is NOT orphaned."""
-        (tmp_path / "main.py").write_text(
-            'm = __import__("dynamic_mod")\n'
-        )
+        (tmp_path / "main.py").write_text('m = __import__("dynamic_mod")\n')
         (tmp_path / "dynamic_mod.py").write_text("x = 1\n")
         (tmp_path / "conftest.py").write_text("")
 
@@ -354,7 +352,9 @@ class TestCLISmoke:
             timeout=30,
             check=False,
         )
-        assert result.returncode == 0, f"Unexpected orphans:\n{result.stdout}\n{result.stderr}"
+        assert result.returncode == 0, (
+            f"Unexpected orphans:\n{result.stdout}\n{result.stderr}"
+        )
 
     def test_json_output(self) -> None:
         result = subprocess.run(
