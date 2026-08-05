@@ -30,7 +30,7 @@ def _points(point_key, value_field, samples):
         "dataPoints": [
             {point_key: {value_field: value, "sampleTime": {"physicalTime": when}}}
             for when, value in samples
-        ]
+        ],
     }
 
 
@@ -45,7 +45,7 @@ def test_fetch_body_metrics_reads_latest(monkeypatch):
                         ("2026-06-15T08:00:00Z", 15.2),
                         ("2026-06-17T08:00:00Z", 14.6),
                     ],
-                )
+                ),
             )
         return _FakeResponse(
             _points(
@@ -55,7 +55,7 @@ def test_fetch_body_metrics_reads_latest(monkeypatch):
                     ("2026-06-15T08:00:00Z", 83000),
                     ("2026-06-17T08:00:00Z", 81500),
                 ],
-            )
+            ),
         )
 
     monkeypatch.setattr(google_health_client.requests, "get", fake_get)
@@ -75,7 +75,7 @@ def test_fetch_body_metrics_picks_latest_regardless_of_order(monkeypatch):
                     ("2026-06-17T08:00:00Z", 81500),
                     ("2026-06-15T08:00:00Z", 83000),
                 ],
-            )
+            ),
         )
 
     monkeypatch.setattr(google_health_client.requests, "get", fake_get)
@@ -104,16 +104,16 @@ def test_sync_persists_refresh_token(tmp_path, monkeypatch):
         # The request must carry the stored refresh token.
         assert kwargs["data"]["refresh_token"] == "env-token"
         return _FakeResponse(
-            {"access_token": "access-1", "refresh_token": "rotated-token"}
+            {"access_token": "access-1", "refresh_token": "rotated-token"},
         )
 
     def fake_get(url, **kwargs):
         if "body-fat" in url:
             return _FakeResponse(
-                _points("bodyFat", "percentage", [("2026-06-17T08:00:00Z", 14.0)])
+                _points("bodyFat", "percentage", [("2026-06-17T08:00:00Z", 14.0)]),
             )
         return _FakeResponse(
-            _points("weight", "weightGrams", [("2026-06-17T08:00:00Z", 80000)])
+            _points("weight", "weightGrams", [("2026-06-17T08:00:00Z", 80000)]),
         )
 
     monkeypatch.setattr(google_health_client.requests, "post", fake_post)
@@ -198,9 +198,9 @@ def test_latest_value_handles_non_dict_sample_time(monkeypatch):
                     "percentage": 14.0,
                     # sampleTime is a string instead of a nested dict
                     "sampleTime": "2026-07-01T08:00:00Z",
-                }
-            }
-        ]
+                },
+            },
+        ],
     }
     monkeypatch.setattr(
         google_health_client.requests,
@@ -208,7 +208,7 @@ def test_latest_value_handles_non_dict_sample_time(monkeypatch):
         lambda url, **kwargs: _FakeResponse(points),
     )
     result = google_health_client._latest_value(
-        "access", "body-fat", "bodyFat", "percentage"
+        "access", "body-fat", "bodyFat", "percentage",
     )
     assert result == 14.0  # value still readable without a parseable time
 
@@ -220,9 +220,9 @@ def test_latest_value_handles_missing_sample_time(monkeypatch):
             {
                 "bodyFat": {
                     "percentage": 14.0,
-                }
-            }
-        ]
+                },
+            },
+        ],
     }
     monkeypatch.setattr(
         google_health_client.requests,
@@ -230,7 +230,7 @@ def test_latest_value_handles_missing_sample_time(monkeypatch):
         lambda url, **kwargs: _FakeResponse(points),
     )
     result = google_health_client._latest_value(
-        "access", "body-fat", "bodyFat", "percentage"
+        "access", "body-fat", "bodyFat", "percentage",
     )
     assert result == 14.0  # value still readable without a sample time
 
@@ -257,7 +257,7 @@ def test_fetch_body_metrics_graceful_on_malformed_json(monkeypatch):
             raise ValueError("not json")
 
     monkeypatch.setattr(
-        google_health_client.requests, "get", lambda url, **kwargs: _Bad()
+        google_health_client.requests, "get", lambda url, **kwargs: _Bad(),
     )
     metrics = google_health_client.fetch_body_metrics("access")
     assert metrics is None

@@ -98,7 +98,7 @@ def generate_weekly_correlations(config: Config) -> None:
 
     # Also fetch training history for the last 60 days
     all_history = get_progress_history(
-        limit_per_exercise=60, db_path=config.database_path
+        limit_per_exercise=60, db_path=config.database_path,
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -140,10 +140,10 @@ Use Markdown format. Output the Markdown report directly.
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--daily", action="store_true", help="Generate daily insight header"
+        "--daily", action="store_true", help="Generate daily insight header",
     )
     parser.add_argument(
-        "--weekly", action="store_true", help="Generate weekly deep correlations"
+        "--weekly", action="store_true", help="Generate weekly deep correlations",
     )
     args = parser.parse_args()
 

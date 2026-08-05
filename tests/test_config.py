@@ -53,7 +53,7 @@ class TestParseWeekday:
 
 class TestConfigLoad:
     def test_missing_required_raises_config_error(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -62,7 +62,7 @@ class TestConfigLoad:
             Config.load()
 
     def test_missing_shows_all_missing_at_once(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "test-key")
         monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
@@ -103,7 +103,7 @@ class TestConfigLoad:
         assert cfg.hevy_api_key == "hevy-key"
 
     def test_google_health_optional_all_none(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tt")
@@ -164,7 +164,7 @@ class TestConfigLoad:
         assert cfg.self_review_enabled is False
 
     def test_gemini_model_default_and_override(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tt")
@@ -178,7 +178,7 @@ class TestConfigLoad:
         assert cfg.gemini_model == "gemini-2.5-pro"
 
     def test_database_path_default_and_override(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tt")
@@ -204,7 +204,7 @@ class TestConfigLoad:
         assert cfg.telegram_parse_mode == "MarkdownV2"
 
     def test_self_review_weekday_default_and_override(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tt")
@@ -229,7 +229,7 @@ class TestConfigLoad:
         assert cfg.hevy_api_key == "hevy"
 
     def test_whitespace_only_treated_as_missing(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "   ")
         monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "   ")

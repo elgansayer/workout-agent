@@ -50,7 +50,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 date TEXT NOT NULL,
                 hevy_payload TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -59,7 +59,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 current_day INTEGER NOT NULL,
                 split_name TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -71,7 +71,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 top_reps INTEGER,
                 sets INTEGER NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -80,7 +80,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 routine_id TEXT NOT NULL,
                 content_hash TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -88,7 +88,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -100,7 +100,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 weeks INTEGER NOT NULL,
                 message TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -113,7 +113,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 plan TEXT NOT NULL,
                 lifestyle TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -126,7 +126,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 resting_hr INTEGER,
                 hrv REAL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -135,7 +135,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 date TEXT NOT NULL,
                 insight_json TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -144,7 +144,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 date TEXT NOT NULL,
                 insight_markdown TEXT NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -154,7 +154,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 exercise_name TEXT NOT NULL,
                 reasoning TEXT NOT NULL
             )
-            """
+            """,
         )
 
         # Note: For new databases the initial programme_state row is
@@ -176,26 +176,26 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 content TEXT NOT NULL,
                 created_at TEXT NOT NULL
             )
-            """
+            """,
         )
 
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)",
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)",
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)",
         )
         # ⚡ Bolt Optimization: Add indexes to eliminate slow TEMP B-TREE sorts on large progress tables.
         # - idx_exercise_progress_name_id optimizes get_progress_history, get_recent_bests, and get_exercise_volumes
         # - idx_exercise_progress_date optimizes get_session_volumes
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id)"
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress (exercise_name, id)",
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date)"
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress (date)",
         )
 
         # Migration: Add hrv column to body_metrics if it doesn't exist
@@ -215,7 +215,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 timezone TEXT DEFAULT 'UTC',
                 units TEXT DEFAULT 'metric'
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -232,7 +232,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 UNIQUE(user_id, provider)
             )
-            """
+            """,
         )
         cursor.execute(
             """
@@ -241,10 +241,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 ip TEXT NOT NULL,
                 timestamp REAL NOT NULL
             )
-            """
+            """,
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)"
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)",
         )
 
         cursor.execute(
@@ -260,7 +260,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 custom_rules TEXT,
                 updated_at TEXT NOT NULL DEFAULT ''
             )
-            """
+            """,
         )
 
         # Migration: Add user_id column to workout_history for multi-tenancy
@@ -268,7 +268,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         woh_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in woh_columns:
             cursor.execute(
-                "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             # Backfill existing rows with a synthesised legacy user
             from uuid import uuid4
@@ -276,7 +276,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
             ).fetchone()
             if legacy_row:
                 legacy_id = legacy_row[0]
@@ -293,7 +293,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
-            "ON workout_history (user_id, date DESC, id DESC)"
+            "ON workout_history (user_id, date DESC, id DESC)",
         )
 
         # Migration: Add user_id column to exercise_progress for multi-tenancy
@@ -301,7 +301,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         ep_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in ep_columns:
             cursor.execute(
-                "ALTER TABLE exercise_progress ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE exercise_progress ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             cursor.execute(
                 "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
@@ -310,11 +310,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute("DROP INDEX IF EXISTS idx_exercise_progress_user")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_name_id "
-            "ON exercise_progress (user_id, exercise_name, id DESC)"
+            "ON exercise_progress (user_id, exercise_name, id DESC)",
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_date "
-            "ON exercise_progress (user_id, date ASC)"
+            "ON exercise_progress (user_id, date ASC)",
         )
 
         # Migration: Add user_id column to body_metrics for multi-tenancy
@@ -322,7 +322,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         bm_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in bm_columns:
             cursor.execute(
-                "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             cursor.execute(
                 "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
@@ -331,7 +331,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
-            "ON body_metrics (user_id, date DESC, id DESC)"
+            "ON body_metrics (user_id, date DESC, id DESC)",
         )
 
         # ---- Programme templates table (multi-user) ----
@@ -348,11 +348,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL,
                 UNIQUE(user_id, template_key)
             )
-            """
+            """,
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
-            "ON programmes (user_id, active)"
+            "ON programmes (user_id, active)",
         )
 
         # ---- Multi-tenant migration helper ----
@@ -361,7 +361,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             from uuid import uuid4
 
             row = cur.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
             ).fetchone()
             if row:
                 return row[0]
@@ -383,7 +383,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cm_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in cm_columns:
             cursor.execute(
-                "ALTER TABLE chat_messages ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE chat_messages ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             chat_legacy_id = _ensure_legacy_user(cursor)
             cursor.execute(
@@ -392,7 +392,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_user "
-            "ON chat_messages (user_id, id DESC)"
+            "ON chat_messages (user_id, id DESC)",
         )
 
         # Migration: Migrate dashboard_insights from singleton to user_id-scoped
@@ -407,10 +407,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     insight_json TEXT NOT NULL,
                     PRIMARY KEY (user_id)
                 )
-                """
+                """,
             )
             old_row = cursor.execute(
-                "SELECT date, insight_json FROM dashboard_insights WHERE id = 1"
+                "SELECT date, insight_json FROM dashboard_insights WHERE id = 1",
             ).fetchone()
             if old_row:
                 di_legacy_id = _ensure_legacy_user(cursor)
@@ -421,7 +421,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 )
             cursor.execute("DROP TABLE dashboard_insights")
             cursor.execute(
-                "ALTER TABLE dashboard_insights_new RENAME TO dashboard_insights"
+                "ALTER TABLE dashboard_insights_new RENAME TO dashboard_insights",
             )
 
         # Migration: Migrate deep_correlations from singleton to user_id-scoped
@@ -436,10 +436,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     insight_markdown TEXT NOT NULL,
                     PRIMARY KEY (user_id)
                 )
-                """
+                """,
             )
             old_row = cursor.execute(
-                "SELECT date, insight_markdown FROM deep_correlations WHERE id = 1"
+                "SELECT date, insight_markdown FROM deep_correlations WHERE id = 1",
             ).fetchone()
             if old_row:
                 dc_legacy_id = _ensure_legacy_user(cursor)
@@ -450,7 +450,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 )
             cursor.execute("DROP TABLE deep_correlations")
             cursor.execute(
-                "ALTER TABLE deep_correlations_new RENAME TO deep_correlations"
+                "ALTER TABLE deep_correlations_new RENAME TO deep_correlations",
             )
 
         # Migration: Add user_id column to daily_log for multi-tenancy
@@ -458,7 +458,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         dl_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in dl_columns:
             cursor.execute(
-                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             dl_legacy_id = _ensure_legacy_user(cursor)
             cursor.execute(
@@ -467,7 +467,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
-            "ON daily_log (user_id, date DESC, id DESC)"
+            "ON daily_log (user_id, date DESC, id DESC)",
         )
 
         # Migration: Add user_id column to check_ins for multi-tenancy
@@ -475,7 +475,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         ci_columns = {row[1] for row in cursor.fetchall()}
         if "user_id" not in ci_columns:
             cursor.execute(
-                "ALTER TABLE check_ins ADD COLUMN user_id TEXT REFERENCES users(id)"
+                "ALTER TABLE check_ins ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
             ci_legacy_id = _ensure_legacy_user(cursor)
             cursor.execute(
@@ -484,7 +484,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_check_ins_user "
-            "ON check_ins (user_id, id DESC)"
+            "ON check_ins (user_id, id DESC)",
         )
 
         # Migration: Migrate programme_state from singleton to user_id-scoped
@@ -499,10 +499,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     split_name TEXT NOT NULL,
                     PRIMARY KEY (user_id)
                 )
-                """
+                """,
             )
             old_row = cursor.execute(
-                "SELECT current_day, split_name FROM programme_state WHERE id = 1"
+                "SELECT current_day, split_name FROM programme_state WHERE id = 1",
             ).fetchone()
             if old_row:
                 ps_legacy_id = _ensure_legacy_user(cursor)
@@ -541,7 +541,7 @@ def get_current_day(
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT current_day FROM programme_state LIMIT 1"
+                "SELECT current_day FROM programme_state LIMIT 1",
             ).fetchone()
     return int(row[0]) if row else 1
 
@@ -703,7 +703,7 @@ def get_recent_bests(
                     SELECT MAX(id) FROM exercise_progress GROUP BY exercise_name
                 )
                 ORDER BY exercise_name
-                """
+                """,
             ).fetchall()
 
     bests: dict[str, dict[str, Any]] = {}
@@ -769,7 +769,7 @@ def get_progress_history(
                 "top_reps": reps,
                 "sets": sets,
                 "date": when,
-            }
+            },
         )
     return series
 
@@ -810,7 +810,7 @@ def get_session_volumes(
                 FROM exercise_progress
                 GROUP BY date
                 ORDER BY date ASC
-                """
+                """,
             ).fetchall()
     return [
         {"date": when, "volume": float(volume or 0), "exercises": int(exercises)}
@@ -853,7 +853,7 @@ def get_exercise_volumes(
                 FROM exercise_progress
                 GROUP BY exercise_name
                 ORDER BY volume DESC
-                """
+                """,
             ).fetchall()
     return [
         {"exercise": name, "volume": float(volume or 0), "sessions": int(sessions)}
@@ -905,7 +905,7 @@ def get_personal_records(
                 WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
                 GROUP BY exercise_name
                 ORDER BY e1rm DESC
-                """
+                """,
             ).fetchall()
 
     return [
@@ -921,7 +921,7 @@ def get_personal_records(
 
 
 def get_routine_record(
-    routine_key: str, db_path: str = DEFAULT_DB_PATH
+    routine_key: str, db_path: str = DEFAULT_DB_PATH,
 ) -> tuple[str, str] | None:
     """Return (routine_id, content_hash) for a synced routine, or None."""
     with _connect(db_path) as conn:
@@ -956,7 +956,7 @@ def get_meta(key: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
     """Return a stored metadata value, or None if absent."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT value FROM hevy_meta WHERE key = ?", (key,)
+            "SELECT value FROM hevy_meta WHERE key = ?", (key,),
         ).fetchone()
     return row[0] if row else None
 
@@ -974,7 +974,7 @@ def set_meta(key: str, value: str, db_path: str = DEFAULT_DB_PATH) -> None:
 
 
 def check_rate_limit(
-    ip: str, limit: int = 10, window: int = 60, *, db_path: str = DEFAULT_DB_PATH
+    ip: str, limit: int = 10, window: int = 60, *, db_path: str = DEFAULT_DB_PATH,
 ) -> bool:
     """Return True if the IP is within the rate-limit window, inserting a new entry.
 
@@ -987,7 +987,7 @@ def check_rate_limit(
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
         count = conn.execute(
-            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?", (ip,)
+            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?", (ip,),
         ).fetchone()[0]
         if count >= limit:
             return True
@@ -1303,7 +1303,7 @@ def get_dashboard_insight(
 
 
 def save_reasoning_log(
-    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH
+    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Save an AI reasoning log for an exercise change."""
     with _connect(db_path) as conn:
@@ -1327,7 +1327,7 @@ def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | 
     """Get the reasoning log by context_id."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)
+            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,),
         ).fetchone()
     return row[0] if row else None
 
@@ -1501,7 +1501,7 @@ def get_or_create_user(
 
 
 def get_user_by_id(
-    user_id: str, db_path: str = DEFAULT_DB_PATH
+    user_id: str, db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
@@ -1526,7 +1526,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units FROM users"
+            "SELECT id, email, display_name, created_at, timezone, units FROM users",
         ).fetchall()
     return [
         {
@@ -1594,7 +1594,7 @@ def save_user_api_key(
 
 
 def get_user_api_key(
-    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH
+    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     """Return the decrypted API key record for a user + provider, or None."""
     with _connect(db_path) as conn:
@@ -1620,7 +1620,7 @@ def get_user_api_key(
 
 
 def get_user_api_keys(
-    user_id: str, db_path: str = DEFAULT_DB_PATH
+    user_id: str, db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
     """Return all API key records for a user, keyed by provider name.
 
@@ -1651,7 +1651,7 @@ def get_user_api_keys(
 
 
 def delete_user_api_key(
-    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH
+    user_id: str, provider: str, db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Remove a stored API key for a user + provider."""
     with _connect(db_path) as conn:
@@ -1712,7 +1712,7 @@ def save_user_preferences(
 
 
 def get_user_preferences(
-    user_id: str, db_path: str = DEFAULT_DB_PATH
+    user_id: str, db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
     defaults: dict[str, Any] = {
@@ -1776,7 +1776,7 @@ def _build_template_definition() -> dict[str, Any]:
                     "template_id": block.pullups.template_id,
                 },
                 "accessory_emphasis": block.accessory_emphasis,
-            }
+            },
         )
 
     days: list[dict[str, Any]] = []
@@ -1791,10 +1791,10 @@ def _build_template_definition() -> dict[str, Any]:
                     "rep_range": ex.rep_range,
                     "note": ex.note,
                     "template_id": ex.template_id,
-                }
+                },
             )
         days.append(
-            {"number": day_num, "focus": day_focus(day_num), "exercises": exercises}
+            {"number": day_num, "focus": day_focus(day_num), "exercises": exercises},
         )
 
     return {

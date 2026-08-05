@@ -72,7 +72,7 @@ class InferredProgramme:
     # Frequency analysis.
     sessions_per_week: float = 0.0
     muscle_frequency: dict[str, float] = field(
-        default_factory=dict
+        default_factory=dict,
     )  # muscle -> sessions/week
 
     # Training history stats.
@@ -330,7 +330,7 @@ def infer_programme(hevy_data: HevyTrainingData) -> InferredProgramme:
 
     # Next routine suggestion.
     programme.next_routine = _determine_next_routine(
-        programme.training_days, hevy_data.recent_workouts
+        programme.training_days, hevy_data.recent_workouts,
     )
 
     logger.info(

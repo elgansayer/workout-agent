@@ -118,7 +118,7 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None
+    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
     """Resolve the lifestyle pillars for the given cycle day.
 

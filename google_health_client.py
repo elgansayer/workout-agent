@@ -43,7 +43,7 @@ _KEY_REFRESH_TOKEN = "google_health_refresh_token"
 
 
 def _refresh_tokens(
-    client_id: str, client_secret: str, refresh_token: str
+    client_id: str, client_secret: str, refresh_token: str,
 ) -> tuple[str, str] | None:
     """Exchange a refresh token for a new access token.
 
@@ -81,7 +81,7 @@ def _refresh_tokens(
 
 
 def _latest_value(
-    access_token: str, data_type: str, point_key: str, value_field: str
+    access_token: str, data_type: str, point_key: str, value_field: str,
 ) -> float | None:
     """Return the most recent numeric value from a Google Health data type.
 
@@ -90,7 +90,7 @@ def _latest_value(
     numeric field within it (e.g. "percentage").
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
+        "%Y-%m-%dT%H:%M:%SZ",
     )
     # Filter fields use the snake_case form of the data type name.
     filter_field = data_type.replace("-", "_")
@@ -102,7 +102,7 @@ def _latest_value(
                 "Accept": "application/json",
             },
             params={
-                "filter": f'{filter_field}.sample_time.physical_time >= "{cutoff}"'
+                "filter": f'{filter_field}.sample_time.physical_time >= "{cutoff}"',
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -145,10 +145,10 @@ def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
     weight_grams = _latest_value(access_token, "weight", "weight", "weightGrams")
     fat = _latest_value(access_token, "body-fat", "bodyFat", "percentage")
     resting_hr = _latest_value(
-        access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute"
+        access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute",
     )
     hrv = _latest_value(
-        access_token, "heart-rate-variability", "heartRateVariability", "rmssd"
+        access_token, "heart-rate-variability", "heartRateVariability", "rmssd",
     )
     metrics: dict[str, Any] = {}
     if weight_grams is not None:

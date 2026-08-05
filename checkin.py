@@ -147,7 +147,7 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict]
+    name: str, planned: str, rep_range: str, history: list[dict],
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
@@ -222,7 +222,7 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+    due_info: CheckinDue, block: Block, reviews: list[LiftReview],
 ) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
@@ -267,7 +267,7 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
 
 
 def record(
-    config: Config, due_info: CheckinDue, message: str, today: date | None = None
+    config: Config, due_info: CheckinDue, message: str, today: date | None = None,
 ) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:

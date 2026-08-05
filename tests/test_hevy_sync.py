@@ -111,7 +111,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
     # Leg Press range 10-12; last top set was 12 reps at 100kg -> bump.
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12}
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12},
     ]
     assert hevy_sync._target_weight(ex, history) == 102.5
 
@@ -119,7 +119,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
 def test_target_weight_holds_when_below_top() -> None:
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10}
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10},
     ]
     assert hevy_sync._target_weight(ex, history) == 100.0
 

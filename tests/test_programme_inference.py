@@ -25,7 +25,7 @@ from programme_inference import (
 
 
 def _make_template(
-    tid: str, title: str, primary: str, secondaries: list[str] | None = None
+    tid: str, title: str, primary: str, secondaries: list[str] | None = None,
 ) -> ExerciseTemplate:
     return ExerciseTemplate(
         id=tid,
@@ -72,7 +72,7 @@ def test_classify_routine_muscles_ranks_primary_then_secondary():
         "2": _make_template("2", "Tricep Pushdown", "triceps"),
     }
     routine = _make_routine(
-        "Push Day", "r1", [_make_routine_exercise("1"), _make_routine_exercise("2")]
+        "Push Day", "r1", [_make_routine_exercise("1"), _make_routine_exercise("2")],
     )
     result = _classify_routine_muscles(routine, templates)
     # Chest has count 1.0, triceps has 1.0 + 0.5 = 1.5 -> triceps first.
@@ -217,7 +217,7 @@ def test_determine_next_round_robin():
 
 
 def _make_workout_exercise(
-    tid: str, title: str, weight: float, reps: int
+    tid: str, title: str, weight: float, reps: int,
 ) -> WorkoutExercise:
     return WorkoutExercise(
         template_id=tid,
@@ -304,7 +304,7 @@ def test_infer_programme_empty_data():
 
 def test_training_day_focus_summary():
     td = TrainingDay(
-        title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"]
+        title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"],
     )
     assert "Chest" in td.focus_summary()
     assert "Shoulders" in td.focus_summary()
