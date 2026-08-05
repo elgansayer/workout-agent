@@ -29,11 +29,13 @@ def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
 
     # Mock the AI provider to return valid insight JSON
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = json.dumps({
-        "fatigue": "Green",
-        "wins_stalls": "All lifts progressing",
-        "advice": "Keep pushing",
-    })
+    fake_provider.generate.return_value = json.dumps(
+        {
+            "fatigue": "Green",
+            "wins_stalls": "All lifts progressing",
+            "advice": "Keep pushing",
+        }
+    )
     fake_provider.name.return_value = "Gemini (test)"
 
     monkeypatch.setattr(
@@ -60,7 +62,9 @@ def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
     assert parsed["advice"] == "Keep pushing"
 
 
-def test_generate_daily_header_strips_markdown_code_blocks(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_strips_markdown_code_blocks(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
@@ -82,7 +86,9 @@ def test_generate_daily_header_strips_markdown_code_blocks(monkeypatch, tmp_path
     assert parsed["fatigue"] == "Yellow"
 
 
-def test_generate_daily_header_invalid_json_structure_not_saved(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_invalid_json_structure_not_saved(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
@@ -119,11 +125,13 @@ def test_generate_daily_header_filters_by_date_cutoff(monkeypatch, tmp_path) -> 
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = json.dumps({
-        "fatigue": "Green",
-        "wins_stalls": "Good",
-        "advice": "Go",
-    })
+    fake_provider.generate.return_value = json.dumps(
+        {
+            "fatigue": "Green",
+            "wins_stalls": "Good",
+            "advice": "Go",
+        }
+    )
     fake_provider.name.return_value = "Gemini (test)"
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
 
@@ -161,7 +169,9 @@ def test_generate_weekly_correlations_saves_markdown(monkeypatch, tmp_path) -> N
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = "## Correlation Report\n\nPull-ups stall after poor sleep."
+    fake_provider.generate.return_value = (
+        "## Correlation Report\n\nPull-ups stall after poor sleep."
+    )
     fake_provider.name.return_value = "Gemini (test)"
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
@@ -179,7 +189,9 @@ def test_generate_weekly_correlations_saves_markdown(monkeypatch, tmp_path) -> N
     assert "Pull-ups stall" in saved[0]
 
 
-def test_generate_weekly_correlations_empty_response_not_saved(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_empty_response_not_saved(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
@@ -200,7 +212,9 @@ def test_generate_weekly_correlations_empty_response_not_saved(monkeypatch, tmp_
     assert len(saved) == 0
 
 
-def test_generate_weekly_correlations_exception_is_handled(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_exception_is_handled(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
@@ -214,7 +228,9 @@ def test_generate_weekly_correlations_exception_is_handled(monkeypatch, tmp_path
     generate_weekly_correlations(config)  # type: ignore[arg-type]
 
 
-def test_generate_weekly_correlations_filters_history_by_date(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_filters_history_by_date(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
@@ -227,7 +243,9 @@ def test_generate_weekly_correlations_filters_history_by_date(monkeypatch, tmp_p
     # All history entries are newer than 60 days ago, should all be included
     monkeypatch.setattr(
         "insight_cron.get_progress_history",
-        lambda **kw: {"Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]},
+        lambda **kw: {
+            "Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]
+        },
     )
 
     saved = []
