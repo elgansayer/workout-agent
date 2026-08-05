@@ -17,6 +17,5 @@
 - **Working tree**: No untracked `.env`, `.db`, or `data/` files. `workout_agent.db`
   exists locally but is covered by `.gitignore` (`*.db`).
 
-**Verification gates**: ruff clean (0 warnings), mypy clean apart from pre-existing
-  missing library stubs (types-requests, types-Authlib), 432 pytest tests pass.
-  No action required.
+**Verification gates**: ruff clean (0 warnings), mypy clean (0 issues),
+  475 pytest tests pass. No action required.
