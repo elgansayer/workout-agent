@@ -114,7 +114,14 @@ class TestEntryPoints:
 
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
-        expected = {"main.py", "scheduler.py", "sync_history.py", "insight_cron.py"}
+        expected = {
+            "main.py",
+            "scheduler.py",
+            "sync_history.py",
+            "insight_cron.py",
+            "dead_code_sweep.py",
+            "commit_hygiene.py",
+        }
         assert ENTRY_POINTS == expected
 
 
