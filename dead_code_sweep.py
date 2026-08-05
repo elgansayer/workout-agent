@@ -205,6 +205,15 @@ def find_orphans() -> list[OrphanReport]:
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
+    # Build name → relative-path mapping for module-defining files so BFS can
+    # resolve a module name back to its definition and discover its own imports.
+    _name_to_file: dict[str, str] = {}
+    for mi in modules:
+        try:
+            _name_to_file[mi.name] = str(mi.path.relative_to(ROOT))
+        except ValueError:
+            _name_to_file[mi.name] = str(mi.path)
+
     queue: list[str] = []
     for ep in entry_point_files:
         for imp in import_graph.get(ep, set()):
@@ -214,13 +223,13 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file(s) that define this module
-        for file_rel, imports in import_graph.items():
-            if module_name in imports:
-                for transitive in import_graph.get(file_rel, set()):
-                    if transitive not in wired:
-                        wired.add(transitive)
-                        queue.append(transitive)
+        # Look up the file that defines this module and discover its imports.
+        module_file = _name_to_file.get(module_name)
+        if module_file is not None and module_file in import_graph:
+            for transitive in import_graph[module_file]:
+                if transitive not in wired:
+                    wired.add(transitive)
+                    queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
