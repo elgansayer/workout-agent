@@ -17,7 +17,6 @@ to build plans, show progress, and render the dynamic UI.
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -132,14 +131,16 @@ def _classify_routine_muscles(
     templates: dict,
 ) -> list[str]:
     """Return a ranked list of primary muscle groups hit by this routine."""
-    counts: Counter = Counter()
+    counts: dict[str, float] = {}
     for ex in routine.exercises:
         tmpl = templates.get(ex.template_id)
         if tmpl:
-            counts[tmpl.primary_muscle_group] += 1
+            counts[tmpl.primary_muscle_group] = (
+                counts.get(tmpl.primary_muscle_group, 0.0) + 1.0
+            )
             for sec in tmpl.secondary_muscle_groups:
-                counts[sec] += 0.5
-    return [muscle for muscle, _ in counts.most_common()]
+                counts[sec] = counts.get(sec, 0.0) + 0.5
+    return sorted(counts, key=lambda k: counts[k], reverse=True)
 
 
 def _classify_split(days: list[TrainingDay]) -> str:
@@ -226,7 +227,7 @@ def _compute_frequency(
     weeks = window_days / 7
     sessions_per_week = len(recent) / weeks if weeks > 0 else 0
 
-    muscle_hits: Counter = Counter()
+    muscle_hits: dict[str, int] = {}
     for w in recent:
         session_muscles: set[str] = set()
         for ex in w.exercises:
@@ -234,7 +235,7 @@ def _compute_frequency(
             if tmpl:
                 session_muscles.add(tmpl.primary_muscle_group)
         for m in session_muscles:
-            muscle_hits[m] += 1
+            muscle_hits[m] = muscle_hits.get(m, 0) + 1
 
     muscle_freq = {m: round(count / weeks, 1) for m, count in muscle_hits.items()}
     return round(sessions_per_week, 1), muscle_freq
