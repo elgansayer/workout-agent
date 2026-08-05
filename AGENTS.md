@@ -197,11 +197,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Two independent, hand-rolled scheduling loops in one container**
-  (`docker-entrypoint.sh`'s bash sleep-loop and `scheduler.py`'s
-  Python sleep-loop), each single-timezone/single-recipient by construction.
-  Needs consolidating into one scheduler that can support per-user run times
-  once multi-tenancy lands.
+- **Scheduling consolidated.** `scheduler.py` replaced the old dual
+  sleep-loop design (`docker-entrypoint.sh` bash loop + Python
+  `insight_scheduler.py`). It provides a single unified scheduler with
+  per-user timezone support, dispatching coaching runs and insight jobs
+  from one long-running process.
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
