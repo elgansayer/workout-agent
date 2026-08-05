@@ -5,6 +5,9 @@ RUN_AT times, and dispatches due coaching runs (`main.py`) and insight jobs
 (`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is isolated so
 one user's failures do not block another's.
 
+Also runs the hourly dead-code & orphaned-module sweep (`dead_code_sweep.py`)
+once per hour to catch orphaned modules early.
+
 Designed to be the single long-running process inside the agent container.
 MODE=once / MODE=preview are handled by docker-entrypoint.sh before this
 scheduler is started.
@@ -108,6 +111,25 @@ def _run_insight_job(flag: str) -> bool:
         return False
 
 
+def _run_dead_code_sweep() -> bool:
+    """Run the hourly dead-code & orphaned-module sweep.
+
+    Uses ``--create-issues`` to file GitHub issues for any newly discovered
+    orphaned modules.  Returns True on success (exit 0 from the sweep).
+    """
+    logger.info("Running dead-code & orphaned-module sweep ...")
+    try:
+        subprocess.run(
+            [sys.executable, "dead_code_sweep.py", "--create-issues"],
+            check=False,  # exit 1 means orphans found, which is informational
+            timeout=120,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("Dead-code sweep timed out")
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -141,9 +163,20 @@ def run_scheduler() -> None:
     # so they fire at most once per UTC day / per Sunday.
     last_daily_date: str = ""
     last_weekly_date: str = ""
+    # Track the last hour we ran the dead-code sweep (fires once per hour).
+    last_sweep_hour: str = ""
 
     while True:
         now_utc = datetime.now(ZoneInfo("UTC"))
+
+        # --- Dead-code & orphaned-module sweep (fires once per hour) ---
+        current_hour = now_utc.strftime("%Y-%m-%dT%H")
+        if current_hour != last_sweep_hour:
+            try:
+                _run_dead_code_sweep()
+            except Exception:
+                logger.exception("Unhandled error in dead-code sweep")
+            last_sweep_hour = current_hour
 
         # --- Per-user coaching runs ---
         # Re-read users each loop so newly created accounts are picked up.

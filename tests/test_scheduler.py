@@ -116,6 +116,7 @@ def test_run_scheduler_bootstrap_calls_jobs(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
 
     iteration = [0]
 
@@ -151,6 +152,7 @@ def test_run_scheduler_dispatches_due_users(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
@@ -187,6 +189,7 @@ def test_run_scheduler_user_failure_isolated(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _failing_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: True)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
