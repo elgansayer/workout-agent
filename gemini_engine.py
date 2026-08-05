@@ -203,7 +203,9 @@ def generate_rest_day_message(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI generation returned an empty rest-day response; using fallback.")
+        logger.warning(
+            "AI generation returned an empty rest-day response; using fallback."
+        )
     except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
         logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
@@ -364,9 +366,7 @@ def apply_autonomous_adjustments(
         if isinstance(updated, dict):
             return updated
 
-        logger.warning(
-            "AI autonomous routines did not return a dict; using baseline."
-        )
+        logger.warning("AI autonomous routines did not return a dict; using baseline.")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "AI autonomous adjustment failed (%s); using baseline routines.", exc

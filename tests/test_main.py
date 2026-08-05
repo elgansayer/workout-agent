@@ -21,6 +21,7 @@ from main import (
 
 def test_compose_with_guidance_and_footer() -> None:
     from lifestyle import DailyGuidance
+
     guidance = DailyGuidance(
         training="Train: Legs",
         carb_tier="moderate",
@@ -29,7 +30,9 @@ def test_compose_with_guidance_and_footer() -> None:
         recovery="Sleep well.",
         protein_target=None,
     )
-    result = _compose("Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1.")
+    result = _compose(
+        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1."
+    )
     assert result.startswith("Workout plan here")
     assert "Today's lifestyle:" in result
     assert "Hevy routines refreshed: Day 1." in result
@@ -173,11 +176,14 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
         lambda key: {"id": "1", "title": "Day 1", "exercises": []},
     )
     from hevy_parser import WorkoutSummary
+
     monkeypatch.setattr(
         "main.parse_workout",
         lambda raw, targets: WorkoutSummary(
-            title="Day 1", date="2026-08-02",
-            duration_seconds=3600, total_volume_kg=2500,
+            title="Day 1",
+            date="2026-08-02",
+            duration_seconds=3600,
+            total_volume_kg=2500,
             exercises=[],
         ),
     )
@@ -192,21 +198,40 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
 
     # Mock insights
     from insights import LiftInsight, RecoveryInsight, TrainingInsights
+
     fake_insights = TrainingInsights(
-        lifts=[LiftInsight(
-            name="Deadlift (Barbell)", trend="progressing", metric="kg",
-            change_pct=5.0, sessions=4, latest=140.0, best=140.0,
-            slope_per_session=1.25, sessions_since_best=0, intervention=None,
-        )],
+        lifts=[
+            LiftInsight(
+                name="Deadlift (Barbell)",
+                trend="progressing",
+                metric="kg",
+                change_pct=5.0,
+                sessions=4,
+                latest=140.0,
+                best=140.0,
+                slope_per_session=1.25,
+                sessions_since_best=0,
+                intervention=None,
+            )
+        ],
         recovery=RecoveryInsight(
-            sleep_hours=7.5, resting_hr=58, resting_hr_trend="steady",
-            weight_kg=82.0, weight_trend="steady", body_fat_pct=None,
-            body_fat_trend=None, muscle_pct=None, is_catabolic=False,
-            status="good", directive="Stay the course.",
+            sleep_hours=7.5,
+            resting_hr=58,
+            resting_hr_trend="steady",
+            weight_kg=82.0,
+            weight_trend="steady",
+            body_fat_pct=None,
+            body_fat_trend=None,
+            muscle_pct=None,
+            is_catabolic=False,
+            status="good",
+            directive="Stay the course.",
         ),
         headline="All lifts progressing.",
     )
-    monkeypatch.setattr("main.insights_engine.build_insights", lambda *a, **kw: fake_insights)
+    monkeypatch.setattr(
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
+    )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
 
@@ -282,6 +307,7 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     _make_config(monkeypatch, tmp_path, hevy_api_key="hevy-key")
     # Patch Config.load to return a config with hevy_sync_routines=True
     from config import Config
+
     db_path = str(tmp_path / "test_main.db")
     config2 = Config(
         hevy_api_key="hevy-key",
@@ -336,6 +362,7 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     # Capture stdout to check footer appears
     import io
     import sys
+
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
 
@@ -378,6 +405,7 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
 
     import io
     import sys
+
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
 
@@ -403,10 +431,14 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
 
     # Make check-in due
     import checkin
+
     monkeypatch.setattr(
         "main.checkin.due",
         lambda cfg: checkin.CheckinDue(
-            number=1, workouts_done=24, weeks_elapsed=4, total_count=64,
+            number=1,
+            workouts_done=24,
+            weeks_elapsed=4,
+            total_count=64,
         ),
     )
     monkeypatch.setattr(
@@ -430,11 +462,14 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
         lambda key: {"id": "1", "title": "Day 1", "exercises": []},
     )
     from hevy_parser import WorkoutSummary
+
     monkeypatch.setattr(
         "main.parse_workout",
         lambda raw, targets: WorkoutSummary(
-            title="Day 1", date="2026-08-02",
-            duration_seconds=3600, total_volume_kg=2500,
+            title="Day 1",
+            date="2026-08-02",
+            duration_seconds=3600,
+            total_volume_kg=2500,
             exercises=[],
         ),
     )
@@ -445,21 +480,40 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
         lambda path: {"Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}},
     )
     from insights import LiftInsight, RecoveryInsight, TrainingInsights
+
     fake_insights = TrainingInsights(
-        lifts=[LiftInsight(
-            name="Deadlift (Barbell)", trend="progressing", metric="kg",
-            change_pct=5.0, sessions=4, latest=140.0, best=140.0,
-            slope_per_session=1.25, sessions_since_best=0, intervention=None,
-        )],
+        lifts=[
+            LiftInsight(
+                name="Deadlift (Barbell)",
+                trend="progressing",
+                metric="kg",
+                change_pct=5.0,
+                sessions=4,
+                latest=140.0,
+                best=140.0,
+                slope_per_session=1.25,
+                sessions_since_best=0,
+                intervention=None,
+            )
+        ],
         recovery=RecoveryInsight(
-            sleep_hours=7.5, resting_hr=58, resting_hr_trend="steady",
-            weight_kg=82.0, weight_trend="steady", body_fat_pct=None,
-            body_fat_trend=None, muscle_pct=None, is_catabolic=False,
-            status="good", directive="Stay the course.",
+            sleep_hours=7.5,
+            resting_hr=58,
+            resting_hr_trend="steady",
+            weight_kg=82.0,
+            weight_trend="steady",
+            body_fat_pct=None,
+            body_fat_trend=None,
+            muscle_pct=None,
+            is_catabolic=False,
+            status="good",
+            directive="Stay the course.",
         ),
         headline="All lifts progressing.",
     )
-    monkeypatch.setattr("main.insights_engine.build_insights", lambda *a, **kw: fake_insights)
+    monkeypatch.setattr(
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
+    )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("main.get_daily_logs", lambda **kw: [])
@@ -475,6 +529,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
 
     import io
     import sys
+
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
 
@@ -516,9 +571,11 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
 
     # Track Telegram send — must return True for success
     telegram_calls = []
+
     def _fake_send(token, chat_id, msg, **kw):
         telegram_calls.append((token, chat_id, msg))
         return True
+
     monkeypatch.setattr("main.send_telegram_message", _fake_send)
 
     result = run(preview=False)
@@ -700,7 +757,11 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
     # Self-review uses these
     monkeypatch.setattr(
         "main.get_progress_history",
-        lambda **kw: {"Deadlift (Barbell)": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]},
+        lambda **kw: {
+            "Deadlift (Barbell)": [
+                {"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}
+            ]
+        },
     )
     monkeypatch.setattr(
         "main.get_body_metrics",
@@ -718,6 +779,7 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
 
     import io
     import sys
+
     captured = io.StringIO()
     monkeypatch.setattr(sys, "stdout", captured)
 

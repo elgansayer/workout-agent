@@ -303,7 +303,9 @@ def test_infer_programme_empty_data():
 
 
 def test_training_day_focus_summary():
-    td = TrainingDay(title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"])
+    td = TrainingDay(
+        title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"]
+    )
     assert "Chest" in td.focus_summary()
     assert "Shoulders" in td.focus_summary()
     assert "Triceps" in td.focus_summary()

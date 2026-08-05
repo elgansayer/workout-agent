@@ -88,9 +88,7 @@ def sync_all(
             save_progress(summary, db_path, user_id=user_id)
             saved_count += 1
 
-    logger.info(
-        "Finished rebuilding history. Processed %d workouts.", saved_count
-    )
+    logger.info("Finished rebuilding history. Processed %d workouts.", saved_count)
     return {"workouts_found": len(workouts), "processed": saved_count}
 
 

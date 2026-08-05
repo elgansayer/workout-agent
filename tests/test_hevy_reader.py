@@ -125,10 +125,14 @@ def test_parse_routine_with_targets() -> None:
 
 
 def test_parse_routine_resolves_template_title() -> None:
-    templates = {"001": hevy_reader.ExerciseTemplate(
-        id="001", title="Bench Press", exercise_type="weight_reps",
-        primary_muscle_group="chest",
-    )}
+    templates = {
+        "001": hevy_reader.ExerciseTemplate(
+            id="001",
+            title="Bench Press",
+            exercise_type="weight_reps",
+            primary_muscle_group="chest",
+        )
+    }
     raw: dict[str, object] = {
         "id": "R2",
         "title": "Push Day",
@@ -159,7 +163,9 @@ def test_parse_workout_single_exercise() -> None:
         ],
     }
     tmpl = hevy_reader.ExerciseTemplate(
-        id="001", title="Bench Press", exercise_type="weight_reps",
+        id="001",
+        title="Bench Press",
+        exercise_type="weight_reps",
         primary_muscle_group="chest",
     )
     templates = {"001": tmpl}
@@ -212,19 +218,28 @@ def make_training_data() -> hevy_reader.HevyTrainingData:
     data = hevy_reader.HevyTrainingData()
     data.exercise_templates = {
         "001": hevy_reader.ExerciseTemplate(
-            id="001", title="Bench Press", exercise_type="weight_reps",
+            id="001",
+            title="Bench Press",
+            exercise_type="weight_reps",
             primary_muscle_group="chest",
         ),
         "002": hevy_reader.ExerciseTemplate(
-            id="002", title="Squat", exercise_type="weight_reps",
+            id="002",
+            title="Squat",
+            exercise_type="weight_reps",
             primary_muscle_group="quads",
         ),
     }
     data.routines = [
-        hevy_reader.Routine(id="R1", title="Push Day", exercises=[
-            hevy_reader.RoutineExercise(template_id="001", title="Bench Press",
-                                         sets=3, rest_seconds=90),
-        ]),
+        hevy_reader.Routine(
+            id="R1",
+            title="Push Day",
+            exercises=[
+                hevy_reader.RoutineExercise(
+                    template_id="001", title="Bench Press", sets=3, rest_seconds=90
+                ),
+            ],
+        ),
         hevy_reader.Routine(id="R2", title="Leg Day", exercises=[]),
     ]
     data.recent_workouts = [
@@ -276,8 +291,12 @@ def test_latest_workout() -> None:
 
 def _fake_templates(api_key: str) -> list[dict[str, object]]:
     return [
-        {"id": "001", "title": "Bench Press", "type": "weight_reps",
-         "primary_muscle_group": "chest"},
+        {
+            "id": "001",
+            "title": "Bench Press",
+            "type": "weight_reps",
+            "primary_muscle_group": "chest",
+        },
     ]
 
 
@@ -290,7 +309,8 @@ def _fake_routines(api_key: str) -> list[dict[str, object]]:
 def _fake_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, object]]:
     return [
         {
-            "id": "W1", "title": "Push session",
+            "id": "W1",
+            "title": "Push session",
             "start_time": "2025-06-01T08:00:00Z",
             "end_time": "2025-06-01T09:00:00Z",
             "exercises": [],
