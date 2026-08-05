@@ -185,12 +185,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   Python sleep-loop), each single-timezone/single-recipient by construction.
   Needs consolidating into one scheduler that can support per-user run times
   once multi-tenancy lands.
-- **Docs drift from code**: README.md claims the dashboard "has no login" —
-  it has a working Google OAuth login (`webapp/app.py`). README's documented
-  web port (8088/8080/8770 appear inconsistently across README and the two
-  compose files) needs reconciling. `SWARM_RELAXED_TESTS`-style "aspirational
-  comment" drift is exactly the kind of thing `task-daily-documentation-sync`
-  (§9) exists to catch — don't let it recur here.
+- **Docs drift from code** — ~~README.md claims the dashboard "has no login"~~
+  Resolved (issue #91): all files now consistently describe the working Google
+  OAuth login and use port 8088 (previously 8770/8088/8000 inconsistently).
+  Portainer env-vars table now documents `WEB_GOOGLE_CLIENT_ID`,
+  `WEB_GOOGLE_CLIENT_SECRET`, `WEB_AUTH_SECRET`, and `ALLOWED_EMAILS`.
 - **Zero test coverage** on the newest/most product-relevant modules:
   `ai_provider.py`, `gemini_engine.py`, `programme_inference.py`,
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
