@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-import dead_code_sweep
 from dead_code_sweep import (
     ENTRY_POINTS,
     ModuleInfo,
@@ -354,7 +353,6 @@ class TestCLISmoke:
             timeout=30,
             cwd=str(self._CWD),
             check=False,
-            cwd=dead_code_sweep.ROOT,
         )
         assert result.returncode == 0
         assert "dead-code" in result.stdout.lower() or "orphan" in result.stdout.lower()
@@ -368,7 +366,6 @@ class TestCLISmoke:
             timeout=30,
             cwd=str(self._CWD),
             check=False,
-            cwd=dead_code_sweep.ROOT,
         )
         assert result.returncode == 0, (
             f"Unexpected orphans:\n{result.stdout}\n{result.stderr}"
@@ -382,7 +379,6 @@ class TestCLISmoke:
             timeout=30,
             cwd=str(self._CWD),
             check=False,
-            cwd=dead_code_sweep.ROOT,
         )
         assert result.returncode == 0
         assert "status" in result.stdout
@@ -396,7 +392,6 @@ class TestCLISmoke:
             timeout=30,
             cwd=str(self._CWD),
             check=False,
-            cwd=dead_code_sweep.ROOT,
         )
         assert "--create-issues" in result.stdout
 
