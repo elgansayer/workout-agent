@@ -261,6 +261,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             # Backfill existing rows with a synthesised legacy user
             from uuid import uuid4
+
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
@@ -312,8 +313,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 (legacy_id,),
             )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user "
-            "ON body_metrics (user_id)"
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user ON body_metrics (user_id)"
         )
 
         # ---- Multi-tenant migration helper ----
@@ -330,8 +330,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cur.execute(
                 "INSERT INTO users (id, email, display_name, created_at) "
                 "VALUES (?, ?, ?, ?)",
-                (legacy_id2, "legacy@local", "Legacy Data",
-                 datetime.now(tz=timezone.utc).isoformat()),
+                (
+                    legacy_id2,
+                    "legacy@local",
+                    "Legacy Data",
+                    datetime.now(tz=timezone.utc).isoformat(),
+                ),
             )
             return legacy_id2
 
@@ -1135,7 +1139,11 @@ def save_deep_correlation(
                 date = excluded.date,
                 insight_markdown = excluded.insight_markdown
             """,
-            (user_id, datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
+            (
+                user_id,
+                datetime.now(tz=timezone.utc).date().isoformat(),
+                insight_markdown,
+            ),
         )
 
 

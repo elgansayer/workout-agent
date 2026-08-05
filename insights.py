@@ -283,15 +283,21 @@ def analyse_recovery(
     recent = readings[-14:]
     rhr_trend = _trend_of(
         [v for r in recent[-7:] if (v := r.get("resting_hr")) is not None],
-        "rising", "falling", 0.3,
+        "rising",
+        "falling",
+        0.3,
     )
     weight_trend = _trend_of(
         [v for r in recent[-7:] if (v := r.get("weight_kg")) is not None],
-        "rising", "falling", 0.05,
+        "rising",
+        "falling",
+        0.05,
     )
     bf_trend = _trend_of(
         [v for r in recent[-7:] if (v := r.get("body_fat_pct")) is not None],
-        "rising", "falling", 0.05,
+        "rising",
+        "falling",
+        0.05,
     )
 
     is_catabolic = False
