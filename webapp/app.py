@@ -887,6 +887,7 @@ def programmes_page(request: Request):
 @app.post("/api/programmes/select")
 async def select_programme(request: Request):
     """Activate a programme template for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
