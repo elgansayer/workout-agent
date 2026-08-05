@@ -3,6 +3,10 @@
 {% block content %}
 <section class="hero">
     <div class="cycle">Week {{ week }} of {{ cycle_weeks }} | {{ weekday }}</div>
+    <div class="rings">
+        {{ cycle_ring|safe }}
+        {{ block_ring|safe }}
+    </div>
     <h1>Block {{ block.number }}: {{ block.name }}</h1>
     <p class="muted">{{ block.focus }}</p>
     <div class="schemes">

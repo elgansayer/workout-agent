@@ -161,7 +161,6 @@ def _review_exercise(name: str, planned: str, rep_range: str,
         and change <= 0
         and rep_change is not None
         and rep_change <= 0
-        and not hit_top
     )
 
     if latest_w is not None and latest_r is not None:
