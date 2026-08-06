@@ -214,12 +214,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   import-sanity). Hourly test watch #490 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
-- **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
+- **Hourly dead-code sweep re-verified (#491).** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
   verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
-  (zero orphans), import-sanity (all reachable). Issue #479 sweep complete
-  — no newly orphaned or truly-dead modules found.
+  (zero orphans), import-sanity (all reachable), mypy (clean, 31 source files).
+  Issue #491 sweep complete — no newly orphaned or truly-dead modules found.
+  Stale pycache cleaned: 0.
 
 
 
