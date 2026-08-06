@@ -774,7 +774,9 @@ def main() -> int:
     # Always clean stale bytecode (safe no-op when nothing is orphaned).
     stale_cleaned = clean_stale_pycache()
     if stale_cleaned:
-        logger.info("Cleaned %d stale bytecode file(s) from prior removals.", stale_cleaned)
+        logger.info(
+            "Cleaned %d stale bytecode file(s) from prior removals.", stale_cleaned
+        )
 
     orphans = find_orphans()
 

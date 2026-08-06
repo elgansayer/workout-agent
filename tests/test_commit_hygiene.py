@@ -257,9 +257,7 @@ class TestCheckGitignore:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         gi = tmp_path / ".gitignore"
-        gi.write_text(
-            self._BASE_PATTERNS.replace("__pycache__/\n", "")
-        )
+        gi.write_text(self._BASE_PATTERNS.replace("__pycache__/\n", ""))
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert len(findings) == 1
@@ -268,9 +266,7 @@ class TestCheckGitignore:
 
     def test_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
-        gi.write_text(
-            self._BASE_PATTERNS.replace("*.db\n", "")
-        )
+        gi.write_text(self._BASE_PATTERNS.replace("*.db\n", ""))
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert len(findings) == 1
@@ -278,9 +274,7 @@ class TestCheckGitignore:
 
     def test_missing_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
-        gi.write_text(
-            self._BASE_PATTERNS.replace(".env\n", "")
-        )
+        gi.write_text(self._BASE_PATTERNS.replace(".env\n", ""))
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert len(findings) == 1
