@@ -211,7 +211,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   full test suite stands at 564 passing tests covering 30 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, mypy,
-  import-sanity). Hourly test watch #405 confirmed no drift.
+  import-sanity). Hourly test watch #405 confirmed no drift; all gates
+  green with no failures to resolve.
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
