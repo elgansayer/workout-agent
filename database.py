@@ -366,7 +366,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 ("legacy@local",),
             ).fetchone()
             if row:
-                return row[0]
+                return str(row[0])
             legacy_id2 = str(uuid4())
             cur.execute(
                 "INSERT INTO users (id, email, display_name, created_at) "
@@ -1342,7 +1342,10 @@ def get_dashboard_insight(
         ).fetchone()
     if row:
         try:
-            return json.loads(row[0])
+            result = json.loads(row[0])
+            if isinstance(result, dict):
+                return result
+            return None
         except json.JSONDecodeError:
             pass
     return None
