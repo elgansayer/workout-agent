@@ -98,3 +98,23 @@ def test_as_text_formatting():
 
     extreme = weather.WeatherConditions(32.0, 70.0, True)
     assert "Extreme Heat Warning" in extreme.as_text()
+
+
+def test_graceful_non_object_json(monkeypatch):
+    """Regression: non-object JSON from weather API must return None, not crash."""
+    monkeypatch.setattr(
+        weather.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse([1, 2, 3]),
+    )
+    assert weather.get_current_weather() is None
+
+
+def test_graceful_non_object_current(monkeypatch):
+    """Regression: non-object 'current' field must return None, not crash."""
+    monkeypatch.setattr(
+        weather.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({"current": [1, 2, 3]}),
+    )
+    assert weather.get_current_weather() is None

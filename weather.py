@@ -41,7 +41,14 @@ def get_current_weather(
     try:
         response = requests.get(url, timeout=TIMEOUT)
         response.raise_for_status()
-        data = response.json().get("current", {})
+        response_data = response.json()
+        if not isinstance(response_data, dict):
+            logger.warning("Weather API returned non-object JSON")
+            return None
+        data = response_data.get("current", {})
+        if not isinstance(data, dict):
+            logger.warning("Weather API returned non-object current data")
+            return None
 
         temp = data.get("temperature_2m")
         hum = data.get("relative_humidity_2m")

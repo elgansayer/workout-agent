@@ -66,6 +66,9 @@ def _refresh_tokens(
         )
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            logger.warning("Google Health returned non-object token JSON.")
+            return None
     except requests.RequestException as exc:
         logger.warning("Google Health token refresh failed: %s", exc)
         return None
@@ -112,7 +115,11 @@ def _latest_value(
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        points = response.json().get("dataPoints", [])
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Google Health returned non-object JSON for %s", data_type)
+            return None
+        points = data.get("dataPoints", [])
     except requests.RequestException as exc:
         logger.warning("Could not fetch Google Health %s: %s", data_type, exc)
         return None
@@ -123,6 +130,8 @@ def _latest_value(
     best_time: str = ""
     best_value: float | None = None
     for point in points:
+        if not isinstance(point, dict):
+            continue
         payload = point.get(point_key)
         if not isinstance(payload, dict):
             continue
