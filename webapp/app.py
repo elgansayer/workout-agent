@@ -1081,7 +1081,9 @@ def checkins(request: Request) -> Any:
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
     # context_id is expected to be {date}_{exercise_name}
-    existing = get_reasoning_log(context_id, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+
+    existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
         return {"reasoning": existing}
 
@@ -1092,7 +1094,6 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    user_id = request.session.get("user_id")
     provider = resolve_provider(
         user_id,
         db_path=DB_PATH,
@@ -1107,7 +1108,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         str(provider.generate(prompt)).strip() or "Could not determine reasoning."
     )
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
     return {"reasoning": reasoning}
 
 
