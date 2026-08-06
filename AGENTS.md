@@ -151,13 +151,11 @@ The end goal is a product where a user can, entirely from their own account:
    which connectors to link) — the Settings UI shell for this already
    exists; §3 and §2 are what make it actually take effect.
 3. **Select or build their workout programme** from the app rather than
-   inheriting a hardcoded split — this UI does not exist yet (only read-only
-   rendering of the fixed split does); building it is a first-class product
-   feature, not a stretch goal. `programme_inference.py`/`hevy_reader.py`
-
-   (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
-   natural foundation for an "infer from my Hevy history" option alongside
-   manually-authored templates.
+   inheriting a hardcoded split. The `/programmes` page now provides
+   template selection, Hevy-inference, and custom programme activation
+   (PR #142 onward). `programme_inference.py`/`hevy_reader.py` are wired
+   via `webapp/app.py`'s `_run_hevy_inference()` for the
+   "infer from my Hevy history" option.
 
 4. Have the agent **continuously track, adjust, and improve** that
    programme from connector data (Hevy sessions, body metrics, recovery)
@@ -167,7 +165,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-05)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -187,14 +185,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **`hevy_reader.py` and `programme_inference.py` are wired** into
   `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
-  orphaned; the remaining work is a full programme-selection UI (see next
-  item).
+  orphaned.
 - **`sync_history.py` is wired** — it is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
   endpoint). It is also executable standalone (`python sync_history.py`).
-- **No workout-programme selection UI.** `/plan` only renders the fixed
-  split read-only. No route lets a user choose a template or build a custom
-  one.
+- ~~**No workout-programme selection UI.**~~ **RESOLVED (2026-08-05).**
+  `/programmes` route and `programmes.html` template now provide template
+  selection, Hevy-inference, and custom programme activation (PR #142 onward).
 - **Scheduling has been consolidated** into a single unified `scheduler.py`
   (PR #142). `insight_scheduler.py` has been removed. The dual bash/Python
   sleep-loops described in prior audits no longer exist — `scheduler.py` is
@@ -204,6 +201,10 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
   `8770` across README and both compose files (reconciled 2026-08-05).
+  README.md AI-provider language updated to reflect multi-provider support
+  (no longer Gemini-only). Portainer-agent-on-port-9001 claim removed from
+  README (docker-compose.portainer.yml never had it). Dashboard route table
+  now includes `/programmes`. (Reconciled 2026-08-06.)
 
 - **Test coverage audit** (last updated 2026-08-05): all source modules
   now have corresponding test files. The full test suite stands at 533
