@@ -347,7 +347,7 @@ def _grep_import(module_name: str) -> list[str]:
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {escaped}|from {escaped}( |\\.))",
+                f"^\\s*(import {escaped}\\b|from {escaped}( |\\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -373,7 +373,8 @@ def _grep_import(module_name: str) -> list[str]:
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from {pkg} import .*{short}",
+                    "-E",
+                    f"^\\s*from {pkg} import .*\\b{short}\\b",
                     "--include=*.py",
                     str(ROOT),
                 ],
@@ -814,7 +815,8 @@ def main() -> int:
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
-    merely_orphaned = [r for r in orphans if r not in truly_dead]
+    dead_names = {r.module.name for r in truly_dead}
+    merely_orphaned = [r for r in orphans if r.module.name not in dead_names]
 
     exit_code = 0
 
