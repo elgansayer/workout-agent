@@ -17,6 +17,7 @@ from dead_code_sweep import (
     OrphanReport,
     _build_import_graph,
     _extract_imports,
+    _extract_submodule_imports,
     _get_github_repo,
     _get_github_token,
     _grep_import,
@@ -62,6 +63,66 @@ class TestExtractImports:
 
     def test_no_imports(self) -> None:
         assert _extract_imports("x = 1\ny = 2\n") == set()
+
+
+# ---------------------------------------------------------------------------
+# _extract_submodule_imports
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSubmoduleImports:
+    def test_from_webapp_import_charts(self) -> None:
+        """Pattern 1: from webapp import charts → webapp.charts"""
+        assert _extract_submodule_imports(
+            "from webapp import charts\n", {"webapp"}
+        ) == {"webapp.charts"}
+
+    def test_from_webapp_dot_charts_import_line_chart(self) -> None:
+        """Pattern 2: from webapp.charts import line_chart → webapp.charts"""
+        assert _extract_submodule_imports(
+            "from webapp.charts import line_chart\n", {"webapp"}
+        ) == {"webapp.charts"}
+
+    def test_deeply_nested_submodule(self) -> None:
+        """Pattern 3: from webapp.sub.dir import foo → webapp.sub.dir"""
+        assert _extract_submodule_imports(
+            "from webapp.sub.dir import foo\n", {"webapp"}
+        ) == {"webapp.sub.dir"}
+
+    def test_mixed_patterns(self) -> None:
+        source = "from webapp import charts\nfrom webapp.charts import line_chart\nfrom webapp import ai_widgets\n"
+        assert _extract_submodule_imports(source, {"webapp"}) == {
+            "webapp.charts",
+            "webapp.ai_widgets",
+        }
+
+    def test_multiple_local_packages(self) -> None:
+        """imports from non-webapp local packages should also resolve."""
+        assert _extract_submodule_imports(
+            "from foo import bar\n", {"webapp", "foo"}
+        ) == {"foo.bar"}
+
+    def test_non_local_imports_not_captured(self) -> None:
+        """stdlib imports should not be captured."""
+        assert (
+            _extract_submodule_imports(
+                "from os import path\nfrom collections import defaultdict\n",
+                {"webapp"},
+            )
+            == set()
+        )
+
+    def test_import_not_from_local_package(self) -> None:
+        """from thirdparty.lib import x should not match local packages."""
+        assert (
+            _extract_submodule_imports(
+                "from mypy.nodes import Node\n", {"webapp"}
+            )
+            == set()
+        )
+
+    def test_syntax_error_returns_empty(self) -> None:
+        assert _extract_submodule_imports("this is not python !!!", {"webapp"}) == set()
 
 
 # ---------------------------------------------------------------------------
