@@ -231,9 +231,9 @@ def get_provider(
             f"Unknown AI provider '{provider_name}'. "
             f"Choose from: {', '.join(PROVIDERS)}",
         )
-    cls = spec["class"]
-    effective_model = model or spec["default_model"]
-    return cls(api_key=api_key, model=effective_model)
+    p_cls = spec["class"]
+    effective_model = model or str(spec["default_model"])
+    return p_cls(api_key=api_key, model=effective_model)
 
 
 _DISPLAY_NAMES = {
@@ -306,7 +306,7 @@ def available_providers() -> list[dict[str, str]]:
         {
             "id": key,
             "name": _DISPLAY_NAMES.get(key, key.title()),
-            "default_model": spec["default_model"],
+            "default_model": str(spec["default_model"]),
         }
         for key, spec in PROVIDERS.items()
     ]
