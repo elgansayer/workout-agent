@@ -372,7 +372,8 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
 
     "Truly dead" means:
     * No plausible future caller (the module was superseded by another)
-    * Confirmed via ``git log`` that it was intentionally replaced
+    * Confirmed via ``git log`` that it was intentionally replaced, OR has so
+      few commits that it was never really wired in
     * No references in documentation or skill files
     """
     truly_dead: list[OrphanReport] = []
@@ -380,7 +381,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     for report in orphans:
         module_path = str(report.module.path.relative_to(ROOT))
 
-        # Check git log for clues that this module was replaced
+        # Check git log for clues that this module was replaced or is stale.
         try:
             log_result = subprocess.run(
                 ["git", "log", "--oneline", "-20", "--", module_path],
@@ -411,28 +412,36 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
         except (subprocess.TimeoutExpired, OSError):
             doc_refs = []
 
-        # A module is "truly dead" if it has no recent commits (wasn't
-        # recently created for a purpose) AND no documentation references.
-        # We err on the side of NOT marking something as dead — the default
-        # orphan path (file a task) is always safer.
-        has_recent_commits = any(
+        has_replacement_keywords = any(
             "replace" in l.lower()
             or "supersed" in l.lower()
             or "remove" in l.lower()
             or "deprecat" in l.lower()
             for l in log_lines
         )
+        # A module that was only added once (or has a single trivial commit)
+        # and never referenced in docs may be genuinely dead — it was created
+        # as part of an unfinished task and never wired.
+        # We require at least one commit to exist (len > 0) — zero commits
+        # means we couldn't access git (e.g. running in a temp dir during
+        # tests), so we can't make a determination.
+        few_commits = len(log_lines) >= 1 and len(log_lines) <= 1
         has_doc_refs = len(doc_refs) > 0
 
-        if has_recent_commits and not has_doc_refs:
+        if (has_replacement_keywords or few_commits) and not has_doc_refs:
+            if has_replacement_keywords:
+                evidence = (
+                    f"git log shows replacement/supersession: "
+                    f"{log_lines[0] if log_lines else 'N/A'}. "
+                    "No documentation references remain."
+                )
+            else:
+                evidence = (
+                    f"Only {len(log_lines)} commit(s) in git history — "
+                    "likely never wired in. No documentation references remain."
+                )
             truly_dead.append(
-                OrphanReport(
-                    module=report.module,
-                    evidence=(
-                        f"git log shows replacement/supersession: {log_lines[0] if log_lines else 'N/A'}. "
-                        "No documentation references remain."
-                    ),
-                ),
+                OrphanReport(module=report.module, evidence=evidence),
             )
 
     return truly_dead
@@ -629,6 +638,26 @@ def report_orphans(orphans: list[OrphanReport], *, json_output: bool = False) ->
     return 1
 
 
+def _cleanup_pycache(module_path: Path) -> int:
+    """Remove stale ``__pycache__/*.pyc`` bytecode for *module_path*.
+
+    Returns the number of files removed.
+    """
+    cleaned = 0
+    cache_dir = module_path.parent / "__pycache__"
+    if not cache_dir.is_dir():
+        return cleaned
+    stem = module_path.stem
+    # Match ``stem.cpython-*.pyc`` patterns (CPython 3.x).
+    for pyc in cache_dir.glob(f"{stem}.cpython-*.pyc"):
+        try:
+            pyc.unlink()
+            cleaned += 1
+        except OSError:
+            logger.debug("Failed to remove stale pyc: %s", pyc)
+    return cleaned
+
+
 def prune_dead_modules(reports: list[OrphanReport]) -> int:
     """Remove truly-dead modules.  Returns count of files removed."""
     removed = 0
@@ -637,6 +666,13 @@ def prune_dead_modules(reports: list[OrphanReport]) -> int:
         logger.info("Removing truly-dead module: %s", path.relative_to(ROOT))
         path.unlink(missing_ok=True)
         removed += 1
+        pyc_cleaned = _cleanup_pycache(path)
+        if pyc_cleaned:
+            logger.info(
+                "Cleaned %d stale bytecode file(s) for %s",
+                pyc_cleaned,
+                path.relative_to(ROOT),
+            )
     return removed
 
 
