@@ -1,4 +1,4 @@
-# Commit Hygiene Audit — 2026-08-06 (Run #7 — Issue #380)
+# Commit Hygiene Audit — 2026-08-06 (Issue #407)
 
 **Result: CLEAN** — No issues found.
 
@@ -23,7 +23,7 @@
 
 - **ruff**: Clean (0 warnings)
 - **mypy**: Clean (0 issues on commit_hygiene.py)
-- **pytest**: 559/559 tests pass (40 in test_commit_hygiene.py)
+- **pytest**: 564/564 tests pass (40 in test_commit_hygiene.py)
 - **import sanity**: `python -c "import commit_hygiene"` succeeds
 
 ## Summary
