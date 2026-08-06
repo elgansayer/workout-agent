@@ -397,6 +397,43 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON chat_messages (user_id, id DESC)",
         )
 
+        # Migration: Migrate reasoning_logs to user_id-scoped composite PK
+        cursor.execute("PRAGMA table_info(reasoning_logs)")
+        rl_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in rl_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reasoning_logs_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    context_id TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    exercise_name TEXT NOT NULL,
+                    reasoning TEXT NOT NULL,
+                    PRIMARY KEY (user_id, context_id)
+                )
+                """,
+            )
+            old_rows = cursor.execute(
+                "SELECT context_id, date, exercise_name, reasoning FROM reasoning_logs",
+            ).fetchall()
+            if old_rows:
+                rl_legacy_id = _ensure_legacy_user(cursor)
+                for row in old_rows:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO reasoning_logs_new "
+                        "(user_id, context_id, date, exercise_name, reasoning) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (rl_legacy_id, row[0], row[1], row[2], row[3]),
+                    )
+            cursor.execute("DROP TABLE reasoning_logs")
+            cursor.execute(
+                "ALTER TABLE reasoning_logs_new RENAME TO reasoning_logs",
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reasoning_logs_user "
+            "ON reasoning_logs (user_id, context_id)",
+        )
+
         # Migration: Migrate dashboard_insights from singleton to user_id-scoped
         cursor.execute("PRAGMA table_info(dashboard_insights)")
         di_columns = {row[1] for row in cursor.fetchall()}
@@ -1316,17 +1353,23 @@ def save_reasoning_log(
     exercise_name: str,
     reasoning: str,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Save an AI reasoning log for an exercise change."""
+    """Save an AI reasoning log for an exercise change.
+
+    If *user_id* is provided, the log is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO reasoning_logs (context_id, date, exercise_name, reasoning)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(context_id) DO UPDATE SET
+            INSERT INTO reasoning_logs (user_id, context_id, date, exercise_name, reasoning)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, context_id) DO UPDATE SET
                 reasoning = excluded.reasoning
             """,
             (
+                user_id,
                 context_id,
                 datetime.now(tz=timezone.utc).date().isoformat(),
                 exercise_name,
@@ -1335,13 +1378,28 @@ def save_reasoning_log(
         )
 
 
-def get_reasoning_log(context_id: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
-    """Get the reasoning log by context_id."""
+def get_reasoning_log(
+    context_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> str | None:
+    """Get the reasoning log by context_id.
+
+    If *user_id* is provided, results are scoped to that user.
+    """
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
-            (context_id,),
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT reasoning FROM reasoning_logs "
+                "WHERE user_id = ? AND context_id = ?",
+                (user_id, context_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
+                (context_id,),
+            ).fetchone()
     return row[0] if row else None
 
 
