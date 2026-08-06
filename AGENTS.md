@@ -167,13 +167,13 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-05)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
 
-- **`ai_provider.py` multi-provider wiring is complete.** PR #85
+- ~~**`ai_provider.py` multi-provider wiring is complete.** PR #85
   (`wire-ai-provider`) integrated `resolve_provider()` into `gemini_engine.py`,
   `main.py`, `checkin.py`, and `hevy_sync.py`. `webapp/app.py` and
   `insight_cron.py` now also use `resolve_provider()`. PR #164
@@ -182,31 +182,32 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   call sites are fully migrated to the provider abstraction.
   `tests/test_ai_provider.py` covers the provider abstraction (7 tests);
   `tests/test_gemini_engine.py` covers the prompt/fallback functions
-  (32 tests).
+  (32 tests).~~ ✅ Resolved.
 
-- **`hevy_reader.py` and `programme_inference.py` are wired** into
+- ~~**`hevy_reader.py` and `programme_inference.py` are wired** into
   `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
   orphaned; the remaining work is a full programme-selection UI (see next
-  item).
-- **`sync_history.py` is wired** — it is imported by `main.py`
+  item).~~ ✅ Resolved.
+- ~~**`sync_history.py` is wired** — it is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
-  endpoint). It is also executable standalone (`python sync_history.py`).
+  endpoint). It is also executable standalone (`python sync_history.py`).~~ ✅ Resolved.
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
-- **Scheduling has been consolidated** into a single unified `scheduler.py`
+- ~~**Scheduling has been consolidated** into a single unified `scheduler.py`
   (PR #142). `insight_scheduler.py` has been removed. The dual bash/Python
   sleep-loops described in prior audits no longer exist — `scheduler.py` is
   the single long-running process in the agent container, dispatching both
   coaching runs (`main.py`) and insight jobs (`insight_cron.py`) on one
-  per-minute wake loop, with per-user timezone support.
-- **Docs drift from code**: README.md no longer claims the dashboard "has no
+  per-minute wake loop, with per-user timezone support.~~ ✅ Resolved.
+- ~~**Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
-  `8770` across README and both compose files (reconciled 2026-08-05).
+  `8770` across README, both compose files, and `.env.example`
+  (reconciled 2026-08-06).~~
 
-- **Test coverage audit** (last updated 2026-08-05): all source modules
-  now have corresponding test files. The full test suite stands at 533
+- **Test coverage audit** (last updated 2026-08-06): all source modules
+  now have corresponding test files. The full test suite stands at 550
   passing tests covering 30 test modules. Previously-uncovered modules now
   with tests: `programme_inference.py` (16 tests),
   `hevy_reader.py` (20 tests), `insight_cron.py` (9 tests),
