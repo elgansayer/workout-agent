@@ -184,14 +184,18 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
 
     imports: set[str] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.level == 0
-            and node.module in local_packages
-        ):
-            for alias in node.names:
-                imports.add(f"{node.module}.{alias.name}")
+        if isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
+            # Pattern A: ``from webapp import charts`` → ``webapp.charts``
+            if node.module in local_packages:
+                for alias in node.names:
+                    imports.add(f"{node.module}.{alias.name}")
+            else:
+                # Pattern B: ``from webapp.charts import line_chart`` → ``webapp.charts``
+                for local_pkg in local_packages:
+                    if node.module.startswith(local_pkg + "."):
+                        # The parent module (e.g. ``webapp.charts``) is being used
+                        imports.add(node.module)
+                        break
     return imports
 
 
