@@ -339,12 +339,15 @@ def _grep_import(module_name: str) -> list[str]:
     test_file = f"tests/test_{module_name.replace('webapp.', '')}.py"
 
     try:
+        # Escape dots so "webapp.charts" matches only the literal dot, not
+        # any character (e.g. would otherwise also match "webapp_charts").
+        escaped = module_name.replace(".", "\\.")
         result = subprocess.run(
             [
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {module_name}|from {module_name}( |\\.))",
+                f"^\\s*(import {escaped}|from {escaped}( |\\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
