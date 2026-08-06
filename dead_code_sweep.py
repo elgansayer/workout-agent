@@ -371,12 +371,14 @@ def _grep_import(module_name: str) -> list[str]:
     # sub-package (e.g. ``from webapp import charts``, or future sub-packages).
     if "." in module_name:
         pkg, short = module_name.rsplit(".", 1)
+        # Escape dots in pkg so "webapp.sub" doesn't match "webappXsub".
+        escaped_pkg = pkg.replace(".", "\\.")
         try:
             result = subprocess.run(
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from {pkg} import .*\\b{short}\\b",
+                    f"^\\s*from {escaped_pkg} import .*\\b{short}\\b",
                     "--include=*.py",
                     str(ROOT),
                 ],
