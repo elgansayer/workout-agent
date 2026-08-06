@@ -293,3 +293,45 @@ def test_fetch_body_metrics_graceful_on_malformed_json(
     )
     metrics = google_health_client.fetch_body_metrics("access")
     assert metrics is None
+
+
+def test_latest_value_non_object_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: non-object JSON from Google Health must return None, not crash."""
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse([1, 2, 3]),
+    )
+    result = google_health_client._latest_value("a", "body-fat", "bodyFat", "percentage")
+    assert result is None
+
+
+def test_latest_value_non_dict_data_point(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: a dataPoints entry that is not a dict must not crash _latest_value."""
+    points: dict[str, list[Any]] = {
+        "dataPoints": [1, "string", None, {"bodyFat": {"percentage": 14.0}}],
+    }
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse(points),
+    )
+    result = google_health_client._latest_value("a", "body-fat", "bodyFat", "percentage")
+    assert result == 14.0
+
+
+def test_refresh_tokens_non_object_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: non-object token JSON must return None, not crash."""
+    monkeypatch.setattr(
+        google_health_client.requests,
+        "post",
+        lambda url, **kwargs: _FakeResponse([1, 2, 3]),
+    )
+    result = google_health_client._refresh_tokens("id", "secret", "token")
+    assert result is None
