@@ -16,6 +16,7 @@ from dead_code_sweep import (
     ModuleInfo,
     OrphanReport,
     _build_import_graph,
+    _cleanup_pycache,
     _extract_imports,
     _get_github_repo,
     _get_github_token,
@@ -24,6 +25,7 @@ from dead_code_sweep import (
     create_github_issues,
     find_orphans,
     find_truly_dead,
+    prune_dead_modules,
     report_orphans,
 )
 
@@ -317,6 +319,126 @@ class TestFindTrulyDead:
             # Should not raise
             result = find_truly_dead([report])
             assert isinstance(result, list)
+
+    def test_few_commits_and_no_doc_refs_is_truly_dead(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A module with <=1 commit and no doc refs IS truly dead."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        # Mock git log to return a single commit (not about replacement)
+        mock_run = MagicMock(returncode=0, stdout="abc123 Initial commit\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_run
+            if isinstance(cmd, list) and cmd[:2] == ["grep", "-rn"] and "--include=*.md" in cmd:
+                return MagicMock(returncode=1, stdout="", stderr="")
+            # Default for git remote queries, etc.
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            assert len(result) == 1
+            assert result[0].module.name == "stale_mod"
+            assert "Only 1 commit" in result[0].evidence
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_pycache
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupPycache:
+    def test_no_cache_dir_returns_zero(self, tmp_path: Path) -> None:
+        result = _cleanup_pycache(tmp_path / "nonexistent.py")
+        assert result == 0
+
+    def test_removes_matching_pyc_files(self, tmp_path: Path) -> None:
+        module = tmp_path / "dead_mod.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        # Create matching pyc
+        pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        pyc.write_text("")
+        # Create non-matching pyc
+        other_pyc = cache_dir / "other_mod.cpython-312.pyc"
+        other_pyc.write_text("")
+
+        result = _cleanup_pycache(module)
+        assert result == 1
+        assert not pyc.exists()
+        assert other_pyc.exists()  # untouched
+
+    def test_handles_oserror_gracefully(self, tmp_path: Path) -> None:
+        module = tmp_path / "dead_mod.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        pyc.write_text("")
+
+        # Make unlink fail
+        with patch("pathlib.Path.unlink", side_effect=OSError("Permission denied")):
+            result = _cleanup_pycache(module)
+            assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# prune_dead_modules
+# ---------------------------------------------------------------------------
+
+
+class TestPruneDeadModules:
+    def test_removes_module_file(self, tmp_path: Path) -> None:
+        module = tmp_path / "to_remove.py"
+        module.write_text("x = 1\n")
+        mi = ModuleInfo(name="to_remove", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1
+            assert not module.exists()
+
+    def test_missing_ok(self, tmp_path: Path) -> None:
+        """Already-removed file shouldn't crash prune."""
+        module = tmp_path / "already_gone.py"
+        mi = ModuleInfo(name="already_gone", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1  # counted, but didn't crash
+
+    def test_cleans_stale_pycache(self, tmp_path: Path) -> None:
+        module = tmp_path / "to_remove.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        pyc = cache_dir / "to_remove.cpython-312.pyc"
+        pyc.write_text("")
+        mi = ModuleInfo(name="to_remove", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1
+            assert not module.exists()
+            assert not pyc.exists()
 
 
 # ---------------------------------------------------------------------------
