@@ -211,8 +211,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   full test suite stands at 533 passing tests covering 30 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, mypy,
-  import-sanity). Hourly test watch #434 confirmed no drift; all gates
-  green with no failures to resolve.
+  import-sanity). Hourly test watch #444 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
 
 - ~~**Hourly dead-code sweep is operational.** `dead_code_sweep.py` runs
   via `scheduler.py`'s `_run_dead_code_sweep()` every hour with
