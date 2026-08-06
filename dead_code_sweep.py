@@ -455,9 +455,12 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
             log_lines = []
 
         # Check if referenced in docs / skill files
+        # Use -F (fixed-string) to avoid regex interpretation of dots in
+        # dotted module names like "webapp.charts" (where "." would match
+        # any character and produce false positives).
         try:
             doc_result = subprocess.run(
-                ["grep", "-rn", report.module.name, "--include=*.md", str(ROOT)],
+                ["grep", "-rn", "-F", report.module.name, "--include=*.md", str(ROOT)],
                 capture_output=True,
                 text=True,
                 timeout=10,
