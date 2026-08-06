@@ -166,10 +166,14 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
 
     imports: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module is not None:
-            if node.level == 0 and node.module in local_packages:
-                for alias in node.names:
-                    imports.add(f"{node.module}.{alias.name}")
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module is not None
+            and node.level == 0
+            and node.module in local_packages
+        ):
+            for alias in node.names:
+                imports.add(f"{node.module}.{alias.name}")
     return imports
 
 
