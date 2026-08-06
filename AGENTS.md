@@ -207,14 +207,16 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (reconciled 2026-08-06).~~
 
 - **Test coverage audit** (last updated 2026-08-06): all source modules
-  now have corresponding test files. The full test suite stands at 550
-  passing tests covering 30 test modules. Previously-uncovered modules now
-  with tests: `programme_inference.py` (16 tests),
+  now have corresponding test files. The full test suite stands at 559
+  passing tests covering 30 test modules. Zero coverage gaps — every
+  source module has a corresponding test file. Previously-uncovered
+  modules now with tests: `programme_inference.py` (16 tests),
   `hevy_reader.py` (20 tests), `insight_cron.py` (9 tests),
   `main.py` (20 tests), `sync_history.py` (9 tests),
   `webapp/ai_widgets.py` (14 tests), `weather.py` (7 tests).
   `insight_scheduler.py` was replaced by `scheduler.py` (18 tests).
   `webapp/charts.py` has `tests/test_charts.py` (9 tests).
+  All verification gates clean (compileall, ruff, pytest, import-sanity).
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
