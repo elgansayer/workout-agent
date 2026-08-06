@@ -481,7 +481,11 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
         # tests), so we can't make a determination.
         # In a shallow clone every file has a single commit so we never use
         # *few_commits* alone — it would flag *every* module.
-        few_commits = not shallow and len(log_lines) >= 1 and len(log_lines) <= 1
+        few_commits = (
+            not shallow
+            and len(log_lines) >= 1
+            and len(log_lines) <= 1
+        )
         has_doc_refs = len(doc_refs) > 0
 
         if (has_replacement_keywords or few_commits) and not has_doc_refs:
