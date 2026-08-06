@@ -718,35 +718,34 @@ def get_recent_bests(
 
     If *user_id* is provided, results are scoped to that user.
     """
+    # Performance Optimization (Bolt ⚡): Delegate the MAX(id) operation directly
+    # into the main SELECT clause. SQLite guarantees un-aggregated columns correspond
+    # to the MAX value, allowing direct use of idx_exercise_progress_user_name_id index
+    # without slow subquery lookups.
     with _connect(db_path) as conn:
         if user_id is not None:
             rows = conn.execute(
                 """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, MAX(id)
                 FROM exercise_progress
-                WHERE id IN (
-                    SELECT MAX(id) FROM exercise_progress
-                    WHERE user_id = ? GROUP BY exercise_name
-                )
-                AND user_id = ?
+                WHERE user_id = ?
+                GROUP BY exercise_name
                 ORDER BY exercise_name
                 """,
-                (user_id, user_id),
+                (user_id,),
             ).fetchall()
         else:
             rows = conn.execute(
                 """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, MAX(id)
                 FROM exercise_progress
-                WHERE id IN (
-                    SELECT MAX(id) FROM exercise_progress GROUP BY exercise_name
-                )
+                GROUP BY exercise_name
                 ORDER BY exercise_name
                 """,
             ).fetchall()
 
     bests: dict[str, dict[str, Any]] = {}
-    for name, weight, reps, sets, when in rows:
+    for name, weight, reps, sets, when, _ in rows:
         bests[name] = {
             "top_weight_kg": weight,
             "top_reps": reps,
