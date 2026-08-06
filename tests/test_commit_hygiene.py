@@ -238,7 +238,8 @@ class TestCheckSensitiveFiles:
 
 class TestCheckGitignore:
     COMPLETE_GITIGNORE = (
-        "*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n*.sqlite\n*.sqlite3\n*.log\n"
+        "*.db\n.env\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+        ".venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
     )
 
     def test_all_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,7 +254,8 @@ class TestCheckGitignore:
     ) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text(
-            "*.db\n.env\n.pytest_cache/\n.venv/\n*.sqlite\n*.sqlite3\n*.log\n"
+            "*.db\n.env\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+            ".venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
         )
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
@@ -264,7 +266,8 @@ class TestCheckGitignore:
     def test_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text(
-            ".env\n__pycache__/\n.pytest_cache/\n.venv/\n*.sqlite\n*.sqlite3\n*.log\n"
+            ".env\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+            ".venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
         )
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
@@ -274,7 +277,8 @@ class TestCheckGitignore:
     def test_missing_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text(
-            "*.db\n__pycache__/\n.pytest_cache/\n.venv/\n*.sqlite\n*.sqlite3\n*.log\n"
+            "*.db\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+            ".venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
         )
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
@@ -535,8 +539,8 @@ class TestRunAllChecks:
     def test_clean_repo(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         gi = tmp_path / ".gitignore"
         gi.write_text(
-            "*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n"
-            "*.sqlite\n*.sqlite3\n*.log\n"
+            "*.db\n.env\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n"
+            ".ruff_cache/\n.venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
         )
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         monkeypatch.setattr(commit_hygiene, "MAX_FILE_SIZE", 100 * 1024 * 1024)
@@ -609,7 +613,8 @@ class TestCreateGitHubIssues:
 
 class TestMain:
     COMPLETE_GITIGNORE = (
-        "*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n*.sqlite\n*.sqlite3\n*.log\n"
+        "*.db\n.env\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+        ".venv/\nvenv/\n*.sqlite\n*.sqlite3\n*.log\n"
     )
 
     def test_main_clean(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
