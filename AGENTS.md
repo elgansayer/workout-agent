@@ -221,6 +221,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   modules, and git-log analysis to distinguish truly-dead from
   merely-orphaned modules. 69 focused tests (all passing). No orphaned
   modules currently detected — repo is clean.~~ ✅ Resolved (Issue #423).
+  ✅ Re-verified 2026-08-06 (Issue #458): all 27 top-level modules and 3
+  webapp sub-modules confirmed wired; zero orphans; sweep exits clean.
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
