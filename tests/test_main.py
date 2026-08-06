@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +15,9 @@ from main import (
     _parse_args,
     run,
 )
+
+if TYPE_CHECKING:
+    from config import Config
 
 # ---------------------------------------------------------------------------
 # _compose
@@ -98,14 +103,14 @@ def test_parse_args_unknown_raises() -> None:
 
 
 def _make_config(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     *,
-    hevy_api_key="hevy-key",
-    checkin_enabled=False,
-    lifestyle_enabled=False,
-    self_review_enabled=False,
-):
+    hevy_api_key: str | None = "hevy-key",
+    checkin_enabled: bool = False,
+    lifestyle_enabled: bool = False,
+    self_review_enabled: bool = False,
+) -> Config:
     """Patch Config.load and init_db to return a controlled config."""
     from config import Config
 
@@ -139,7 +144,7 @@ def _make_config(
     return config
 
 
-def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
+def test_run_preview_training_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Preview mode on a training day prints the plan without sending Telegram."""
     _make_config(monkeypatch, tmp_path)
 
@@ -260,7 +265,7 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
     assert result == 0  # success
 
 
-def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
+def test_run_preview_rest_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Preview mode on a Sunday (rest day)."""
     _make_config(monkeypatch, tmp_path)
 
@@ -297,7 +302,7 @@ def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
     assert result == 0
 
 
-def test_run_config_error_returns_1(monkeypatch) -> None:
+def test_run_config_error_returns_1(monkeypatch: pytest.MonkeyPatch) -> None:
     """When Config.load raises ConfigError, run returns 1."""
     monkeypatch.setattr(
         "main.Config.load",
@@ -307,7 +312,7 @@ def test_run_config_error_returns_1(monkeypatch) -> None:
     assert result == 1
 
 
-def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
+def test_run_preview_with_sync_statuses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Statuses from sync_routines appear in the footer."""
     _make_config(monkeypatch, tmp_path, hevy_api_key="hevy-key")
     # Patch Config.load to return a config with hevy_sync_routines=True
@@ -378,7 +383,7 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     assert "Day 1" in output
 
 
-def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
+def test_run_preview_with_lifestyle(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When lifestyle is enabled, guidance appears in the output."""
     _make_config(monkeypatch, tmp_path, lifestyle_enabled=True)
 
@@ -420,7 +425,7 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
     assert "Today's lifestyle:" in output
 
 
-def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
+def test_run_preview_training_day_with_checkin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When a check-in is due, it is also printed in preview mode."""
     _make_config(monkeypatch, tmp_path, checkin_enabled=True)
 
@@ -547,7 +552,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     assert "Check-in 1" in output  # check-in message should appear
 
 
-def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
+def test_run_deliver_sends_telegram(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Non-preview mode sends the plan via Telegram."""
     _make_config(monkeypatch, tmp_path)
 
@@ -580,7 +585,7 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
     # Track Telegram send — must return True for success
     telegram_calls = []
 
-    def _fake_send(token, chat_id, msg, **kw):
+    def _fake_send(token: str, chat_id: str, msg: str, **kw: object) -> bool:
         telegram_calls.append((token, chat_id, msg))
         return True
 
@@ -593,7 +598,7 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
     assert telegram_calls[0][1] == "test-chat-id"
 
 
-def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> None:
+def test_run_deliver_returns_2_when_telegram_fails(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When Telegram delivery fails, run returns 2."""
     _make_config(monkeypatch, tmp_path)
 
@@ -633,7 +638,7 @@ def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> Non
     assert result == 2
 
 
-def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
+def test_run_hevy_sync_failure_does_not_block(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """If Hevy sync raises, the daily message still goes out."""
     _make_config(monkeypatch, tmp_path)
 
@@ -675,7 +680,7 @@ def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
     assert result == 0
 
 
-def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
+def test_run_checkin_due_failure_does_not_block(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """If checkin.due raises, the daily message still goes out."""
     _make_config(monkeypatch, tmp_path, checkin_enabled=True)
 
@@ -717,7 +722,7 @@ def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
     assert result == 0  # delivered successfully despite check-in failure
 
 
-def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
+def test_run_self_review_on_configured_weekday(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """When self_review is enabled and today is the review weekday, a review is sent."""
     from config import Config
 
