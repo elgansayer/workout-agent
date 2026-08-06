@@ -317,7 +317,9 @@ def fix_missing_gitignore_entries(findings: list[HygieneFinding]) -> list[str]:
         escaped = re.escape(pattern)
         if re.search(rf"^{escaped}\s*$", content, re.MULTILINE):
             continue
-        content += f"\n{pattern}\n"
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"{pattern}\n"
         added.append(pattern)
 
     if added:
