@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
-        import google.generativeai as genai  # type: ignore[import-untyped]
+        import google.generativeai as genai
 
         genai.configure(api_key=api_key)  # type: ignore[attr-defined]
         self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
@@ -233,7 +233,7 @@ def get_provider(
         )
     p_cls = spec["class"]
     effective_model = model or str(spec["default_model"])
-    return p_cls(api_key=api_key, model=effective_model)
+    return cast(AIProvider, p_cls(api_key=api_key, model=effective_model))
 
 
 _DISPLAY_NAMES = {
