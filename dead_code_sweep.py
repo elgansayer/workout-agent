@@ -101,7 +101,12 @@ IGNORE_FILES: set[str] = {
 
 
 def _discover_modules() -> list[ModuleInfo]:
-    """Return every Python module in the repo (top-level + webapp/)."""
+    """Return every Python module in the repo (top-level + all sub-packages).
+
+    Discovers sub-packages recursively by looking for ``__init__.py`` files,
+    matching the same convention ``_build_import_graph`` uses for local package
+    detection.  Tests (``tests/``) and hidden directories are excluded.
+    """
     modules: list[ModuleInfo] = []
 
     # Top-level
@@ -116,17 +121,30 @@ def _discover_modules() -> list[ModuleInfo]:
             ),
         )
 
-    # webapp/ sub-package
-    webapp_dir = ROOT / "webapp"
-    if webapp_dir.is_dir():
-        for p in sorted(webapp_dir.glob("*.py")):
+    # All sub-packages (e.g. webapp/, any future sub-packages).
+    for init_py in sorted(ROOT.rglob("__init__.py")):
+        pkg_dir = init_py.parent
+        try:
+            relative = pkg_dir.relative_to(ROOT)
+        except ValueError:
+            continue
+        parts = relative.parts
+        # Skip hidden directories, tests, venvs, and .agents/.jules scaffolding.
+        if any(
+            p.startswith(".")
+            or p in ("tests", "__pycache__", ".venv", "venv", ".agents", ".jules")
+            for p in parts
+        ):
+            continue
+        dotted = ".".join(parts)
+        for p in sorted(pkg_dir.glob("*.py")):
             if p.name.startswith("test_") or p.name == "__init__.py":
                 continue
             modules.append(
                 ModuleInfo(
-                    name=f"webapp.{p.stem}",
+                    name=f"{dotted}.{p.stem}",
                     path=p,
-                    is_entry_point=False,  # webapp modules are never entry points
+                    is_entry_point=False,
                 ),
             )
 
@@ -334,15 +352,16 @@ def _grep_import(module_name: str) -> list[str]:
     except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Also check for `from webapp import <short_name>` pattern
-    if module_name.startswith("webapp."):
-        short = module_name.split(".")[1]
+    # Also check for `from <package> import <short_name>` pattern for any
+    # sub-package (e.g. ``from webapp import charts``, or future sub-packages).
+    if "." in module_name:
+        pkg, short = module_name.rsplit(".", 1)
         try:
             result = subprocess.run(
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from webapp import .*{short}",
+                    f"^\\s*from {pkg} import .*{short}",
                     "--include=*.py",
                     str(ROOT),
                 ],
