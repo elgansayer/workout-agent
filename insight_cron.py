@@ -113,7 +113,7 @@ def generate_weekly_correlations(config: Config) -> None:
         "exercise_history": filtered_history,
     }
 
-    prompt = f"""You are an elite data-driven strength coach and analyst. 
+    prompt = f"""You are an elite data-driven strength coach and analyst.
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
 Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
@@ -121,7 +121,7 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(data, indent=2)}
 
-Analyze this data and produce a "Deep Correlation Engine" report. 
+Analyze this data and produce a "Deep Correlation Engine" report.
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
 """
