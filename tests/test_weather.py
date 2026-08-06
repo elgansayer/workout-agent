@@ -26,7 +26,9 @@ def _current(temp: float, humidity: float) -> dict[str, object]:
     return {"current": {"temperature_2m": temp, "relative_humidity_2m": humidity}}
 
 
-def test_get_current_weather_returns_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_current_weather_returns_conditions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(
         weather.requests,
         "get",
