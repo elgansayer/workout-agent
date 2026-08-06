@@ -15,7 +15,9 @@ from dead_code_sweep import (
     ENTRY_POINTS,
     ModuleInfo,
     OrphanReport,
+    _build_full_import_graph,
     _build_import_graph,
+    _extract_full_imports,
     _extract_imports,
     _get_github_repo,
     _get_github_token,
@@ -62,6 +64,111 @@ class TestExtractImports:
 
     def test_no_imports(self) -> None:
         assert _extract_imports("x = 1\ny = 2\n") == set()
+
+
+# ---------------------------------------------------------------------------
+# _extract_full_imports
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFullImports:
+    """Tests for the enhanced import resolver that preserves sub-module names."""
+
+    def test_import_foo(self) -> None:
+        assert _extract_full_imports("import foo\n") == {"foo"}
+
+    def test_import_foo_dot_bar(self) -> None:
+        result = _extract_full_imports("import foo.bar\n")
+        assert result == {"foo", "foo.bar"}
+
+    def test_import_deeply_nested(self) -> None:
+        result = _extract_full_imports("import a.b.c.d\n")
+        assert result == {"a", "a.b.c.d"}
+
+    def test_from_foo_import_bar(self) -> None:
+        result = _extract_full_imports("from foo import bar\n")
+        assert result == {"foo", "foo.bar"}
+
+    def test_from_foo_dot_baz_import_qux(self) -> None:
+        result = _extract_full_imports("from foo.baz import qux\n")
+        assert result == {"foo", "foo.baz", "foo.baz.qux"}
+
+    def test_from_webapp_import_multiple(self) -> None:
+        """The critical case: ``from webapp import charts, ai_widgets``
+        must produce ``webapp.charts`` and ``webapp.ai_widgets`` so the
+        BFS can find their defining files."""
+        result = _extract_full_imports("from webapp import ai_widgets, charts\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.ai_widgets" in result
+
+    def test_from_webapp_dot_charts_import_function(self) -> None:
+        result = _extract_full_imports("from webapp.charts import line_chart\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.charts.line_chart" in result
+
+    def test_star_import_not_expanded(self) -> None:
+        """``from foo import *`` — can't resolve individual names."""
+        result = _extract_full_imports("from foo import *\n")
+        assert result == {"foo"}
+
+    def test_multiple_imports(self) -> None:
+        source = "import os\nfrom sys import argv\nfrom datetime import datetime\n"
+        result = _extract_full_imports(source)
+        assert result == {"os", "sys", "sys.argv", "datetime", "datetime.datetime"}
+
+    def test_syntax_error_returns_empty(self) -> None:
+        assert _extract_full_imports("this is not valid python !!!") == set()
+
+    def test_import_in_function(self) -> None:
+        source = textwrap.dedent("""
+            def foo():
+                import bar
+        """)
+        assert _extract_full_imports(source) == {"bar"}
+
+    def test_no_imports(self) -> None:
+        assert _extract_full_imports("x = 1\ny = 2\n") == set()
+
+    def test_from_future_import(self) -> None:
+        # __future__ imports shouldn't be treated as module wiring
+        result = _extract_full_imports("from __future__ import annotations\n")
+        assert result == {"__future__", "__future__.annotations"}
+
+    def test_relative_import(self) -> None:
+        """Relative imports (``from . import x``) have ``module is None``."""
+        result = _extract_full_imports("from . import sibling\nfrom .. import parent_mod\n")
+        assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# _build_full_import_graph
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFullImportGraph:
+    def test_returns_dict(self) -> None:
+        graph = _build_full_import_graph()
+        assert isinstance(graph, dict)
+        assert len(graph) > 10
+
+    def test_webapp_app_includes_charts(self) -> None:
+        """webapp/app.py imports charts, so the full graph must include
+        ``webapp.charts`` as a resolved import."""
+        graph = _build_full_import_graph()
+        webapp_imports = graph.get("webapp/app.py", set())
+        assert "webapp.charts" in webapp_imports, (
+            "full import graph must resolve 'from webapp import charts' → webapp.charts"
+        )
+        assert "webapp.ai_widgets" in webapp_imports, (
+            "full import graph must resolve 'from webapp import ai_widgets' → webapp.ai_widgets"
+        )
+
+    def test_includes_test_files(self) -> None:
+        graph = _build_full_import_graph()
+        test_files = [k for k in graph if k.startswith("tests/")]
+        assert len(test_files) > 0, "Test files should be in the full import graph"
 
 
 # ---------------------------------------------------------------------------

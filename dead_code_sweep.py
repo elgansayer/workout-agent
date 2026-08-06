@@ -137,6 +137,10 @@ def _extract_imports(source: str) -> set[str]:
     """Return the set of top-level module names imported by *source*.
 
     Handles ``import foo``, ``from foo import bar``, and ``from foo.baz import ...``.
+
+    Returns only the top-level package name (e.g. ``webapp`` from
+    ``from webapp import charts``).  Use :func:`_extract_full_imports` when
+    you need the fully-qualified module name.
     """
     try:
         tree = ast.parse(source)
@@ -150,6 +154,44 @@ def _extract_imports(source: str) -> set[str]:
                 imports.add(alias.name.split(".")[0])
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
             imports.add(node.module.split(".")[0])
+    return imports
+
+
+def _extract_full_imports(source: str) -> set[str]:
+    """Return the set of **fully-qualified** module names imported by *source*.
+
+    Unlike :func:`_extract_imports`, this preserves sub-module resolution
+    from ``from X import Y`` patterns: ``from webapp import charts``
+    yields ``{"webapp", "webapp.charts"}`` (both forms), while
+    ``from webapp.charts import line_chart`` yields ``{"webapp", "webapp.charts"}``.
+
+    This allows transitive-import resolution to find the defining file for
+    ``webapp.charts`` without falling back to grep.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                imports.add(parts[0])
+                # Add full dotted path for sub-module imports
+                if len(parts) > 1:
+                    imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            parts = node.module.split(".")
+            imports.add(parts[0])
+            # For "from webapp import charts": add "webapp.charts"
+            for alias in node.names:
+                if alias.name != "*":
+                    imports.add(f"{node.module}.{alias.name}")
+            # Also add the module itself for deeper sub-module references
+            if len(parts) > 1:
+                imports.add(node.module)
     return imports
 
 
@@ -177,10 +219,37 @@ def _build_import_graph() -> dict[str, set[str]]:
     return graph
 
 
+def _build_full_import_graph() -> dict[str, set[str]]:
+    """Return {importing_file_rel -> {fully_qualified_module_names_it_imports}}.
+
+    Uses :func:`_extract_full_imports` so that ``from webapp import charts``
+    records both ``webapp`` and ``webapp.charts`` in the graph.  This lets
+    the BFS in :func:`find_orphans` resolve ``webapp.charts`` to its
+    defining file without a grep fallback.
+    """
+    graph: dict[str, set[str]] = {}
+
+    for py_file in sorted(ROOT.rglob("*.py")):
+        parts = py_file.parts
+        if any(
+            p.startswith(".") or p in ("__pycache__", ".venv", "venv") for p in parts
+        ):
+            continue
+
+        rel = str(py_file.relative_to(ROOT))
+        source = py_file.read_text(encoding="utf-8")
+        graph[rel] = _extract_full_imports(source)
+
+    return graph
+
+
 def find_orphans() -> list[OrphanReport]:
     """Return every module that is never imported by any reachable code."""
     modules = _discover_modules()
-    import_graph = _build_import_graph()
+    # Use the full import graph so that ``from webapp import charts`` is
+    # resolved as ``webapp.charts`` (not just ``webapp``), which allows the
+    # BFS to find ``webapp/charts.py`` without a grep fallback.
+    import_graph = _build_full_import_graph()
 
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
@@ -210,7 +279,10 @@ def find_orphans() -> list[OrphanReport]:
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
-    # Build a look-up: module_name -> file_rel that defines it
+    # Build a look-up: module_name -> file_rel that defines it.
+    # With the full import graph this now includes fully-qualified names like
+    # "webapp.charts" → "webapp/charts.py" in addition to the existing
+    # top-level names.
     module_to_file: dict[str, str] = {}
     for file_rel in import_graph:
         stem = file_rel.replace("/", ".").replace(".py", "")
@@ -226,9 +298,6 @@ def find_orphans() -> list[OrphanReport]:
     while queue:
         module_name = queue.pop(0)
         # Find the file that defines this module and add everything IT imports.
-        # (The old approach looked at files that import module_name and added
-        # what those files import — that only discovers transitive
-        # dependencies by coincidence when two modules share a common importer.)
         defining_file = module_to_file.get(module_name)
         if defining_file is not None:
             for transitive in import_graph.get(defining_file, set()):
@@ -275,13 +344,16 @@ def _grep_import(module_name: str) -> list[str]:
     own_file = f"{module_name.replace('.', '/')}.py"
     test_file = f"tests/test_{module_name.replace('webapp.', '')}.py"
 
+    # Build a safe regex: ``import module_name`` or ``from module_name``
+    # followed by a space, dot, or end-of-line.  Word boundaries (\b) guard
+    # against prefix false-positives.
     try:
         result = subprocess.run(
             [
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {module_name}|from {module_name}( |\\.))",
+                rf"^\s*(import\s+{module_name}\b|from\s+{module_name}(\s|\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -298,30 +370,32 @@ def _grep_import(module_name: str) -> list[str]:
     except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Also check for `from webapp import <short_name>` pattern
-    if module_name.startswith("webapp."):
-        short = module_name.split(".")[1]
-        try:
-            result = subprocess.run(
-                [
-                    "grep",
-                    "-rn",
-                    f"^\\s*from webapp import .*{short}",
-                    "--include=*.py",
-                    str(ROOT),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            for line in result.stdout.splitlines():
-                file_part = line.split(":", 1)[0]
-                rel = os.path.relpath(file_part, ROOT)
-                if rel != own_file and rel != test_file:
-                    hits.append(rel)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+    # For top-level-package sub-modules (e.g. "webapp.charts"), also search
+    # for the ``from <package> import <short>`` pattern.
+    if "." in module_name:
+        pkg, short = module_name.split(".", 1)
+        if short:
+            try:
+                result = subprocess.run(
+                    [
+                        "grep",
+                        "-rn",
+                        rf"^\s*from\s+{pkg}\s+import\s+.*\b{short}\b",
+                        "--include=*.py",
+                        str(ROOT),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                for line in result.stdout.splitlines():
+                    file_part = line.split(":", 1)[0]
+                    rel = os.path.relpath(file_part, ROOT)
+                    if rel != own_file and rel != test_file:
+                        hits.append(rel)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     return sorted(set(hits))
 
