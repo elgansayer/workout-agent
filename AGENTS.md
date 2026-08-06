@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -211,7 +211,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   full test suite stands at 569 passing tests covering 30 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, mypy,
-  import-sanity). Hourly test watch #478 confirmed no drift; all gates
+  import-sanity). Hourly test watch #490 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
 - ~~**Hourly dead-code sweep is operational.** `dead_code_sweep.py` runs
@@ -221,7 +221,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   modules, and git-log analysis to distinguish truly-dead from
   merely-orphaned modules. 69 focused tests (all passing). No orphaned
   modules currently detected — repo is clean.~~ ✅ Resolved (Issue #423).
-  ✅ Re-verified 2026-08-06 (Issue #458): all 27 top-level modules and 3
+  ✅ Re-verified 2026-08-06 (Issue #490): all 27 top-level modules and 3
   webapp sub-modules confirmed wired; zero orphans; sweep exits clean.
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
