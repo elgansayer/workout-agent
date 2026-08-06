@@ -1306,7 +1306,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
 
-    valid_providers = {"hevy", "gemini", "claude", "openai"}
+    valid_providers = {"hevy", "gemini", "claude", "openai", "deepseek"}
     if provider not in valid_providers:
         raise HTTPException(
             status_code=400,
