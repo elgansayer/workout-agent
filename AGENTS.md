@@ -214,15 +214,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   import-sanity). Hourly test watch #478 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
-- ~~**Hourly dead-code sweep is operational.** `dead_code_sweep.py` runs
-  via `scheduler.py`'s `_run_dead_code_sweep()` every hour with
-  `--create-issues`. It uses AST-based import discovery with grep
-  fallback, BFS from entry-point and webapp/app.py to find reachable
-  modules, and git-log analysis to distinguish truly-dead from
-  merely-orphaned modules. 69 focused tests (all passing). No orphaned
-  modules currently detected — repo is clean.~~ ✅ Resolved (Issue #423).
-  ✅ Re-verified 2026-08-06 (Issue #458): all 27 top-level modules and 3
-  webapp sub-modules confirmed wired; zero orphans; sweep exits clean.
+- **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
+  (zero orphans), import-sanity (all reachable). Issue #479 sweep complete
+  — no newly orphaned or truly-dead modules found.
+
+
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
