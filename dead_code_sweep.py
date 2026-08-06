@@ -395,6 +395,28 @@ def _grep_import(module_name: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _is_shallow_repo() -> bool:
+    """Detect whether we're inside a shallow git clone.
+
+    In a shallow clone every file has only one commit, so ``few_commits``
+    is never a reliable signal for "never wired in" — every module would
+    look equally orphaned.  ``--prune`` is effectively a no-op in shallow
+    repos unless *replacement_keywords* are present.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(ROOT),
+            check=False,
+        )
+        return result.stdout.strip() == "true"
+    except (subprocess.TimeoutExpired, OSError):
+        return True  # defensive: treat unreadable repos as shallow
+
+
 def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     """From a list of orphans, return those confirmed as truly dead.
 
@@ -405,6 +427,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     * No references in documentation or skill files
     """
     truly_dead: list[OrphanReport] = []
+    shallow = _is_shallow_repo()
 
     for report in orphans:
         module_path = str(report.module.path.relative_to(ROOT))
@@ -453,7 +476,13 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
         # We require at least one commit to exist (len > 0) — zero commits
         # means we couldn't access git (e.g. running in a temp dir during
         # tests), so we can't make a determination.
-        few_commits = len(log_lines) >= 1 and len(log_lines) <= 1
+        # In a shallow clone every file has a single commit so we never use
+        # *few_commits* alone — it would flag *every* module.
+        few_commits = (
+            not shallow
+            and len(log_lines) >= 1
+            and len(log_lines) <= 1
+        )
         has_doc_refs = len(doc_refs) > 0
 
         if (has_replacement_keywords or few_commits) and not has_doc_refs:

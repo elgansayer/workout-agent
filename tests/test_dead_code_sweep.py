@@ -21,6 +21,7 @@ from dead_code_sweep import (
     _get_github_repo,
     _get_github_token,
     _grep_import,
+    _is_shallow_repo,
     _task_add_text,
     clean_stale_pycache,
     create_github_issues,
@@ -343,7 +344,7 @@ class TestFindTrulyDead:
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """A module with <=1 commit and no doc refs IS truly dead."""
+        """A module with <=1 commit and no doc refs IS truly dead (non-shallow)."""
         (tmp_path / "stale_mod.py").write_text("x = 1\n")
         mi = ModuleInfo(
             name="stale_mod",
@@ -352,20 +353,21 @@ class TestFindTrulyDead:
         )
         report = OrphanReport(module=mi, evidence="no imports")
 
-        # Mock git log to return a single commit (not about replacement)
-        mock_run = MagicMock(returncode=0, stdout="abc123 Initial commit\n", stderr="")
+        mock_git_log = MagicMock(returncode=0, stdout="abc123 Initial commit\n", stderr="")
+        mock_shallow_check = MagicMock(returncode=0, stdout="false\n", stderr="")
 
         def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
             cmd = args[0] if args else []
             if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
-                return mock_run
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == ["git", "rev-parse", "--is-shallow-repository"]:
+                return mock_shallow_check
             if (
                 isinstance(cmd, list)
                 and cmd[:2] == ["grep", "-rn"]
                 and "--include=*.md" in cmd
             ):
                 return MagicMock(returncode=1, stdout="", stderr="")
-            # Default for git remote queries, etc.
             return MagicMock(returncode=1, stdout="", stderr="")
 
         with (
@@ -376,6 +378,112 @@ class TestFindTrulyDead:
             assert len(result) == 1
             assert result[0].module.name == "stale_mod"
             assert "Only 1 commit" in result[0].evidence
+
+    def test_shallow_repo_blocks_few_commits_signal(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """In a shallow repo, few_commits is NOT used — every file has 1 commit."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        mock_git_log = MagicMock(returncode=0, stdout="abc123 Initial commit\n", stderr="")
+        mock_shallow_check = MagicMock(returncode=0, stdout="true\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == ["git", "rev-parse", "--is-shallow-repository"]:
+                return mock_shallow_check
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            # Shallow repo guards against false positives — NOT truly dead
+            assert result == []
+
+    def test_shallow_repo_still_uses_replacement_keywords(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """In a shallow repo, replacement_keywords still trigger truly-dead."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        mock_git_log = MagicMock(returncode=0, stdout="abc123 Replace stale_mod with new_impl\n", stderr="")
+        mock_shallow_check = MagicMock(returncode=0, stdout="true\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == ["git", "rev-parse", "--is-shallow-repository"]:
+                return mock_shallow_check
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            assert len(result) == 1
+            assert result[0].module.name == "stale_mod"
+            assert "replacement" in result[0].evidence.lower()
+
+
+# ---------------------------------------------------------------------------
+# _is_shallow_repo
+# ---------------------------------------------------------------------------
+
+
+class TestIsShallowRepo:
+    def test_true_when_rev_parse_says_true(self, tmp_path: Path) -> None:
+        mock = MagicMock(returncode=0, stdout="true\n", stderr="")
+        with patch("dead_code_sweep.subprocess.run", return_value=mock), patch(
+            "dead_code_sweep.ROOT", tmp_path
+        ):
+            assert _is_shallow_repo() is True
+
+    def test_false_when_rev_parse_says_false(self, tmp_path: Path) -> None:
+        mock = MagicMock(returncode=0, stdout="false\n", stderr="")
+        with patch("dead_code_sweep.subprocess.run", return_value=mock), patch(
+            "dead_code_sweep.ROOT", tmp_path
+        ):
+            assert _is_shallow_repo() is False
+
+    def test_true_when_error_defaults_defensive(self, tmp_path: Path) -> None:
+        """On error, we default to True (defensive) to prevent accidental pruning."""
+        with patch(
+            "dead_code_sweep.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5),
+        ), patch("dead_code_sweep.ROOT", tmp_path):
+            assert _is_shallow_repo() is True
 
 
 # ---------------------------------------------------------------------------
