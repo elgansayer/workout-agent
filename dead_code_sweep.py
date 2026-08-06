@@ -342,12 +342,15 @@ def _grep_import(module_name: str) -> list[str]:
         # Escape dots so "webapp.charts" matches only the literal dot, not
         # any character (e.g. would otherwise also match "webapp_charts").
         escaped = module_name.replace(".", "\\.")
+        # Word-boundary anchors prevent partial-name matches:
+        #   "import charts"  must NOT match  "import charts_legacy"
+        #   "from webapp\\.charts" must NOT match "from webapp\\.charts_legacy"
         result = subprocess.run(
             [
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {escaped}|from {escaped}( |\\.))",
+                f"^\\s*(import {escaped}\\b|from {escaped}( |\\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -373,7 +376,7 @@ def _grep_import(module_name: str) -> list[str]:
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from {pkg} import .*{short}",
+                    f"^\\s*from {pkg} import .*\\b{short}\\b",
                     "--include=*.py",
                     str(ROOT),
                 ],
