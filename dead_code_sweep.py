@@ -677,6 +677,38 @@ def _cleanup_pycache(module_path: Path) -> int:
     return cleaned
 
 
+def clean_stale_pycache() -> int:
+    """Remove ``__pycache__/*.pyc`` entries whose corresponding ``.py`` no longer exists.
+
+    This handles modules deleted outside the sweep (e.g. in prior commits)
+    that left orphaned bytecode behind.  Safe to run on every sweep.
+
+    Returns the number of files removed.
+    """
+    removed = 0
+    for cache_dir in ROOT.rglob("__pycache__"):
+        # Skip hidden / venv / test cache dirs
+        try:
+            rel = cache_dir.relative_to(ROOT)
+        except ValueError:
+            continue
+        if any(p.startswith(".") or p in (".venv", "venv") for p in rel.parts):
+            continue
+        for pyc in sorted(cache_dir.glob("*.pyc")):
+            pyc_stem = pyc.stem
+            # Strip cpython version suffix: "foo.cpython-312" → "foo"
+            module_stem = re.sub(r"\.cpython-\d+.*", "", pyc_stem)
+            py_file = cache_dir.parent / f"{module_stem}.py"
+            if not py_file.exists():
+                try:
+                    pyc.unlink()
+                    logger.info("Removed stale bytecode: %s", pyc.relative_to(ROOT))
+                    removed += 1
+                except OSError:
+                    logger.debug("Failed to remove stale pyc: %s", pyc)
+    return removed
+
+
 def prune_dead_modules(reports: list[OrphanReport]) -> int:
     """Remove truly-dead modules.  Returns count of files removed."""
     removed = 0
@@ -729,6 +761,11 @@ def main() -> int:
     args = parser.parse_args()
 
     os.chdir(ROOT)
+
+    # Always clean stale bytecode (safe no-op when nothing is orphaned).
+    stale_cleaned = clean_stale_pycache()
+    if stale_cleaned:
+        logger.info("Cleaned %d stale bytecode file(s) from prior removals.", stale_cleaned)
 
     orphans = find_orphans()
 

@@ -22,6 +22,7 @@ from dead_code_sweep import (
     _get_github_token,
     _grep_import,
     _task_add_text,
+    clean_stale_pycache,
     create_github_issues,
     find_orphans,
     find_truly_dead,
@@ -399,6 +400,68 @@ class TestCleanupPycache:
         with patch("pathlib.Path.unlink", side_effect=OSError("Permission denied")):
             result = _cleanup_pycache(module)
             assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# clean_stale_pycache
+# ---------------------------------------------------------------------------
+
+
+class TestCleanStalePycache:
+    def test_no_pycache_returns_zero(self, tmp_path: Path) -> None:
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            assert clean_stale_pycache() == 0
+
+    def test_removes_stale_pyc_without_corresponding_py(self, tmp_path: Path) -> None:
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        stale_pyc = cache_dir / "removed_mod.cpython-312.pyc"
+        stale_pyc.write_text("")
+        # No removed_mod.py exists
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 1
+            assert not stale_pyc.exists()
+
+    def test_leaves_valid_pyc_untouched(self, tmp_path: Path) -> None:
+        (tmp_path / "live_mod.py").write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        valid_pyc = cache_dir / "live_mod.cpython-312.pyc"
+        valid_pyc.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 0
+            assert valid_pyc.exists()
+
+    def test_mixed_stale_and_valid(self, tmp_path: Path) -> None:
+        (tmp_path / "live_mod.py").write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        valid_pyc = cache_dir / "live_mod.cpython-312.pyc"
+        valid_pyc.write_text("")
+        stale_pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        stale_pyc.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 1
+            assert not stale_pyc.exists()
+            assert valid_pyc.exists()
+
+    def test_skips_hidden_and_venv_dirs(self, tmp_path: Path) -> None:
+        # Create stale pyc in .venv/ — should be skipped
+        venv_dir = tmp_path / ".venv" / "__pycache__"
+        venv_dir.mkdir(parents=True)
+        stale_in_venv = venv_dir / "old_mod.cpython-312.pyc"
+        stale_in_venv.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 0
+            assert stale_in_venv.exists()  # skipped, not removed
 
 
 # ---------------------------------------------------------------------------
