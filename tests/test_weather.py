@@ -118,3 +118,30 @@ def test_graceful_non_object_current(monkeypatch):
         lambda url, **kwargs: _FakeResponse({"current": [1, 2, 3]}),
     )
     assert weather.get_current_weather() is None
+
+
+def test_graceful_string_numeric_values(monkeypatch):
+    """Regression: defensive float coercion handles string-number responses."""
+    monkeypatch.setattr(
+        weather.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse(
+            {"current": {"temperature_2m": "22.5", "relative_humidity_2m": "55"}},
+        ),
+    )
+    result = weather.get_current_weather()
+    assert result is not None
+    assert result.temperature_c == 22.5
+    assert result.humidity_pct == 55.0
+
+
+def test_graceful_uncoercable_values(monkeypatch):
+    """Regression: non-coercible strings must return None, not crash."""
+    monkeypatch.setattr(
+        weather.requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse(
+            {"current": {"temperature_2m": "warm", "relative_humidity_2m": [1, 2]}},
+        ),
+    )
+    assert weather.get_current_weather() is None
