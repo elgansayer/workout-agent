@@ -84,7 +84,7 @@ def test_exchange_code_request_exception_with_response(monkeypatch: Any) -> None
         text: str = "bad request error"
 
     exc = requests.RequestException("bad request")
-    exc.response = _Resp()  # type: ignore[attr-defined]
+    exc.response = _Resp()  # type: ignore[assignment,attr-defined]
 
     def _fake_post(
         url: str,
