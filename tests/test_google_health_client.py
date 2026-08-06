@@ -304,7 +304,9 @@ def test_latest_value_non_object_response(
         "get",
         lambda url, **kwargs: _FakeResponse([1, 2, 3]),
     )
-    result = google_health_client._latest_value("a", "body-fat", "bodyFat", "percentage")
+    result = google_health_client._latest_value(
+        "a", "body-fat", "bodyFat", "percentage"
+    )
     assert result is None
 
 
@@ -320,7 +322,9 @@ def test_latest_value_non_dict_data_point(
         "get",
         lambda url, **kwargs: _FakeResponse(points),
     )
-    result = google_health_client._latest_value("a", "body-fat", "bodyFat", "percentage")
+    result = google_health_client._latest_value(
+        "a", "body-fat", "bodyFat", "percentage"
+    )
     assert result == 14.0
 
 

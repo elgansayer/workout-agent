@@ -341,7 +341,11 @@ class TestFindTrulyDead:
             cmd = args[0] if args else []
             if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
                 return mock_run
-            if isinstance(cmd, list) and cmd[:2] == ["grep", "-rn"] and "--include=*.md" in cmd:
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
                 return MagicMock(returncode=1, stdout="", stderr="")
             # Default for git remote queries, etc.
             return MagicMock(returncode=1, stdout="", stderr="")
