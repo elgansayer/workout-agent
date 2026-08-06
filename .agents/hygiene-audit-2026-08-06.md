@@ -1,12 +1,12 @@
-# Commit Hygiene Audit — 2026-08-06 (Run #6 — Issue #366)
+# Commit Hygiene Audit — 2026-08-06 (Run #7 — Issue #380)
 
 **Result: CLEAN** — No issues found.
 
 ## Checks Performed
 
 - **Commit messages**: Reviewed last 10 commits. The sole commit message
-  ("docs: sync documentation to match code reality (2026-08-06) (#367)")
-  is descriptive. No "fix" or "wip" commits found.
+  ("Fixes #365: [Hourly] Hourly Test Watch (#383)") is descriptive. No
+  "fix" or "wip" commits found.
 - **Sensitive files**: `git log -p -10 -- .env .env.* data/ '*.db'` returned
   no `.env`, database, or `data/` files. `.env.example` matched but is
   explicitly whitelisted (`!.env.example` in `.gitignore`).
@@ -23,7 +23,7 @@
 
 - **ruff**: Clean (0 warnings)
 - **mypy**: Clean (0 issues on commit_hygiene.py)
-- **pytest**: 556/556 tests pass
+- **pytest**: 559/559 tests pass
 - **import sanity**: `python -c "import commit_hygiene"` succeeds
 
 ## Summary
