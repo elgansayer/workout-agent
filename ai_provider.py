@@ -42,10 +42,10 @@ class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
-        import google.generativeai as genai
+        import google.generativeai as genai  # type: ignore[import-untyped]
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(model)
+        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
+        self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
