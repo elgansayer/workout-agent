@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly commit hygiene #492 checked 2026-08-06)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -220,6 +220,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
   (zero orphans), import-sanity (all reachable). Issue #479 sweep complete
   — no newly orphaned or truly-dead modules found.
+
+- **Hourly commit hygiene re-verified.** `commit_hygiene.py` executed clean
+  via `--json` output (status: "clean", zero findings). Last 10 commits have
+  descriptive messages; no sensitive files (.env, *.db, data/) committed;
+  `.gitignore` covers all required patterns (`*.db`, `.env`, `__pycache__/`,
+  `.pytest_cache/`, `.venv/`, etc.); no large files (>3 MB) found outside
+  `data/`. Issue #492 hygiene complete — git history clean, no security
+  concerns.
 
 
 
