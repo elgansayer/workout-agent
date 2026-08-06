@@ -152,9 +152,12 @@ def _discover_modules() -> list[ModuleInfo]:
 
 
 def _extract_imports(source: str) -> set[str]:
-    """Return the set of top-level module names imported by *source*.
+    """Return the set of module names imported by *source*.
 
-    Handles ``import foo``, ``from foo import bar``, and ``from foo.baz import ...``.
+    Handles ``import foo``, ``from foo import bar``, and
+    ``from foo.baz import ...``.  Returns every intermediate dotted path
+    (``foo``, ``foo.baz``) so the BFS traverser can resolve local submodules
+    without relying solely on the grep fallback.
     """
     try:
         tree = ast.parse(source)
@@ -165,9 +168,15 @@ def _extract_imports(source: str) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add(alias.name.split(".")[0])
+                parts = alias.name.split(".")
+                imports.add(parts[0])
+                for i in range(2, len(parts) + 1):
+                    imports.add(".".join(parts[:i]))
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imports.add(node.module.split(".")[0])
+            parts = node.module.split(".")
+            imports.add(parts[0])
+            for i in range(2, len(parts) + 1):
+                imports.add(".".join(parts[:i]))
     return imports
 
 

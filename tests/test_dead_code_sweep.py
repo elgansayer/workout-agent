@@ -42,7 +42,7 @@ class TestExtractImports:
         assert _extract_imports("from foo import bar\n") == {"foo"}
 
     def test_from_foo_dot_baz_import_qux(self) -> None:
-        assert _extract_imports("from foo.baz import qux\n") == {"foo"}
+        assert _extract_imports("from foo.baz import qux\n") == {"foo", "foo.baz"}
 
     def test_multiple_imports(self) -> None:
         source = "import os\nfrom sys import argv\nfrom datetime import datetime\n"
@@ -50,7 +50,24 @@ class TestExtractImports:
 
     def test_webapp_dotted(self) -> None:
         assert _extract_imports("from webapp import charts\n") == {"webapp"}
-        assert _extract_imports("from webapp.charts import line_chart\n") == {"webapp"}
+        assert _extract_imports("from webapp.charts import line_chart\n") == {
+            "webapp",
+            "webapp.charts",
+        }
+        # Deeply nested: from webapp.sub.inner import thing
+        assert _extract_imports("from webapp.sub.inner import thing\n") == {
+            "webapp",
+            "webapp.sub",
+            "webapp.sub.inner",
+        }
+        # Import-style: import webapp.sub.inner
+        assert _extract_imports("import webapp.sub.inner\n") == {
+            "webapp",
+            "webapp.sub",
+            "webapp.sub.inner",
+        }
+        # Top-level import stays unchanged
+        assert _extract_imports("import os\n") == {"os"}
 
     def test_syntax_error_returns_empty(self) -> None:
         assert _extract_imports("this is not valid python !!!") == set()
