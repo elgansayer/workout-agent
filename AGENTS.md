@@ -211,16 +211,16 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 
 - **Test coverage audit** (last updated 2026-08-07, re-verified
   2026-08-07): all source modules have corresponding test files. The
-  full test suite stands at 601 passing tests covering 31 test modules.
+  full test suite stands at 609 passing tests covering 31 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, import-sanity).
-  Hourly test watch #592 confirmed no drift; all gates green with no
+  Hourly test watch #616 confirmed no drift; all gates green with no
   failures to resolve and zero test coverage gaps.
 
 - **Hourly dead-code sweep #593 re-verified.** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (601/601), dead_code_sweep
+  verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean on core modules).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
   `webapp/app.py`). Stale pycache cleaned: 0.
