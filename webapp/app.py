@@ -1450,7 +1450,9 @@ def google_health_callback(request: Request) -> RedirectResponse:
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
-    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use, regardless of outcome
+    set_meta(
+        _GH_STATE_KEY, "", DB_PATH, user_id=user_id
+    )  # one-time use, regardless of outcome
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
