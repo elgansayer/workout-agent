@@ -82,6 +82,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """,
         )
+        # Note: hevy_meta is migrated from key PK to (user_id, key) composite
+        # PK below (see the migration block after user_preferences). In brand-new
+        # databases the migration block creates it from scratch; for existing DBs
+        # it was created above and will be migrated when the block runs.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS hevy_meta (
@@ -561,6 +565,45 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("DROP TABLE programme_state")
             cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
 
+        # Migration: Migrate hevy_meta from key PK to (user_id, key) composite PK
+        cursor.execute("PRAGMA table_info(hevy_meta)")
+        hm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in hm_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hevy_meta_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                )
+                """,
+            )
+            old_rows = cursor.execute(
+                "SELECT key, value FROM hevy_meta",
+            ).fetchall()
+            if old_rows:
+                hm_legacy_id = _ensure_legacy_user(cursor)
+                for row in old_rows:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO hevy_meta_new "
+                        "(user_id, key, value) VALUES (?, ?, ?)",
+                        (hm_legacy_id, row[0], row[1]),
+                    )
+            else:
+                # Brand-new database: seed programme_start_date for legacy user
+                hm_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO hevy_meta_new (user_id, key, value) "
+                    "VALUES (?, 'programme_start_date', ?)",
+                    (hm_legacy_id, datetime.now(tz=timezone.utc).date().isoformat()),
+                )
+            cursor.execute("DROP TABLE hevy_meta")
+            cursor.execute("ALTER TABLE hevy_meta_new RENAME TO hevy_meta")
+
+        # Note: The programme_start_date INSERT OR IGNORE below is now redundant
+        # for new DBs (migration above handles it) but harmless as a fallback.
+
 
 def get_current_day(
     db_path: str = DEFAULT_DB_PATH,
@@ -991,25 +1034,64 @@ def save_routine_record(
         )
 
 
-def get_meta(key: str, db_path: str = DEFAULT_DB_PATH) -> str | None:
-    """Return a stored metadata value, or None if absent."""
+def get_meta(
+    key: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> str | None:
+    """Return a stored metadata value, or None if absent.
+
+    When *user_id* is provided, the lookup is scoped to that user.
+    When None, returns a legacy match (first row found)."""
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT value FROM hevy_meta WHERE key = ?",
-            (key,),
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT value FROM hevy_meta WHERE user_id = ? AND key = ?",
+                (user_id, key),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT value FROM hevy_meta WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
     return row[0] if row else None
 
 
-def set_meta(key: str, value: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Store a metadata value under the given key."""
+def set_meta(
+    key: str,
+    value: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Store a metadata value under the given key.
+
+    When *user_id* is provided, the value is scoped to that user.
+    When None, falls back to the legacy user."""
     with _connect(db_path) as conn:
+        uid = user_id
+        if uid is None:
+            row = conn.execute(
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
+            ).fetchone()
+            if row:
+                uid = row[0]
+            else:
+                from uuid import uuid4
+                uid = str(uuid4())
+                conn.execute(
+                    "INSERT INTO users (id, email, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (uid, "legacy@local", "Legacy Data",
+                     datetime.now(tz=timezone.utc).isoformat()),
+                )
         conn.execute(
             """
-            INSERT INTO hevy_meta (key, value) VALUES (?, ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
+            ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
             """,
-            (key, value),
+            (uid, key, value),
         )
 
 
@@ -1046,9 +1128,16 @@ def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> N
         conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
 
 
-def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
-    """Return the programme start date, defaulting to today if unset."""
-    value = get_meta("programme_start_date", db_path)
+def get_programme_start_date(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> date:
+    """Return the programme start date, defaulting to today if unset.
+
+    When *user_id* is provided, the lookup is scoped to that user.
+    """
+    value = get_meta("programme_start_date", db_path, user_id=user_id)
     if value:
         try:
             return date.fromisoformat(value)

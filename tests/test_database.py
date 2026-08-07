@@ -10,7 +10,9 @@ from database import (
     get_current_day,
     get_daily_logs,
     get_exercise_volumes,
+    get_meta,
     get_personal_records,
+    get_programme_start_date,
     get_progress_history,
     get_recent_bests,
     get_recent_hevy_logs,
@@ -20,6 +22,7 @@ from database import (
     save_daily_log,
     save_progress,
     save_workout,
+    set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
@@ -1148,3 +1151,105 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
     from database import get_current_day
 
     assert get_current_day(db) == 1
+
+
+# --- Multi-tenant isolation tests: hevy_meta user_id scoping ---
+
+
+def test_hevy_meta_migration_adds_user_id_column(tmp_path: Any) -> None:
+    """Running init_db on a pre-migration DB migrates hevy_meta to scoped PK."""
+    import sqlite3
+
+    db = _db(tmp_path)
+
+    # Simulate pre-migration schema with the old key-PK hevy_meta
+    conn = sqlite3.connect(db)
+    conn.execute("""
+        CREATE TABLE hevy_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO hevy_meta (key, value) VALUES ('test_key', 'test_value')",
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(hevy_meta)")
+    cols = {row[1] for row in cursor.fetchall()}
+    assert "user_id" in cols, "hevy_meta should have user_id after migration"
+    assert "key" in cols
+
+    rows = cursor.execute(
+        "SELECT user_id, key, value FROM hevy_meta WHERE key = 'test_key'",
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] is not None  # backfilled to legacy user
+    assert rows[0][1] == "test_key"
+    assert rows[0][2] == "test_value"
+    conn.close()
+
+
+def test_hevy_meta_scoped_isolation(tmp_path: Any) -> None:
+    """Two different user_ids don't see each other's hevy_meta values."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a"
+    user_b = "user-b"
+
+    set_meta("alpha", "val_a", db, user_id=user_a)
+    set_meta("alpha", "val_b", db, user_id=user_b)
+
+    assert get_meta("alpha", db, user_id=user_a) == "val_a"
+    assert get_meta("alpha", db, user_id=user_b) == "val_b"
+
+    # Storing for user_a doesn't overwrite user_b
+    assert get_meta("alpha", db, user_id=user_b) == "val_b"
+
+
+def test_hevy_meta_null_user_id_backward_compat(tmp_path: Any) -> None:
+    """Callers not passing user_id still work (backward compat)."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    set_meta("mykey", "myval", db)
+    assert get_meta("mykey", db) == "myval"
+
+
+def test_hevy_meta_nonexistent_key(tmp_path: Any) -> None:
+    """get_meta returns None for nonexistent key."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    assert get_meta("nonexistent", db, user_id="user-a") is None
+
+
+def test_hevy_meta_set_updates_existing(tmp_path: Any) -> None:
+    """set_meta updates an existing key's value (ON CONFLICT upsert)."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    set_meta("foo", "bar", db, user_id="u1")
+    assert get_meta("foo", db, user_id="u1") == "bar"
+
+    set_meta("foo", "baz", db, user_id="u1")
+    assert get_meta("foo", db, user_id="u1") == "baz"
+
+
+def test_programme_start_date_scoped(tmp_path: Any) -> None:
+    """get_programme_start_date respects user_id scoping."""
+    from datetime import date
+    db = _db(tmp_path)
+    init_db(db)
+
+    set_meta("programme_start_date", "2026-01-15", db, user_id="u1")
+    set_meta("programme_start_date", "2026-06-01", db, user_id="u2")
+
+    assert get_programme_start_date(db, user_id="u1") == date(2026, 1, 15)
+    assert get_programme_start_date(db, user_id="u2") == date(2026, 6, 1)
