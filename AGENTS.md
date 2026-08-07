@@ -192,9 +192,12 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - ~~**`sync_history.py` is wired** — it is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
   endpoint). It is also executable standalone (`python sync_history.py`).~~ ✅ Resolved.
-- **No workout-programme selection UI.** `/plan` only renders the fixed
+- ~~**No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
-  one.
+  one.~~ ✅ Resolved — `/programmes` provides template selection (including
+  "Infer from my Hevy history" and custom). A full drag-and-drop custom
+  workout builder UI (defining every exercise and set scheme from scratch)
+  is still planned but template selection is functional.
 - ~~**Scheduling has been consolidated** into a single unified `scheduler.py`
   (PR #142). `insight_scheduler.py` has been removed. The dual bash/Python
   sleep-loops described in prior audits no longer exist — `scheduler.py` is
