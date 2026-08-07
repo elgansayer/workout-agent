@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #499 checked 2026-08-06)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -220,6 +220,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
   (zero orphans), import-sanity (all reachable). Issue #479 sweep complete
   — no newly orphaned or truly-dead modules found.
+
+- **Hourly test watch #499 verified 2026-08-06.** Full test suite:
+  569/569 passed. Zero coverage gaps — all source modules have
+  corresponding test files. Verification gate all green: compileall
+  (clean), ruff (zero warnings), mypy (no issues, 61 source files),
+  pytest (569 passed), import-sanity (webapp.app and main both
+  importable). No drift between code and test suite detected; no
+  fixes needed.
 
 
 
