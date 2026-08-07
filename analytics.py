@@ -8,6 +8,7 @@ so training volume can be broken down by body part.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 # DOTS coefficients for men (Open Powerlifting). DOTS expresses strength
 # relative to bodyweight on a single scale, so progress shows even as weight
@@ -169,7 +170,7 @@ def muscle_group_for(name: str) -> str:
     return "Other"
 
 
-def group_volumes(exercise_volumes: Iterable[dict]) -> dict[str, float]:
+def group_volumes(exercise_volumes: Iterable[dict[str, Any]]) -> dict[str, float]:
     """Sum per-exercise volume into muscle groups.
 
     ``exercise_volumes`` is an iterable of ``{"exercise": str, "volume": float}``.
