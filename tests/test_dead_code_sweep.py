@@ -142,6 +142,7 @@ class TestEntryPoints:
             "insight_cron.py",
             "dead_code_sweep.py",
             "commit_hygiene.py",
+            "connector_health.py",
         }
         assert ENTRY_POINTS == expected
 

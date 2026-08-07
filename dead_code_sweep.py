@@ -91,6 +91,7 @@ ENTRY_POINTS: set[str] = {
     "insight_cron.py",
     "dead_code_sweep.py",
     "commit_hygiene.py",
+    "connector_health.py",
 }
 
 # Files that are not modules in the import sense.
