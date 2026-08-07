@@ -73,7 +73,9 @@ def fake_calls(monkeypatch: MonkeyPatch) -> list[tuple[str, str, str | None]]:
     """Patch ai_provider.get_provider to record calls and return a GeminiProvider."""
     calls: list[tuple[str, str, str | None]] = []
 
-    def _fake(provider_name: str, api_key: str, model: str | None = None) -> GeminiProvider:
+    def _fake(
+        provider_name: str, api_key: str, model: str | None = None
+    ) -> GeminiProvider:
         calls.append((provider_name, api_key, model))
         return GeminiProvider(api_key, model=model or "gemini-2.5-flash")
 
@@ -81,7 +83,9 @@ def fake_calls(monkeypatch: MonkeyPatch) -> list[tuple[str, str, str | None]]:
     return calls
 
 
-def test_resolve_uses_preferences(monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]) -> None:
+def test_resolve_uses_preferences(
+    monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]
+) -> None:
     """When user prefs specify openai, resolve_provider uses it with user's key."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -96,7 +100,9 @@ def test_resolve_uses_preferences(monkeypatch: MonkeyPatch, fake_calls: list[tup
     assert fake_calls == [("openai", "sk-user-key", "gpt-4o-mini")]
 
 
-def test_resolve_falls_back_to_gemini_server_key(monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]) -> None:
+def test_resolve_falls_back_to_gemini_server_key(
+    monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]
+) -> None:
     """Without user prefs, Gemini is default and server key is used."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -111,7 +117,9 @@ def test_resolve_falls_back_to_gemini_server_key(monkeypatch: MonkeyPatch, fake_
     assert fake_calls == [("gemini", "server-gemini-key", None)]
 
 
-def test_resolve_no_user_id_uses_gemini_server_key(fake_calls: list[tuple[str, str, str | None]]) -> None:
+def test_resolve_no_user_id_uses_gemini_server_key(
+    fake_calls: list[tuple[str, str, str | None]],
+) -> None:
     """When user_id is None, Gemini is assumed with server_gemini_key."""
     resolve_provider(server_gemini_key="server-key")
     assert fake_calls == [("gemini", "server-key", None)]
@@ -132,7 +140,9 @@ def test_resolve_raises_when_no_key_for_non_default(monkeypatch: MonkeyPatch) ->
         resolve_provider("user-1", server_gemini_key="server-key")
 
 
-def test_resolve_preserves_provider_case(monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]) -> None:
+def test_resolve_preserves_provider_case(
+    monkeypatch: MonkeyPatch, fake_calls: list[tuple[str, str, str | None]]
+) -> None:
     """Provider name normalisation should handle mixed case preferences."""
     monkeypatch.setattr(
         "database.get_user_preferences",
