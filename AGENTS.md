@@ -214,7 +214,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   import-sanity). Hourly test watch #514 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
-- **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
+- **Hourly dead-code sweep re-verified.** Issue #505 audit complete.
+  `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
   verification gate passed: ruff (clean), pytest (533/533), dead_code_sweep
