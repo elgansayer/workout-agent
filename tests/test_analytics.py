@@ -5,26 +5,26 @@ from __future__ import annotations
 import analytics
 
 
-def test_epley_1rm():
+def test_epley_1rm() -> None:
     assert analytics.epley_1rm(100, 5) == round(100 * (1 + 5 / 30), 1)
     assert analytics.epley_1rm(None, 5) is None
     assert analytics.epley_1rm(100, 0) is None
 
 
-def test_dots_score_is_positive_and_scales_with_load():
+def test_dots_score_is_positive_and_scales_with_load() -> None:
     light = analytics.dots_score(80, 150)
     heavy = analytics.dots_score(80, 200)
     assert light and heavy
     assert heavy > light
 
 
-def test_dots_score_rejects_bad_input():
+def test_dots_score_rejects_bad_input() -> None:
     assert analytics.dots_score(0, 100) is None
     assert analytics.dots_score(80, 0) is None
     assert analytics.dots_score(None, None) is None
 
 
-def test_linear_fit_recovers_known_line():
+def test_linear_fit_recovers_known_line() -> None:
     fit = analytics.linear_fit([0, 1, 2, 3], [1, 3, 5, 7])  # y = 2x + 1
     assert fit is not None
     slope, intercept = fit
@@ -32,18 +32,18 @@ def test_linear_fit_recovers_known_line():
     assert round(intercept, 6) == 1.0
 
 
-def test_linear_fit_needs_variance():
+def test_linear_fit_needs_variance() -> None:
     assert analytics.linear_fit([1, 1, 1], [2, 3, 4]) is None
     assert analytics.linear_fit([1], [2]) is None
 
 
-def test_project_extrapolates():
+def test_project_extrapolates() -> None:
     points = [(0.0, 100.0), (10.0, 110.0)]  # +1/day
     assert analytics.project(points, 20) == 120.0
     assert analytics.project([(0.0, 1.0)], 5) is None
 
 
-def test_muscle_group_classification():
+def test_muscle_group_classification() -> None:
     cases = {
         "Deadlift (Barbell)": "Back",
         "Strict Pull-Ups": "Back",
@@ -66,8 +66,8 @@ def test_muscle_group_classification():
         assert analytics.muscle_group_for(name) == expected, name
 
 
-def test_group_volumes_sums_by_group():
-    rows = [
+def test_group_volumes_sums_by_group() -> None:
+    rows: list[dict[str, str | float]] = [
         {"exercise": "Deadlift (Barbell)", "volume": 1000.0},
         {"exercise": "Chest-Supported T-Bar Rows", "volume": 500.0},
         {"exercise": "Leg Press", "volume": 800.0},
