@@ -1152,12 +1152,14 @@ def chat_page(request: Request) -> Any:
 
 @app.get("/api/chat/history")
 def chat_history(request: Request) -> list[dict[str, Any]]:
+    _check_rate_limit(request)
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request) -> dict[str, str]:
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
@@ -1296,6 +1298,7 @@ def settings(request: Request) -> Any:
 @app.post("/api/settings/key")
 async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1333,6 +1336,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
 @app.post("/api/settings/key/delete")
 async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1397,6 +1401,7 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
 @app.post("/api/settings/preferences")
 async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1419,6 +1424,7 @@ async def save_preferences(request: Request) -> dict[str, str]:
 @app.get("/google-health/connect")
 def google_health_connect(request: Request) -> RedirectResponse:
     """Start the Google Health OAuth flow and redirect to the consent screen."""
+    _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     state = secrets.token_urlsafe(16)
@@ -1457,8 +1463,9 @@ def google_health_callback(request: Request) -> RedirectResponse:
 
 
 @app.post("/google-health/disconnect")
-def google_health_disconnect() -> RedirectResponse:
+def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
+    _check_rate_limit(request, limit=5)
     set_meta(_GH_TOKEN_KEY, "", DB_PATH)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
