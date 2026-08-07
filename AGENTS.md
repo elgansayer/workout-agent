@@ -217,9 +217,18 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
+  verification gate passed: ruff (clean), pytest (533/533), dead_code_sweep
   (zero orphans), import-sanity (all reachable). Issue #479 sweep complete
   — no newly orphaned or truly-dead modules found.
+
+- **Hourly dead-code sweep #505 re-verified 2026-08-07.** `dead_code_sweep.py`
+  executed clean (status: "clean", zero orphans). All 27 top-level modules
+  and 3 webapp sub-modules confirmed wired. Known previously-orphaned modules
+  (`programme_inference.py`, `hevy_reader.py`, `sync_history.py`) remain wired
+  via `webapp/app.py` and transitively reachable. Full verification gate
+  passed: ruff (clean), pytest (533/533, 1 skipped), dead_code_sweep (zero
+  orphans), import-sanity (all reachable). No truly-dead code found. No
+  orphaned test files. Zero stale bytecode.
 
 
 
