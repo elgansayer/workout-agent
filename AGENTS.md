@@ -37,13 +37,10 @@ commit message or task file:
 
 This codebase currently has **partial** multi-user support: `users`,
 `user_api_keys`, and `user_preferences` tables exist and are wired to a real
-Google OAuth login (`webapp/app.py`), but every domain table
-(`workout_history`, `programme_state`, `exercise_progress`, `body_metrics`,
-`daily_log`, `check_ins`, `chat_messages`, `dashboard_insights`,
-`deep_correlations`) has **no `user_id` column** — one shared programme,
-history, and chat for every logged-in account. This is the single biggest
-gap between "personal script" and "public product" and must be treated as
-such:
+Google OAuth login (`webapp/app.py`). Most domain tables have been migrated
+to include `user_id` columns; the remaining unscoped tables are `hevy_routines`
+and `hevy_meta` — one shared set of Hevy routines for every logged-in account.
+Multi-tenancy migration of these remaining tables is the top-priority backlog item:
 
 - **Any new table you add MUST have a `user_id TEXT NOT NULL REFERENCES
   users(id)` column from day one**, even if the feature initially only runs
@@ -167,11 +164,13 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07)
 
-- **No real data isolation between users** (§2). Logging in as a different
-  Google account today shares the exact same programme/history/chat as
-  everyone else. This is the top-priority backlog item.
+- **Partial data isolation between users** (§2). Most domain tables have been
+  migrated to include `user_id` columns and are scoped per-user. The remaining
+  unscoped tables are `hevy_routines` and `hevy_meta` — all users share the
+  same Hevy routine cache. Completing the multi-tenancy migration is the
+  top-priority backlog item.
 
 - ~~**`ai_provider.py` multi-provider wiring is complete.** PR #85
   (`wire-ai-provider`) integrated `resolve_provider()` into `gemini_engine.py`,
@@ -192,9 +191,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - ~~**`sync_history.py` is wired** — it is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
   endpoint). It is also executable standalone (`python sync_history.py`).~~ ✅ Resolved.
-- **No workout-programme selection UI.** `/plan` only renders the fixed
-  split read-only. No route lets a user choose a template or build a custom
-  one.
+- **Workout-programme selection UI exists** (`/programmes`) with Hevy
+  inference and template selection, but the full interactive programme
+  builder (drag-and-drop exercise arrangement, custom block authoring) is
+  not yet built. The current UI lets users pick from fixed templates or
+  infer a split from their Hevy history — see `programme-builder-ui` skill.
 - ~~**Scheduling has been consolidated** into a single unified `scheduler.py`
   (PR #142). `insight_scheduler.py` has been removed. The dual bash/Python
   sleep-loops described in prior audits no longer exist — `scheduler.py` is
