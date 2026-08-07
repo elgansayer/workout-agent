@@ -1175,8 +1175,7 @@ def delete_routine_record(
     with _connect(db_path) as conn:
         if user_id is not None:
             conn.execute(
-                "DELETE FROM hevy_routines "
-                "WHERE user_id = ? AND routine_key = ?",
+                "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
                 (user_id, routine_key),
             )
         else:
