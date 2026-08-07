@@ -1,5 +1,3 @@
-
-
 """Unified scheduler: replaces the bash sleep-loop and Python insight scheduler.
 
 Wakes every 60 seconds, checks each user's local time against the configured

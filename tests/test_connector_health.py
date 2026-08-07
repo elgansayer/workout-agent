@@ -98,7 +98,9 @@ class TestCheckFailureIsolation:
         f.write_text(UNPROTECTED_NETWORK_CALL)
         findings = _check_failure_isolation("bad", f)
         assert len(findings) >= 1
-        assert any("not wrapped in try/except" in finding.message for finding in findings)
+        assert any(
+            "not wrapped in try/except" in finding.message for finding in findings
+        )
 
     def test_bare_except_warns(self, tmp_path: Path) -> None:
         f = tmp_path / "bare.py"
@@ -121,7 +123,9 @@ class TestCheckFailureIsolation:
 
 
 class TestCheckEnvDocs:
-    def test_all_documented_is_clean(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_all_documented_is_clean(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         """When .env.example covers all connector vars, no findings."""
         import connector_health as ch
 
@@ -131,9 +135,7 @@ class TestCheckEnvDocs:
 
         # Create a fake connector module
         conn_path = tmp_path / "hevy_client.py"
-        conn_path.write_text(
-            'import os\nkey = os.environ.get("HEVY_API_KEY", "")'
-        )
+        conn_path.write_text('import os\nkey = os.environ.get("HEVY_API_KEY", "")')
 
         monkeypatch.setattr(ch, "ROOT", tmp_path)
         monkeypatch.setattr(
@@ -145,7 +147,9 @@ class TestCheckEnvDocs:
         findings = _check_env_docs()
         assert len(findings) == 0
 
-    def test_undocumented_var_is_found(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_undocumented_var_is_found(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         import connector_health as ch
 
         env_path = tmp_path / ".env.example"
@@ -153,7 +157,7 @@ class TestCheckEnvDocs:
 
         conn_path = tmp_path / "hevy_client.py"
         conn_path.write_text(
-            'import os\n'
+            "import os\n"
             'key = os.environ.get("HEVY_API_KEY", "")\n'
             'undoc = os.environ.get("UNDOCUMENTED_VAR", "")\n'
         )
@@ -168,7 +172,9 @@ class TestCheckEnvDocs:
         findings = _check_env_docs()
         assert any("UNDOCUMENTED_VAR" in f.message for f in findings)
 
-    def test_missing_env_example(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_missing_env_example(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         import connector_health as ch
 
         monkeypatch.setattr(ch, "ROOT", tmp_path)
@@ -182,13 +188,13 @@ class TestCheckEnvDocs:
 
 
 class TestCheckPerUserCredentials:
-    def test_known_global_vars_produce_info(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def test_known_global_vars_produce_info(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         import connector_health as ch
 
         conn_path = tmp_path / "hevy_client.py"
-        conn_path.write_text(
-            'import os\nkey = os.environ.get("HEVY_API_KEY", "")'
-        )
+        conn_path.write_text('import os\nkey = os.environ.get("HEVY_API_KEY", "")')
 
         monkeypatch.setattr(
             ch,
@@ -274,10 +280,12 @@ class TestCreateGitHubIssues:
     def test_handles_http_error_gracefully(self) -> None:
         report = HealthReport()
         report.add("mod", "error", "failure-isolation", "bad thing")
-        with patch("connector_health._get_github_token", return_value="tk"), \
-             patch("connector_health._get_github_repo", return_value=("org", "repo")), \
-             patch("connector_health.logger") as mock_logger, \
-             patch("urllib.request.urlopen", side_effect=OSError("network down")):
+        with (
+            patch("connector_health._get_github_token", return_value="tk"),
+            patch("connector_health._get_github_repo", return_value=("org", "repo")),
+            patch("connector_health.logger") as mock_logger,
+            patch("urllib.request.urlopen", side_effect=OSError("network down")),
+        ):
             issues = create_github_issues(report)
             assert issues == []
             # Should have logged a warning about the failure
