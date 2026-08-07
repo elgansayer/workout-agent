@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #667 checked 2026-08-07)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -210,7 +210,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (reconciled 2026-08-06).~~
 
 - **Test coverage audit** (last updated 2026-08-07, re-verified
-2026-08-07 by hourly test watch #653): all 609 tests passing,
+2026-08-07 by hourly test watch #667): all 609 tests passing,
   covering 31 test modules. Zero coverage gaps — every source module
   has a corresponding test file. All verification gates clean
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
