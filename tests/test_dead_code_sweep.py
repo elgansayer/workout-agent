@@ -133,6 +133,9 @@ class TestEntryPoints:
     def test_insight_cron_is_entry_point(self) -> None:
         assert "insight_cron.py" in ENTRY_POINTS
 
+    def test_connector_health_is_entry_point(self) -> None:
+        assert "connector_health.py" in ENTRY_POINTS
+
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
         expected = {
@@ -142,6 +145,7 @@ class TestEntryPoints:
             "insight_cron.py",
             "dead_code_sweep.py",
             "commit_hygiene.py",
+            "connector_health.py",
         }
         assert ENTRY_POINTS == expected
 
