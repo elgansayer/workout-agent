@@ -222,7 +222,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean on all 27 source files).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
-  `webapp/app.py` — `_run_hevy_inference()` helper, `/api/hevy/infer` route). Stale pycache cleaned: 0.
+  `webapp/app.py` — `_run_hevy_inference()` helper, `/api/hevy/infer` route). No
+  truly dead code found. Stale pycache cleaned: 0.
 
 
 
