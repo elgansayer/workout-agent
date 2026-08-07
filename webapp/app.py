@@ -1284,7 +1284,7 @@ def settings(request: Request) -> Any:
         {
             "active": "settings",
             "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
-            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH)),
+            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id)),
             "gh_status": request.query_params.get("gh"),
             "user_keys": masked_keys,
             "user_prefs": user_prefs,
@@ -1427,8 +1427,9 @@ def google_health_connect(request: Request) -> RedirectResponse:
     _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+    user_id = request.session.get("user_id")
     state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH)
+    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
     url = build_authorize_url(
         GH_CLIENT_ID,
         state,
@@ -1444,10 +1445,11 @@ def google_health_callback(request: Request) -> RedirectResponse:
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
+    user_id = request.session.get("user_id")
     code = request.query_params.get("code")
     state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH)
-    set_meta(_GH_STATE_KEY, "", DB_PATH)  # one-time use, regardless of outcome
+    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
+    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
@@ -1458,15 +1460,15 @@ def google_health_callback(request: Request) -> RedirectResponse:
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH)
+    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
 @app.post("/google-health/disconnect")
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
-    _check_rate_limit(request, limit=5)
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH)
+    user_id = request.session.get("user_id")
+    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
