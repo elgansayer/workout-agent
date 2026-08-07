@@ -1475,7 +1475,7 @@ def get_dashboard_insight(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Get the latest dashboard insight JSON as a dict.
 
     If *user_id* is provided, returns only that user's insight.
