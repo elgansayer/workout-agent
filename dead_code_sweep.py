@@ -205,6 +205,56 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
     return imports
 
 
+def _extract_subprocess_module_refs(source: str) -> set[str]:
+    """Return module names referenced in ``subprocess.run([sys.executable, "module.py"])``-style calls.
+
+    Detects patterns like::
+
+        subprocess.run([sys.executable, "commit_hygiene.py", "--fix"])
+        subprocess.run([sys.executable, "insight_cron.py", "--daily"])
+
+    where a module is invoked as a standalone script via the same Python
+    interpreter rather than imported.  The returned names are the module
+    stems (without ``.py``) — e.g. ``{"commit_hygiene", "insight_cron"}``.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        # Look for: subprocess.run([sys.executable, "foo.py", ...])
+        if not isinstance(node, ast.Call):
+            continue
+        # Drill into the first positional arg (the list)
+        if not node.args:
+            continue
+        cmd_list = node.args[0]
+        if not isinstance(cmd_list, (ast.List, ast.Tuple)):
+            continue
+        # Does the list start with sys.executable?
+        if len(cmd_list.elts) < 2:
+            continue
+        first = cmd_list.elts[0]
+        if not (
+            isinstance(first, ast.Attribute)
+            and isinstance(first.value, ast.Name)
+            and first.value.id == "sys"
+            and first.attr == "executable"
+        ):
+            continue
+        # Second element is the module script name
+        second = cmd_list.elts[1]
+        if (
+            isinstance(second, ast.Constant)
+            and isinstance(second.value, str)
+            and second.value.endswith(".py")
+        ):
+            modules.add(second.value[:-3])  # strip ".py"
+    return modules
+
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -234,8 +284,10 @@ def _build_import_graph() -> dict[str, set[str]]:
 
         rel = str(py_file.relative_to(ROOT))
         source = py_file.read_text(encoding="utf-8")
-        graph[rel] = _extract_imports(source) | _extract_submodule_imports(
-            source, local_packages
+        graph[rel] = (
+            _extract_imports(source)
+            | _extract_submodule_imports(source, local_packages)
+            | _extract_subprocess_module_refs(source)
         )
 
     return graph
