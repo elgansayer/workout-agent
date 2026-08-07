@@ -210,7 +210,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (reconciled 2026-08-06).~~
 
 - **Test coverage audit** (last updated 2026-08-07, re-verified
-  2026-08-07 by hourly test watch #641): all 609 tests passing,
+2026-08-07 by hourly test watch #641): all 609 tests passing,
   covering 31 test modules. Zero coverage gaps — every source module
   has a corresponding test file. All verification gates clean
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
