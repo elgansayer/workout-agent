@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #593 checked 2026-08-07, hourly test watch #592 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #605 checked 2026-08-07, hourly test watch #592 checked 2026-08-07)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -211,19 +211,20 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 
 - **Test coverage audit** (last updated 2026-08-07, re-verified
   2026-08-07): all source modules have corresponding test files. The
-  full test suite stands at 601 passing tests covering 31 test modules.
+  full test suite stands at 565 passing tests covering 31 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, import-sanity).
   Hourly test watch #592 confirmed no drift; all gates green with no
   failures to resolve and zero test coverage gaps.
 
-- **Hourly dead-code sweep #593 re-verified.** `dead_code_sweep.py` executed
+- **Hourly dead-code sweep #605 re-verified.** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
-  top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (601/601), dead_code_sweep
+  top-level modules and 4 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (565/565), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean on core modules).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
-  `webapp/app.py`). Stale pycache cleaned: 0.
+  `webapp/app.py`). `sync_history.py` confirmed wired (`main.py` and `webapp/app.py`).
+  Stale pycache cleaned: 0.
 
 
 
