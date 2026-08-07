@@ -16,3 +16,7 @@
 ## 2026-08-06 - SQLite MAX() and N+1 query loops
 **Learning:** SQLite has a unique, documented feature where un-aggregated "bare" columns in a `GROUP BY` query correspond directly to the row containing the `MAX()` or `MIN()` value. This enables the replacement of slow `IN (SELECT MAX(id) ... GROUP BY)` subqueries with a single `SELECT *, MAX(id) ... GROUP BY` pass. However, be wary of replacing window functions with iterative `LIMIT` queries (N+1 query loops) in Python to avoid temporary B-Trees, as the overhead of switching context and breaking sort order creates far worse regressions than the B-Tree sort.
 **Action:** Next time you need the row corresponding to the latest timestamp/ID in SQLite, use a simple `GROUP BY` with `MAX(id)` directly in the `SELECT` clause, avoiding subqueries entirely. Never replace single bulk SQL queries (like window functions) with a loop in Python making multiple small queries.
+
+## 2026-08-07 - High-Frequency Function Generator Overhead
+**Learning:** In tight loops or high-frequency functions (like `muscle_group_for` and `linear_fit` in `analytics.py`), the overhead of creating Python generators (e.g., using `any(...)` or `sum(x for x in ...)` inside a loop) can significantly degrade performance compared to explicit nested loops, even on small datasets.
+**Action:** For heavily used analytical or parsing functions, avoid generator expressions in favor of unrolled or explicit `for` loops to minimize function-call and object-creation overhead.
