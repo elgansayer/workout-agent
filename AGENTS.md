@@ -217,11 +217,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   import-sanity). Hourly test watch #543 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
-- **Hourly dead-code sweep #552 completed.** `dead_code_sweep.py` executed
-  clean via `--json` output (status: "clean", zero orphans). All 26
+- **Hourly dead-code sweep #552 re-verified.** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (575/575), dead_code_sweep
-  (zero orphans), import-sanity (all reachable), mypy (clean — 31 source files).
+  verification gate passed: ruff (clean), pytest (565/565), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on core modules).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
   `webapp/app.py`). Stale pycache cleaned: 0.
 
