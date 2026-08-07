@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -206,18 +206,18 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `8770` across README, both compose files, and `.env.example`
   (reconciled 2026-08-06).~~
 
-- **Test coverage audit** (last updated 2026-08-06, re-verified
-  2026-08-06): all source modules have corresponding test files. The
-  full test suite stands at 569 passing tests covering 30 test modules.
+- **Test coverage audit** (last updated 2026-08-07, re-verified
+  2026-08-07): all source modules have corresponding test files. The
+  full test suite stands at 533 passing tests covering 30 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, mypy,
-  import-sanity). Hourly test watch #490 confirmed no drift; all gates
+  import-sanity). Hourly test watch #514 confirmed no drift; all gates
   green with no failures to resolve and zero test coverage gaps.
 
 - **Hourly dead-code sweep re-verified (#491).** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
+  verification gate passed: ruff (clean), pytest (533/533), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean, 31 source files).
   Issue #491 sweep complete — no newly orphaned or truly-dead modules found.
   Stale pycache cleaned: 0.
