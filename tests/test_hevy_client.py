@@ -399,3 +399,56 @@ def test_get_exercise_history_non_dict_json() -> None:
         mock_get.return_value.json.return_value = [1, 2, 3]
         result = hevy_client.get_exercise_history("fake-key", "001")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Regression: page_count edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_workouts_null_page_count() -> None:
+    """Regression: null page_count must not raise TypeError (unhandled path)."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": [{"id": "W1"}],
+            "page_count": None,
+        }
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result == [{"id": "W1"}]
+
+
+def test_get_recent_workouts_null_page_count() -> None:
+    """Regression: null page_count must not raise TypeError (unhandled path)."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": [{"id": "W1"}],
+            "page_count": None,
+        }
+        result = hevy_client.get_recent_workouts("fake-key", limit=5)
+        assert result == [{"id": "W1"}]
+
+
+def test_get_all_workouts_string_page_count() -> None:
+    """Regression: string page_count must be handled gracefully."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": [{"id": "W1"}],
+            "page_count": "1",
+        }
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result == [{"id": "W1"}]
+
+
+def test_get_all_workouts_malformed_page_count() -> None:
+    """Regression: unparseable page_count must not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": [{"id": "W1"}],
+            "page_count": "not-a-number",
+        }
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result is None

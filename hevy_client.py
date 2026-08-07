@@ -80,15 +80,15 @@ def _get_all_pages(
                 logger.warning("Hevy returned non-object JSON for %s", collection_key)
                 return None
             items.extend(data.get(collection_key, []))
-            if page >= int(data.get("page_count", 1)):
+            if page >= int(data.get("page_count") or 1):
                 break
             page += 1
         return items
     except requests.RequestException as exc:
         logger.warning("Could not list %s from Hevy: %s", collection_key, exc)
         return None
-    except ValueError as exc:  # invalid JSON
-        logger.warning("Hevy returned invalid JSON for %s: %s", collection_key, exc)
+    except (ValueError, TypeError) as exc:  # invalid JSON, malformed page_count
+        logger.warning("Hevy returned invalid data for %s: %s", collection_key, exc)
         return None
 
 
@@ -289,13 +289,13 @@ def get_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, Any]] |
                 return None
             batch = data.get("workouts", [])
             items.extend(batch)
-            if page >= int(data.get("page_count", 1)):
+            if page >= int(data.get("page_count") or 1):
                 break
             page += 1
         return items[:limit]
     except requests.RequestException as exc:
         logger.warning("Could not fetch recent workouts from Hevy: %s", exc)
         return None
-    except ValueError as exc:
-        logger.warning("Hevy returned invalid JSON for workouts: %s", exc)
+    except (ValueError, TypeError) as exc:
+        logger.warning("Hevy returned invalid data for workouts: %s", exc)
         return None
