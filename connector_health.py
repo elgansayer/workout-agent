@@ -142,9 +142,10 @@ class _TryExceptVisitor(ast.NodeVisitor):
 
     def visit_Try(self, node: ast.Try) -> None:
         for handler in node.handlers:
+            end = handler.end_lineno if handler.end_lineno is not None else handler.lineno
             for i in range(
                 node.body[0].lineno if node.body else node.lineno,
-                handler.end_lineno + 1,
+                end + 1,
             ):
                 self.handled_lines.add(i)
             if handler.type is None:
