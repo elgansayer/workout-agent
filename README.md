@@ -265,6 +265,7 @@ dashboard usable with JavaScript disabled.
 | `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
 | `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
+| `/programmes`| Select a workout programme template, infer from Hevy history, or build a custom split |
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
