@@ -68,11 +68,11 @@ def test_available_providers_returns_all() -> None:
 
 
 @pytest.fixture
-def fake_calls(monkeypatch: pytest.MonkeyPatch) -> list:
+def fake_calls(monkeypatch) -> list:
     """Patch ai_provider.get_provider to record calls and return a GeminiProvider."""
     calls: list = []
 
-    def _fake(provider_name: str, api_key: str, model: str | None = None) -> GeminiProvider:
+    def _fake(provider_name: str, api_key: str, model: str | None = None):
         calls.append((provider_name, api_key, model))
         return GeminiProvider(api_key, model=model or "gemini-2.5-flash")
 
@@ -80,7 +80,7 @@ def fake_calls(monkeypatch: pytest.MonkeyPatch) -> list:
     return calls
 
 
-def test_resolve_uses_preferences(monkeypatch: pytest.MonkeyPatch, fake_calls: list) -> None:
+def test_resolve_uses_preferences(monkeypatch, fake_calls: list) -> None:
     """When user prefs specify openai, resolve_provider uses it with user's key."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -95,9 +95,7 @@ def test_resolve_uses_preferences(monkeypatch: pytest.MonkeyPatch, fake_calls: l
     assert fake_calls == [("openai", "sk-user-key", "gpt-4o-mini")]
 
 
-def test_resolve_falls_back_to_gemini_server_key(
-    monkeypatch: pytest.MonkeyPatch, fake_calls: list
-) -> None:
+def test_resolve_falls_back_to_gemini_server_key(monkeypatch, fake_calls: list) -> None:
     """Without user prefs, Gemini is default and server key is used."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -118,7 +116,7 @@ def test_resolve_no_user_id_uses_gemini_server_key(fake_calls: list) -> None:
     assert fake_calls == [("gemini", "server-key", None)]
 
 
-def test_resolve_raises_when_no_key_for_non_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_raises_when_no_key_for_non_default(monkeypatch) -> None:
     """Non-default providers must have a user key; server fallback only for Gemini."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -133,9 +131,7 @@ def test_resolve_raises_when_no_key_for_non_default(monkeypatch: pytest.MonkeyPa
         resolve_provider("user-1", server_gemini_key="server-key")
 
 
-def test_resolve_preserves_provider_case(
-    monkeypatch: pytest.MonkeyPatch, fake_calls: list
-) -> None:
+def test_resolve_preserves_provider_case(monkeypatch, fake_calls: list) -> None:
     """Provider name normalisation should handle mixed case preferences."""
     monkeypatch.setattr(
         "database.get_user_preferences",
@@ -151,7 +147,7 @@ def test_resolve_preserves_provider_case(
 
 
 def test_resolve_no_user_record_defaults_to_gemini(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch,
     fake_calls: list,
 ) -> None:
     """If user has no preferences row, defaults should apply."""
@@ -168,7 +164,7 @@ def test_resolve_no_user_record_defaults_to_gemini(
     assert fake_calls[0][0] == "gemini"
 
 
-def test_resolve_none_api_key_treated_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_none_api_key_treated_as_missing(monkeypatch) -> None:
     """An empty string api_key in the record should trigger fallback."""
     monkeypatch.setattr(
         "database.get_user_preferences",
