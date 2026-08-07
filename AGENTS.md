@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07, hourly lint & format fix #651 checked 2026-08-07)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
