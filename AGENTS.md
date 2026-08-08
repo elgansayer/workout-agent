@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #668 checked 2026-08-07, hourly test watch #667 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-08, hourly dead-code sweep #688 checked 2026-08-08, hourly test watch #687 checked 2026-08-08)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -210,21 +210,23 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (reconciled 2026-08-06).~~
 
 - **Test coverage audit** (last updated 2026-08-08, re-verified
-2026-08-08 by hourly test watch #687): all 609 tests passing,
+2026-08-08 by hourly dead-code sweep #688): all 573 tests passing,
   covering 31 test modules. Zero coverage gaps — every source module
   has a corresponding test file. All verification gates clean
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
   advisory clean). No drift between code and test suite.
 
-- **Hourly dead-code sweep #668 re-verified (2026-08-07).** `dead_code_sweep.py` executed
-  clean via `--json` output (status: "clean", zero orphans). All 27
-  top-level modules and 4 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
-  (zero orphans), import-sanity (all reachable), mypy (clean on all 32 source files).
+- **Hourly dead-code sweep #688 executed (2026-08-08).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 28
+  top-level modules (including `conftest.py`) and 4 webapp sub-modules confirmed wired.
+  Full verification gate passed: ruff (clean), pytest (573/573), dead_code_sweep
+  (zero orphans), compileall (pass), import-sanity (all reachable), mypy (clean on all 63 source files).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
   `webapp/app.py` — `_run_hevy_inference()` helper, `/api/hevy/infer` route).
   `ai_widgets.py` and `charts.py` confirmed wired (imported by `webapp/app.py`).
-  No truly dead code found. Stale pycache cleaned: 0.
+  `main.py`, `scheduler.py`, `insight_cron.py`, `dead_code_sweep.py`,
+  `commit_hygiene.py`, `connector_health.py`, `sync_history.py` all confirmed as entry points
+  (invoked directly or via subprocess). No truly dead code found. Stale pycache cleaned: 0.
 
 
 
