@@ -13,7 +13,7 @@ import time
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
@@ -22,6 +22,15 @@ if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
 
 DEFAULT_DB_PATH = "workout_agent.db"
+
+
+class UserRow(TypedDict):
+    id: str
+    email: str
+    display_name: str | None
+    created_at: str
+    timezone: str
+    units: str
 
 
 @contextlib.contextmanager
@@ -1679,7 +1688,7 @@ def get_or_create_user(
     email: str,
     display_name: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any]:
+) -> UserRow:
     """Return the user row for an email, creating one on first login."""
     import uuid
     from datetime import datetime
@@ -1722,7 +1731,7 @@ def get_or_create_user(
 def get_user_by_id(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
+) -> UserRow | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1742,7 +1751,7 @@ def get_user_by_id(
     }
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
