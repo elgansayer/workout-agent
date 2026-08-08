@@ -209,8 +209,8 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `8770` across README, both compose files, and `.env.example`
   (reconciled 2026-08-06).~~
 
-- **Test coverage audit** (last updated 2026-08-07, re-verified
-2026-08-07 by hourly test watch #667): all 609 tests passing,
+- **Test coverage audit** (last updated 2026-08-08, re-verified
+2026-08-08 by hourly test watch #687): all 609 tests passing,
   covering 31 test modules. Zero coverage gaps — every source module
   has a corresponding test file. All verification gates clean
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
