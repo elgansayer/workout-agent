@@ -20,3 +20,7 @@
 ## 2024-10-24 - Add ARIA Labels to Missing Icons and Form Inputs
 **Learning:** Found an accessibility issue pattern in the app's components where icon-only buttons rely on `title` attributes instead of explicit `aria-label`, and placeholder-only inputs lack proper `aria-label` definitions, degrading screen reader experience.
 **Action:** Always add `aria-label` to icon-only buttons (while hiding decorative SVGs with `aria-hidden="true"`) and provide explicit labels or `aria-label` tags to input fields lacking a visible `<label>`.
+
+## 2025-03-03 - Accessible Selection Chips
+**Learning:** Found that custom toggleable elements (like selection chips) are difficult for screen reader users to understand because they lack grouped context and states are not explicitly announced when toggled via custom JavaScript functions.
+**Action:** Always group custom selection elements using `role="group"` and `aria-labelledby`, and ensure the `aria-pressed` attribute is actively managed via JavaScript to indicate their current toggled/selected state.
