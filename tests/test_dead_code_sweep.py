@@ -113,8 +113,16 @@ class TestExtractSubprocessModuleRefs:
         source = 'import foo\nfoo.bar(["x.py"])\n'
         assert _extract_subprocess_module_refs(source) == set()
 
-    def test_ignores_non_sys_executable(self) -> None:
+    def test_detects_python_string_executable(self) -> None:
         source = 'subprocess.run(["python", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_detects_python3_string_executable(self) -> None:
+        source = 'subprocess.run(["python3", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_ignores_non_python_executable(self) -> None:
+        source = 'subprocess.run(["node", "foo.js"])\n'
         assert _extract_subprocess_module_refs(source) == set()
 
     def test_ignores_non_py_script(self) -> None:
