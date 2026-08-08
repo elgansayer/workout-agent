@@ -219,7 +219,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Hourly dead-code sweep #668 re-verified (2026-08-07).** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 4 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (573/573), dead_code_sweep
+  verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean on all 32 source files).
   `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
   `webapp/app.py` — `_run_hevy_inference()` helper, `/api/hevy/infer` route).
