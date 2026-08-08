@@ -6,9 +6,8 @@ the real calendar day, pulls your latest workout from the
 [Hevy API](https://api.hevyapp.com/docs/), reads your recovery metrics from
 Google Health Connect (via an exported JSON file), asks Google Gemini to apply
 progressive overload, then sends today's exact routine plus one daily
-improvement tip to your phone via Telegram. On Sundays it sends a weekly
-self-review digest analysing lift progressions, fatigue, and recovery trends
-(alongside the rest and recovery message).
+improvement tip to your phone via Telegram. On Sundays it sends a short rest and
+recovery message instead.
 
 Built as a small, focused script rather than a heavyweight generalist agent
 framework. It does one thing well: read your data, reason about it, message you.
@@ -35,7 +34,7 @@ framework. It does one thing well: read your data, reason about it, message you.
 
 ## AI-Native "Insight-First" Dashboard & Correlation Engine
 
-The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by your configured AI provider (default **Gemini 2.5 Flash**):
+The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by **Gemini 1.5 Pro**:
 
 - **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
 - **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.
@@ -195,17 +194,6 @@ pillars ([lifestyle.py](lifestyle.py)):
 
 Set `LIFESTYLE_ENABLED=0` to turn the block off.
 
-### Weekly self-review digest (Sundays)
-
-Once a week (default: Sunday) the agent analyses your Hevy and Google Health
-trends — which lifts are progressing, stalling, or regressing, plus recovery
-metrics — and sends a short Telegram digest. Configure:
-
-| Variable | Description |
-|---|---|
-| `SELF_REVIEW_ENABLED` | Optional, `1` (default) to enable the weekly digest |
-| `SELF_REVIEW_WEEKDAY` | Optional, day to send (`Sun` default, or 0-6 with Monday=0) |
-
 ### Everything is logged
 
 Each run records the full plan and lifestyle guidance it issued to a `daily_log`
@@ -274,8 +262,6 @@ dashboard usable with JavaScript disabled.
 
 | Route        | Shows                                                          |
 | ------------ | -------------------------------------------------------------- |
-| `/login`     | Google OAuth login page (when `WEB_AUTH_SECRET` is configured) |
-| `/settings`  | Profile, AI provider/key/model, connectors, and programme setup |
 | `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
 | `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
@@ -284,6 +270,7 @@ dashboard usable with JavaScript disabled.
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
 | `/chat`      | RAG-enabled AI chat (streaming) for digging into your training history |
+| `/settings`  | Profile, AI provider/key/model, connectors, and programme setup |
 
 Run it with Docker alongside the agent (it shares the same SQLite volume):
 
@@ -365,10 +352,6 @@ Example Apache virtual host mapping `gym.example.com` to the dashboard:
    | `TELEGRAM_PARSE_MODE`| Optional, blank for plain text or `MarkdownV2`     |
    | `CHECKIN_ENABLED`    | Optional, `1` (default) to run periodic check-ins  |
    | `LIFESTYLE_ENABLED`  | Optional, `1` (default) to append daily lifestyle  |
-   | `SELF_REVIEW_ENABLED`| Optional, `1` (default) to send a weekly digest    |
-   | `SELF_REVIEW_WEEKDAY`| Optional, day of week for self-review (Sun/Mon/…)  |
-   | `HEVY_SYNC_ROUTINES` | Optional, `1` (default) to sync sessions to Hevy   |
-   | `HEVY_PREFILL_WEIGHTS`| Optional, `1` (default) to prefill target weights  |
 
    If any required key is missing, the agent reports them all at once on
    startup, each with a one-line hint, rather than failing one at a time.
