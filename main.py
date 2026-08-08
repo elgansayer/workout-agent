@@ -220,7 +220,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     today = datetime.now(tz=timezone.utc).date()
     when = today.isoformat()
-    week = week_in_cycle(get_programme_start_date(config.database_path, user_id=user_id), today)
+    week = week_in_cycle(
+        get_programme_start_date(config.database_path, user_id=user_id), today
+    )
     block = block_for_week(week)
     logger.info("Week %s of 12, Block %s: %s.", week, block.number, block.name)
 

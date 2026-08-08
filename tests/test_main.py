@@ -209,7 +209,9 @@ def test_run_preview_training_day(
     # Mock recent bests
     monkeypatch.setattr(
         "main.get_recent_bests",
-        lambda *args, **kw: {"Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}},
+        lambda *args, **kw: {
+            "Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}
+        },
     )
 
     # Mock insights
@@ -502,7 +504,9 @@ def test_run_preview_training_day_with_checkin(
     monkeypatch.setattr("main.save_progress", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.get_recent_bests",
-        lambda *args, **kw: {"Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}},
+        lambda *args, **kw: {
+            "Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}
+        },
     )
     from insights import LiftInsight, RecoveryInsight, TrainingInsights
 
