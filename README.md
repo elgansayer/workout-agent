@@ -280,8 +280,7 @@ docker compose up -d web
 
 
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
-network. (Both compose files default to port 8770; the Portainer variant
-adds a Portainer agent on port 9001.) To run
+network. (Both compose files default to port 8770.) To run
 
 it directly instead:
 
@@ -509,6 +508,7 @@ without it.
    | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
    | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
    | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
+   | `ENCRYPTION_KEY` | optional | Fernet key for encrypting user API keys at rest |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
