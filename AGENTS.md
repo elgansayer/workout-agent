@@ -235,6 +235,19 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `commit_hygiene.py`, `connector_health.py`, `sync_history.py` all confirmed as entry points
   (invoked directly or via subprocess). No truly dead code found. Stale pycache cleaned: 0.
 
+- **Hourly dead-code sweep #718 executed (2026-08-08).** `dead_code_sweep.py --json`
+  status: "clean", zero orphans. All 25 top-level source modules (excluding
+  `conftest.py` and test files) and 4 webapp sub-modules confirmed wired via
+  AST-based import graph BFS from entry points + grep fallback.
+  Full verification gate passed: ruff (clean), pytest (611/611),
+  dead_code_sweep (zero orphans), compileall (pass), import-sanity
+  (`webapp.app` + `main` OK), mypy (clean on all 32 source files).
+  `hevy_reader.py` and `programme_inference.py` remain wired via
+  `webapp/app.py` (`_run_hevy_inference()` / `/api/hevy/infer`).
+  `commit_hygiene.py` and `connector_health.py` invoked by `scheduler.py`
+  via subprocess. `sync_history.py` imported by `main.py` and
+  `webapp/app.py`. No truly dead code found. No GitHub issues created.
+
 
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
