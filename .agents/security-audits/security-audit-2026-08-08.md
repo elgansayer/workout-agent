@@ -51,7 +51,7 @@ API key management endpoints (`/api/settings/key`, `/api/settings/key/delete`) a
 ### 5. Verification Gates
 
 - `ruff check .` — clean (zero warnings)
-- `pytest` — 572 passed, 1 skipped
+- `pytest` — 573 passed, 1 skipped
 - `mypy webapp/app.py` — no issues found
 
 ### Changes in scope (last 24 hours)
