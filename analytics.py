@@ -165,8 +165,11 @@ def muscle_group_for(name: str) -> str:
     """Classify an exercise name into a broad muscle group."""
     lowered = " ".join(name.lower().split())
     for group, keywords in _GROUP_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            return group
+        # Bolt Optimization: Explode `any()` into a double for-loop to prevent
+        # creating a generator on every lookup, significantly speeding up classification.
+        for keyword in keywords:
+            if keyword in lowered:
+                return group
     return "Other"
 
 
