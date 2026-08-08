@@ -1,9 +1,9 @@
-# Commit Hygiene Audit — 2026-08-08
+# Commit Hygiene Audit — 2026-08-08 (Issue #708)
 
 ## Verification
 
 1. **Commit messages (last 10)**: ✅ All descriptive, no "wip"/"fix" one-word messages.
-   Most recent: `Fixes #681: [Daily] Daily Multi-Tenant Isolation Audit (#695)` — descriptive.
+   Most recent: `Bump google-generativeai>=0.8.6, python-dotenv>=1.2.0 (#683) (#700)` — descriptive.
 
 2. **Sensitive files** (`git log -p -10 -- .env .env.* data/ '*.db'`): ✅ Clean.
    No `.env`, `.db`, `.sqlite`, `.sqlite3`, `.log`, or `data/` files committed.
@@ -22,8 +22,8 @@
 ## Results
 
 - **Status: CLEAN** — zero issues found across all four checks.
-- **`commit_hygiene.py --json`**: `{"status":"clean","count":0,"findings":[]}`
-- **`dead_code_sweep.py --json`**: `{"status":"clean","orphans":[]}`
+- **`commit_hygiene.py --json`**: `{"status":"clean","count":0,"findings":[]}`  
 - **ruff**: All checks passed.
-- **pytest**: 573/573 passed (2 deprecation warnings — upstream `google._upb._message` in google-generativeai).
+- **pytest**: 609/609 passed.
+- **mypy** (`commit_hygiene.py`): Clean.
 - **No fixes needed** — `.gitignore` is complete, no sensitive files to remove, no commit messages to flag.
