@@ -204,10 +204,10 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   the single long-running process in the agent container, dispatching both
   coaching runs (`main.py`) and insight jobs (`insight_cron.py`) on one
   per-minute wake loop, with per-user timezone support.~~ ✅ Resolved.
-- ~~**Docs drift from code**: README.md no longer claims the dashboard "has no
-  login" — the Google OAuth section is accurate. Web port is now uniformly
-  `8770` across README, both compose files, and `.env.example`
-  (reconciled 2026-08-06).~~
+- **Docs drift from code**: Previously reconciled (2026-08-06). Periodically
+  drifts back as features land — verify on each documentation sync that README
+  lists all current routes, env vars, and behaviour (e.g. weekly self-review,
+  Hevy sync toggles, model references).
 
 - **Test coverage audit** (last updated 2026-08-08, re-verified
 2026-08-08 by hourly dead-code sweep #688): all 573 tests passing,
