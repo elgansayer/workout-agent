@@ -164,9 +164,12 @@ _GROUP_RULES: list[tuple[str, tuple[str, ...]]] = [
 def muscle_group_for(name: str) -> str:
     """Classify an exercise name into a broad muscle group."""
     lowered = " ".join(name.lower().split())
+    # ⚡ Bolt Optimization: Unroll any(...) generator expression into a native loop
+    # to avoid generator creation overhead in this high-frequency O(N*M) function.
     for group, keywords in _GROUP_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            return group
+        for keyword in keywords:
+            if keyword in lowered:
+                return group
     return "Other"
 
 
