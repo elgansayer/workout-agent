@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import secrets
-from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache

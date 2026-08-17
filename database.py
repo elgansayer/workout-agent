@@ -260,10 +260,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 ip TEXT NOT NULL,
                 timestamp REAL NOT NULL
             )
-            """,
+            """
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)"
         )
 
         cursor.execute(
@@ -1111,11 +1111,7 @@ def set_meta(
 
 
 def check_rate_limit(
-    ip: str,
-    limit: int = 10,
-    window: int = 60,
-    *,
-    db_path: str = DEFAULT_DB_PATH,
+    ip: str, limit: int = 10, window: int = 60, *, db_path: str = DEFAULT_DB_PATH
 ) -> bool:
     """Return True if the IP is within the rate-limit window, inserting a new entry.
 
@@ -1125,6 +1121,21 @@ def check_rate_limit(
     """
     now = time.time()
     cutoff = now - window
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
+        count = conn.execute(
+            "SELECT COUNT(*) FROM rate_limits WHERE ip = ?", (ip,)
+        ).fetchone()[0]
+        if count >= limit:
+            return True
+        conn.execute(
+            "INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)", (ip, now)
+        )
+        return False
+
+
+def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> None:
+    """Remove a tracked routine record (used when a routine is renamed)."""
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
         count = conn.execute(
