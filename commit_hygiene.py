@@ -56,6 +56,9 @@ ROOT = Path(__file__).resolve().parent
 # Patterns that .gitignore must cover
 REQUIRED_GITIGNORE = [
     "*.db",
+    "*.db-wal",
+    "*.db-shm",
+    "*.db-journal",
     ".env",
     "__pycache__/",
     ".pytest_cache/",
@@ -63,9 +66,17 @@ REQUIRED_GITIGNORE = [
     ".ruff_cache/",
     ".venv/",
     "venv/",
+    "data/",
     "*.sqlite",
+    "*.sqlite-wal",
+    "*.sqlite-shm",
+    "*.sqlite-journal",
     "*.sqlite3",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
+    "*.sqlite3-journal",
     "*.log",
+    "agent.log",
 ]
 
 # Glob patterns for sensitive files to scan via git log (beyond .env and data/)
@@ -306,7 +317,9 @@ def fix_missing_gitignore_entries(findings: list[HygieneFinding]) -> list[str]:
         escaped = re.escape(pattern)
         if re.search(rf"^{escaped}\s*$", content, re.MULTILINE):
             continue
-        content += f"\n{pattern}\n"
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"{pattern}\n"
         added.append(pattern)
 
     if added:

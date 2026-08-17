@@ -7,7 +7,7 @@ from datetime import date
 from webapp import charts
 
 
-def test_line_chart_renders_svg_with_points():
+def test_line_chart_renders_svg_with_points() -> None:
     points = [
         {"date": "01-01", "value": 100.0, "label": "100 kg"},
         {"date": "01-08", "value": 105.0, "label": "105 kg"},
@@ -19,12 +19,12 @@ def test_line_chart_renders_svg_with_points():
     assert "110 kg" in svg
 
 
-def test_line_chart_handles_too_little_data():
+def test_line_chart_handles_too_little_data() -> None:
     svg = charts.line_chart([{"date": "01-01", "value": 100.0}])
     assert "Not enough data" in svg
 
 
-def test_line_chart_escapes_labels():
+def test_line_chart_escapes_labels() -> None:
     points = [
         {"date": "01-01", "value": 1, "label": "<script>"},
         {"date": "01-02", "value": 2, "label": "ok"},
@@ -33,13 +33,13 @@ def test_line_chart_escapes_labels():
     assert "<script>" not in svg
 
 
-def test_progress_ring_clamps_and_renders():
+def test_progress_ring_clamps_and_renders() -> None:
     svg = charts.progress_ring(150, label="Wk 6", sub="of 12")
     assert "Wk 6" in svg
     assert "<circle" in svg
 
 
-def test_donut_renders_segments_and_legend():
+def test_donut_renders_segments_and_legend() -> None:
     out = charts.donut(
         [
             {"label": "Legs", "value": 3},
@@ -50,23 +50,23 @@ def test_donut_renders_segments_and_legend():
     assert "legend" in out
 
 
-def test_donut_empty_when_no_values():
+def test_donut_empty_when_no_values() -> None:
     out = charts.donut([{"label": "x", "value": 0}])
     assert "No data" in out
 
 
-def test_bar_chart_renders():
+def test_bar_chart_renders() -> None:
     svg = charts.bar_chart([{"label": "a", "value": 10}, {"label": "b", "value": 20}])
     assert "<rect" in svg
 
 
-def test_calendar_heatmap_marks_levels():
+def test_calendar_heatmap_marks_levels() -> None:
     today = date(2026, 6, 17)
     svg = charts.calendar_heatmap({"2026-06-16": 4}, end=today)
     assert svg.startswith("<svg")
     assert "2026-06-16" in svg
 
 
-def test_sparkline_needs_two_points():
+def test_sparkline_needs_two_points() -> None:
     assert charts.sparkline([1.0]) == ""
     assert charts.sparkline([1.0, 2.0, 3.0]).startswith("<svg")
