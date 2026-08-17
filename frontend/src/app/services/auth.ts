@@ -18,9 +18,9 @@ export class Auth {
 
   async checkAuth() {
     try {
-      const response = await firstValueFrom(this.http.get<{user: User}>('/api/me'));
-      this.currentUser.set(response.user);
-    } catch (e) {
+      const res = await firstValueFrom(this.http.get<{user: User}>('/api/me'));
+      this.currentUser.set(res.user);
+    } catch {
       this.currentUser.set(null);
     }
   }
