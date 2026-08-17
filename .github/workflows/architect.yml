@@ -14,8 +14,22 @@ jobs:
       issues: write
       id-token: write
     steps:
+      - name: Check issue queue depth
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          OPEN=$(gh issue list --repo ${{ github.repository }} \
+            --state open --label "ai-agent-task" \
+            --search "-label:swarm-active" \
+            --json number -q 'length' 2>/dev/null || echo "0")
+          echo "Open unprocessed ai-agent-task issues: $OPEN"
+          if [ "$OPEN" -gt 10 ]; then
+            echo "Queue depth $OPEN > 10 — skipping architect run to avoid flooding."
+            exit 0
+          fi
+
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       # ── TIER 1: Claude Code ────────────────────────────────────────────────
       - name: Tier 1 - Claude Code (Claude Pro via OAuth)
@@ -80,7 +94,7 @@ jobs:
                Use priority:high for core features/bugs, priority:medium for enhancements, priority:low for nice-to-haves.
 
             IMPORTANT: Do NOT write code. Only plan and create tickets.
-          cli_args: "--max-iterations 50"
+          cli_args: "--max-iterations 25"
 
       # ── TIER 3: Gemini 3.6 Flash (last resort) ────────────────────────────
       - name: Tier 3 - OpenHands (Gemini 3.6 Flash — last resort)
@@ -101,4 +115,4 @@ jobs:
             3. Create GitHub issues: gh issue create --title "..." --body "..." --label "ai-agent-task,priority:high"
 
             IMPORTANT: Do NOT write code. Only create tickets.
-          cli_args: "--max-iterations 30"
+          cli_args: "--max-iterations 15"

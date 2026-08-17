@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
 from ai_provider import AIProvider
@@ -19,12 +20,34 @@ from program import (
     format_day,
 )
 
-try:
-    from weather import WeatherConditions
-except ImportError:
-    WeatherConditions = Any  # type: ignore[assignment,misc]
+__all__ = [
+    "apply_autonomous_adjustments",
+    "generate_checkin_message",
+    "generate_next_workout",
+    "generate_rest_day_message",
+]
+
+from weather import WeatherConditions
 
 logger = logging.getLogger(__name__)
+
+
+def _server_gemini_provider() -> AIProvider:
+    """Return a Gemini provider from the server's environment-configured key.
+
+    Reads ``GEMINI_API_KEY`` and ``GEMINI_MODEL`` from the environment.  This
+    is a convenience for single-tenant cron jobs and scripts that don't resolve
+    a per-user provider through ``ai_provider.resolve_provider``.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY is not set. Provide it in the environment "
+            "or use ai_provider.resolve_provider(user_id=...) for "
+            "per-user resolution."
+        )
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    return get_provider("gemini", api_key, model)
 
 
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
@@ -133,16 +156,39 @@ def generate_next_workout(
     day: int,
     week: int,
     block: Block,
+    *,
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error."""
+    """Generate today's plan, falling back to the baseline plan on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
         prompt = _build_prompt(
-            day, week, block, workout_summary, recovery, history, insights, last_plan
+            day,
+            week,
+            block,
+            workout_summary,
+            recovery,
+            history,
+            insights,
+            last_plan,
+        )
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -190,7 +236,12 @@ def generate_rest_day_message(
     provider: AIProvider,
     recovery: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error."""
+    """Generate a short rest-day recovery message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
@@ -256,10 +307,30 @@ def generate_checkin_message(
     analysis_text: str,
     fallback: str,
 ) -> str:
-    """Generate a periodic check-in message, falling back on error."""
+    """Generate a periodic check-in message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
         prompt = _build_checkin_prompt(
-            number, week, block, workouts_done, weeks, analysis_text
+            number,
+            week,
+            block,
+            workouts_done,
+            weeks,
+            analysis_text,
+        )
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -317,7 +388,7 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
@@ -329,10 +400,18 @@ def apply_autonomous_adjustments(
     weather: WeatherConditions | None = None,
     is_catabolic: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines."""
+    """Applies the unified autonomous progression and returns updated JSON routines.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
         prompt = _build_autonomous_prompt(
-            base_routines, hevy_logs, weather, is_catabolic
+            base_routines,
+            hevy_logs,
+            weather,
+            is_catabolic,
         )
         text = str(provider.generate(prompt)).strip()
 
