@@ -91,10 +91,7 @@ class ClaudeProvider(AIProvider):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-        for block in response.content:
-            if hasattr(block, "text"):
-                return block.text.strip()
-        return ""
+        return response.content[0].text.strip()  # type: ignore[union-attr]
 
     def _stream(self, prompt: str) -> Iterator[str]:
         with self._client.messages.stream(
@@ -215,9 +212,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 
 def get_provider(
-    provider_name: str,
-    api_key: str,
-    model: str | None = None,
+    provider_name: str, api_key: str, model: str | None = None
 ) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 
@@ -244,14 +239,18 @@ _DISPLAY_NAMES = {
 }
 
 
-def resolve_provider(
-    user_id: str | None = None,
-    *,
-    server_gemini_key: str | None = None,
-    server_gemini_model: str | None = None,
-    db_path: str = "workout_agent.db",
-) -> AIProvider:
-    """Resolve a user's preferred AI provider from their settings.
+def available_providers() -> list[dict[str, str]]:
+    """Return metadata for each registered provider (for the settings UI)."""
+    return [
+        {
+            "id": key,
+            "name": _DISPLAY_NAMES.get(key, key.title()),
+            "default_model": spec["default_model"],
+        }
+        for key, spec in PROVIDERS.items()
+    ]
+
+
 
     When *user_id* is provided, preferences and stored API keys are read from
     the database.  Falls back to *server_gemini_key* / *server_gemini_model*
@@ -269,8 +268,9 @@ def resolve_provider(
 
     if user_id is not None:
         prefs = get_user_preferences(user_id, db_path=db_path)
-        provider_name: str = (prefs and prefs.get("preferred_ai")) or "gemini"
-        provider_name = provider_name.lower().strip()
+        provider_name: str = (
+            (prefs and prefs.get("preferred_ai")) or "gemini"
+        ).lower().strip()
         model: str | None = prefs and prefs.get("ai_model") or None
         record = get_user_api_key(user_id, provider_name, db_path=db_path)
         api_key: str | None = record["api_key"] if record else None
@@ -281,7 +281,7 @@ def resolve_provider(
         if provider_name != "gemini":
             raise ValueError(
                 f"No {provider_name} API key configured. "
-                "Add a key in Settings -> AI Providers.",
+                "Add a key in Settings -> AI Providers."
             )
 
         # Fall through to server-fallback for the default provider.
@@ -294,19 +294,7 @@ def resolve_provider(
     if not api_key:
         raise ValueError(
             "No AI provider key available. Set GEMINI_API_KEY in the "
-            "environment or store a key in Settings.",
+            "environment or store a key in Settings."
         )
 
     return get_provider("gemini", api_key, effective_model)
-
-
-def available_providers() -> list[dict[str, str]]:
-    """Return metadata for each registered provider (for the settings UI)."""
-    return [
-        {
-            "id": key,
-            "name": _DISPLAY_NAMES.get(key, key.title()),
-            "default_model": str(spec["default_model"]),
-        }
-        for key, spec in PROVIDERS.items()
-    ]
