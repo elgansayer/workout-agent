@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parent
 CONNECTOR_MODULES: dict[str, Path] = {
     "hevy_client": ROOT / "hevy_client.py",
     "google_health_client": ROOT / "google_health_client.py",
+    "google_health_auth": ROOT / "google_health_auth.py",
     "health_connect": ROOT / "health_connect.py",
     "weather": ROOT / "weather.py",
     "telegram_notifier": ROOT / "telegram_notifier.py",
@@ -125,7 +126,9 @@ class HealthReport:
         line: int | None = None,
         snippet: str | None = None,
     ) -> None:
-        self.findings.append(HealthFinding(module, severity, category, message, line, snippet))
+        self.findings.append(
+            HealthFinding(module, severity, category, message, line, snippet)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -142,33 +145,31 @@ class _TryExceptVisitor(ast.NodeVisitor):
 
     def visit_Try(self, node: ast.Try) -> None:
         for handler in node.handlers:
-            end = handler.end_lineno if handler.end_lineno is not None else handler.lineno
+            end = (
+                handler.end_lineno if handler.end_lineno is not None else handler.lineno
+            )
             for i in range(
                 node.body[0].lineno if node.body else node.lineno,
                 end + 1,
             ):
                 self.handled_lines.add(i)
             if handler.type is None:
-                self.handler_types.append(
-                    f"bare except at line {handler.lineno}"
-                )
+                self.handler_types.append(f"bare except at line {handler.lineno}")
             elif isinstance(handler.type, ast.Name):
                 self.handler_types.append(
                     f"except {handler.type.id} at line {handler.lineno}"
                 )
             elif isinstance(handler.type, ast.Tuple):
-                names = [
-                    e.id
-                    for e in handler.type.elts
-                    if isinstance(e, ast.Name)
-                ]
+                names = [e.id for e in handler.type.elts if isinstance(e, ast.Name)]
                 self.handler_types.append(
                     f"except ({', '.join(names)}) at line {handler.lineno}"
                 )
         self.generic_visit(node)
 
 
-def _check_failure_isolation(module_name: str, module_path: Path) -> list[HealthFinding]:
+def _check_failure_isolation(
+    module_name: str, module_path: Path
+) -> list[HealthFinding]:
     """Verify every network call is wrapped in try/except."""
     findings: list[HealthFinding] = []
     source = module_path.read_text(encoding="utf-8")
@@ -182,12 +183,14 @@ def _check_failure_isolation(module_name: str, module_path: Path) -> list[Health
     # Find bare excepts within the file (not in tests).
     for handler_type in visitor.handler_types:
         if handler_type.startswith("bare except"):
-            findings.append(HealthFinding(
-                module_name,
-                "warning",
-                "failure-isolation",
-                f"Bare except: found in {module_name}: {handler_type}",
-            ))
+            findings.append(
+                HealthFinding(
+                    module_name,
+                    "warning",
+                    "failure-isolation",
+                    f"Bare except: found in {module_name}: {handler_type}",
+                )
+            )
 
     # Find network calls that aren't inside a try/except.
     for node in ast.walk(tree):
@@ -198,15 +201,17 @@ def _check_failure_isolation(module_name: str, module_path: Path) -> list[Health
             continue
         for indicator in _NETWORK_CALL_INDICATORS:
             if indicator in call_str and node.lineno not in visitor.handled_lines:
-                findings.append(HealthFinding(
-                    module_name,
-                    "error",
-                    "failure-isolation",
-                    f"Network call '{call_str}' at line {node.lineno} is not "
-                    f"wrapped in try/except — a timeout/4xx/5xx could crash the caller",
-                    line=node.lineno,
-                    snippet=ast.get_source_segment(source, node),
-                ))
+                findings.append(
+                    HealthFinding(
+                        module_name,
+                        "error",
+                        "failure-isolation",
+                        f"Network call '{call_str}' at line {node.lineno} is not "
+                        f"wrapped in try/except — a timeout/4xx/5xx could crash the caller",
+                        line=node.lineno,
+                        snippet=ast.get_source_segment(source, node),
+                    )
+                )
                 break
 
     return findings
@@ -223,19 +228,21 @@ def _check_env_docs() -> list[HealthFinding]:
     env_example_path = ROOT / ".env.example"
 
     if not env_example_path.is_file():
-        findings.append(HealthFinding(
-            ".env.example",
-            "error",
-            "env-docs",
-            ".env.example does not exist",
-        ))
+        findings.append(
+            HealthFinding(
+                ".env.example",
+                "error",
+                "env-docs",
+                ".env.example does not exist",
+            )
+        )
         return findings
 
     env_example_text = env_example_path.read_text(encoding="utf-8")
     documented_vars: set[str] = set()
     for line in env_example_text.splitlines():
         # Match lines like KEY= or # KEY=
-        m = re.match(r'^#?\s*([A-Z][A-Z0-9_]*)\s*[=]', line)
+        m = re.match(r"^#?\s*([A-Z][A-Z0-9_]*)\s*[=]", line)
         if m:
             documented_vars.add(m.group(1))
 
@@ -255,13 +262,15 @@ def _check_env_docs() -> list[HealthFinding]:
     for module_name, vars_used in connector_env_vars.items():
         for var in vars_used:
             if var not in documented_vars:
-                findings.append(HealthFinding(
-                    module_name,
-                    "error",
-                    "env-docs",
-                    f"Connector {module_name} reads {var} but it is not documented "
-                    f"in .env.example",
-                ))
+                findings.append(
+                    HealthFinding(
+                        module_name,
+                        "error",
+                        "env-docs",
+                        f"Connector {module_name} reads {var} but it is not documented "
+                        f"in .env.example",
+                    )
+                )
 
     # Reverse: check for documented vars no longer used.
     all_connector_vars: set[str] = set()
@@ -272,7 +281,9 @@ def _check_env_docs() -> list[HealthFinding]:
         if var not in all_connector_vars and var not in _SERVER_WIDE_ENV_VARS:
             # Check if the var is used elsewhere in the codebase.
             used_elsewhere = False
-            all_py_files = list(ROOT.glob("*.py")) + list((ROOT / "webapp").glob("*.py"))
+            all_py_files = list(ROOT.glob("*.py")) + list(
+                (ROOT / "webapp").glob("*.py")
+            )
             for py_file in all_py_files:
                 if py_file.name.startswith("test_"):
                     continue
@@ -283,13 +294,15 @@ def _check_env_docs() -> list[HealthFinding]:
                     used_elsewhere = True
                     break
             if not used_elsewhere:
-                findings.append(HealthFinding(
-                    ".env.example",
-                    "warning",
-                    "env-docs",
-                    f".env.example documents {var} but it is not read by any "
-                    f"connector or source module",
-                ))
+                findings.append(
+                    HealthFinding(
+                        ".env.example",
+                        "warning",
+                        "env-docs",
+                        f".env.example documents {var} but it is not read by any "
+                        f"connector or source module",
+                    )
+                )
 
     return findings
 
@@ -331,13 +344,15 @@ def _check_per_user_credentials() -> list[HealthFinding]:
         found = set(env_var_pattern.findall(source))
         for var in found:
             if var in _known_global_connector_vars:
-                findings.append(HealthFinding(
-                    module_name,
-                    "info",
-                    "env-var-regression",
-                    f"{module_name} reads {var} from env — should be a per-user "
-                    f"credential once multi-tenant migration reaches this connector",
-                ))
+                findings.append(
+                    HealthFinding(
+                        module_name,
+                        "info",
+                        "env-var-regression",
+                        f"{module_name} reads {var} from env — should be a per-user "
+                        f"credential once multi-tenant migration reaches this connector",
+                    )
+                )
 
     return findings
 
@@ -356,7 +371,9 @@ def run_health_check() -> HealthReport:
             report.findings.extend(_check_failure_isolation(name, path))
         else:
             report.add(
-                name, "error", "failure-isolation",
+                name,
+                "error",
+                "failure-isolation",
                 f"Connector module {name} ({path}) does not exist",
             )
 
@@ -381,22 +398,26 @@ def _format_finding(f: HealthFinding) -> str:
 def report_health(health: HealthReport, *, json_output: bool = False) -> int:
     """Print the health report. Returns 0 if clean, 1 if findings exist."""
     if json_output:
-        print(json.dumps(
-            {"status": "clean" if health.is_clean else "findings",
-             "count": len(health.findings),
-             "findings": [
-                 {
-                     "module": f.module,
-                     "severity": f.severity,
-                     "category": f.category,
-                     "message": f.message,
-                     "line": f.line,
-                     "snippet": f.snippet,
-                 }
-                 for f in health.findings
-             ]},
-            indent=2,
-        ))
+        print(
+            json.dumps(
+                {
+                    "status": "clean" if health.is_clean else "findings",
+                    "count": len(health.findings),
+                    "findings": [
+                        {
+                            "module": f.module,
+                            "severity": f.severity,
+                            "category": f.category,
+                            "message": f.message,
+                            "line": f.line,
+                            "snippet": f.snippet,
+                        }
+                        for f in health.findings
+                    ],
+                },
+                indent=2,
+            )
+        )
         return 0 if health.is_clean else 1
 
     if health.is_clean:
@@ -415,8 +436,10 @@ def report_health(health: HealthReport, *, json_output: bool = False) -> int:
         len(infos),
     )
     for f in errors + warnings + infos:
-        log_fn = logger.error if f.severity == "error" else (
-            logger.warning if f.severity == "warning" else logger.info
+        log_fn = (
+            logger.error
+            if f.severity == "error"
+            else (logger.warning if f.severity == "warning" else logger.info)
         )
         log_fn("%s", _format_finding(f))
 
@@ -432,9 +455,13 @@ def _get_github_repo() -> tuple[str, str] | None:
     """Return (owner, repo) from the origin remote, or None."""
     try:
         import subprocess
+
         result = subprocess.run(
             ["git", "remote", "get-url", "origin"],
-            capture_output=True, text=True, cwd=ROOT, timeout=5,
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            timeout=5,
             check=False,
         )
         url = result.stdout.strip()
@@ -447,7 +474,11 @@ def _get_github_repo() -> tuple[str, str] | None:
 
 
 def _get_github_token() -> str | None:
-    return os.environ.get("GITHUB_TOKEN", "").strip() or os.environ.get("GH_TOKEN", "").strip() or None
+    return (
+        os.environ.get("GITHUB_TOKEN", "").strip()
+        or os.environ.get("GH_TOKEN", "").strip()
+        or None
+    )
 
 
 def create_github_issues(report: HealthReport) -> list[str]:
@@ -514,11 +545,13 @@ def create_github_issues(report: HealthReport) -> list[str]:
             logger.info("Skipping duplicate issue: [Daily] %s", title)
             continue
 
-        payload = json.dumps({
-            "title": f"[Daily] {title}",
-            "body": body,
-            "labels": ["ai-agent-task", "daily"],
-        }).encode()
+        payload = json.dumps(
+            {
+                "title": f"[Daily] {title}",
+                "body": body,
+                "labels": ["ai-agent-task", "daily"],
+            }
+        ).encode()
 
         try:
             req = urllib.request.Request(
