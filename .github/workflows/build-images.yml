@@ -70,3 +70,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Portainer Webhook
+        run: |
+          if [ -n "${{ secrets.PORTAINER_WEBHOOK }}" ]; then
+            curl -X POST "${{ secrets.PORTAINER_WEBHOOK }}"
+          else
+            echo "No PORTAINER_WEBHOOK secret found. Skipping deploy."
+          fi

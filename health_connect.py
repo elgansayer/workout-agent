@@ -64,7 +64,6 @@ def body_metrics_from_recovery(
         "body_fat_pct": recovery.get("body_fat_pct"),
         "muscle_pct": recovery.get("muscle_pct"),
         "resting_hr": recovery.get("resting_hr"),
-        "hrv": recovery.get("hrv"),
     }
     if all(
         metrics[key] is None

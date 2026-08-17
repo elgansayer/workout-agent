@@ -15,12 +15,12 @@ def _sets(*pairs: tuple[float | None, int | None]) -> list[dict]:
                 "top_reps": reps,
                 "sets": 3,
                 "date": f"2026-01-{i + 1:02d}",
-            }
+            },
         )
     return rows
 
 
-def test_progressing_lift_is_detected():
+def test_progressing_lift_is_detected() -> None:
     entries = _sets((100, 8), (102.5, 8), (105, 8), (107.5, 8))
     lift = insights.analyse_lift("Deadlift", entries, "good")
     assert lift.trend == "progressing"
@@ -29,47 +29,48 @@ def test_progressing_lift_is_detected():
     assert lift.metric == "kg"
 
 
-def test_stalling_lift_is_flagged_with_intervention():
+def test_stalling_lift_is_flagged_with_intervention() -> None:
     entries = _sets((100, 8), (100, 8), (100, 8), (100, 8))
     lift = insights.analyse_lift("Bench", entries, "good")
     assert lift.trend == "stalling"
     assert lift.intervention is not None
 
 
-def test_regressing_lift_with_poor_recovery_suggests_deload():
+def test_regressing_lift_with_poor_recovery_suggests_deload() -> None:
     entries = _sets((110, 8), (107.5, 8), (105, 8), (100, 8))
     lift = insights.analyse_lift("Squat", entries, "poor")
     assert lift.trend == "regressing"
+    assert lift.intervention is not None
     assert "deload" in lift.intervention.lower()
 
 
-def test_new_lift_has_no_trend():
+def test_new_lift_has_no_trend() -> None:
     lift = insights.analyse_lift("Curl", _sets((20, 12), (20, 12)), "good")
     # Only two sessions: below the minimum for a trend judgement.
     assert lift.trend == "new"
     assert lift.intervention is None
 
 
-def test_bodyweight_lift_uses_reps_metric():
+def test_bodyweight_lift_uses_reps_metric() -> None:
     entries = _sets((None, 8), (None, 9), (None, 10), (None, 11))
     lift = insights.analyse_lift("Pull-Up", entries, "good")
     assert lift.metric == "reps"
     assert lift.trend == "progressing"
 
 
-def test_sessions_since_best_counts_from_peak():
+def test_sessions_since_best_counts_from_peak() -> None:
     entries = _sets((100, 8), (110, 8), (105, 8), (105, 8))
     lift = insights.analyse_lift("Row", entries, "good")
     assert lift.sessions_since_best == 2
 
 
-def test_recovery_poor_on_short_sleep():
+def test_recovery_poor_on_short_sleep() -> None:
     rec = insights.analyse_recovery([], {"sleep_hours": 5.0})
     assert rec.status == "poor"
     assert "trim" in rec.directive.lower()
 
 
-def test_recovery_good_on_solid_sleep_and_steady_hr():
+def test_recovery_good_on_solid_sleep_and_steady_hr() -> None:
     metrics = [
         {"date": "2026-01-01", "resting_hr": 58, "weight_kg": 82.0},
         {"date": "2026-01-02", "resting_hr": 58, "weight_kg": 81.9},
@@ -80,7 +81,7 @@ def test_recovery_good_on_solid_sleep_and_steady_hr():
     assert rec.weight_trend == "falling"
 
 
-def test_recovery_rising_hr_is_poor():
+def test_recovery_rising_hr_is_poor() -> None:
     metrics = [
         {"date": "2026-01-01", "resting_hr": 55},
         {"date": "2026-01-02", "resting_hr": 60},
@@ -91,16 +92,16 @@ def test_recovery_rising_hr_is_poor():
     assert rec.status == "poor"
 
 
-def test_recovery_unknown_without_data():
+def test_recovery_unknown_without_data() -> None:
     rec = insights.analyse_recovery(None, None)
     assert rec.status == "unknown"
 
 
-def test_build_insights_orders_problems_first():
+def test_build_insights_orders_problems_first() -> None:
     history = {
-        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),       # stalling
-        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),    # progressing
-        "Squat": _sets((110, 8), (107, 8), (104, 8), (100, 8)),       # regressing
+        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),  # stalling
+        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),  # progressing
+        "Squat": _sets((110, 8), (107, 8), (104, 8), (100, 8)),  # regressing
     }
     review = insights.build_insights(history, [], {"sleep_hours": 7.5})
     trends = [lift.trend for lift in review.lifts]
@@ -111,7 +112,7 @@ def test_build_insights_orders_problems_first():
     assert review.as_text().startswith("Self-review:")
 
 
-def test_priorities_returns_only_flagged_lifts():
+def test_priorities_returns_only_flagged_lifts() -> None:
     history = {
         "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),
         "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),
@@ -122,10 +123,10 @@ def test_priorities_returns_only_flagged_lifts():
     assert "Deadlift" not in names
 
 
-def test_as_message_is_plain_text_with_sections():
+def test_as_message_is_plain_text_with_sections() -> None:
     history = {
-        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),       # stalling
-        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),    # progressing
+        "Bench": _sets((100, 8), (100, 8), (100, 8), (100, 8)),  # stalling
+        "Deadlift": _sets((100, 8), (105, 8), (110, 8), (115, 8)),  # progressing
     }
     review = insights.build_insights(history, [], {"sleep_hours": 7.5})
     message = review.as_message(week=4, block_name="Hypertrophy")

@@ -1,23 +1,50 @@
-"""Uses Google Gemini to apply progressive overload and write today's plan."""
+"""Uses AI (Gemini/Claude/OpenAI/DeepSeek) to apply progressive overload and
+write today's plan, going through ``AIProvider`` from ``ai_provider.py``."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
-import google.generativeai as genai
-
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
-from program import COACHING_RULES, Block, SPLIT_NAME, day_exercises, day_focus, format_day
+from program import (
+    COACHING_RULES,
+    SPLIT_NAME,
+    Block,
+    day_exercises,
+    day_focus,
+    format_day,
+)
 
 try:
     from weather import WeatherConditions
 except ImportError:
-    WeatherConditions = Any
+    WeatherConditions = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
+
+
+def _server_gemini_provider() -> AIProvider:
+    """Return a Gemini provider from the server's environment-configured key.
+
+    Reads ``GEMINI_API_KEY`` and ``GEMINI_MODEL`` from the environment.  This
+    is a convenience for single-tenant cron jobs and scripts that don't resolve
+    a per-user provider through ``ai_provider.resolve_provider``.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY is not set. Provide it in the environment "
+            "or use ai_provider.resolve_provider(user_id=...) for "
+            "per-user resolution."
+        )
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    return get_provider("gemini", api_key, model)
+
 
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
     if not history:
@@ -47,9 +74,7 @@ def _build_prompt(
     baseline = format_day(day, block)
     focus = day_focus(day)
     rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
-    workout_text = (
-        workout_summary.as_text() if workout_summary else "None available."
-    )
+    workout_text = workout_summary.as_text() if workout_summary else "None available."
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
     history_text = _format_history(history)
     insights_text = insights.as_text() if insights else "Not enough history yet."
@@ -123,31 +148,50 @@ Use British English. Never use the em dash."""
 
 
 def generate_next_workout(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     day: int,
     week: int,
     block: Block,
+    *,
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error."""
+    """Generate today's plan, falling back to the baseline plan on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_prompt(
-            day, week, block, workout_summary, recovery, history, insights, last_plan
+            day,
+            week,
+            block,
+            workout_summary,
+            recovery,
+            history,
+            insights,
+            last_plan,
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
+        )
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty response; using baseline plan.")
-    except Exception as exc:  # the SDK raises a variety of exception types
-        logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
+        logger.warning("AI provider returned an empty response; using baseline plan.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
 
@@ -185,22 +229,23 @@ Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     recovery: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error."""
+    """Generate a short rest-day recovery message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_rest_prompt(recovery)
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty rest-day response; using fallback.")
-    except Exception as exc:  # the SDK raises a variety of exception types
-        logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
+        logger.warning("AI provider returned an empty rest-day response; using fallback.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
 
@@ -249,8 +294,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     number: int,
     week: int,
     block: Block,
@@ -259,22 +303,40 @@ def generate_checkin_message(
     analysis_text: str,
     fallback: str,
 ) -> str:
-    """Generate a periodic check-in message, falling back on error."""
+    """Generate a periodic check-in message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_checkin_prompt(
-            number, week, block, workouts_done, weeks, analysis_text
+            number,
+            week,
+            block,
+            workouts_done,
+            weeks,
+            analysis_text,
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
+        )
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty check-in; using fallback.")
-    except Exception as exc:  # the SDK raises a variety of exception types
-        logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
+        logger.warning("AI provider returned an empty check-in; using fallback.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
     return fallback
+
 
 def _build_autonomous_prompt(
     base_routines: dict[str, list[dict[str, Any]]],
@@ -285,11 +347,11 @@ def _build_autonomous_prompt(
     routines_json = json.dumps(base_routines, indent=2)
     # We only send a subset of logs to avoid blowing up context
     logs_json = json.dumps(hevy_logs[:15], indent=2) if hevy_logs else "[]"
-    
+
     thermal_text = "None"
     if weather and weather.is_extreme_heat:
         thermal_text = f"ACTIVE: {weather.as_text()}. Reduce high-tax compound volume by 10% to account for thermal stress."
-        
+
     catabolism_text = "None"
     if is_catabolic:
         catabolism_text = "ACTIVE: Scale data indicates a sudden, disproportionate drop in muscle mass percentage (catabolic state). Increase the daily protein target calculation (e.g., to 2.5 g/kg) in your thought process and importantly, REDUCE training volume across routines until the trend reverses."
@@ -322,27 +384,33 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
 
 def apply_autonomous_adjustments(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     base_routines: dict[str, list[dict[str, Any]]],
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
     is_catabolic: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines."""
+    """Applies the unified autonomous progression and returns updated JSON routines.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        prompt = _build_autonomous_prompt(base_routines, hevy_logs, weather, is_catabolic)
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
-        
+        prompt = _build_autonomous_prompt(
+            base_routines,
+            hevy_logs,
+            weather,
+            is_catabolic,
+        )
+        text = str(provider.generate(prompt)).strip()
+
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
         if text.startswith("```json"):
@@ -351,13 +419,17 @@ def apply_autonomous_adjustments(
             text = text[3:].strip()
         if text.endswith("```"):
             text = text[:-3].strip()
-            
+
         updated = json.loads(text)
         if isinstance(updated, dict):
             return updated
-            
-        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
-    except Exception as exc:
-        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
+
+        logger.warning(
+            "AI provider returned non-dict autonomous data; using baseline."
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "AI autonomous adjustment failed (%s); using baseline routines.", exc
+        )
 
     return base_routines

@@ -24,7 +24,13 @@ class ConfigError(RuntimeError):
 # Day-of-week names accepted by SELF_REVIEW_WEEKDAY, mapped to Python's
 # Monday=0 .. Sunday=6 convention.
 _WEEKDAYS = {
-    "mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
+    "mon": 0,
+    "tue": 1,
+    "wed": 2,
+    "thu": 3,
+    "fri": 4,
+    "sat": 5,
+    "sun": 6,
 }
 
 
@@ -68,11 +74,11 @@ class Config:
     self_review_weekday: int
 
     @classmethod
-    def load(cls) -> "Config":
+    def load(cls) -> Config:
         missing: list[str] = []
 
         def required(name: str) -> str:
-            value = os.environ.get(name, "").strip()
+            value: str = os.environ.get(name, "").strip()
             if not value:
                 missing.append(name)
             return value
@@ -93,21 +99,27 @@ class Config:
         hevy_api_key = os.environ.get("HEVY_API_KEY", "").strip() or None
         health_file = os.environ.get("HEALTH_CONNECT_FILE", "").strip() or None
         parse_mode = os.environ.get("TELEGRAM_PARSE_MODE", "").strip() or None
-        sync_routines = os.environ.get("HEVY_SYNC_ROUTINES", "1").strip().lower() not in (
+        sync_routines = os.environ.get(
+            "HEVY_SYNC_ROUTINES",
+            "1",
+        ).strip().lower() not in (
             "0",
             "false",
             "no",
         )
         prefill_weights = os.environ.get(
-            "HEVY_PREFILL_WEIGHTS", "1"
+            "HEVY_PREFILL_WEIGHTS",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         checkin_enabled = os.environ.get(
-            "CHECKIN_ENABLED", "1"
+            "CHECKIN_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         lifestyle_enabled = os.environ.get(
-            "LIFESTYLE_ENABLED", "1"
+            "LIFESTYLE_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         # Google Health is optional: it auto-syncs body weight and fat from a
@@ -123,10 +135,11 @@ class Config:
         )
 
         self_review_enabled = os.environ.get(
-            "SELF_REVIEW_ENABLED", "1"
+            "SELF_REVIEW_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
         self_review_weekday = _parse_weekday(
-            os.environ.get("SELF_REVIEW_WEEKDAY", "Sun")
+            os.environ.get("SELF_REVIEW_WEEKDAY", "Sun"),
         )
 
         return cls(
@@ -148,4 +161,3 @@ class Config:
             self_review_enabled=self_review_enabled,
             self_review_weekday=self_review_weekday,
         )
-

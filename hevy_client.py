@@ -32,10 +32,17 @@ def fetch_latest_workout(api_key: str) -> dict[str, Any] | None:
 
     try:
         response = requests.get(
-            url, headers=headers, params=params, timeout=REQUEST_TIMEOUT
+            url,
+            headers=headers,
+            params=params,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON for workouts")
+            return None
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not fetch latest workout from Hevy: %s", exc)
         return None
@@ -50,7 +57,10 @@ def get_all_workouts(api_key: str) -> list[dict[str, Any]] | None:
 
 
 def _get_all_pages(
-    api_key: str, path: str, collection_key: str, page_size: int
+    api_key: str,
+    path: str,
+    collection_key: str,
+    page_size: int,
 ) -> list[dict[str, Any]] | None:
     """Fetch every page of a paginated Hevy collection, or None on failure."""
     url = f"{BASE_URL}/{path}"
@@ -66,7 +76,14 @@ def _get_all_pages(
             )
             response.raise_for_status()
             data = response.json()
-            items.extend(data.get(collection_key, []))
+            if not isinstance(data, dict):
+                logger.warning("Hevy returned non-object JSON for %s", collection_key)
+                return None
+            batch = data.get(collection_key, [])
+            if not isinstance(batch, list):
+                logger.warning("Hevy returned non-list %s", collection_key)
+                return None
+            items.extend(batch)
             if page >= int(data.get("page_count", 1)):
                 break
             page += 1
@@ -76,6 +93,9 @@ def _get_all_pages(
         return None
     except ValueError as exc:  # invalid JSON
         logger.warning("Hevy returned invalid JSON for %s: %s", collection_key, exc)
+        return None
+    except TypeError as exc:
+        logger.warning("Hevy returned unexpected %s type: %s", collection_key, exc)
         return None
 
 
@@ -95,10 +115,17 @@ def create_routine_folder(api_key: str, title: str) -> dict[str, Any] | None:
     body = {"routine_folder": {"title": title}}
     try:
         response = requests.post(
-            url, headers=_headers(api_key), json=body, timeout=REQUEST_TIMEOUT
+            url,
+            headers=_headers(api_key),
+            json=body,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON creating a folder")
+            return None
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not create routine folder '%s': %s", title, exc)
         return None
@@ -112,10 +139,17 @@ def create_routine(api_key: str, payload: dict[str, Any]) -> dict[str, Any] | No
     url = f"{BASE_URL}/routines"
     try:
         response = requests.post(
-            url, headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
+            url,
+            headers=_headers(api_key),
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON creating a routine")
+            return None
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not create routine: %s", exc)
         return None
@@ -125,16 +159,25 @@ def create_routine(api_key: str, payload: dict[str, Any]) -> dict[str, Any] | No
 
 
 def update_routine(
-    api_key: str, routine_id: str, payload: dict[str, Any]
+    api_key: str,
+    routine_id: str,
+    payload: dict[str, Any],
 ) -> dict[str, Any] | None:
     """Update a routine from a PutRoutinesRequestBody payload, or None."""
     url = f"{BASE_URL}/routines/{routine_id}"
     try:
         response = requests.put(
-            url, headers=_headers(api_key), json=payload, timeout=REQUEST_TIMEOUT
+            url,
+            headers=_headers(api_key),
+            json=payload,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON updating a routine")
+            return None
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not update routine %s: %s", routine_id, exc)
         return None
@@ -144,7 +187,9 @@ def update_routine(
 
 
 def get_exercise_history(
-    api_key: str, template_id: str, start_date: str | None = None
+    api_key: str,
+    template_id: str,
+    start_date: str | None = None,
 ) -> list[dict[str, Any]] | None:
     """Return logged history entries for an exercise template, or None.
 
@@ -157,14 +202,20 @@ def get_exercise_history(
         params["start_date"] = start_date
     try:
         response = requests.get(
-            url, headers=_headers(api_key), params=params, timeout=REQUEST_TIMEOUT
+            url,
+            headers=_headers(api_key),
+            params=params,
+            timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json().get("exercise_history", [])
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON for exercise history")
+            return None
+        history: list[dict[str, Any]] = data.get("exercise_history", [])
+        return history
     except requests.RequestException as exc:
-        logger.warning(
-            "Could not fetch exercise history for %s: %s", template_id, exc
-        )
+        logger.warning("Could not fetch exercise history for %s: %s", template_id, exc)
         return None
     except ValueError as exc:
         logger.warning("Hevy returned invalid JSON for exercise history: %s", exc)
@@ -175,11 +226,13 @@ def get_workout_count(api_key: str) -> int | None:
     """Return the total number of logged workouts on the account, or None."""
     url = f"{BASE_URL}/workouts/count"
     try:
-        response = requests.get(
-            url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT
-        )
+        response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        count = response.json().get("workout_count")
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON for workout count")
+            return None
+        count = data.get("workout_count")
         return int(count) if count is not None else None
     except requests.RequestException as exc:
         logger.warning("Could not fetch workout count from Hevy: %s", exc)
@@ -195,18 +248,25 @@ def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:
     Each template has at least ``id``, ``title``, ``type``,
     ``primary_muscle_group``, and ``secondary_muscle_groups``.
     """
-    return _get_all_pages(api_key, "exercise_templates", "exercise_templates", page_size=100)
+    return _get_all_pages(
+        api_key,
+        "exercise_templates",
+        "exercise_templates",
+        page_size=100,
+    )
 
 
 def get_user_info(api_key: str) -> dict[str, Any] | None:
     """Return the authenticated user's profile, or None on failure."""
     url = f"{BASE_URL}/user/info"
     try:
-        response = requests.get(
-            url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT
-        )
+        response = requests.get(url, headers=_headers(api_key), timeout=REQUEST_TIMEOUT)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Hevy returned non-object JSON for user info")
+            return None
+        return data
     except requests.RequestException as exc:
         logger.warning("Could not fetch user info from Hevy: %s", exc)
         return None
@@ -215,9 +275,7 @@ def get_user_info(api_key: str) -> dict[str, Any] | None:
         return None
 
 
-def get_recent_workouts(
-    api_key: str, limit: int = 10
-) -> list[dict[str, Any]] | None:
+def get_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, Any]] | None:
     """Return the N most recent workouts (most recent first), or None."""
     url = f"{BASE_URL}/workouts"
     items: list[dict[str, Any]] = []
@@ -233,7 +291,13 @@ def get_recent_workouts(
             )
             response.raise_for_status()
             data = response.json()
+            if not isinstance(data, dict):
+                logger.warning("Hevy returned non-object JSON for workouts")
+                return None
             batch = data.get("workouts", [])
+            if not isinstance(batch, list):
+                logger.warning("Hevy returned non-list workouts")
+                return None
             items.extend(batch)
             if page >= int(data.get("page_count", 1)):
                 break
@@ -244,4 +308,7 @@ def get_recent_workouts(
         return None
     except ValueError as exc:
         logger.warning("Hevy returned invalid JSON for workouts: %s", exc)
+        return None
+    except TypeError as exc:
+        logger.warning("Hevy returned unexpected workouts type: %s", exc)
         return None

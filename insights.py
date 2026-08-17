@@ -12,16 +12,17 @@ fully unit-testable without a database, network, or model.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 from analytics import epley_1rm, linear_fit
 
 # A lift needs at least this many logged sessions before a trend is meaningful.
 MIN_SESSIONS_FOR_TREND = 3
 # Relative change (latest vs first in window) that counts as real movement.
-PROGRESS_THRESHOLD = 0.02   # +2 percent or better is progressing
-REGRESS_THRESHOLD = -0.02   # -2 percent or worse is regressing
+PROGRESS_THRESHOLD = 0.02  # +2 percent or better is progressing
+REGRESS_THRESHOLD = -0.02  # -2 percent or worse is regressing
 # Sessions without a new best before a lift is treated as stalled.
 STALL_SESSIONS = 3
 # Recovery thresholds.
@@ -36,15 +37,15 @@ class LiftInsight:
     """Trend judgement for a single exercise over its recent sessions."""
 
     name: str
-    metric: str                 # "kg" (estimated 1RM) or "reps" (bodyweight)
+    metric: str  # "kg" (estimated 1RM) or "reps" (bodyweight)
     sessions: int
-    latest: float | None        # latest score in the chosen metric
-    best: float | None          # best score ever in the window
-    change_pct: float | None    # latest vs first, as a fraction
+    latest: float | None  # latest score in the chosen metric
+    best: float | None  # best score ever in the window
+    change_pct: float | None  # latest vs first, as a fraction
     slope_per_session: float | None
-    trend: str                  # progressing | stalling | regressing | new
+    trend: str  # progressing | stalling | regressing | new
     sessions_since_best: int | None
-    intervention: str | None    # what to change when not progressing
+    intervention: str | None  # what to change when not progressing
 
     def as_line(self) -> str:
         unit = "kg e1RM" if self.metric == "kg" else "reps"
@@ -67,15 +68,15 @@ class RecoveryInsight:
 
     sleep_hours: float | None
     resting_hr: int | None
-    resting_hr_trend: str | None    # rising | falling | steady
+    resting_hr_trend: str | None  # rising | falling | steady
     weight_kg: float | None
     weight_trend: str | None
     body_fat_pct: float | None
     body_fat_trend: str | None
     muscle_pct: float | None
     is_catabolic: bool
-    status: str                     # good | fair | poor | unknown
-    directive: str                  # what the coach should do about volume today
+    status: str  # good | fair | poor | unknown
+    directive: str  # what the coach should do about volume today
 
     def as_text(self) -> str:
         bits = [f"Recovery status: {self.status}."]
@@ -91,7 +92,9 @@ class RecoveryInsight:
             trend = f" ({self.body_fat_trend})" if self.body_fat_trend else ""
             bits.append(f"Body fat {self.body_fat_pct:g}%{trend}.")
         if self.is_catabolic:
-            bits.append("CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight.")
+            bits.append(
+                "CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight.",
+            )
         bits.append(f"Directive: {self.directive}")
         return " ".join(bits)
 
@@ -107,7 +110,9 @@ class TrainingInsights:
     def priorities(self) -> list[LiftInsight]:
         """Lifts most in need of intervention, worst first."""
         order = {"regressing": 0, "stalling": 1, "progressing": 2, "new": 3}
-        flagged = [lift for lift in self.lifts if lift.trend in ("regressing", "stalling")]
+        flagged = [
+            lift for lift in self.lifts if lift.trend in ("regressing", "stalling")
+        ]
         return sorted(flagged, key=lambda lift: order.get(lift.trend, 9))
 
     def as_text(self) -> str:
@@ -201,7 +206,11 @@ def _sessions_since_best(scores: Sequence[float]) -> int | None:
     return len(scores) - 1 - best_idx
 
 
-def _intervention(trend: str, since_best: int | None, recovery_status: str) -> str | None:
+def _intervention(
+    trend: str,
+    since_best: int | None,
+    recovery_status: str,
+) -> str | None:
     """Suggest a concrete change for a lift that is not progressing."""
     if trend == "progressing" or trend == "new":
         return None
@@ -215,7 +224,11 @@ def _intervention(trend: str, since_best: int | None, recovery_status: str) -> s
     return "add a rep or a tiny load increase to nudge past the plateau"
 
 
-def analyse_lift(name: str, entries: Sequence[dict[str, Any]], recovery_status: str = "unknown") -> LiftInsight:
+def analyse_lift(
+    name: str,
+    entries: Sequence[dict[str, Any]],
+    recovery_status: str = "unknown",
+) -> LiftInsight:
     """Build a trend judgement for one exercise from its logged top sets."""
     scores, metric = _series_scores(entries)
     sessions = len(scores)
@@ -238,7 +251,9 @@ def analyse_lift(name: str, entries: Sequence[dict[str, Any]], recovery_status: 
     )
 
 
-def _trend_of(values: Sequence[float], rising_is: str, falling_is: str, tol: float) -> str | None:
+def _trend_of(
+    values: Sequence[float | None], rising_is: str, falling_is: str, tol: float
+) -> str | None:
     """Classify the direction of a short numeric series."""
     clean = [v for v in values if v is not None]
     if len(clean) < MIN_READINGS_FOR_TREND:
@@ -270,9 +285,9 @@ def analyse_recovery(
     muscle_pct = latest.get("muscle_pct") or (recovery or {}).get("muscle_pct")
 
     recent = readings[-14:]
-    rhr_trend = _trend_of([r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3)
-    weight_trend = _trend_of([r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05)
-    bf_trend = _trend_of([r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05)
+    rhr_trend = _trend_of([float(r["resting_hr"]) for r in recent[-7:] if r.get("resting_hr") is not None], "rising", "falling", 0.3)
+    weight_trend = _trend_of([float(r["weight_kg"]) for r in recent[-7:] if r.get("weight_kg") is not None], "rising", "falling", 0.05)
+    bf_trend = _trend_of([float(r["body_fat_pct"]) for r in recent[-7:] if r.get("body_fat_pct") is not None], "rising", "falling", 0.05)
 
     is_catabolic = False
     if len(recent) >= 3 and weight_kg is not None and muscle_pct is not None:
@@ -289,7 +304,9 @@ def analyse_recovery(
                 is_catabolic = True
 
     # Decide an overall status and a volume directive for today.
-    poor = (sleep_hours is not None and sleep_hours < LOW_SLEEP_HOURS) or rhr_trend == "rising"
+    poor = (
+        sleep_hours is not None and sleep_hours < LOW_SLEEP_HOURS
+    ) or rhr_trend == "rising"
     good = (
         sleep_hours is not None
         and sleep_hours >= GOOD_SLEEP_HOURS
@@ -300,7 +317,9 @@ def analyse_recovery(
         directive = "increase protein target to 2.5 g/kg and reduce training volume to arrest catabolism"
     elif poor:
         status = "poor"
-        directive = "trim volume and intensity today; keep form strict, no grinding reps"
+        directive = (
+            "trim volume and intensity today; keep form strict, no grinding reps"
+        )
     elif good:
         status = "good"
         directive = "recovery is solid; push the prescribed progressions confidently"
@@ -317,7 +336,9 @@ def analyse_recovery(
         resting_hr_trend=rhr_trend,
         weight_kg=round(float(weight_kg), 1) if weight_kg is not None else None,
         weight_trend=weight_trend,
-        body_fat_pct=round(float(body_fat_pct), 1) if body_fat_pct is not None else None,
+        body_fat_pct=round(float(body_fat_pct), 1)
+        if body_fat_pct is not None
+        else None,
         body_fat_trend=bf_trend,
         muscle_pct=round(float(muscle_pct), 1) if muscle_pct is not None else None,
         is_catabolic=is_catabolic,
