@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parent
 CONNECTOR_MODULES: dict[str, Path] = {
     "hevy_client": ROOT / "hevy_client.py",
     "google_health_client": ROOT / "google_health_client.py",
+    "google_health_auth": ROOT / "google_health_auth.py",
     "health_connect": ROOT / "health_connect.py",
     "weather": ROOT / "weather.py",
     "telegram_notifier": ROOT / "telegram_notifier.py",

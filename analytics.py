@@ -164,9 +164,12 @@ _GROUP_RULES: list[tuple[str, tuple[str, ...]]] = [
 def muscle_group_for(name: str) -> str:
     """Classify an exercise name into a broad muscle group."""
     lowered = " ".join(name.lower().split())
+    # ⚡ Bolt Optimization: Unroll any(...) generator expression into a native loop
+    # to avoid generator creation overhead in this high-frequency O(N*M) function.
     for group, keywords in _GROUP_RULES:
-        if any(keyword in lowered for keyword in keywords):
-            return group
+        for keyword in keywords:
+            if keyword in lowered:
+                return group
     return "Other"
 
 
@@ -177,6 +180,10 @@ def group_volumes(exercise_volumes: Iterable[dict[str, Any]]) -> dict[str, float
     """
     totals: dict[str, float] = {}
     for row in exercise_volumes:
+        volume = float(row.get("volume") or 0.0)
+        # ⚡ Bolt Optimization: Skip O(N) string processing for zero-volume exercises.
+        if volume <= 0:
+            continue
         group = muscle_group_for(row["exercise"])
-        totals[group] = totals.get(group, 0.0) + float(row.get("volume") or 0.0)
-    return {g: v for g, v in totals.items() if v > 0}
+        totals[group] = totals.get(group, 0.0) + volume
+    return totals
