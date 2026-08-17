@@ -107,15 +107,20 @@ def _recovery() -> str:
 def _protein_target(recovery: dict[str, Any] | None) -> str | None:
     if not recovery:
         return None
+    weight = recovery.get("weight_kg")
+    if weight is None:
+        return None
     try:
-        grams = round(float(recovery.get("weight_kg")) * PROTEIN_G_PER_KG)
+        grams = round(float(weight) * PROTEIN_G_PER_KG)
     except (TypeError, ValueError):
         return None
     return f"Protein: about {grams} g today ({PROTEIN_G_PER_KG:g} g per kg)."
 
 
 def daily_guidance(
-    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None
+    day: int | None,
+    is_rest: bool,
+    recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
     """Resolve the lifestyle pillars for the given cycle day.
 
@@ -124,7 +129,11 @@ def daily_guidance(
     """
     rest = is_rest or day is None
     tier = _carb_tier(None if rest else day)
-    training = "Rest and recovery, no lifting today" if rest else day_focus(day)
+    if rest:
+        training = "Rest and recovery, no lifting today"
+    else:
+        # day is guaranteed non-None when not rest
+        training = day_focus(day)  # type: ignore[arg-type]
     return DailyGuidance(
         training=training,
         carb_tier=tier,

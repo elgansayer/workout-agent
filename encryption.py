@@ -37,7 +37,7 @@ def _fernet() -> Fernet | None:
     if not _HAS_CRYPTOGRAPHY:
         logger.warning(
             "ENCRYPTION_KEY is set but the `cryptography` package is not installed. "
-            "API keys will be stored in PLAINTEXT. Run: pip install cryptography"
+            "API keys will be stored in PLAINTEXT. Run: pip install cryptography",
         )
         return None
     try:

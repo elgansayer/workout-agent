@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import importlib
 import os
+from collections.abc import Generator
+from typing import Any
 
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
@@ -27,7 +30,7 @@ from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
+def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
     db_path = str(tmp_path / "web.db")
     init_db(db_path)
     save_checkin(1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path)
@@ -39,6 +42,8 @@ def client(tmp_path, monkeypatch):
     summary = WorkoutSummary(
         title="Day 1",
         date="2026-03-02",
+        duration_seconds=3600,
+        total_volume_kg=2800.0,
         exercises=[ExerciseSummary("Deadlift (Barbell)", 140.0, 5, 4)],
     )
     save_progress(summary, db_path)
@@ -55,34 +60,34 @@ def client(tmp_path, monkeypatch):
         yield test_client
 
 
-def test_dashboard_ok(client):
+def test_dashboard_ok(client: Any) -> None:
     response = client.get("/")
     assert response.status_code == 200
     assert "Block" in response.text
     assert "Week" in response.text
 
 
-def test_progress_ok(client):
+def test_progress_ok(client: Any) -> None:
     response = client.get("/progress")
     assert response.status_code == 200
     assert "Progress" in response.text
 
 
-def test_checkins_shows_saved_checkin(client):
+def test_checkins_shows_saved_checkin(client: Any) -> None:
     response = client.get("/checkins")
     assert response.status_code == 200
     assert "Check-in 1" in response.text
     assert "solid block" in response.text
 
 
-def test_nudge_button_and_endpoint_removed(client):
+def test_nudge_button_and_endpoint_removed(client: Any) -> None:
     # Motivation is automated now: no button on the page, no /nudge route.
     page = client.get("/")
     assert "nudge-btn" not in page.text
     assert client.get("/nudge").status_code == 404
 
 
-def test_dashboard_shows_automated_quote_and_charts(client):
+def test_dashboard_shows_automated_quote_and_charts(client: Any) -> None:
     response = client.get("/")
     assert response.status_code == 200
     # The daily quote and the Coach's Status insight are rendered automatically.
@@ -90,37 +95,37 @@ def test_dashboard_shows_automated_quote_and_charts(client):
     assert "Consistency" in response.text
 
 
-def test_progress_renders_svg_charts(client):
+def test_progress_renders_svg_charts(client: Any) -> None:
     response = client.get("/progress")
     assert response.status_code == 200
     assert "svg-chart" in response.text
 
 
-def test_stats_ok(client):
+def test_stats_ok(client: Any) -> None:
     response = client.get("/stats")
     assert response.status_code == 200
     assert "Personal records" in response.text
 
 
-def test_plan_ok(client):
+def test_plan_ok(client: Any) -> None:
     response = client.get("/plan")
     assert response.status_code == 200
     assert "Periodisation" in response.text
 
 
-def test_history_ok(client):
+def test_history_ok(client: Any) -> None:
     response = client.get("/history")
     assert response.status_code == 200
     assert "Training calendar" in response.text
 
 
-def test_stats_shows_projection_and_muscle_breakdown(client):
+def test_stats_shows_projection_and_muscle_breakdown(client: Any) -> None:
     response = client.get("/stats")
     assert response.status_code == 200
     assert "muscle group" in response.text.lower()
 
 
-def test_pwa_manifest_and_service_worker(client):
+def test_pwa_manifest_and_service_worker(client: Any) -> None:
     page = client.get("/")
     assert "manifest.webmanifest" in page.text
     assert "/sw.js" in page.text
@@ -134,7 +139,7 @@ def test_pwa_manifest_and_service_worker(client):
     assert "Workout Agent" in manifest.text
 
 
-def test_settings_page_and_nav(client):
+def test_settings_page_and_nav(client: Any) -> None:
     page = client.get("/settings")
     assert page.status_code == 200
     assert "Google Health" in page.text
@@ -143,13 +148,13 @@ def test_settings_page_and_nav(client):
     assert "/settings" in client.get("/").text
 
 
-def test_google_health_connect_unconfigured_redirects(client):
+def test_google_health_connect_unconfigured_redirects(client: Any) -> None:
     resp = client.get("/google-health/connect", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=unconfigured"
 
 
-def test_google_health_disconnect_clears_token(client):
+def test_google_health_disconnect_clears_token(client: Any) -> None:
     from database import get_meta, set_meta
 
     db_path = os.environ["DATABASE_PATH"]
@@ -160,7 +165,7 @@ def test_google_health_disconnect_clears_token(client):
     assert not get_meta("google_health_refresh_token", db_path)
 
 
-def _configured_app(tmp_path, monkeypatch):
+def _configured_app(tmp_path: Any, monkeypatch: Any) -> tuple[Any, str]:
     db_path = str(tmp_path / "web.db")
     init_db(db_path)
     monkeypatch.setenv("DATABASE_PATH", db_path)
@@ -172,7 +177,10 @@ def _configured_app(tmp_path, monkeypatch):
     return app_module, db_path
 
 
-def test_google_health_connect_redirects_to_google(tmp_path, monkeypatch):
+def test_google_health_connect_redirects_to_google(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
     app_module, _ = _configured_app(tmp_path, monkeypatch)
     with TestClient(app_module.app) as c:
         resp = c.get("/google-health/connect", follow_redirects=False)
@@ -182,31 +190,41 @@ def test_google_health_connect_redirects_to_google(tmp_path, monkeypatch):
     assert "client_id=cid" in location
 
 
-def test_google_health_callback_stores_refresh_token(tmp_path, monkeypatch):
+def test_google_health_callback_stores_refresh_token(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        app_module, "exchange_code", lambda *a, **k: {"refresh_token": "rt-123"}
+        app_module,
+        "exchange_code",
+        lambda *a, **k: {"refresh_token": "rt-123"},
     )
     set_meta("google_health_oauth_state", "st-1", db_path)
     with TestClient(app_module.app) as c:
         resp = c.get(
-            "/google-health/callback?code=abc&state=st-1", follow_redirects=False
+            "/google-health/callback?code=abc&state=st-1",
+            follow_redirects=False,
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=connected"
     assert get_meta("google_health_refresh_token", db_path) == "rt-123"
 
 
-def test_google_health_callback_rejects_bad_state(tmp_path, monkeypatch):
+def test_google_health_callback_rejects_bad_state(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
     set_meta("google_health_oauth_state", "real-state", db_path)
     with TestClient(app_module.app) as c:
         resp = c.get(
-            "/google-health/callback?code=abc&state=forged", follow_redirects=False
+            "/google-health/callback?code=abc&state=forged",
+            follow_redirects=False,
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"

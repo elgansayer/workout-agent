@@ -1,13 +1,14 @@
-"""Uses Google Gemini to apply progressive overload and write today's plan."""
+"""Uses AI (Gemini/Claude/OpenAI/DeepSeek) to apply progressive overload and
+write today's plan, going through ``AIProvider`` from ``ai_provider.py``."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
-import google.generativeai as genai
-
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -22,7 +23,7 @@ from program import (
 try:
     from weather import WeatherConditions
 except ImportError:
-    WeatherConditions = Any
+    WeatherConditions = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -129,26 +130,45 @@ Use British English. Never use the em dash."""
 
 
 def generate_next_workout(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     day: int,
     week: int,
     block: Block,
+    *,
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error."""
+    """Generate today's plan, falling back to the baseline plan on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_prompt(
-            day, week, block, workout_summary, recovery, history, insights, last_plan
+            day,
+            week,
+            block,
+            workout_summary,
+            recovery,
+            history,
+            insights,
+            last_plan,
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
+        )
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
         logger.warning("Gemini returned an empty response; using baseline plan.")
@@ -191,17 +211,18 @@ Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     recovery: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error."""
+    """Generate a short rest-day recovery message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_rest_prompt(recovery)
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
         logger.warning("Gemini returned an empty rest-day response; using fallback.")
@@ -255,8 +276,7 @@ Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     number: int,
     week: int,
     block: Block,
@@ -265,15 +285,32 @@ def generate_checkin_message(
     analysis_text: str,
     fallback: str,
 ) -> str:
-    """Generate a periodic check-in message, falling back on error."""
+    """Generate a periodic check-in message, falling back on error.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
         prompt = _build_checkin_prompt(
-            number, week, block, workouts_done, weeks, analysis_text
+            number,
+            week,
+            block,
+            workouts_done,
+            weeks,
+            analysis_text,
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
+        )
+        text = str(provider.generate(prompt)).strip()
         if text:
             return text
         logger.warning("Gemini returned an empty check-in; using fallback.")
@@ -329,20 +366,24 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
 
 def apply_autonomous_adjustments(
-    api_key: str,
-    model_name: str,
+    provider: AIProvider,
     base_routines: dict[str, list[dict[str, Any]]],
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
     is_catabolic: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines."""
+    """Applies the unified autonomous progression and returns updated JSON routines.
+
+    Args:
+        provider: A resolved AI provider instance from
+            :func:`ai_provider.resolve_provider`.
+    """
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)

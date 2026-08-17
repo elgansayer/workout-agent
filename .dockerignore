@@ -5,8 +5,20 @@ __pycache__/
 .git/
 .gitignore
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 tests/
 *.db
+*.sqlite
+*.sqlite3
 .env
+*.log
 *.md
 !README.md
+
+# Binary images -- never bake stray image files into images
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico

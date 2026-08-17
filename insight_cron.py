@@ -1,15 +1,20 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_or_create_user,
     get_progress_history,
     init_db,
     save_dashboard_insight,
@@ -22,8 +27,7 @@ logger = logging.getLogger("insight_cron")
 
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _get_provider(config)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
@@ -63,8 +67,10 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
-            logger.info("Daily insight generated successfully.")
+            save_dashboard_insight(
+                json.dumps(parsed), db_path=config.database_path, user_id=user_id
+            )
+            logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
     except Exception as e:  # noqa: BLE001
@@ -73,8 +79,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _get_provider(config)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
@@ -106,7 +111,7 @@ def generate_weekly_correlations(config: Config) -> None:
         "exercise_history": filtered_history,
     }
 
-    prompt = f"""You are an elite data-driven strength coach and analyst. 
+    prompt = f"""You are an elite data-driven strength coach and analyst.
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
 Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
@@ -114,14 +119,13 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(data, indent=2)}
 
-Analyze this data and produce a "Deep Correlation Engine" report. 
+Analyze this data and produce a "Deep Correlation Engine" report.
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
 """
 
     try:
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         if text:
             save_deep_correlation(text, db_path=config.database_path)
             logger.info("Weekly deep correlation generated successfully.")

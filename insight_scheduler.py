@@ -3,8 +3,9 @@ import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("insight_scheduler")
+This module exists as a backward-compatibility shim.  When invoked directly
+it delegates to the unified scheduler.
+"""
 
 
 def run_daily():

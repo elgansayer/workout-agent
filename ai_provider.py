@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +41,11 @@ class AIProvider(ABC):
 class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         import google.generativeai as genai
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(model)
+        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
+        self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
@@ -72,13 +72,13 @@ class GeminiProvider(AIProvider):
 class ClaudeProvider(AIProvider):
     """Anthropic Claude via the ``anthropic`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: str, model: str = "claude-sonnet-4-20250514") -> None:
         try:
             import anthropic
         except ImportError:
             raise ImportError(
                 "The `anthropic` package is required for Claude. "
-                "Install it with: pip install anthropic"
+                "Install it with: pip install anthropic",
             )
         self._client = anthropic.Anthropic(api_key=api_key)
         self._model = model
@@ -91,7 +91,7 @@ class ClaudeProvider(AIProvider):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()
+        return response.content[0].text.strip()  # type: ignore[union-attr]
 
     def _stream(self, prompt: str) -> Iterator[str]:
         with self._client.messages.stream(
@@ -113,13 +113,13 @@ class ClaudeProvider(AIProvider):
 class OpenAIProvider(AIProvider):
     """OpenAI GPT via the ``openai`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "gpt-4o"):
+    def __init__(self, api_key: str, model: str = "gpt-4o") -> None:
         try:
             import openai
         except ImportError:
             raise ImportError(
                 "The `openai` package is required for OpenAI. "
-                "Install it with: pip install openai"
+                "Install it with: pip install openai",
             )
         self._client = openai.OpenAI(api_key=api_key)
         self._model = model
@@ -163,13 +163,13 @@ class DeepSeekProvider(AIProvider):
 
     BASE_URL = "https://api.deepseek.com"
 
-    def __init__(self, api_key: str, model: str = "deepseek-chat"):
+    def __init__(self, api_key: str, model: str = "deepseek-chat") -> None:
         try:
             import openai
         except ImportError:
             raise ImportError(
                 "The `openai` package is required for DeepSeek (it uses an "
-                "OpenAI-compatible API). Install it with: pip install openai"
+                "OpenAI-compatible API). Install it with: pip install openai",
             )
         self._client = openai.OpenAI(api_key=api_key, base_url=self.BASE_URL)
         self._model = model
@@ -224,11 +224,11 @@ def get_provider(
     if spec is None:
         raise ValueError(
             f"Unknown AI provider '{provider_name}'. "
-            f"Choose from: {', '.join(PROVIDERS)}"
+            f"Choose from: {', '.join(PROVIDERS)}",
         )
-    cls = spec["class"]
-    effective_model = model or spec["default_model"]
-    return cls(api_key=api_key, model=effective_model)
+    p_cls = spec["class"]
+    effective_model = model or str(spec["default_model"])
+    return cast(AIProvider, p_cls(api_key=api_key, model=effective_model))
 
 
 _DISPLAY_NAMES = {
@@ -249,3 +249,52 @@ def available_providers() -> list[dict[str, str]]:
         }
         for key, spec in PROVIDERS.items()
     ]
+
+
+
+    When *user_id* is provided, preferences and stored API keys are read from
+    the database.  Falls back to *server_gemini_key* / *server_gemini_model*
+    (typically the server's shared GEMINI_API_KEY) when the user has
+    chosen the default provider ("gemini") but has not stored their own key.
+
+    When *user_id* is None (e.g. single-tenant cron jobs), the function
+    returns a Gemini provider built from *server_gemini_key* /
+    *server_gemini_model* directly -- no database lookup is attempted.
+
+    Raises ValueError when a non-default provider is selected but no key
+    is configured, or when no server key is available.
+    """
+    from database import get_user_api_key, get_user_preferences
+
+    if user_id is not None:
+        prefs = get_user_preferences(user_id, db_path=db_path)
+        provider_name: str = (
+            (prefs and prefs.get("preferred_ai")) or "gemini"
+        ).lower().strip()
+        model: str | None = prefs and prefs.get("ai_model") or None
+        record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        api_key: str | None = record["api_key"] if record else None
+
+        if api_key:
+            return get_provider(provider_name, api_key, model)
+
+        if provider_name != "gemini":
+            raise ValueError(
+                f"No {provider_name} API key configured. "
+                "Add a key in Settings -> AI Providers."
+            )
+
+        # Fall through to server-fallback for the default provider.
+        api_key = server_gemini_key
+        effective_model: str | None = model or server_gemini_model
+    else:
+        api_key = server_gemini_key
+        effective_model = server_gemini_model
+
+    if not api_key:
+        raise ValueError(
+            "No AI provider key available. Set GEMINI_API_KEY in the "
+            "environment or store a key in Settings."
+        )
+
+    return get_provider("gemini", api_key, effective_model)
