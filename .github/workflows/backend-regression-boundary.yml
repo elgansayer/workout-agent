@@ -1,0 +1,78 @@
+name: Diagnose Backend Regression Boundary
+
+on:
+  push:
+    branches:
+      - diagnostics/backend-regression-boundary
+    paths:
+      - .github/workflows/backend-regression-boundary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  affected-suites:
+    name: ${{ matrix.candidate.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate:
+          - name: pre-angular-abf1d8
+            sha: abf1d8a01bf1d03ee775fbcd7325ecb3754b0d35
+          - name: angular-2888ece
+            sha: 2888ece956f6d19647397470bfc99432b62d09ff
+          - name: post-auth-ui-29e61
+            sha: 29e61cd9f6b8eddb62599825bfb5624ce32a2c84
+          - name: current-main-0a12
+            sha: 0a12db22d5c37843f232c98bd7ca4c076c7421cb
+    steps:
+      - name: Check out immutable candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.candidate.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Install candidate dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
+
+      - name: Compile every tracked Python file
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Run affected suites from the candidate itself
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+          WEB_ALLOW_ANONYMOUS: "1"
+        shell: bash
+        run: |
+          tests=(
+            tests/test_webapp.py
+            tests/test_database.py
+            tests/test_ai_provider.py
+            tests/test_insight_cron.py
+            tests/test_analytics.py
+          )
+          present=()
+          for test_path in "${tests[@]}"; do
+            [[ -f "$test_path" ]] && present+=("$test_path")
+          done
+          if [[ ${#present[@]} -eq 0 ]]; then
+            echo "No affected suites exist at ${{ matrix.candidate.sha }}"
+            exit 1
+          fi
+          python -m pytest -q "${present[@]}"
