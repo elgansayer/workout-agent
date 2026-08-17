@@ -13,9 +13,9 @@ repo (per `AGENTS.md` §4's "never leave dead orphaned modules" rule).
    those import transitively) — `grep -rn "import <module_name>"` across the
    repo excluding the module's own file and its test file.
 3. If you find a module that is defined but never imported anywhere
-   (`programme_inference.py` and `hevy_reader.py` are known examples as of
-   the last audit — check whether they're still orphaned or have since been
-   wired in), do not delete it outright in this automation. Instead file a
+   (no known examples as of the 2026-08-05 audit — `programme_inference.py`
+   and `hevy_reader.py` were previously orphaned but have since been wired
+   by PR #142), do not delete it outright in this automation. Instead file a
    `task_add()` entry naming the specific module and what wiring it up would
    require, tagged for the `programme-builder-ui` or relevant skill, so a
    dedicated task handles the wiring deliberately rather than a drive-by

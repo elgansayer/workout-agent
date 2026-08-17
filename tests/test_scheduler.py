@@ -6,6 +6,8 @@ import subprocess
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
+import pytest
+
 import scheduler
 
 # ---------------------------------------------------------------------------
@@ -13,27 +15,27 @@ import scheduler
 # ---------------------------------------------------------------------------
 
 
-def test_parse_run_at_default(monkeypatch) -> None:
+def test_parse_run_at_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("RUN_AT", raising=False)
     assert scheduler._parse_run_at() == ["07:00"]
 
 
-def test_parse_run_at_single(monkeypatch) -> None:
+def test_parse_run_at_single(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_AT", "05:30")
     assert scheduler._parse_run_at() == ["05:30"]
 
 
-def test_parse_run_at_comma_separated(monkeypatch) -> None:
+def test_parse_run_at_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_AT", "00:00,05:00")
     assert scheduler._parse_run_at() == ["00:00", "05:00"]
 
 
-def test_parse_run_at_space_separated(monkeypatch) -> None:
+def test_parse_run_at_space_separated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_AT", "00:00  05:00")
     assert scheduler._parse_run_at() == ["00:00", "05:00"]
 
 
-def test_parse_run_at_sorts(monkeypatch) -> None:
+def test_parse_run_at_sorts(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RUN_AT", "23:00,01:00")
     assert scheduler._parse_run_at() == ["01:00", "23:00"]
 
@@ -43,25 +45,25 @@ def test_parse_run_at_sorts(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_is_due_true(monkeypatch) -> None:
+def test_is_due_true(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_now = datetime(2026, 8, 5, 7, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
     assert scheduler._is_due("UTC", ["07:00"]) is True
 
 
-def test_is_due_false_wrong_minute(monkeypatch) -> None:
+def test_is_due_false_wrong_minute(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_now = datetime(2026, 8, 5, 7, 1, tzinfo=timezone.utc)
     monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
     assert scheduler._is_due("UTC", ["07:00"]) is False
 
 
-def test_is_due_false_wrong_hour(monkeypatch) -> None:
+def test_is_due_false_wrong_hour(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_now = datetime(2026, 8, 5, 8, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
     assert scheduler._is_due("UTC", ["07:00"]) is False
 
 
-def test_is_due_multiple_times(monkeypatch) -> None:
+def test_is_due_multiple_times(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_now = datetime(2026, 8, 5, 5, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
     assert scheduler._is_due("UTC", ["00:00", "05:00"]) is True
@@ -72,26 +74,26 @@ def test_is_due_multiple_times(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_coaching_success(monkeypatch) -> None:
+def test_run_coaching_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_run = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr(subprocess, "run", mock_run)
     assert scheduler._run_coaching("user-1") is True
     assert mock_run.call_count == 1
 
 
-def test_run_coaching_failure_is_isolated(monkeypatch) -> None:
+def test_run_coaching_failure_is_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_run = MagicMock(side_effect=subprocess.CalledProcessError(1, "cmd"))
     monkeypatch.setattr(subprocess, "run", mock_run)
     assert scheduler._run_coaching("user-1") is False
 
 
-def test_run_insight_daily_success(monkeypatch) -> None:
+def test_run_insight_daily_success(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_run = MagicMock(return_value=MagicMock(returncode=0))
     monkeypatch.setattr(subprocess, "run", mock_run)
     assert scheduler._run_insight_job("--daily") is True
 
 
-def test_run_insight_weekly_failure(monkeypatch) -> None:
+def test_run_insight_weekly_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_run = MagicMock(side_effect=subprocess.CalledProcessError(1, "cmd"))
     monkeypatch.setattr(subprocess, "run", mock_run)
     assert scheduler._run_insight_job("--weekly") is False
@@ -102,7 +104,7 @@ def test_run_insight_weekly_failure(monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_run_scheduler_bootstrap_calls_jobs(monkeypatch) -> None:
+def test_run_scheduler_bootstrap_calls_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
@@ -116,6 +118,9 @@ def test_run_scheduler_bootstrap_calls_jobs(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_connector_health", lambda: True)
 
     iteration = [0]
 
@@ -137,7 +142,7 @@ def test_run_scheduler_bootstrap_calls_jobs(monkeypatch) -> None:
     assert len(coaching_calls) == 0
 
 
-def test_run_scheduler_dispatches_due_users(monkeypatch) -> None:
+def test_run_scheduler_dispatches_due_users(monkeypatch: pytest.MonkeyPatch) -> None:
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
@@ -151,6 +156,8 @@ def test_run_scheduler_dispatches_due_users(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
@@ -179,7 +186,7 @@ def test_run_scheduler_dispatches_due_users(monkeypatch) -> None:
     assert coaching_calls.count("user-2") >= 2
 
 
-def test_run_scheduler_user_failure_isolated(monkeypatch) -> None:
+def test_run_scheduler_user_failure_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     def _failing_coaching(uid: str) -> bool:
         if uid == "user-fail":
             raise RuntimeError("Simulated user failure")
@@ -187,6 +194,8 @@ def test_run_scheduler_user_failure_isolated(monkeypatch) -> None:
 
     monkeypatch.setattr(scheduler, "_run_coaching", _failing_coaching)
     monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: True)
+    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [

@@ -61,7 +61,7 @@ def build_authorize_url(
             # offline + consent guarantee a refresh token is returned.
             "access_type": "offline",
             "prompt": "consent",
-        }
+        },
     )
     return f"{AUTHORIZE_URL}?{query}"
 
@@ -72,7 +72,7 @@ def exchange_code(
     code: str,
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Swap an authorisation code for access and refresh tokens."""
     try:
         response = requests.post(
@@ -88,7 +88,11 @@ def exchange_code(
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            print("Google returned non-object token JSON.", file=sys.stderr)
+            return None
+        return data
     except requests.RequestException as exc:
         print(f"Token exchange failed: {exc}", file=sys.stderr)
         if exc.response is not None:
@@ -119,14 +123,19 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         )
         self.wfile.write(body.encode("utf-8"))
 
-    def log_message(self, *args: Any, **kwargs: Any) -> None:  # silence the default logging
+    def log_message(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:  # silence the default logging
         pass
 
 
 def _wait_for_code(redirect_uri: str) -> tuple[str | None, str | None]:
     parsed = urllib.parse.urlparse(redirect_uri)
     server = HTTPServer(
-        (parsed.hostname or "localhost", parsed.port or 80), _CallbackHandler
+        (parsed.hostname or "localhost", parsed.port or 80),
+        _CallbackHandler,
     )
     print("Waiting for Google to redirect back...")
     server.handle_request()  # blocks until the single callback arrives
