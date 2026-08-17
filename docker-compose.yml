@@ -21,7 +21,8 @@ services:
       # - /absolute/path/on/host/health:/health:ro
     restart: unless-stopped
 
-  # Internal web dashboard. Reach it on the LAN at http://<host-ip>:8088
+  # Authenticated web dashboard. Production is the safe default. For local-only
+  # anonymous development set APP_ENV=development and WEB_ALLOW_ANONYMOUS=1.
   web:
     build:
       context: .
@@ -30,6 +31,9 @@ services:
     container_name: workout-agent-web
     env_file: .env
     environment:
+      APP_ENV: ${APP_ENV:-production}
+      WEB_AUTH_MODE: ${WEB_AUTH_MODE:-google}
+      WEB_ALLOW_ANONYMOUS: ${WEB_ALLOW_ANONYMOUS:-0}
       DATABASE_PATH: /data/workout_agent.db
       TZ: "Europe/London"
     ports:
