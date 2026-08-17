@@ -27,8 +27,8 @@ jobs:
 
           path = Path("database.py")
           text = path.read_text()
-          old = "from typing import Any\n"
-          new = "from typing import Any, TypedDict\n"
+          old = "from typing import TYPE_CHECKING, Any\n"
+          new = "from typing import TYPE_CHECKING, Any, TypedDict\n"
           count = text.count(old)
           if count != 1:
               raise SystemExit(
