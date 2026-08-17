@@ -149,7 +149,7 @@ def parse_workout(
                 top_reps=top_reps,
                 sets=count,
                 hit_top_of_range=hit_top,
-            )
+            ),
         )
 
     if not summaries:

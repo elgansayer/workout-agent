@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -11,6 +12,7 @@ from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_or_create_user,
     get_progress_history,
     init_db,
     save_dashboard_insight,
@@ -29,8 +31,22 @@ def _resolve_provider(config: Config) -> AIProvider:
     )
 
 
-def generate_daily_header(config: Config) -> None:
-    logger.info("Generating daily insight header...")
+def _resolve_insight_user(db_path: str) -> str:
+    """Return the user_id for running insight jobs.
+
+    Prefers $SCHEDULER_USER_ID (set by scheduler.py). Falls back to the
+    first legacy user for single-tenant backwards compat.
+    """
+    env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
+    if env_id:
+        return env_id
+    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+
+
+def generate_daily_header(config: Config, *, user_id: str | None = None) -> None:
+    if user_id is None:
+        user_id = _resolve_insight_user(config.database_path)
+    logger.info("Generating daily insight header for user %s...", user_id)
     provider = _resolve_provider(config)
 
     # Fetch last 7 days of data
@@ -38,12 +54,16 @@ def generate_daily_header(config: Config) -> None:
 
     metrics = [
         m
-        for m in get_body_metrics(limit=14, db_path=config.database_path)
+        for m in get_body_metrics(
+            limit=14, db_path=config.database_path, user_id=user_id
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=14, db_path=config.database_path)
+        for log in get_daily_logs(
+            limit=14, db_path=config.database_path, user_id=user_id
+        )
         if log["date"] >= cutoff
     ]
 
@@ -70,18 +90,20 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
-            logger.info(
-                "Daily insight generated successfully via %s.", provider.name()
+            save_dashboard_insight(
+                json.dumps(parsed), db_path=config.database_path, user_id=user_id
             )
+            logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
 
 
-def generate_weekly_correlations(config: Config) -> None:
-    logger.info("Generating weekly deep correlations...")
+def generate_weekly_correlations(config: Config, *, user_id: str | None = None) -> None:
+    if user_id is None:
+        user_id = _resolve_insight_user(config.database_path)
+    logger.info("Generating weekly deep correlations for user %s...", user_id)
     provider = _resolve_provider(config)
 
     # Fetch 60-day trailing window
@@ -89,18 +111,24 @@ def generate_weekly_correlations(config: Config) -> None:
 
     metrics = [
         m
-        for m in get_body_metrics(limit=120, db_path=config.database_path)
+        for m in get_body_metrics(
+            limit=120, db_path=config.database_path, user_id=user_id
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=120, db_path=config.database_path)
+        for log in get_daily_logs(
+            limit=120, db_path=config.database_path, user_id=user_id
+        )
         if log["date"] >= cutoff
     ]
 
     # Also fetch training history for the last 60 days
     all_history = get_progress_history(
-        limit_per_exercise=60, db_path=config.database_path
+        limit_per_exercise=60,
+        db_path=config.database_path,
+        user_id=user_id,
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -114,7 +142,7 @@ def generate_weekly_correlations(config: Config) -> None:
         "exercise_history": filtered_history,
     }
 
-    prompt = f"""You are an elite data-driven strength coach and analyst. 
+    prompt = f"""You are an elite data-driven strength coach and analyst.
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
 Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
@@ -122,7 +150,7 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(data, indent=2)}
 
-Analyze this data and produce a "Deep Correlation Engine" report. 
+Analyze this data and produce a "Deep Correlation Engine" report.
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
 """
@@ -130,7 +158,7 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path)
+            save_deep_correlation(text, db_path=config.database_path, user_id=user_id)
             logger.info(
                 "Weekly deep correlation generated successfully via %s.",
                 provider.name(),
@@ -142,10 +170,14 @@ Use Markdown format. Output the Markdown report directly.
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--daily", action="store_true", help="Generate daily insight header"
+        "--daily",
+        action="store_true",
+        help="Generate daily insight header",
     )
     parser.add_argument(
-        "--weekly", action="store_true", help="Generate weekly deep correlations"
+        "--weekly",
+        action="store_true",
+        help="Generate weekly deep correlations",
     )
     args = parser.parse_args()
 
