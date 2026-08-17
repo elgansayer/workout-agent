@@ -13,11 +13,11 @@ from telegram_notifier import (
 )
 
 
-def test_short_message_is_single_chunk():
+def test_short_message_is_single_chunk() -> None:
     assert split_message("hello world") == ["hello world"]
 
 
-def test_split_respects_limit():
+def test_split_respects_limit() -> None:
     text = "\n".join(f"line {i}" for i in range(100))
     chunks = split_message(text, limit=40)
     assert len(chunks) > 1
@@ -26,18 +26,18 @@ def test_split_respects_limit():
     assert "\n".join(chunks) == text
 
 
-def test_split_hard_splits_overlong_line():
+def test_split_hard_splits_overlong_line() -> None:
     text = "x" * 90
     chunks = split_message(text, limit=40)
     assert all(len(chunk) <= 40 for chunk in chunks)
     assert "".join(chunks) == text
 
 
-def test_escape_markdown_v2_escapes_reserved_chars():
+def test_escape_markdown_v2_escapes_reserved_chars() -> None:
     assert escape_markdown_v2("a.b-c!") == "a\\.b\\-c\\!"
 
 
-def test_escape_markdown_v2_leaves_plain_text():
+def test_escape_markdown_v2_leaves_plain_text() -> None:
     assert escape_markdown_v2("hello world") == "hello world"
 
 
