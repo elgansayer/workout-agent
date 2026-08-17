@@ -164,6 +164,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #514 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly dead-code sweep #505 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
@@ -230,6 +231,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (docker-compose.portainer.yml has no Portainer-agent service, confirmed
   2026-08-08, #684).~~ ✅ Resolved.
 
+- **Test coverage audit** (last updated 2026-08-06, re-verified
+  2026-08-06, re-verified 2026-08-07): all source modules have
+  corresponding test files. The full test suite stands at 569 passing
+  tests covering 30 test modules. Zero coverage gaps — every source
+  module has a corresponding test file. All verification gates clean
+  (compileall, ruff, pytest, mypy, import-sanity). Hourly test watch
+  #514 confirmed no drift; all gates
 - **Test coverage audit** (last updated 2026-08-07, re-verified
   2026-08-07): all source modules have corresponding test files. The
   full test suite stands at 569 passing tests covering 31 test modules.
