@@ -5,8 +5,10 @@ RUN_AT times, and dispatches due coaching runs (`main.py`) and insight jobs
 (`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is isolated so
 one user's failures do not block another's.
 
-Also runs the hourly dead-code & orphaned-module sweep (`dead_code_sweep.py`)
-and commit-hygiene audit (`commit_hygiene.py`) once per hour.
+Also runs hourly maintenance sweeps once per hour:
+* `dead_code_sweep.py` — catches orphaned modules early.
+* `commit_hygiene.py` — checks git history hygiene (.gitignore coverage,
+  sensitive files, large binaries, commit-message quality).
 
 Designed to be the single long-running process inside the agent container.
 MODE=once / MODE=preview are handled by docker-entrypoint.sh before this
@@ -132,6 +134,25 @@ def _run_commit_hygiene() -> bool:
         return False
 
 
+def _run_connector_health() -> bool:
+    """Run the daily connector health check.
+
+    Uses ``--create-issues`` to file GitHub issues for any findings.  Returns
+    True on success (exit 0 means clean).
+    """
+    logger.info("Running daily connector health check ...")
+    try:
+        subprocess.run(
+            [sys.executable, "connector_health.py", "--create-issues"],
+            check=False,  # exit 1 means findings found, which is informational
+            timeout=60,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("Connector health check timed out")
+        return False
+
+
 def _run_dead_code_sweep() -> bool:
     """Run the hourly dead-code & orphaned-module sweep.
 
@@ -148,6 +169,25 @@ def _run_dead_code_sweep() -> bool:
         return True
     except subprocess.TimeoutExpired:
         logger.error("Dead-code sweep timed out")
+        return False
+
+
+def _run_commit_hygiene() -> bool:
+    """Run the hourly commit hygiene sweep.
+
+    Uses ``--create-issues`` to file GitHub issues for any security findings
+    that need human review.  Returns True on success.
+    """
+    logger.info("Running commit hygiene sweep ...")
+    try:
+        subprocess.run(
+            [sys.executable, "commit_hygiene.py", "--create-issues"],
+            check=False,  # exit 1 means issues found, which is informational
+            timeout=120,
+        )
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("Commit hygiene sweep timed out")
         return False
 
 
@@ -184,13 +224,15 @@ def run_scheduler() -> None:
     # so they fire at most once per UTC day / per Sunday.
     last_daily_date: str = ""
     last_weekly_date: str = ""
-    # Track the last hour we ran the dead-code sweep (fires once per hour).
+    # Track the last hour we ran the hourly sweeps (fires once per hour).
     last_sweep_hour: str = ""
+    # Track the last date we ran the connector health check (once per day).
+    last_health_date: str = ""
 
     while True:
         now_utc = datetime.now(ZoneInfo("UTC"))
 
-        # --- Hourly housekeeping (fires once per hour) ---
+        # --- Hourly maintenance sweeps (fire once per hour) ---
         current_hour = now_utc.strftime("%Y-%m-%dT%H")
         if current_hour != last_sweep_hour:
             try:
@@ -200,8 +242,17 @@ def run_scheduler() -> None:
             try:
                 _run_commit_hygiene()
             except Exception:
-                logger.exception("Unhandled error in commit-hygiene audit")
+                logger.exception("Unhandled error in commit hygiene sweep")
             last_sweep_hour = current_hour
+
+        # --- Daily connector health check (fires once per UTC day) ---
+        today_utc_date = now_utc.strftime("%Y-%m-%d")
+        if today_utc_date != last_health_date:
+            try:
+                _run_connector_health()
+            except Exception:
+                logger.exception("Unhandled error in connector health check")
+            last_health_date = today_utc_date
 
         # --- Per-user coaching runs ---
         # Re-read users each loop so newly created accounts are picked up.
