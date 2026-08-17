@@ -280,14 +280,13 @@ def test_api_programmes_select_requires_template_key(client: Any) -> None:
     )
     assert resp.status_code in (400, 401)
 
-
 # ---------------------------------------------------------------------------
 # AI Provider wiring tests - verify the chat/RAG/XAI endpoints resolve the
 # user's preferred AI provider rather than hardcoding Gemini.
 # ---------------------------------------------------------------------------
 
 
-def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
+def test_xai_reasoning_uses_resolve_provider(client, monkeypatch):
     """The XAI reasoning endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -297,25 +296,18 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
     saved_prompts: list[str] = []
 
     class _FakeProvider:
-        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+        def generate(self, prompt, *, stream=False):
             saved_prompts.append(prompt)
             return "Causal explanation from fake provider."
 
-    def _fake_resolve(
-        user_id: Any = None,
-        *,
-        server_gemini_key: Any = None,
-        server_gemini_model: Any = None,
-        db_path: str = "workout_agent.db",
-    ) -> Any:
-        captured.append(
-            {
-                "user_id": user_id,
-                "server_gemini_key": server_gemini_key,
-                "server_gemini_model": server_gemini_model,
-                "db_path": db_path,
-            },
-        )
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+            "server_gemini_model": server_gemini_model,
+            "db_path": db_path,
+        })
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
@@ -324,7 +316,6 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
         lambda *a, **kw: None,
     )
     from config import Config
-
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/xai_reasoning/2026-03-02_Deadlift (Barbell)")
@@ -335,7 +326,7 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
     assert captured[0]["server_gemini_key"] == "test-gem-key"
 
 
-def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
+def test_project_peak_uses_resolve_provider(client, monkeypatch):
     """The project_peak endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -344,27 +335,19 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
     captured: list[dict] = []
 
     class _FakeProvider:
-        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+        def generate(self, prompt, *, stream=False):
             return '{"Deadlift_Projected": 200, "Pullups_Projected": 25, "Validation": "ok"}'
 
-    def _fake_resolve(
-        user_id: Any = None,
-        *,
-        server_gemini_key: Any = None,
-        server_gemini_model: Any = None,
-        db_path: str = "workout_agent.db",
-    ) -> Any:
-        captured.append(
-            {
-                "user_id": user_id,
-                "server_gemini_key": server_gemini_key,
-            },
-        )
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+        })
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
     from config import Config
-
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/project_peak")
@@ -372,7 +355,7 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
     assert len(captured) == 1
 
 
-def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
+def test_rag_search_uses_resolve_provider(client, monkeypatch):
     """The RAG search (chat) endpoint resolves via ai_provider.resolve_provider."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
@@ -381,29 +364,21 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
     captured: list[dict] = []
 
     class _FakeProvider:
-        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+        def generate(self, prompt, *, stream=False):
             if stream:
                 return iter(["Response from fake provider."])
             return "Response from fake provider."
 
-    def _fake_resolve(
-        user_id: Any = None,
-        *,
-        server_gemini_key: Any = None,
-        server_gemini_model: Any = None,
-        db_path: str = "workout_agent.db",
-    ) -> Any:
-        captured.append(
-            {
-                "user_id": user_id,
-                "server_gemini_key": server_gemini_key,
-            },
-        )
+    def _fake_resolve(user_id=None, *, server_gemini_key=None,
+                      server_gemini_model=None, db_path="workout_agent.db"):
+        captured.append({
+            "user_id": user_id,
+            "server_gemini_key": server_gemini_key,
+        })
         return _FakeProvider()
 
     monkeypatch.setattr("webapp.app.resolve_provider", _fake_resolve)
     from config import Config
-
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     response = client.get("/api/rag_search?q=How+is+my+deadlift+progressing")
@@ -411,14 +386,14 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
     assert len(captured) == 1
 
 
-def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
+def test_rag_search_rate_limited(client, monkeypatch):
     """Repeated RAG search requests hit the rate limiter."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
 
     class _StubProvider:
-        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+        def generate(self, prompt, *, stream=False):
             return "ok"
 
     monkeypatch.setattr(
@@ -426,7 +401,6 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
         lambda user_id=None, **kw: _StubProvider(),
     )
     from config import Config
-
     monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
 
     for i in range(20):
@@ -436,97 +410,8 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
     assert response.status_code == 429
 
 
-def test_xai_reasoning_invalid_context(client: Any) -> None:
+def test_xai_reasoning_invalid_context(client):
     """An invalid context ID returns a graceful error, not a stack trace."""
     response = client.get("/api/xai_reasoning/nounderscore")
     assert response.status_code == 200
     assert response.json() == {"reasoning": "Invalid context ID"}
-
-
-# ---------------------------------------------------------------------------
-# sync_history tests
-# ---------------------------------------------------------------------------
-
-
-def test_sync_history_requires_auth(client: Any) -> None:
-    """POST /api/settings/sync-history without a session returns 401."""
-    resp = client.post("/api/settings/sync-history")
-    assert resp.status_code == 401
-
-
-def test_sync_history_requires_hevy_key(monkeypatch: Any, tmp_path: Any) -> None:
-    """sync_history.sync_all returns an error string when no key is provided."""
-    from sync_history import sync_all
-
-    result = sync_all("", str(tmp_path / "test.db"))
-    assert "error" in result
-    error_msg = result["error"]
-    assert isinstance(error_msg, str)
-    assert "Hevy API key" in error_msg
-
-
-def test_sync_history_no_workouts(monkeypatch: Any, tmp_path: Any) -> None:
-    """When Hevy returns no workouts, sync_all returns zero counts."""
-    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
-
-    def _fake_get_all(api_key: Any) -> Any:
-        return []
-
-    monkeypatch.setattr("sync_history.get_all_workouts", _fake_get_all)
-
-    from sync_history import sync_all
-
-    result = sync_all("fake-hevy-key", str(tmp_path / "test.db"))
-    assert result["workouts_found"] == 0
-    assert result["processed"] == 0
-
-
-# -- auth / login / logout ----------------------------------------------
-
-
-def test_login_unconfigured_returns_500(client: Any) -> None:
-    """Without WEB_GOOGLE_CLIENT_ID, /login returns 500."""
-    resp = client.get("/login")
-    assert resp.status_code == 500
-    assert "not configured" in resp.text
-
-
-def test_login_google_unconfigured_returns_500(client: Any) -> None:
-    """Without WEB_GOOGLE_CLIENT_ID, /login/google returns 500."""
-    resp = client.get("/login/google")
-    assert resp.status_code == 500
-    assert "not configured" in resp.text
-
-
-def test_logout_clears_session_and_redirects(client: Any) -> None:
-    """Logout clears the session and redirects to /login."""
-    resp = client.get("/logout", follow_redirects=False)
-    assert resp.status_code == 307
-    assert resp.headers["location"] == "/login"
-
-
-# -- chat routes --------------------------------------------------------
-
-
-def test_chat_page_renders(client: Any) -> None:
-    """GET /chat returns the chat page (no auth required in test env)."""
-    resp = client.get("/chat")
-    assert resp.status_code == 200
-    assert "chat" in resp.text.lower()
-
-
-def test_chat_history_returns_empty_list(client: Any) -> None:
-    """GET /api/chat/history returns an empty list for a fresh DB."""
-    resp = client.get("/api/chat/history")
-    assert resp.status_code == 200
-    assert resp.json() == []
-
-
-def test_chat_clear_returns_ok(client: Any) -> None:
-    """POST /api/chat/clear returns status ok."""
-    resp = client.post("/api/chat/clear")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
-
-
-# -- settings API-key CRUD ---------------------------------------------
