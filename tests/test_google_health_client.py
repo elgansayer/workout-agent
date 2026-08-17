@@ -340,3 +340,48 @@ def test_refresh_tokens_non_object_json(
     )
     result = google_health_client._refresh_tokens("id", "secret", "token")
     assert result is None
+
+
+def test_latest_value_null_datapoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: dataPoints=null in the API response must not crash _latest_value."""
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({"dataPoints": None}),
+    )
+    result = google_health_client._latest_value(
+        "a", "body-fat", "bodyFat", "percentage"
+    )
+    assert result is None
+
+
+def test_latest_value_non_list_datapoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: non-list dataPoints must return None, not crash."""
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({"dataPoints": "not_a_list"}),
+    )
+    result = google_health_client._latest_value(
+        "a", "body-fat", "bodyFat", "percentage"
+    )
+    assert result is None
+
+
+def test_fetch_body_metrics_null_datapoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: dataPoints=null in fetch_body_metrics must not crash."""
+    monkeypatch.setattr(
+        requests,
+        "get",
+        lambda url, **kwargs: _FakeResponse({"dataPoints": None}),
+    )
+    result = google_health_client._latest_value(
+        "a", "body-fat", "bodyFat", "percentage"
+    )
+    assert result is None
