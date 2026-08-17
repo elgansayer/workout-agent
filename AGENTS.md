@@ -223,6 +223,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.
+- **Two independent, hand-rolled scheduling loops in one container**
+  (`docker-entrypoint.sh`'s bash sleep-loop and the old `insight_scheduler.py`
+  Python sleep-loop) have been consolidated into a single unified `scheduler.py`
+  that supports per-user timezones (PR #TBD).
+  `tests/test_scheduler.py` covers the scheduler (18 tests).
 - **Scheduler consolidated.** The dual sleep-loop architecture (bash
   `docker-entrypoint.sh` + Python `insight_scheduler.py`) has been replaced
   by a unified `scheduler.py` that iterates per-user run times. The
@@ -264,6 +269,18 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (docker-compose.portainer.yml has no Portainer-agent service, confirmed
   2026-08-08, #684).~~ ✅ Resolved.
 
+- **Test coverage gaps** are now closed on all previously-uncovered modules.
+  Every module in the codebase has a corresponding `tests/test_*.py` file
+  (28 test modules, 418 tests passing as of 2026-08-05). Previously-gapped
+  modules that are now covered: `programme_inference.py`, `hevy_reader.py`,
+  `insight_cron.py`, `scheduler.py` (was `insight_scheduler.py`), `main.py`,
+  `sync_history.py`, `ai_widgets.py`, `weather.py`.
+  Now-covered modules:
+  `tests/test_ai_provider.py` (7 tests, PR #85),
+  `tests/test_gemini_engine.py` (32 tests, PR #164),
+  `tests/test_encryption.py` (PR #146),
+  `tests/test_config.py` (PR #146),
+  `tests/test_scheduler.py` (18 tests, PR #227).
 - **Test coverage gaps** remain on the following modules (any task that
   touches these should add tests as part of the same change, not as a
   follow-up): `programme_inference.py`, `hevy_reader.py`,
