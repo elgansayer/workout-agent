@@ -58,6 +58,7 @@
             </button>
             {% if user_keys.get('hevy', {}).get('has_key') %}
             <button class="btn btn-ghost btn-sm" onclick="verifyHevy()">Verify</button>
+            <button class="btn btn-ghost btn-sm" onclick="syncHistory()">Sync History</button>
             <button class="btn btn-ghost btn-sm btn-danger" onclick="deleteKey('hevy')">Remove</button>
             {% endif %}
         </div>
@@ -178,13 +179,15 @@
 
     <div class="pref-form">
         <div class="pref-group">
-            <label class="pref-label">Goals</label>
-            <div class="chip-select" id="goals-select">
+            <label class="pref-label" id="goals-label">Goals</label>
+            <div class="chip-select" id="goals-select" role="group" aria-labelledby="goals-label">
                 {% set user_goals = user_prefs.get('goals', []) %}
                 {% for goal in ['strength', 'hypertrophy', 'fat_loss', 'endurance', 'general_fitness', 'powerlifting', 'bodybuilding'] %}
                 <button
                     class="chip-option {{ 'selected' if goal in user_goals }}"
+                    aria-pressed="{{ 'true' if goal in user_goals else 'false' }}"
                     data-value="{{ goal }}"
+                    aria-pressed="{{ 'true' if goal in user_goals else 'false' }}"
                     onclick="toggleChip(this)"
                 >{{ goal|replace('_', ' ')|title }}</button>
                 {% endfor %}
@@ -192,12 +195,14 @@
         </div>
 
         <div class="pref-group">
-            <label class="pref-label">Experience Level</label>
-            <div class="chip-select" id="experience-select">
+            <label class="pref-label" id="experience-label">Experience Level</label>
+            <div class="chip-select" id="experience-select" role="group" aria-labelledby="experience-label">
                 {% for level in ['beginner', 'intermediate', 'advanced'] %}
                 <button
                     class="chip-option {{ 'selected' if level == user_prefs.get('experience_level', 'intermediate') }}"
+                    aria-pressed="{{ 'true' if level == user_prefs.get('experience_level', 'intermediate') else 'false' }}"
                     data-value="{{ level }}"
+                    aria-pressed="{{ 'true' if level == user_prefs.get('experience_level', 'intermediate') else 'false' }}"
                     onclick="selectSingle(this, 'experience-select')"
                 >{{ level|title }}</button>
                 {% endfor %}
@@ -314,13 +319,37 @@ async function verifyHevy() {
     }
 }
 
+async function syncHistory() {
+    if (!confirm('This will DELETE all local workout_history and exercise_progress data, then rebuild them from your Hevy account. This cannot be undone. Continue?')) return;
+    showStatus('hevy-status', 'Syncing history from Hevy... (this may take a while)', false);
+    try {
+        const res = await fetch('/api/settings/sync-history', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+        });
+        const data = await res.json();
+        if (res.ok) {
+            showStatus('hevy-status', `✓ Synced! ${data.processed} of ${data.workouts_found} workouts processed.`, false);
+        } else {
+            showStatus('hevy-status', data.detail || 'Sync failed.', true);
+        }
+    } catch (e) {
+        showStatus('hevy-status', 'Network error.', true);
+    }
+}
+
 function toggleChip(el) {
     el.classList.toggle('selected');
+    el.setAttribute('aria-pressed', el.classList.contains('selected') ? 'true' : 'false');
 }
 
 function selectSingle(el, groupId) {
-    document.querySelectorAll(`#${groupId} .chip-option`).forEach(c => c.classList.remove('selected'));
+    document.querySelectorAll(`#${groupId} .chip-option`).forEach(c => {
+        c.classList.remove('selected');
+        c.setAttribute('aria-pressed', 'false');
+    });
     el.classList.add('selected');
+    el.setAttribute('aria-pressed', 'true');
 }
 
 async function savePreferences() {
