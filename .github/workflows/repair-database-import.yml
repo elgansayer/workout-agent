@@ -1,0 +1,49 @@
+name: Repair Database Import
+
+on:
+  push:
+    branches:
+      - fix/webapp-main-integrity
+    paths:
+      - .github/workflows/repair-database-import.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repair branch
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Add the missing TypedDict import exactly once
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("database.py")
+          text = path.read_text()
+          old = "from typing import Any\n"
+          new = "from typing import Any, TypedDict\n"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(
+                  f"expected exactly one database typing import, found {count}"
+              )
+          path.write_text(text.replace(old, new, 1))
+          PY
+          python -m py_compile database.py
+
+      - name: Commit repair and remove this one-time workflow
+        run: |
+          rm .github/workflows/repair-database-import.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add database.py .github/workflows/repair-database-import.yml
+          git diff --cached --check
+          git commit -m "fix: restore TypedDict database import"
+          git push origin HEAD:fix/webapp-main-integrity
