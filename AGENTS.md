@@ -168,6 +168,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly test watch #565 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly dead-code sweep #552 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly commit hygiene #580 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #630 checked 2026-08-07, hourly test watch #629 checked 2026-08-07, hourly commit hygiene #631 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #642 checked 2026-08-07, hourly test watch #629 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07, hourly lint & format fix #651 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #668 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-08, daily docs sync #684 checked 2026-08-08, hourly dead-code sweep #688 checked 2026-08-08, hourly test watch #687 checked 2026-08-08)
 
 - **No real data isolation between users** (§2). Logging in as a different
@@ -220,6 +228,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   clean (compileall, ruff, pytest, mypy, import-sanity). Hourly test
   watch #565 confirmed no drift; all gates green with no failures to
   resolve and zero test coverage gaps.
+2026-08-07 by hourly test watch #653): all 609 tests passing,
+  2026-08-07): all source modules have corresponding test files. The
+  full test suite stands at 533 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #543 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
 - **Test coverage audit** (last updated 2026-08-08, re-verified
   2026-08-08 by hourly dead-code sweep #688, hourly lint #685, hourly
   test watch #706, and hourly test watch #717): all 611 tests passing,
@@ -228,6 +243,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
   advisory clean). No drift between code and test suite.
 
+- **Hourly dead-code sweep #642 verified (2026-08-07).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (573/573), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on all 28 source files).
+- **Hourly dead-code sweep #654 re-verified (2026-08-07).** `dead_code_sweep.py` executed
+- **Hourly dead-code sweep #668 re-verified (2026-08-07).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on all 32 source files).
 - **Hourly dead-code sweep #593 verified (2026-08-07).** `dead_code_sweep.py`
   executed clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Entry-point
@@ -267,6 +293,20 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `commit_hygiene.py` and `connector_health.py` invoked by `scheduler.py`
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
+
+- **Hourly dead-code sweep #552 run 2026-08-07.** `dead_code_sweep.py` confirmed
+  clean via `--json` output (status: "clean", zero orphans). All 27 top-level
+  modules and 3 webapp sub-modules confirmed wired. `programme_inference.py`
+  and `hevy_reader.py` remain properly wired through `webapp/app.py` (PR #142).
+  Full verification gate passed: ruff (clean), pytest (539/539), dead_code_sweep
+  (zero orphans), mypy (clean, 31 source files). Stale pycache cleaned: 0.
+  No newly orphaned or truly-dead modules found.
+- **Hourly commit hygiene #631 re-verified (2026-08-07).** `commit_hygiene.py` executed
+  clean via `--json` output (status: "clean", zero findings). All 40 hygiene tests
+  passing. Full verification gate passed: ruff (clean), pytest (609/609), mypy (clean).
+  No sensitive files committed (`.env`, `.db`, `.sqlite3`), `.gitignore` covers all
+  required patterns, no large files (>1 MB) tracked outside `data/`. Audit report:
+  `.agents/hygiene-audit-2026-08-07-run5.md`.
 
 
 
