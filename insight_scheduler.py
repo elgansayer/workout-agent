@@ -1,4 +1,7 @@
-"""Deprecated -- scheduling has moved to scheduler.py.
+import logging
+import subprocess
+import time
+from datetime import datetime, timedelta
 
 This module exists as a backward-compatibility shim.  When invoked directly
 it delegates to the unified scheduler.

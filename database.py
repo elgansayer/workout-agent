@@ -9,11 +9,10 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
-import time
 from collections.abc import Iterator
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
@@ -470,10 +469,7 @@ def get_recent_hevy_logs(
 
 
 def save_progress(
-    summary: WorkoutSummary | None,
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
+    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary.
 

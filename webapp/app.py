@@ -24,14 +24,12 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
-if TYPE_CHECKING:
-    from programme_inference import InferredProgramme
-
+import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
@@ -48,14 +46,11 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import AIProvider, available_providers
-from ai_resolver import resolve_provider
+from ai_provider import available_providers
 from config import Config
 from database import (
-    check_rate_limit,
     clear_chat_messages,
     delete_user_api_key,
-    get_active_programme,
     get_body_metrics,
     get_chat_messages,
     get_checkins,
@@ -66,7 +61,6 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
-    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -78,7 +72,6 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
@@ -132,6 +125,8 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
+    elif request.headers.get("x-real-ip"):
+        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
     else:
         real_ip = request.headers.get("x-real-ip")
         if real_ip:
@@ -547,8 +542,8 @@ def progress(request: Request) -> Any:
             for e in entries
         ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms_clean = [v for v in e1rms if v is not None]
-        best_e1rm: float | None = max(e1rms_clean) if e1rms_clean else None
+        e1rms_filtered = [v for v in e1rms if v is not None]
+        best_e1rm: float | None = max(e1rms_filtered) if e1rms_filtered else None
         charts_data.append(
             {
                 "name": name,
@@ -1135,11 +1130,12 @@ def project_peak(request: Request) -> dict[str, Any]:
 
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = response.text.strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
-        return cast(dict[str, Any], json.loads(text.strip()))
-    except Exception:  # noqa: BLE001
+        return json.loads(text.strip())
+    except Exception:
         return {"error": "Failed to project peak."}
 
 

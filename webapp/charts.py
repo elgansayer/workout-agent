@@ -13,8 +13,7 @@ from __future__ import annotations
 
 import html
 from collections.abc import Sequence
-from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from datetime import date, timedelta
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"

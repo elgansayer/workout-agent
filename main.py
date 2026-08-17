@@ -22,12 +22,10 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
-from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
-    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,

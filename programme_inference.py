@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from hevy_reader import (
     CompletedWorkout,
@@ -140,8 +140,8 @@ def _classify_routine_muscles(
                 counts.get(tmpl.primary_muscle_group, 0.0) + 1.0
             )
             for sec in tmpl.secondary_muscle_groups:
-                counts[sec] = counts.get(sec, 0.0) + 0.5
-    return sorted(counts, key=lambda k: counts[k], reverse=True)
+                counts[sec] += 0.5  # type: ignore[assignment]
+    return [muscle for muscle, _ in counts.most_common()]
 
 
 def _classify_split(days: list[TrainingDay]) -> str:

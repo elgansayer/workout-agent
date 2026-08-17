@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 # Colors
 ACCENT = "#4ade80"
 ACCENT_2 = "#38bdf8"

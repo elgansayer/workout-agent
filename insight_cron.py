@@ -5,7 +5,9 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
+
+import google.generativeai as genai
 
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
@@ -67,7 +69,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 {{"fatigue": "string", "wins_stalls": "string", "advice": "string"}}"""
 
     try:
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = (response.text or "").strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         text = text.strip()
