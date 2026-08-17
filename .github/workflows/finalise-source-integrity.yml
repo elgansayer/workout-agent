@@ -17,7 +17,7 @@ permissions:
 jobs:
   finalise:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Check out repair branch
         uses: actions/checkout@v6
@@ -59,6 +59,7 @@ jobs:
 
           database_path = Path("database.py")
           database = database_path.read_text(encoding="utf-8")
+
           old_progress = (
               "def save_progress(\n"
               "    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH\n"
@@ -74,8 +75,41 @@ jobs:
           )
           if database.count(old_progress) != 1:
               raise SystemExit("expected exactly one damaged save_progress signature")
+          database = database.replace(old_progress, new_progress)
+
+          old_chat = (
+              "def save_chat_message(role: str, content: str, "
+              "db_path: str = DEFAULT_DB_PATH) -> None:\n"
+          )
+          new_chat = (
+              "def save_chat_message(\n"
+              "    role: str,\n"
+              "    content: str,\n"
+              "    db_path: str = DEFAULT_DB_PATH,\n"
+              "    *,\n"
+              "    user_id: str | None = None,\n"
+              ") -> None:\n"
+          )
+          if database.count(old_chat) != 1:
+              raise SystemExit("expected exactly one damaged save_chat_message signature")
+          database = database.replace(old_chat, new_chat)
+
+          old_chat_values = (
+              "            (role, content, "
+              "datetime.now(tz=timezone.utc).isoformat()),\n"
+          )
+          new_chat_values = (
+              "            (\n"
+              "                role,\n"
+              "                content,\n"
+              "                datetime.now(tz=timezone.utc).isoformat(),\n"
+              "                user_id,\n"
+              "            ),\n"
+          )
+          if database.count(old_chat_values) != 1:
+              raise SystemExit("expected exactly one damaged chat insert values tuple")
           database_path.write_text(
-              database.replace(old_progress, new_progress),
+              database.replace(old_chat_values, new_chat_values),
               encoding="utf-8",
           )
           PY
@@ -83,7 +117,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
 
-      - name: Validate repaired source and focused routes
+      - name: Validate repaired source and web/database contracts
         env:
           APP_ENV: test
           ALLOW_ANONYMOUS_WEB: "1"
@@ -96,10 +130,7 @@ jobs:
           fi
           mapfile -d '' files < <(git ls-files -z '*.py')
           python -m py_compile "${files[@]}"
-          python -m pytest -q \
-            tests/test_webapp.py::test_google_health_disconnect_clears_token \
-            tests/test_webapp.py::test_api_programmes_select_requires_auth \
-            tests/test_webapp.py::test_rag_search_uses_resolve_provider
+          python -m pytest -q tests/test_webapp.py tests/test_database.py
 
       - name: Commit verified final repair
         shell: bash
