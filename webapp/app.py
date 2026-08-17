@@ -1079,6 +1079,7 @@ def checkins(request: Request) -> Any:
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
+    user_id = request.session.get("user_id")
     # context_id is expected to be {date}_{exercise_name}
     user_id = request.session.get("user_id")
 
@@ -1093,19 +1094,14 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    provider = resolve_provider(user_id, server_gemini_key=config.gemini_api_key)
 
     history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = (
-        str(provider.generate(prompt)).strip() or "Could not determine reasoning."
-    )
+    result = provider.generate(prompt)
+    assert isinstance(result, str), "streaming must not be used for xai_reasoning"
+    reasoning = (result or "Could not determine reasoning.").strip()
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
     return {"reasoning": reasoning}
@@ -1114,14 +1110,9 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    config = get_config()
     user_id = request.session.get("user_id")
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    config = get_config()
+    provider = resolve_provider(user_id, server_gemini_key=config.gemini_api_key)
 
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     dl_entries = series.get("Deadlift", [])
@@ -1129,7 +1120,9 @@ def project_peak(request: Request) -> dict[str, Any]:
 
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
-        text = str(provider.generate(prompt)).strip()
+        result = provider.generate(prompt)
+        assert isinstance(result, str), "streaming must not be used for project_peak"
+        text = result.strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         return cast(dict[str, Any], json.loads(text.strip()))
@@ -1168,15 +1161,10 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = request.session.get("user_id")
     config = get_config()
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    provider = resolve_provider(user_id, server_gemini_key=config.gemini_api_key)
 
     # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(limit=30, db_path=DB_PATH)
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
     biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
@@ -1223,14 +1211,12 @@ User's new message: {q}
 
 Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
 
-    def generate() -> Generator[str, None, None]:
+    def generate():
         collected: list[str] = []
         try:
-            stream = provider.generate(prompt, stream=True)
-            for chunk in stream:
-                if chunk:
-                    collected.append(str(chunk))
-                    yield str(chunk)
+            for chunk in provider.generate(prompt, stream=True):
+                collected.append(chunk)
+                yield chunk
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error during AI streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
