@@ -521,6 +521,17 @@ def dashboard(request: Request):
         request, "dashboard.html", _dashboard_context(user_id=user_id)
     )
 
+@app.get("/api/dashboard")
+def api_dashboard(request: Request) -> JSONResponse:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    from fastapi.encoders import jsonable_encoder
+    ctx = _dashboard_context(user_id=user_id)
+    return JSONResponse(content=jsonable_encoder(ctx))
+
 
 @app.get("/progress")
 def progress(request: Request) -> Any:
