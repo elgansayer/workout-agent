@@ -34,25 +34,50 @@ jobs:
             requirements.txt
             requirements-web.txt
 
-      - name: Align the provider call with the restored contract
+      - name: Align restored provider and persistence contracts
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          path = Path("webapp/app.py")
-          source = path.read_text(encoding="utf-8")
-          old = (
+          app_path = Path("webapp/app.py")
+          app = app_path.read_text(encoding="utf-8")
+          old_provider = (
               "        fallback_api_key=config.gemini_api_key,\n"
               "        fallback_model=config.gemini_model,\n"
           )
-          new = (
+          new_provider = (
               "        server_gemini_key=config.gemini_api_key,\n"
               "        server_gemini_model=config.gemini_model,\n"
           )
-          if source.count(old) != 1:
+          if app.count(old_provider) != 1:
               raise SystemExit("expected exactly one legacy provider call")
-          path.write_text(source.replace(old, new), encoding="utf-8")
+          app_path.write_text(
+              app.replace(old_provider, new_provider),
+              encoding="utf-8",
+          )
+
+          database_path = Path("database.py")
+          database = database_path.read_text(encoding="utf-8")
+          old_progress = (
+              "def save_progress(\n"
+              "    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH\n"
+              ") -> None:\n"
+          )
+          new_progress = (
+              "def save_progress(\n"
+              "    summary: WorkoutSummary | None,\n"
+              "    db_path: str = DEFAULT_DB_PATH,\n"
+              "    *,\n"
+              "    user_id: str | None = None,\n"
+              ") -> None:\n"
+          )
+          if database.count(old_progress) != 1:
+              raise SystemExit("expected exactly one damaged save_progress signature")
+          database_path.write_text(
+              database.replace(old_progress, new_progress),
+              encoding="utf-8",
+          )
           PY
 
       - name: Install dependencies
@@ -82,6 +107,6 @@ jobs:
           git rm .github/workflows/finalise-source-integrity.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add webapp/app.py
-          git commit -m "fix: align the web provider call with its restored contract"
+          git add webapp/app.py database.py
+          git commit -m "fix: align restored provider and persistence contracts"
           git push origin HEAD:fix/webapp-main-integrity
