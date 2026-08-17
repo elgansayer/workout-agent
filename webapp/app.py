@@ -23,6 +23,8 @@ import json
 import logging
 import os
 import secrets
+import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -46,7 +48,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers
+from ai_provider import AIProvider, available_providers, resolve_provider
 from config import Config
 from database import (
     clear_chat_messages,
@@ -95,7 +97,6 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     user_id = request.session.get("user_id") if hasattr(request, "session") else None
     return resolve_provider(
@@ -1203,11 +1204,11 @@ Respond naturally as Coach. If the question is about their training data, refere
     def generate():
         collected: list[str] = []
         try:
-            response = provider.generate(prompt, stream=True)
+            response = cast(Iterator[str], provider.generate(prompt, stream=True))
             for chunk in response:
-                if chunk.text:
-                    collected.append(chunk.text)
-                    yield chunk.text
+                if chunk:
+                    collected.append(chunk)
+                    yield chunk
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
@@ -1413,10 +1414,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
 @app.post("/google-health/disconnect")
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
-<<<<<<< HEAD
-=======
     _check_rate_limit(request, limit=5)
->>>>>>> main
     user_id = request.session.get("user_id")
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)

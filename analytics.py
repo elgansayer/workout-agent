@@ -177,11 +177,6 @@ def muscle_group_for(name: str) -> str:
     # Generator creation has measurable overhead for small collections.
     # Impact: ~60% reduction in execution time for high-frequency categorization.
     for group, keywords in _GROUP_RULES:
-<<<<<<< HEAD
-        # Bolt Optimization: Explode `any()` into a double for-loop to prevent
-        # creating a generator on every lookup, significantly speeding up classification.
-=======
->>>>>>> main
         for keyword in keywords:
             if keyword in lowered:
                 return group
