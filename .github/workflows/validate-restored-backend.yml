@@ -1,0 +1,61 @@
+name: Validate Restored Backend Contracts
+
+on:
+  push:
+    branches:
+      - fix/restore-green-backend-contracts
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  affected-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
+
+      - name: Reject unresolved merge markers
+        shell: bash
+        run: |
+          matches="$(git grep -nE '^(<<<<<<< .+|>>>>>>> .+)$' -- '*.py' '*.yml' '*.yaml' '*.toml' '*.json' '*.sh' || true)"
+          if [[ -n "$matches" ]]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+
+      - name: Compile all Python files
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Run current affected suites
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+          WEB_ALLOW_ANONYMOUS: "1"
+        run: >-
+          python -m pytest -q
+          tests/test_webapp.py
+          tests/test_database.py
+          tests/test_ai_provider.py
+          tests/test_insight_cron.py
+          tests/test_analytics.py
