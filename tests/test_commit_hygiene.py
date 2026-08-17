@@ -248,7 +248,7 @@ class TestCheckGitignore:
 
     def test_all_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gi = tmp_path / ".gitignore"
-        gi.write_text(self._BASE_PATTERNS)
+        gi.write_text("*.db\n.env\n__pycache__/\n.pytest_cache/\n.venv/\n")
         monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
         findings = commit_hygiene.check_gitignore()
         assert findings == []
