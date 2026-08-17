@@ -37,13 +37,16 @@ def _fernet() -> Fernet | None:
     if not _HAS_CRYPTOGRAPHY:
         logger.warning(
             "ENCRYPTION_KEY is set but the `cryptography` package is not installed. "
-            "API keys will be stored in PLAINTEXT. Run: pip install cryptography"
+            "API keys will be stored in PLAINTEXT. Run: pip install cryptography",
         )
         return None
     try:
         return Fernet(key.encode())
-    except Exception as exc:
-        logger.error("ENCRYPTION_KEY is invalid (%s). Keys will be stored in plaintext.", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "ENCRYPTION_KEY is invalid (%s). Keys will be stored in plaintext.",
+            exc,
+        )
         return None
 
 
@@ -71,6 +74,6 @@ def decrypt(ciphertext: str) -> str:
         return ciphertext
     try:
         return f.decrypt(ciphertext.encode()).decode()
-    except (InvalidToken, Exception):
+    except (InvalidToken, Exception):  # noqa: BLE001
         # The value was probably stored before encryption was enabled.
         return ciphertext

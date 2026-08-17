@@ -32,6 +32,7 @@ import sys
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any
 
 import requests
 
@@ -60,7 +61,7 @@ def build_authorize_url(
             # offline + consent guarantee a refresh token is returned.
             "access_type": "offline",
             "prompt": "consent",
-        }
+        },
     )
     return f"{AUTHORIZE_URL}?{query}"
 
@@ -71,7 +72,7 @@ def exchange_code(
     code: str,
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Swap an authorisation code for access and refresh tokens."""
     try:
         response = requests.post(
@@ -87,7 +88,11 @@ def exchange_code(
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            print("Google returned non-object token JSON.", file=sys.stderr)
+            return None
+        return data
     except requests.RequestException as exc:
         print(f"Token exchange failed: {exc}", file=sys.stderr)
         if exc.response is not None:
@@ -118,14 +123,19 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         )
         self.wfile.write(body.encode("utf-8"))
 
-    def log_message(self, *_args) -> None:  # silence the default logging
+    def log_message(
+        self,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:  # silence the default logging
         pass
 
 
 def _wait_for_code(redirect_uri: str) -> tuple[str | None, str | None]:
     parsed = urllib.parse.urlparse(redirect_uri)
     server = HTTPServer(
-        (parsed.hostname or "localhost", parsed.port or 80), _CallbackHandler
+        (parsed.hostname or "localhost", parsed.port or 80),
+        _CallbackHandler,
     )
     print("Waiting for Google to redirect back...")
     server.handle_request()  # blocks until the single callback arrives
@@ -144,8 +154,7 @@ def main() -> int:
     client_id = os.environ.get("GOOGLE_HEALTH_CLIENT_ID", "").strip()
     client_secret = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
     redirect_uri = (
-        os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
-        or DEFAULT_REDIRECT_URI
+        os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip() or DEFAULT_REDIRECT_URI
     )
 
     if not client_id or not client_secret:
@@ -165,7 +174,7 @@ def main() -> int:
     print(url, "\n")
     try:
         webbrowser.open(url)
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
     code, returned_state = _wait_for_code(redirect_uri)
@@ -194,7 +203,7 @@ def main() -> int:
         db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
         set_meta("google_health_refresh_token", refresh_token, db_path)
         stored = f" (also saved to {db_path})"
-    except Exception:
+    except Exception:  # noqa: BLE001
         stored = ""
 
     print("\nSuccess! Add this line to your .env:\n")

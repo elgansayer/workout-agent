@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 
 SPLIT_NAME = "Hybrid Powerbuilding (12-week periodised)"
 REST_DAY_FOCUS = "Rest & Recovery"
@@ -20,31 +20,31 @@ BLOCK_WEEKS = 4
 
 # Non-negotiable coaching rules the agent must always honour.
 COACHING_RULES = [
-    "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "
+    "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "  # noqa: ISC004
     "training everything else for hypertrophy.",
-    "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "
+    "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "  # noqa: ISC004
     "intensity of the main lifts to the current block.",
-    "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "
+    "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "  # noqa: ISC004
     "set the moment form or bar speed breaks down. Trap bar is a valid joint-friendly "
     "deadlift swap.",
-    "Accessories: strict 3-second negative on every rep, taken close to failure. No "
+    "Accessories: strict 3-second negative on every rep, taken close to failure. No "  # noqa: ISC004
     "momentum.",
-    "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "
+    "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "  # noqa: ISC004
     "press instead.",
     "No stomach vacuums. Train abs for mass with progressive overload.",
-    "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "
+    "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "  # noqa: ISC004
     "the shoulders and elbows (Thai boxing and bouldering add load).",
-    "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "
+    "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "  # noqa: ISC004
     "six-pack needs a sustained caloric deficit.",
-    "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "
+    "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "  # noqa: ISC004
     "days (about 70% around the workout), moderate on leg days, low carb with higher "
     "healthy fats on the lighter upper days and rest days.",
-    "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "
+    "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "  # noqa: ISC004
     "20-30 min of joint-friendly Zone 2 (stationary bike or swim) three to four times "
     "a week. No stair-master or running (bad toes).",
-    "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "
+    "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "  # noqa: ISC004
     "joints, and Magnesium Glycinate before bed.",
-    "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "
+    "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "  # noqa: ISC004
     "top deadlift and pull-up set each week.",
     "Use British English spelling (e.g. programme). Never use the em dash.",
 ]
@@ -98,13 +98,15 @@ BLOCKS: dict[int, Block] = {
         weeks="1-4",
         focus="Rebuild strength capacity and high-volume hypertrophy.",
         deadlift=LiftScheme(
-            4, "5-8",
+            4,
+            "5-8",
             "Moderate-heavy, leave about 2 reps in the tank. Trap bar is a fine "
             "joint-friendly swap.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "6-10",
+            4,
+            "6-10",
             "Bodyweight, stop 1 rep shy of failure. Use a band only if you cannot "
             "hit 6 clean reps.",
             _PULL_UP,
@@ -117,12 +119,14 @@ BLOCKS: dict[int, Block] = {
         weeks="5-8",
         focus="Peak strength development.",
         deadlift=LiftScheme(
-            5, "3-5",
+            5,
+            "3-5",
             "Heavy, push the last set close to failure with a hard brace.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "4-6",
+            4,
+            "4-6",
             "Add a weight belt, leave about 1 rep in reserve.",
             _PULL_UP_WEIGHTED,
         ),
@@ -134,13 +138,15 @@ BLOCKS: dict[int, Block] = {
         weeks="9-12",
         focus="Competition prep, fat loss, and a strength display.",
         deadlift=LiftScheme(
-            5, "1-2",
+            5,
+            "1-2",
             "Ramp over the first sets to a heavy 1-2 rep max. Stop if bar speed or "
             "form breaks down.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "3",
+            4,
+            "3",
             "Weighted 3-rep max, ramp up over the first two sets.",
             _PULL_UP_WEIGHTED,
         ),
@@ -158,33 +164,81 @@ def block_for_week(week: int) -> Block:
 def week_in_cycle(start: date, today: date | None = None) -> int:
     """Return the current week (1-12) given the programme start date."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     weeks_elapsed = max((today - start).days // 7, 0)
     return weeks_elapsed % CYCLE_WEEKS + 1
 
 
 # Accessory pools. Main lifts are added on top of the back day per block.
 _BACK_DL_CHEST = [
-    Exercise("Incline Dumbbell Flyes", 4, "12-15", "pre-exhaust upper chest", "D3E2AB55"),
-    Exercise("Incline Smith Machine Press", 3, "10-12", "focus on the top half", "3A6FA3D1"),
-    Exercise("Chest-Supported T-Bar Rows", 3, "10-12", "mid-back thickness", "08A2974E"),
+    Exercise(
+        "Incline Dumbbell Flyes",
+        4,
+        "12-15",
+        "pre-exhaust upper chest",
+        "D3E2AB55",
+    ),
+    Exercise(
+        "Incline Smith Machine Press",
+        3,
+        "10-12",
+        "focus on the top half",
+        "3A6FA3D1",
+    ),
+    Exercise(
+        "Chest-Supported T-Bar Rows",
+        3,
+        "10-12",
+        "mid-back thickness",
+        "08A2974E",
+    ),
 ]
 
 _SHOULDERS_ARMS = [
     Exercise("Cable Lateral Raises", 5, "15-20", "maximum shoulder width", "BE289E45"),
     Exercise("Reverse Pec Deck Flyes", 4, "15", "rear delts", "D8281C62"),
-    Exercise("Incline Dumbbell Curls", 4, "12", "deep stretch, bicep long head", "8BAB2735"),
-    Exercise("Tricep Overhead Cable Extensions", 4, "12-15", "triceps long head", "B5EFBF9C"),
+    Exercise(
+        "Incline Dumbbell Curls",
+        4,
+        "12",
+        "deep stretch, bicep long head",
+        "8BAB2735",
+    ),
+    Exercise(
+        "Tricep Overhead Cable Extensions",
+        4,
+        "12-15",
+        "triceps long head",
+        "B5EFBF9C",
+    ),
     Exercise("Reverse-Grip Cable Curls", 3, "15", "brachialis and forearm", "9F48F858"),
 ]
 
 _LEGS_ABS = [
     Exercise("Lying Leg Curls", 4, "12", "hamstring isolation", "B8127AD1"),
     Exercise("Leg Press", 4, "10-12", "feet flat, 3-second negative", "C7973E0E"),
-    Exercise("Leg Extensions", 3, "12", "quad sweep; toe-friendly split-squat swap", "75A4F6C4"),
-    Exercise("Leg Press Calf Raises", 4, "15-20", "feet flat, gastrocnemius", "91237BDD"),
+    Exercise(
+        "Leg Extensions",
+        3,
+        "12",
+        "quad sweep; toe-friendly split-squat swap",
+        "75A4F6C4",
+    ),
+    Exercise(
+        "Leg Press Calf Raises",
+        4,
+        "15-20",
+        "feet flat, gastrocnemius",
+        "91237BDD",
+    ),
     Exercise("Hanging Leg Raises", 4, "12-15", "lower abs", "F8356514"),
-    Exercise("Kneeling Cable Crunches", 4, "10-12", "upper abs, heavy resistance", "23A48484"),
+    Exercise(
+        "Kneeling Cable Crunches",
+        4,
+        "10-12",
+        "upper abs, heavy resistance",
+        "23A48484",
+    ),
 ]
 
 # Day-of-cycle (1-6) to session focus. Days 1-3 repeat as 4-6.
@@ -262,7 +316,7 @@ def is_rest_day(weekday: int) -> bool:
 def today_day(today: date | None = None) -> int | None:
     """Return today's cycle day (1-6), or None if today is a rest day."""
     if today is None:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
     return day_for_weekday(today.weekday())
 
 

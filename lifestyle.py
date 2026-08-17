@@ -21,7 +21,7 @@ PROTEIN_G_PER_KG = 2.2
 
 # Carb tiers by cycle day. Heavy pulling days are fully fuelled, leg days run
 # moderate, and the lighter upper days and rest days run low carb / higher fats.
-_HIGH_CARB_DAYS = {1, 4}      # Back & Deadlift: glycogen for heavy pulls
+_HIGH_CARB_DAYS = {1, 4}  # Back & Deadlift: glycogen for heavy pulls
 _MODERATE_CARB_DAYS = {3, 6}  # Legs & Abs: the leg press still needs fuel
 
 # Pillar 2: cardio and NEAT.
@@ -39,12 +39,12 @@ SLEEP_TARGET_HOURS = 8
 class DailyGuidance:
     """The lifestyle pillars resolved for a single day."""
 
-    training: str                # which session to train today
-    carb_tier: str               # "high" | "moderate" | "low"
+    training: str  # which session to train today
+    carb_tier: str  # "high" | "moderate" | "low"
     nutrition: str
     cardio: str
     recovery: str
-    protein_target: str | None   # set only when bodyweight is known
+    protein_target: str | None  # set only when bodyweight is known
 
     def as_lines(self) -> list[str]:
         lines = [
@@ -118,7 +118,9 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None
+    day: int | None,
+    is_rest: bool,
+    recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
     """Resolve the lifestyle pillars for the given cycle day.
 

@@ -149,18 +149,18 @@ def parse_workout(
                 top_reps=top_reps,
                 sets=count,
                 hit_top_of_range=hit_top,
-            )
+            ),
         )
 
     if not summaries:
         return None
 
     title = (workout.get("title") or "Workout").strip()
-    
+
     start_str = workout.get("start_time")
     end_str = workout.get("end_time")
     when = start_str or end_str
-    
+
     duration = None
     if start_str and end_str:
         try:
@@ -169,16 +169,15 @@ def parse_workout(
             duration = int((e - s).total_seconds())
         except ValueError:
             pass
-            
+
     total_volume = sum(
-        (ex.top_weight_kg or 0.0) * (ex.top_reps or 0) * ex.sets 
-        for ex in summaries
+        (ex.top_weight_kg or 0.0) * (ex.top_reps or 0) * ex.sets for ex in summaries
     )
-            
+
     return WorkoutSummary(
-        title=title, 
-        date=when, 
+        title=title,
+        date=when,
         duration_seconds=duration,
         total_volume_kg=total_volume,
-        exercises=summaries
+        exercises=summaries,
     )

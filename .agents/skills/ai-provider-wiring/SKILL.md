@@ -10,10 +10,10 @@ description: 'Resolve a users chosen AI provider (Gemini/Claude/OpenAI/DeepSeek)
 `ai_provider.py` already defines a clean `AIProvider` ABC + `get_provider()`
 factory supporting Gemini/Claude/OpenAI/DeepSeek, and the Settings UI already
 lets a user save a key per provider plus a `preferred_ai`/`ai_model`
-preference. But per `AGENTS.md` §3/§7, nothing calls `get_provider()` outside
-`ai_provider.py` itself — every real generation call hardcodes
-`google.generativeai` against one shared server key. This skill is the
-standard pattern for closing that gap one call site at a time.
+preference. All call sites now use `resolve_provider()` or `get_provider()`
+(PRs #85, #164) — the last hardcoded `google.generativeai` import was
+removed. This skill is the reference for adding new AI generation call sites
+or providers correctly from the start.
 
 ## When to Use
 
@@ -31,6 +31,7 @@ standard pattern for closing that gap one call site at a time.
    ```python
    from ai_provider import get_provider
 
+
    def resolve_provider(user_id: str) -> AIProvider:
        prefs = database.get_user_preferences(user_id)
        provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
@@ -41,9 +42,7 @@ standard pattern for closing that gap one call site at a time.
            # provider — never silently use the server key for a provider
            # the user explicitly configured but whose key lookup failed.
            if provider_name != "gemini":
-               raise ValueError(
-                   f"No {provider_name} key configured for this user"
-               )
+               raise ValueError(f"No {provider_name} key configured for this user")
            api_key = config.gemini_api_key
        return get_provider(provider_name, api_key, model)
    ```
