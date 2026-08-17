@@ -7,7 +7,7 @@ import logging
 import os
 from typing import Any
 
-from ai_provider import AIProvider, get_provider
+from ai_provider import resolve_provider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -151,15 +151,19 @@ Use British English. Never use the em dash."""
 
 
 def generate_next_workout(
-    provider: AIProvider,
     day: int,
     week: int,
     block: Block,
+    *,
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error.
 
@@ -168,6 +172,12 @@ def generate_next_workout(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        provider = resolve_provider(
+            user_id,
+            server_gemini_key=server_gemini_key,
+            server_gemini_model=server_gemini_model,
+            db_path=db_path,
+        )
         prompt = _build_prompt(
             day,
             week,
@@ -221,8 +231,12 @@ Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
-    provider: AIProvider,
     recovery: dict[str, Any] | None = None,
+    *,
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error.
 
@@ -231,6 +245,12 @@ def generate_rest_day_message(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        provider = resolve_provider(
+            user_id,
+            server_gemini_key=server_gemini_key,
+            server_gemini_model=server_gemini_model,
+            db_path=db_path,
+        )
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -288,7 +308,6 @@ Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
-    provider: AIProvider,
     number: int,
     week: int,
     block: Block,
@@ -296,6 +315,11 @@ def generate_checkin_message(
     weeks: int,
     analysis_text: str,
     fallback: str,
+    *,
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> str:
     """Generate a periodic check-in message, falling back on error.
 
@@ -304,6 +328,12 @@ def generate_checkin_message(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        provider = resolve_provider(
+            user_id,
+            server_gemini_key=server_gemini_key,
+            server_gemini_model=server_gemini_model,
+            db_path=db_path,
+        )
         prompt = _build_checkin_prompt(
             number,
             week,
@@ -374,11 +404,15 @@ Do not wrap it in markdown block quotes. Output raw JSON only."""
 
 
 def apply_autonomous_adjustments(
-    provider: AIProvider,
     base_routines: dict[str, list[dict[str, Any]]],
     hevy_logs: list[dict[str, Any]],
     weather: WeatherConditions | None = None,
     is_catabolic: bool = False,
+    *,
+    user_id: str | None = None,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
 ) -> dict[str, list[dict[str, Any]]]:
     """Applies the unified autonomous progression and returns updated JSON routines.
 
@@ -387,6 +421,12 @@ def apply_autonomous_adjustments(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        provider = resolve_provider(
+            user_id,
+            server_gemini_key=server_gemini_key,
+            server_gemini_model=server_gemini_model,
+            db_path=db_path,
+        )
         prompt = _build_autonomous_prompt(
             base_routines,
             hevy_logs,

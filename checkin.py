@@ -288,7 +288,6 @@ def run_checkin(
         server_gemini_model=config.gemini_model,
     )
     return generate_checkin_message(
-        provider,
         number=due_info.number,
         week=week,
         block=block,
@@ -296,6 +295,9 @@ def run_checkin(
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),
         fallback=fallback,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
 
 
