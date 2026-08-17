@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -44,7 +45,7 @@ def _nice_round(value: float) -> str:
 
 
 def line_chart(
-    points: Sequence[dict],
+    points: Sequence[dict[str, Any]],
     *,
     colour: str = ACCENT,
     unit: str = "",
@@ -153,7 +154,7 @@ def progress_ring(
 </svg>"""
 
 
-def donut(segments: Sequence[dict], *, size: int = 160) -> str:
+def donut(segments: Sequence[dict[str, Any]], *, size: int = 160) -> str:
     """A donut chart. ``segments`` = ``[{"label", "value", "colour"?}]``."""
     items = [s for s in segments if float(s.get("value", 0)) > 0]
     total = sum(float(s["value"]) for s in items)
@@ -190,7 +191,7 @@ def donut(segments: Sequence[dict], *, size: int = 160) -> str:
 
 
 def bar_chart(
-    bars: Sequence[dict],
+    bars: Sequence[dict[str, Any]],
     *,
     colour: str = ACCENT,
     unit: str = "",

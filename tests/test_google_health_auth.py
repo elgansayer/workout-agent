@@ -76,7 +76,7 @@ def test_exchange_code_request_exception_with_response(monkeypatch: pytest.Monke
     import requests
 
     class _Resp:
-        text = "bad request error"
+        text: str = "bad request error"
 
     exc = requests.RequestException("bad request")
     exc.response = _Resp()  # type: ignore[assignment]
