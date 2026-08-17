@@ -113,8 +113,16 @@ class TestExtractSubprocessModuleRefs:
         source = 'import foo\nfoo.bar(["x.py"])\n'
         assert _extract_subprocess_module_refs(source) == set()
 
-    def test_ignores_non_sys_executable(self) -> None:
+    def test_detects_python_string_executable(self) -> None:
         source = 'subprocess.run(["python", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_detects_python3_string_executable(self) -> None:
+        source = 'subprocess.run(["python3", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_ignores_non_python_executable(self) -> None:
+        source = 'subprocess.run(["node", "foo.js"])\n'
         assert _extract_subprocess_module_refs(source) == set()
 
     def test_ignores_non_py_script(self) -> None:
@@ -179,6 +187,9 @@ class TestEntryPoints:
 
     def test_insight_cron_is_entry_point(self) -> None:
         assert "insight_cron.py" in ENTRY_POINTS
+
+    def test_connector_health_is_entry_point(self) -> None:
+        assert "connector_health.py" in ENTRY_POINTS
 
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
