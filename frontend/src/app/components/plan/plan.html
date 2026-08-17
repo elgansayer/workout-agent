@@ -1,11 +1,80 @@
 @if (loading()) {
-  <div class="loading">Loading component...</div>
+  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
 }
+
 @if (error()) {
-  <div class="error">{{ error() }}</div>
-}
-@if (data(); as d) {
-  <div class="container">
-    <pre>{{ d | json }}</pre>
+  <div hlmAlert variant="destructive" class="mb-4">
+    <h4 hlmAlertTitle>Error</h4>
+    <p hlmAlertDesc>{{ error() }}</p>
   </div>
+}
+
+@if (data(); as data) {
+<h1>The plan</h1>
+<p class="muted">{{ data.split_name }} | currently week {{ data.week }} of {{ data.cycle_weeks }}.</p>
+
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Periodisation</h2>
+    </div>
+    <div hlmCardContent>
+        <div class="block-grid">
+            @for (b of data.blocks; track b.number) {
+                <article class="block-card" [class.current]="b.is_current">
+                    @if (b.is_current) { <span hlmBadge>Current</span> }
+                    <h3>Block {{ b.number }}: {{ b.name }}</h3>
+                    <p class="muted">Weeks {{ b.weeks }} | {{ b.focus }}</p>
+                    <ul class="block-schemes">
+                        <li><span>Deadlift</span><strong>{{ b.deadlift }}</strong></li>
+                        <li><span>Pull-ups</span><strong>{{ b.pullups }}</strong></li>
+                        <li><span>Accessories</span><strong>{{ b.accessory }}</strong></li>
+                    </ul>
+                </article>
+            }
+        </div>
+    </div>
+</section>
+
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>The 6-day split <span class="muted">(current block)</span></h2>
+    </div>
+    <div hlmCardContent>
+        <div class="day-grid">
+            @for (day of data.days; track day.number) {
+                <article class="day-card" [class.today]="day.is_today">
+                    <div class="day-head">
+                        <span class="day-num">Day {{ day.number }}</span>
+                        @if (day.is_today) { <span hlmBadge>Today</span> }
+                    </div>
+                    <h3>{{ day.focus }}</h3>
+                    <ul class="day-ex">
+                        @for (ex of day.exercises; track $index) {
+                            <li>
+                                <span class="ex-n">{{ ex.name }}</span>
+                                <span class="ex-s">{{ ex.scheme }}</span>
+                            </li>
+                        }
+                    </ul>
+                </article>
+            }
+            <article class="day-card rest">
+                <div class="day-head"><span class="day-num">Sunday</span></div>
+                <h3>Rest &amp; Recovery</h3>
+                <p class="muted">Sleep, protein, light movement only.</p>
+            </article>
+        </div>
+    </div>
+</section>
+
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Coaching rules</h2>
+    </div>
+    <div hlmCardContent>
+        <ul class="rules">
+            @for (rule of data.rules; track $index) {<li>{{ rule }}</li>}
+        </ul>
+    </div>
+</section>
 }

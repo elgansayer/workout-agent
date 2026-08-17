@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
-from encryption import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +35,7 @@ class UserRow(TypedDict):
 DEFAULT_DB_PATH = "workout_agent.db"
 
 
-class UserRow(TypedDict):
+class UserRow(TypedDict):  # noqa: F811
     id: str
     email: str
     display_name: str | None
@@ -102,9 +101,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS hevy_routines (
-                routine_key TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                routine_key TEXT,
                 routine_id TEXT NOT NULL,
-                content_hash TEXT NOT NULL
+                content_hash TEXT NOT NULL,
+                PRIMARY KEY (user_id, routine_key)
             )
             """,
         )
@@ -756,28 +757,30 @@ def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -
 
 
 def save_workout(
-    payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None
+    payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None, *, user_id: str | None = None
 ) -> None:
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
         return
     today = when or datetime.now(tz=timezone.utc).date().isoformat()
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
             "VALUES (?, ?, ?)",
-            (today, json.dumps(payload), user_id),
+            (today, json.dumps(payload), uid),
         )
 
 
 def get_recent_hevy_logs(
-    limit: int = 14, db_path: str = DEFAULT_DB_PATH
+    limit: int = 14, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
 ) -> list[dict[str, Any]]:
     """Return recent raw Hevy payloads for autonomous analysis."""
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT hevy_payload FROM workout_history ORDER BY date DESC, id DESC LIMIT ?",
-            (limit,),
+            "SELECT hevy_payload FROM workout_history WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT ?",
+            (uid, limit,),
         ).fetchall()
     logs = []
     for row in rows:
@@ -796,7 +799,7 @@ def get_recent_hevy_logs(
 
 
 def save_progress(
-    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH
+    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary.
 
@@ -805,6 +808,7 @@ def save_progress(
     if summary is None:
         return
     today = summary.date[:10] if summary.date else datetime.now(tz=timezone.utc).date().isoformat()
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(
@@ -819,7 +823,7 @@ def save_progress(
                     exercise.top_weight_kg,
                     exercise.top_reps,
                     exercise.sets,
-                    user_id,
+                    uid,
                 ),
             )
 
@@ -1186,7 +1190,7 @@ def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> N
         conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
 
 
-def delete_routine_record(
+def delete_routine_record(  # noqa: F811
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
@@ -1582,17 +1586,18 @@ def get_deep_correlation(
     return row[0] if row else None
 
 
-def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH) -> None:
+def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
     from datetime import datetime, timezone
 
+    uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO chat_messages (role, content, created_at, user_id)
             VALUES (?, ?, ?, ?)
             """,
-            (role, content, datetime.now(tz=timezone.utc).isoformat()),
+            (role, content, datetime.now(tz=timezone.utc).isoformat(), uid),
         )
 
 
@@ -1741,7 +1746,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     ]
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
+def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:  # noqa: F811
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(

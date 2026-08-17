@@ -1,0 +1,5 @@
+{
+  "componentsPath": "src/components/ui",
+  "importAlias": "@spartan-ng/ui",
+  "style": "nova"
+}

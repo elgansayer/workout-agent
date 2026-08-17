@@ -6,7 +6,7 @@ import pathlib
 import sqlite3
 from unittest.mock import patch
 
-import sync_history
+from scripts import sync_history
 
 
 def _new_temp_db(tmp_path: pathlib.Path) -> str:

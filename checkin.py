@@ -11,6 +11,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import Any
 
 from ai_provider import resolve_provider
 from config import Config
@@ -255,7 +256,7 @@ def _fallback_message(
     return "\n".join(lines)
 
 
-def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -> str:
+def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block, *, user_id: str | None = None) -> str:
     """Build the check-in message from logged data versus the plan."""
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
@@ -281,7 +282,7 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
 
 
 def record(
-    config: Config, due_info: CheckinDue, message: str, today: date | None = None
+    config: Config, due_info: CheckinDue, message: str, today: date | None = None, *, user_id: str | None = None
 ) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:

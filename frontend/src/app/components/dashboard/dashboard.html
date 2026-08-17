@@ -1,41 +1,54 @@
 @if (loading()) {
-  <div>Loading dashboard...</div>
+  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
 }
 
 @if (error()) {
-  <div class="error">{{ error() }}</div>
+  <div hlmAlert variant="destructive" class="mb-4">
+    <h4 hlmAlertTitle>Error</h4>
+    <p hlmAlertDesc>{{ error() }}</p>
+  </div>
 }
 
-@if (dashboardData(); as data) {
+@if (data(); as data) {
 <section class="hero">
     <div class="cycle">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
     <div class="rings">
-        <span [innerHTML]="cycleRing()"></span>
-        <span [innerHTML]="blockRing()"></span>
+        <div [innerHTML]="data.cycle_ring"></div>
+        <div [innerHTML]="data.block_ring"></div>
     </div>
     <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
     <p class="muted">{{ data.block.focus }}</p>
     <div class="schemes">
-        <span class="chip">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
-        <span class="chip">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
-        <span class="chip ghost">{{ data.block.accessory_emphasis }}</span>
+        <span hlmBadge variant="secondary">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
+        <span hlmBadge variant="secondary">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
+        <span hlmBadge variant="ghost">{{ data.block.accessory_emphasis }}</span>
     </div>
     <p class="quote">&ldquo;{{ data.quote }}&rdquo;</p>
+    <div class="rings">
+        <div [innerHTML]="data.cycle_ring"></div>
+        <div [innerHTML]="data.block_ring"></div>
+    </div>
 </section>
 
 @if (data.dashboard_insight) {
-<section class="panel insight-header">
-    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
-    <div class="insight-content">
-        <p><strong>Fatigue:</strong> <span class="badge fatigue-{{ data.dashboard_insight.fatigue | lowercase }}">{{ data.dashboard_insight.fatigue }}</span></p>
+<section hlmCard class="insight-header">
+    <div hlmCardHeader>
+        <h2 hlmCardTitle class="ai-gradient-text">✨ Coach's Status</h2>
+    </div>
+    <div hlmCardContent class="insight-content">
+        <p><strong>Fatigue:</strong> <span hlmBadge [class]="'fatigue-' + data.dashboard_insight.fatigue.toLowerCase()">{{ data.dashboard_insight.fatigue }}</span></p>
         <p><strong>Wins & Stalls:</strong> {{ data.dashboard_insight.wins_stalls }}</p>
         <p><strong>Action for Today:</strong> {{ data.dashboard_insight.advice }}</p>
     </div>
 </section>
 } @else {
-<section class="panel insight-header">
-    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
-    <p class="muted">Insights are generating. Check back later.</p>
+<section hlmCard class="insight-header">
+    <div hlmCardHeader>
+        <h2 hlmCardTitle class="ai-gradient-text">✨ Coach's Status</h2>
+    </div>
+    <div hlmCardContent>
+        <p class="muted">Insights are generating. Check back later.</p>
+    </div>
 </section>
 }
 
@@ -43,7 +56,8 @@
     <section class="today">
         <h2>{{ data.weekday }}: {{ data.focus }}</h2>
         @if (data.is_rest_day) {
-        <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep, protein, light movement only.</p>
+        <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
+            protein, light movement only.</p>
         } @else {
         <div class="exercise-list">
             @for (row of data.rows; track row.name) {
@@ -52,7 +66,7 @@
                     <span class="ex-name">{{ row.name }}</span>
                     <span class="ex-planned">{{ row.planned }}</span>
                 </div>
-                @if (row.note) { <p class="ex-note">{{ row.note }}</p> }
+                @if (row.note) {<p class="ex-note">{{ row.note }}</p>}
                 <div class="ex-meta">
                     <span class="last">Last: {{ row.last }}</span>
                     <span class="nudge">{{ row.nudge }}</span>
@@ -63,38 +77,50 @@
         }
     </section>
 
-    <section class="lifestyle panel">
-        <h2>Today's lifestyle</h2>
-        <ul class="pillars">
-            @for (line of data.lifestyle; track line) {
-            <li>{{ line }}</li>
-            }
-        </ul>
-    </section>
-
-    <section class="panel">
-        <h2>Coaching self-review</h2>
-        <p class="muted">{{ data.review_headline }}</p>
-        @if (data.review_lifts && data.review_lifts.length > 0) {
-        <div class="review-list">
-            @for (lift of data.review_lifts; track lift.name) {
-            <div class="review-row trend-{{ lift.trend }}">
-                <span class="review-name">{{ lift.name }}</span>
-                <span class="review-trend">{{ lift.trend }}</span>
-                <span class="review-detail">{{ lift.as_line }}</span>
-            </div>
-            }
+    <section hlmCard class="lifestyle">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Today's lifestyle</h2>
         </div>
-        } @else {
-        <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
-        }
-        <p class="muted review-recovery">{{ data.review_recovery }}</p>
+        <div hlmCardContent>
+            <ul class="pillars">
+                @for (line of data.lifestyle; track $index) {
+                <li>{{ line }}</li>
+                }
+            </ul>
+        </div>
     </section>
 
-    <section class="panel" style="grid-column: 1 / -1;">
-        <h2>Consistency</h2>
-        <p class="streak">{{ data.streak }} day streak</p>
-        <div class="cal-scroll" [innerHTML]="calendar()"></div>
+    <section hlmCard>
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Coaching self-review</h2>
+        </div>
+        <div hlmCardContent>
+            <p class="muted">{{ data.review_headline }}</p>
+            @if (data.review_lifts) {
+            <div class="review-list">
+                @for (lift of data.review_lifts; track lift.name) {
+                <div class="review-row trend-{{ lift.trend }}">
+                    <span class="review-name">{{ lift.name }}</span>
+                    <span class="review-trend">{{ lift.trend }}</span>
+                    <span class="review-detail">{{ lift.as_line }}</span>
+                </div>
+                }
+            </div>
+            } @else {
+            <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
+            }
+            <p class="muted review-recovery">{{ data.review_recovery }}</p>
+        </div>
+    </section>
+
+    <section hlmCard style="grid-column: 1 / -1;">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Consistency</h2>
+        </div>
+        <div hlmCardContent>
+            <p class="streak">{{ data.streak }} day streak</p>
+            <div class="cal-scroll" [innerHTML]="data.calendar"></div>
+        </div>
     </section>
 </div>
 }

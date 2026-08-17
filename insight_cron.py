@@ -6,7 +6,8 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
-from config import Config, ConfigError
+from ai_provider import resolve_provider
+from config import Config
 from database import (
     get_body_metrics,
     get_daily_logs,
@@ -22,7 +23,7 @@ logger = logging.getLogger("insight_cron")
 
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
-    provider = _get_provider(config)
+    provider = resolve_provider(user_id=None, fallback_api_key=config.gemini_api_key)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
@@ -56,8 +57,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 {{"fatigue": "string", "wins_stalls": "string", "advice": "string"}}"""
 
     try:
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        response_text = str(provider.generate(prompt))
+        text = response_text.strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         text = text.strip()
@@ -75,7 +76,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
-    provider = _get_provider(config)
+    provider = resolve_provider(user_id=None, fallback_api_key=config.gemini_api_key)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()

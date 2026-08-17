@@ -45,7 +45,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from programme_state import (
     get_active_programme,
-    get_programme_state,
     get_programme_templates,
     set_active_programme,
 )
@@ -60,6 +59,7 @@ from config import Config
 from database import (
     clear_chat_messages,
     delete_user_api_key,
+    get_active_programme,
     get_body_metrics,
     get_chat_messages,
     get_checkins,
@@ -70,6 +70,7 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
+    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -81,6 +82,7 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
+    set_active_programme,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
@@ -94,8 +96,6 @@ from program import (
     block_for_week,
     day_exercises,
     day_focus,
-    get_focus,
-    get_scheme,
     today_day,
     week_in_cycle,
 )
@@ -1532,22 +1532,67 @@ def api_history(request: Request):
 @app.get("/api/plan")
 def api_plan(request: Request):
     user_id = _check_api_auth(request)
+    today = datetime.now(tz=timezone.utc).date()
+    
+    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
+    
+    if active and active.get("definition"):
+        defn = active["definition"]
+        return JSONResponse(jsonable_encoder({
+            "is_active_programme": True,
+            "split_name": defn.get("split_name", active.get("name")),
+            "days": defn.get("schedule", [])
+        }))
+        
+    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
+    current_block = block_for_week(week)
+    day = today_day(today)
+
+    days = []
+    for d in range(1, 7):
+        days.append({
+            "number": d,
+            "focus": day_focus(d),
+            "is_today": d == day,
+            "exercises": [
+                {
+                    "name": ex.name,
+                    "scheme": f"{ex.sets} x {ex.rep_range}",
+                    "note": ex.note,
+                }
+                for ex in day_exercises(d, current_block)
+            ],
+        })
+
+    blocks = [
+        {
+            "number": b.number,
+            "name": b.name,
+            "weeks": b.weeks,
+            "focus": b.focus,
+            "deadlift": f"{b.deadlift.sets} x {b.deadlift.rep_range}",
+            "pullups": f"{b.pullups.sets} x {b.pullups.rep_range}",
+            "accessory": b.accessory_emphasis,
+            "is_current": b.number == current_block.number,
+        }
+        for b in BLOCKS.values()
+    ]
+    
     return JSONResponse(jsonable_encoder({
-        "days": [
-            {
-                "day": d,
-                "focus": get_focus(d),
-                "is_rest": get_focus(d) is None,
-                "scheme": get_scheme(d)
-            } for d in range(1, 8)
-        ]
+        "is_active_programme": False,
+        "split_name": SPLIT_NAME,
+        "current_week": week,
+        "current_block": current_block.name,
+        "days": days,
+        "blocks": blocks
     }))
+
 
 @app.get("/api/programmes")
 def api_programmes(request: Request):
     user_id = _check_api_auth(request)
     return JSONResponse(jsonable_encoder({
-        "current_state": get_programme_state(db_path=DB_PATH, user_id=user_id),
+        "current_state": get_active_programme(user_id, db_path=DB_PATH),
         "templates": [
             {"id": "base", "name": "Standard PPL", "desc": "6-day Push/Pull/Legs split"}
         ]

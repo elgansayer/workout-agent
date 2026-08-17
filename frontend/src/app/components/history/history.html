@@ -1,11 +1,47 @@
 @if (loading()) {
-  <div class="loading">Loading component...</div>
+  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
 }
+
 @if (error()) {
-  <div class="error">{{ error() }}</div>
-}
-@if (data(); as d) {
-  <div class="container">
-    <pre>{{ d | json }}</pre>
+  <div hlmAlert variant="destructive" class="mb-4">
+    <h4 hlmAlertTitle>Error</h4>
+    <p hlmAlertDesc>{{ error() }}</p>
   </div>
+}
+
+@if (data(); as data) {
+<h1>History</h1>
+
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Training calendar</h2>
+    </div>
+    <div hlmCardContent>
+        <div class="cal-scroll" [innerHTML]="data.calendar"></div>
+    </div>
+</section>
+
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Daily log</h2>
+    </div>
+    <div hlmCardContent>
+        @if (data.logs.length === 0) {
+        <p class="muted">No daily plans logged yet. Each morning run records the day's
+            plan and lifestyle guidance here.</p>
+        }
+        <div class="log-list">
+            @for (log of data.logs; track $index) {
+            <article class="log-row" [class.rest]="log.day === null">
+                <div class="log-head">
+                    <span class="log-date">{{ log.date }}</span>
+                    <span class="log-focus">{{ log.focus }}</span>
+                    @if (log.carb_tier) {<span hlmBadge variant="secondary">{{ log.carb_tier }} carb</span>}
+                </div>
+                @if (log.plan) {<pre class="log-body">{{ log.plan }}</pre>}
+            </article>
+            }
+        </div>
+    </div>
+</section>
 }

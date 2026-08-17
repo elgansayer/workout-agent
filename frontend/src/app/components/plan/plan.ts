@@ -1,3 +1,6 @@
+import { HlmCardImports } from '@spartan-ng/ui/card';
+import { HlmBadgeImports } from '@spartan-ng/ui/badge';
+import { HlmAlertImports } from '@spartan-ng/ui/alert';
 import { Component, inject, signal, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
@@ -7,7 +10,7 @@ import { FormsModule } from '@angular/forms';
 @Component({
   selector: 'app-plan',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, HlmCardImports, HlmBadgeImports, HlmAlertImports],
   templateUrl: './plan.html',
   styleUrl: './plan.css'
 })

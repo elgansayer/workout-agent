@@ -1,3 +1,6 @@
+import logging
+
+logger = logging.getLogger(__name__)
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone

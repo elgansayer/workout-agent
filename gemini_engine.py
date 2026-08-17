@@ -367,7 +367,7 @@ def apply_autonomous_adjustments(
             :func:`ai_provider.resolve_provider`.
     """
     try:
-        provider = get_provider("gemini", api_key, model_name)
+        
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )

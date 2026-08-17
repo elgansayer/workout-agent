@@ -14,7 +14,7 @@ export class Dashboard implements OnInit {
   private http = inject(HttpClient);
   private sanitizer = inject(DomSanitizer);
   
-  dashboardData = signal<any>(null);
+  data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
@@ -25,7 +25,7 @@ export class Dashboard implements OnInit {
   ngOnInit() {
     this.http.get('/api/dashboard').subscribe({
       next: (data: any) => {
-        this.dashboardData.set(data);
+        this.data.set(data);
         if (data.cycle_ring) this.cycleRing.set(this.sanitizer.bypassSecurityTrustHtml(data.cycle_ring));
         if (data.block_ring) this.blockRing.set(this.sanitizer.bypassSecurityTrustHtml(data.block_ring));
         if (data.calendar) this.calendar.set(this.sanitizer.bypassSecurityTrustHtml(data.calendar));

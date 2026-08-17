@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+import sqlite3
+
 """Script to fetch all historical workouts from Hevy and store them locally.
 
 This is useful if you have lost your local database or want to sync to a
@@ -6,8 +10,6 @@ new device without losing your PRs and training history.
 Run from the repo root:
     python scripts/sync_history.py
 """
-
-from __future__ import annotations
 
 import logging
 import sys

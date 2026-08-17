@@ -1,3 +1,7 @@
+import { HlmCardImports } from '@spartan-ng/ui/card';
+import { HlmButtonImports } from '@spartan-ng/ui/button';
+import { HlmBadgeImports } from '@spartan-ng/ui/badge';
+import { HlmAlertImports } from '@spartan-ng/ui/alert';
 import { Component, inject, signal, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
@@ -7,11 +11,13 @@ import { FormsModule } from '@angular/forms';
 @Component({
   selector: 'app-programmes',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, HlmCardImports, HlmButtonImports, HlmBadgeImports, HlmAlertImports],
   templateUrl: './programmes.html',
   styleUrl: './programmes.css'
 })
 export class Programmes implements OnInit {
+  selectProgramme(k: string) {}
+
   private http = inject(HttpClient);
   protected sanitizer = inject(DomSanitizer);
   

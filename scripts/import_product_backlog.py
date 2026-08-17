@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """Idempotently publish the curated product backlog as GitHub issues."""
 from __future__ import annotations
-import base64, gzip, json, os, re, sys, time, urllib.error, urllib.request
+
+import base64
+import gzip
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +50,7 @@ def norm(title:str)->str:
     return re.sub(r"[^a-z0-9]+"," ",title.lower()).strip()
 
 def marker(text:str|None)->str|None:
-    match=re.search(rf"<!--\s*{re.escape(MARK)}([a-z0-9-]+)\s*-->",text or "",re.I)
+    match=re.search(rf"<!--\s*{re.escape(MARK)}([a-z0-9-]+)\s*-->",text or "",re.IGNORECASE)
     return match.group(1).lower() if match else None
 
 def label(item:dict[str,Any])->str:

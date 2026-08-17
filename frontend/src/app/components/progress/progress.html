@@ -1,11 +1,96 @@
 @if (loading()) {
-  <div class="loading">Loading component...</div>
+  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
 }
+
 @if (error()) {
-  <div class="error">{{ error() }}</div>
-}
-@if (data(); as d) {
-  <div class="container">
-    <pre>{{ d | json }}</pre>
+  <div hlmAlert variant="destructive" class="mb-4">
+    <h4 hlmAlertTitle>Error</h4>
+    <p hlmAlertDesc>{{ error() }}</p>
   </div>
+}
+
+@if (data(); as data) {
+<h1>Progress</h1>
+
+@if (data.body.weight || data.body.body_fat || data.body.muscle || data.body.resting_hr) {
+<section hlmCard>
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Body composition</h2>
+    </div>
+    <div hlmCardContent class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        @if (data.body.weight) {
+        <div class="chart-card p-4 border rounded-md shadow-sm">
+            <h3>Weight (kg)</h3>
+            <div [innerHTML]="data.body.weight"></div>
+        </div>
+        }
+        @if (data.body.body_fat) {
+        <div class="chart-card p-4 border rounded-md shadow-sm">
+            <h3>Body fat (%)</h3>
+            <div [innerHTML]="data.body.body_fat"></div>
+        </div>
+        }
+        @if (data.body.muscle) {
+        <div class="chart-card p-4 border rounded-md shadow-sm">
+            <h3>Muscle (%)</h3>
+            <div [innerHTML]="data.body.muscle"></div>
+        </div>
+        }
+        @if (data.body.resting_hr) {
+        <div class="chart-card p-4 border rounded-md shadow-sm">
+            <h3>Resting HR (bpm)</h3>
+            <div [innerHTML]="data.body.resting_hr"></div>
+        </div>
+        }
+    </div>
+</section>
+}
+
+<h2 class="section-head text-2xl font-semibold mt-8 mb-4">Lifts</h2>
+@if (!data.charts?.length) {
+<p class="muted text-gray-500">No logged sets yet. Once the agent records your Hevy sessions,
+    your progressive overload will show up here.</p>
+}
+<div class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    @for (chart of data.charts; track $index) {
+    <section class="chart-card p-4 border rounded-md shadow-sm flex flex-col">
+        <div class="chart-card-head flex items-center justify-between mb-2">
+            <h3 class="text-lg font-medium">{{ chart.name }}</h3>
+            @if (chart.best_e1rm) {
+            <span hlmBadge>e1RM {{ chart.best_e1rm }} kg</span>
+            }
+        </div>
+        <!--
+            The 'Why did this happen?' button and XAI result display require component state
+            (e.g., chart.xaiExpanded, chart.xaiReasoning, chart.xaiLoading) and a component method `fetchXAI(chart)`.
+            Assuming these properties exist on the 'chart' object for binding.
+        -->
+        <div class="flex flex-col items-start gap-2 mb-4">
+            <button hlmBtn variant="secondary"
+                    (click)="fetchXAI(chart)"
+                    [attr.aria-expanded]="chart.xaiExpanded"
+                    [attr.aria-controls]="'xai-' + chart.name"
+                    [disabled]="chart.xaiLoading"
+                    class="ai-btn">
+                {{ chart.xaiLoading ? 'Analyzing...' : 'Why did this happen?' }}
+            </button>
+            @if (chart.xaiExpanded) {
+            <div [id]="'xai-' + chart.name" class="xai-result p-3 bg-gray-50 border rounded-md text-sm" aria-live="polite">
+                @if (chart.xaiLoading) {
+                    <span>Analyzing history...</span>
+                } @else {
+                    <span>{{ chart.xaiReasoning || "No explanation available." }}</span>
+                }
+            </div>
+            }
+        </div>
+        <div class="flex-grow">
+            <div [innerHTML]="chart.svg"></div>
+        </div>
+        <p class="chart-foot muted text-sm text-gray-500 mt-2">{{ chart.sessions }} logged session(s)</p>
+    </section>
+    }
+</div>
+
+<!-- The original <script> tag and its contents must be moved to the Angular component's TypeScript file. -->
 }

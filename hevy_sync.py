@@ -14,7 +14,6 @@ import logging
 import re
 from typing import Any
 
-from ai_provider import resolve_provider
 from config import Config
 from database import (
     delete_routine_record,
@@ -343,7 +342,7 @@ def sync_routines(config: Config) -> list[str]:
                 hevy_logs=logs,
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, "is_catabolic", False),
-                provider=ai_provider,
+                provider=resolve_provider(user_id=None),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)

@@ -1,11 +1,170 @@
 @if (loading()) {
-  <div class="loading">Loading component...</div>
+  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
 }
+
 @if (error()) {
-  <div class="error">{{ error() }}</div>
-}
-@if (data(); as d) {
-  <div class="container">
-    <pre>{{ d | json }}</pre>
+  <div hlmAlert variant="destructive" class="mb-4">
+    <h4 hlmAlertTitle>Error</h4>
+    <p hlmAlertDesc>{{ error() }}</p>
   </div>
+}
+
+@if (data(); as data) {
+<h1>Stats</h1>
+
+<section class="stat-strip flex flex-wrap gap-4 justify-center">
+    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="num text-4xl font-bold">{{ data.total_sessions }}</span>
+        <span class="stat-cap text-muted-foreground text-sm">Sessions logged</span>
+    </div>
+    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="num text-4xl font-bold">{{ data.exercises_tracked }}</span>
+        <span class="stat-cap text-muted-foreground text-sm">Exercises tracked</span>
+    </div>
+    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="num text-4xl font-bold">{{ data.total_volume | number:'1.0-0' }}</span>
+        <span class="num-label text-muted-foreground text-sm">kg moved</span>
+        <span class="stat-cap text-muted-foreground text-sm">Est. total load</span>
+    </div>
+    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="num text-4xl font-bold">{{ data.days_on_programme }}</span>
+        <span class="num-label text-muted-foreground text-sm">days</span>
+        <span class="stat-cap text-muted-foreground text-sm">On programme</span>
+    </div>
+</section>
+
+<div class="flex flex-col md:flex-row gap-4 mt-6">
+    <section hlmCard class="flex-1">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Training split</h2>
+        </div>
+        <div hlmCardContent>
+            @if (data.has_distribution) {
+                <div [innerHTML]="data.distribution"></div>
+            } @else {
+                <p class="text-muted-foreground">No sessions logged yet.</p>
+            }
+        </div>
+    </section>
+
+    <section hlmCard class="flex-1">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Volume by muscle group</h2>
+        </div>
+        <div hlmCardContent>
+            @if (data.has_muscle) {
+                <div [innerHTML]="data.muscle_donut"></div>
+            } @else {
+                <p class="text-muted-foreground">No lifts logged yet.</p>
+            }
+        </div>
+    </section>
+</div>
+
+@if (data.projections) {
+    <section hlmCard class="mt-6">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>End-of-cycle projection</h2>
+        </div>
+        <div hlmCardContent>
+            <div class="proj-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                @for (p of data.projections; track p.label) {
+                    <div class="proj-card p-4 bg-secondary text-secondary-foreground rounded-lg shadow-sm flex flex-col">
+                        <span class="proj-label font-semibold text-lg">{{ p.label }}</span>
+                        <span class="proj-now text-muted-foreground text-sm">Now {{ p.current }}</span>
+                        <span class="proj-arrow text-primary font-bold my-1">to</span>
+                        <span class="proj-value text-2xl font-bold text-primary">{{ p.projected }}</span>
+                        <span class="proj-meta text-muted-foreground text-sm">{{ p.metric }}@if (p.gain > 0) { | +{{ p.gain }} }</span>
+                    </div>
+                }
+            </div>
+
+            <h2 class="section-head text-2xl font-bold mt-8 mb-4 ai-gradient-text">✨ Advanced Data Visualisations</h2>
+            <div class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" style="margin-bottom: 20px;">
+                <div [innerHTML]="data.block_phase_svg"></div>
+                <div [innerHTML]="data.recovery_grid_svg"></div>
+                <div [innerHTML]="data.vol_dist_svg"></div>
+            </div>
+
+            <div id="peak-validation" class="xai-result p-4 border border-dashed border-primary rounded-lg text-sm bg-muted text-muted-foreground" style="display: none;">
+                <p>Loading AI projection validation...</p>
+            </div>
+            <p class="chart-foot text-muted-foreground text-sm mt-4">Linear projection from your logged trend to the end of this 12-week cycle.</p>
+        </div>
+    </section>
+}
+
+@if (data.dots_chart || data.ratio_chart) {
+    <section hlmCard class="mt-6">
+        <div hlmCardHeader>
+            <h2 hlmCardTitle>Relative strength</h2>
+        </div>
+        <div hlmCardContent>
+            <div class="chart-grid grid grid-cols-1 md:grid-cols-2 gap-4">
+                @if (data.dots_chart) {
+                    <div class="chart-card p-4 border rounded-lg bg-card text-card-foreground">
+                        <h3 class="font-semibold text-lg mb-2">DOTS score</h3>
+                        <div [innerHTML]="data.dots_chart"></div>
+                        <p class="chart-foot text-muted-foreground text-sm mt-2">Strength relative to bodyweight (deadlift e1RM).</p>
+                    </div>
+                }
+                @if (data.ratio_chart) {
+                    <div class="chart-card p-4 border rounded-lg bg-card text-card-foreground">
+                        <h3 class="font-semibold text-lg mb-2">Deadlift / bodyweight</h3>
+                        <div [innerHTML]="data.ratio_chart"></div>
+                        <p class="chart-foot text-muted-foreground text-sm mt-2">Bodyweight multiples on the deadlift.</p>
+                    </div>
+                }
+            </div>
+        </div>
+    </section>
+}
+
+<section hlmCard class="mt-6">
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Recent session load</h2>
+    </div>
+    <div hlmCardContent>
+        @if (data.has_volume) {
+            <div [innerHTML]="data.volume_bars"></div>
+            <p class="chart-foot text-muted-foreground text-sm mt-4">Estimated load = top weight x reps x sets per session.</p>
+        } @else {
+            <p class="text-muted-foreground">No sessions logged yet.</p>
+        }
+    </div>
+</section>
+
+<section hlmCard class="mt-6">
+    <div hlmCardHeader>
+        <h2 hlmCardTitle>Personal records</h2>
+    </div>
+    <div hlmCardContent>
+        @if (!data.prs || data.prs.length === 0) {
+            <p class="text-muted-foreground">Your estimated 1-rep maxes will appear here once lifts are logged.</p>
+        } @else {
+            <div class="overflow-x-auto">
+                <table class="pr-table w-full text-left border-collapse">
+                    <thead>
+                        <tr class="border-b">
+                            <th class="p-2 font-semibold text-muted-foreground">Exercise</th>
+                            <th class="p-2 font-semibold text-muted-foreground text-right">Est. 1RM</th>
+                            <th class="p-2 font-semibold text-muted-foreground">Best set</th>
+                            <th class="p-2 font-semibold text-muted-foreground">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @for (pr of data.prs; track pr.exercise) {
+                            <tr class="border-b last:border-b-0 hover:bg-muted/50">
+                                <td class="p-2">{{ pr.exercise }}</td>
+                                <td class="num-cell p-2 text-right font-medium">{{ pr.e1rm }} kg</td>
+                                <td class="p-2 text-muted-foreground text-sm">{{ pr.detail }}</td>
+                                <td class="p-2 text-muted-foreground text-sm">{{ pr.date }}</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</section>
 }

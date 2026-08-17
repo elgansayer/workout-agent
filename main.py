@@ -16,16 +16,18 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
-from ai_provider import resolve_provider
+from ai_provider import AIProvider, resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
@@ -243,30 +245,12 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     _maybe_self_review(config, recovery, week, block, preview)
 
-    provider = resolve_provider(
-        user_id=None,
-        fallback_api_key=config.gemini_api_key,
-        fallback_model=config.gemini_model,
-        db_path=config.database_path,
-    )
+    provider = _resolve_provider(config, user_id=user_id)
 
     day = today_day(today)
 
-    provider = resolve_provider(
-        fallback_api_key=config.gemini_api_key,
-        fallback_model=config.gemini_model,
-    )
-
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
-        provider = resolve_provider(server_gemini_key=config.gemini_api_key)
-        message = generate_rest_day_message(
-            provider,
-            recovery=recovery,
-            server_gemini_key=config.gemini_api_key,
-            server_gemini_model=config.gemini_model,
-            db_path=config.database_path,
-        )
         message = generate_rest_day_message(provider, recovery=recovery)
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
@@ -312,7 +296,6 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             last_plan = log["plan"]
             break
 
-    provider = resolve_provider(server_gemini_key=config.gemini_api_key)
     plan = generate_next_workout(
         provider,
         day=day,
