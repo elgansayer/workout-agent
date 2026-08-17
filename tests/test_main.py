@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,6 +15,9 @@ from main import (
     _parse_args,
     run,
 )
+
+if TYPE_CHECKING:
+    from config import Config
 
 # ---------------------------------------------------------------------------
 # _compose
@@ -31,7 +36,9 @@ def test_compose_with_guidance_and_footer() -> None:
         protein_target=None,
     )
     result = _compose(
-        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1.",
+        "Workout plan here",
+        guidance,
+        "\n\nHevy routines refreshed: Day 1.",
     )
     assert result.startswith("Workout plan here")
     assert "Today's lifestyle:" in result
@@ -96,14 +103,14 @@ def test_parse_args_unknown_raises() -> None:
 
 
 def _make_config(
-    monkeypatch,
-    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
     *,
-    hevy_api_key="hevy-key",
-    checkin_enabled=False,
-    lifestyle_enabled=False,
-    self_review_enabled=False,
-):
+    hevy_api_key: str | None = "hevy-key",
+    checkin_enabled: bool = False,
+    lifestyle_enabled: bool = False,
+    self_review_enabled: bool = False,
+) -> Config:
     """Patch Config.load and init_db to return a controlled config."""
     from config import Config
 
@@ -132,12 +139,21 @@ def _make_config(
     monkeypatch.setattr("main.Config.load", lambda: config)
 
     # Patch init_db to do nothing (avoid real DB creation)
-    monkeypatch.setattr("main.init_db", lambda path: None)
+    monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
+    # Patch _resolve_run_user to return a fixed test user_id
+    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    # Patch _resolve_provider to avoid DB lookups in test
+    monkeypatch.setattr(
+        "main._resolve_provider",
+        lambda config, **kw: MagicMock(name="test-provider"),
+    )
 
     return config
 
 
-def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
+def test_run_preview_training_day(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Preview mode on a training day prints the plan without sending Telegram."""
     _make_config(monkeypatch, tmp_path)
 
@@ -162,13 +178,13 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
     # Mock health connect
     monkeypatch.setattr(
         "main.read_recovery_metrics",
-        lambda path: {"sleep_hours": 7.5, "weight_kg": 82},
+        lambda *args, **kw: {"sleep_hours": 7.5, "weight_kg": 82},
     )
     monkeypatch.setattr(
         "main.body_metrics_from_recovery",
         lambda rec: rec,
     )
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
 
     # Mock fetch / parse workout
     monkeypatch.setattr(
@@ -187,13 +203,15 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
             exercises=[],
         ),
     )
-    monkeypatch.setattr("main.save_workout", lambda raw, path: None)
-    monkeypatch.setattr("main.save_progress", lambda summary, path: None)
+    monkeypatch.setattr("main.save_workout", lambda *args, **kw: None)
+    monkeypatch.setattr("main.save_progress", lambda *args, **kw: None)
 
     # Mock recent bests
     monkeypatch.setattr(
         "main.get_recent_bests",
-        lambda path: {"Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}},
+        lambda *args, **kw: {
+            "Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}
+        },
     )
 
     # Mock insights
@@ -230,7 +248,8 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights",
+        lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -250,14 +269,14 @@ def test_run_preview_training_day(monkeypatch, tmp_path) -> None:
     # Mock programme start date
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     result = run(preview=True)
     assert result == 0  # success
 
 
-def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
+def test_run_preview_rest_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Preview mode on a Sunday (rest day)."""
     _make_config(monkeypatch, tmp_path)
 
@@ -275,9 +294,9 @@ def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
 
     monkeypatch.setattr(
         "main.generate_rest_day_message",
@@ -287,14 +306,14 @@ def test_run_preview_rest_day(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     result = run(preview=True)
     assert result == 0
 
 
-def test_run_config_error_returns_1(monkeypatch) -> None:
+def test_run_config_error_returns_1(monkeypatch: pytest.MonkeyPatch) -> None:
     """When Config.load raises ConfigError, run returns 1."""
     monkeypatch.setattr(
         "main.Config.load",
@@ -304,7 +323,9 @@ def test_run_config_error_returns_1(monkeypatch) -> None:
     assert result == 1
 
 
-def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
+def test_run_preview_with_sync_statuses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Statuses from sync_routines appear in the footer."""
     _make_config(monkeypatch, tmp_path, hevy_api_key="hevy-key")
     # Patch Config.load to return a config with hevy_sync_routines=True
@@ -348,9 +369,9 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -358,7 +379,7 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     # Capture stdout to check footer appears
@@ -375,7 +396,9 @@ def test_run_preview_with_sync_statuses(monkeypatch, tmp_path) -> None:
     assert "Day 1" in output
 
 
-def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
+def test_run_preview_with_lifestyle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When lifestyle is enabled, guidance appears in the output."""
     _make_config(monkeypatch, tmp_path, lifestyle_enabled=True)
 
@@ -392,9 +415,9 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -402,7 +425,7 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     import io
@@ -417,7 +440,9 @@ def test_run_preview_with_lifestyle(monkeypatch, tmp_path) -> None:
     assert "Today's lifestyle:" in output
 
 
-def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
+def test_run_preview_training_day_with_checkin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When a check-in is due, it is also printed in preview mode."""
     _make_config(monkeypatch, tmp_path, checkin_enabled=True)
 
@@ -436,7 +461,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(
         "main.checkin.due",
-        lambda cfg: checkin.CheckinDue(
+        lambda cfg, **kw: checkin.CheckinDue(
             number=1,
             workouts_done=24,
             weeks_elapsed=4,
@@ -445,9 +470,9 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         "main.checkin.run_checkin",
-        lambda cfg, due_info, week, block: "Check-in 1: all good.",
+        lambda cfg, due_info, week, block, **kw: "Check-in 1: all good.",
     )
-    monkeypatch.setattr("main.checkin.record", lambda cfg, due_info, msg: None)
+    monkeypatch.setattr("main.checkin.record", lambda cfg, due_info, msg, **kw: None)
 
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
@@ -455,10 +480,10 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     )
     monkeypatch.setattr(
         "main.read_recovery_metrics",
-        lambda path: {"sleep_hours": 7.5, "weight_kg": 82},
+        lambda *args, **kw: {"sleep_hours": 7.5, "weight_kg": 82},
     )
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.fetch_latest_workout",
         lambda key: {"id": "1", "title": "Day 1", "exercises": []},
@@ -475,11 +500,13 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
             exercises=[],
         ),
     )
-    monkeypatch.setattr("main.save_workout", lambda raw, path: None)
-    monkeypatch.setattr("main.save_progress", lambda summary, path: None)
+    monkeypatch.setattr("main.save_workout", lambda *args, **kw: None)
+    monkeypatch.setattr("main.save_progress", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.get_recent_bests",
-        lambda path: {"Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}},
+        lambda *args, **kw: {
+            "Deadlift (Barbell)": {"top_weight_kg": 140, "top_reps": 5}
+        },
     )
     from insights import LiftInsight, RecoveryInsight, TrainingInsights
 
@@ -514,7 +541,8 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights",
+        lambda *a, **kw: fake_insights,
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -528,7 +556,7 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     import io
@@ -543,7 +571,9 @@ def test_run_preview_training_day_with_checkin(monkeypatch, tmp_path) -> None:
     assert "Check-in 1" in output  # check-in message should appear
 
 
-def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
+def test_run_deliver_sends_telegram(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Non-preview mode sends the plan via Telegram."""
     _make_config(monkeypatch, tmp_path)
 
@@ -560,9 +590,9 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -570,13 +600,13 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     # Track Telegram send — must return True for success
     telegram_calls = []
 
-    def _fake_send(token, chat_id, msg, **kw):
+    def _fake_send(token: str, chat_id: str, msg: str, **kw: object) -> bool:
         telegram_calls.append((token, chat_id, msg))
         return True
 
@@ -589,7 +619,9 @@ def test_run_deliver_sends_telegram(monkeypatch, tmp_path) -> None:
     assert telegram_calls[0][1] == "test-chat-id"
 
 
-def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> None:
+def test_run_deliver_returns_2_when_telegram_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When Telegram delivery fails, run returns 2."""
     _make_config(monkeypatch, tmp_path)
 
@@ -606,9 +638,9 @@ def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> Non
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -616,7 +648,7 @@ def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> Non
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     # Telegram fails
@@ -629,7 +661,9 @@ def test_run_deliver_returns_2_when_telegram_fails(monkeypatch, tmp_path) -> Non
     assert result == 2
 
 
-def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
+def test_run_hevy_sync_failure_does_not_block(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """If Hevy sync raises, the daily message still goes out."""
     _make_config(monkeypatch, tmp_path)
 
@@ -649,9 +683,9 @@ def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -659,7 +693,7 @@ def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     monkeypatch.setattr(
@@ -671,7 +705,9 @@ def test_run_hevy_sync_failure_does_not_block(monkeypatch, tmp_path) -> None:
     assert result == 0
 
 
-def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
+def test_run_checkin_due_failure_does_not_block(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """If checkin.due raises, the daily message still goes out."""
     _make_config(monkeypatch, tmp_path, checkin_enabled=True)
 
@@ -692,9 +728,9 @@ def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
     monkeypatch.setattr(
         "main.generate_rest_day_message",
         lambda *args, **kw: "Rest day.",
@@ -702,7 +738,7 @@ def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
     monkeypatch.setattr(
         "main.send_telegram_message",
@@ -713,7 +749,9 @@ def test_run_checkin_due_failure_does_not_block(monkeypatch, tmp_path) -> None:
     assert result == 0  # delivered successfully despite check-in failure
 
 
-def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
+def test_run_self_review_on_configured_weekday(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """When self_review is enabled and today is the review weekday, a review is sent."""
     from config import Config
 
@@ -738,7 +776,12 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
         self_review_weekday=6,  # Sunday
     )
     monkeypatch.setattr("main.Config.load", lambda: config2)
-    monkeypatch.setattr("main.init_db", lambda path: None)
+    monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
+    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    monkeypatch.setattr(
+        "main._resolve_provider",
+        lambda config, **kw: MagicMock(name="test-provider"),
+    )
 
     # Sunday Aug 9, 2026
     monkeypatch.setattr(
@@ -754,9 +797,9 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
     )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda path: None)
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda metrics, date, path: None)
+    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
 
     # Self-review uses these
     monkeypatch.setattr(
@@ -778,7 +821,7 @@ def test_run_self_review_on_configured_weekday(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.get_programme_start_date",
-        lambda path: date(2026, 8, 3),
+        lambda *args, **kw: date(2026, 8, 3),
     )
 
     import io

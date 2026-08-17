@@ -322,7 +322,8 @@ def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainin
             tmpl = _parse_exercise_template(raw)
             data.exercise_templates[tmpl.id] = tmpl
         logger.info(
-            "Fetched %d exercise templates from Hevy.", len(data.exercise_templates),
+            "Fetched %d exercise templates from Hevy.",
+            len(data.exercise_templates),
         )
     else:
         logger.warning("Could not fetch exercise templates from Hevy.")

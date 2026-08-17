@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -44,7 +45,7 @@ def _nice_round(value: float) -> str:
 
 
 def line_chart(
-    points: Sequence[dict],
+    points: Sequence[dict[str, Any]],
     *,
     colour: str = ACCENT,
     unit: str = "",
@@ -130,7 +131,11 @@ def line_chart(
 
 
 def progress_ring(
-    pct: float, *, label: str = "", sub: str = "", colour: str = ACCENT,
+    pct: float,
+    *,
+    label: str = "",
+    sub: str = "",
+    colour: str = ACCENT,
 ) -> str:
     """A circular gauge filled to ``pct`` (0-100)."""
     pct = max(0.0, min(100.0, float(pct)))
@@ -149,7 +154,7 @@ def progress_ring(
 </svg>"""
 
 
-def donut(segments: Sequence[dict], *, size: int = 160) -> str:
+def donut(segments: Sequence[dict[str, Any]], *, size: int = 160) -> str:
     """A donut chart. ``segments`` = ``[{"label", "value", "colour"?}]``."""
     items = [s for s in segments if float(s.get("value", 0)) > 0]
     total = sum(float(s["value"]) for s in items)
@@ -186,7 +191,11 @@ def donut(segments: Sequence[dict], *, size: int = 160) -> str:
 
 
 def bar_chart(
-    bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", height: int = 200,
+    bars: Sequence[dict[str, Any]],
+    *,
+    colour: str = ACCENT,
+    unit: str = "",
+    height: int = 200,
 ) -> str:
     """Vertical bars. ``bars`` = ``[{"label", "value", "caption"?}]``."""
     items = list(bars)
@@ -227,7 +236,10 @@ def bar_chart(
 
 
 def calendar_heatmap(
-    levels: dict[str, int], *, weeks: int = 18, end: date | None = None,
+    levels: dict[str, int],
+    *,
+    weeks: int = 18,
+    end: date | None = None,
 ) -> str:
     """A GitHub-style activity calendar.
 
@@ -285,7 +297,11 @@ def calendar_heatmap(
 
 
 def sparkline(
-    values: Sequence[float], *, colour: str = ACCENT, width: int = 120, height: int = 34,
+    values: Sequence[float],
+    *,
+    colour: str = ACCENT,
+    width: int = 120,
+    height: int = 34,
 ) -> str:
     """A tiny inline trend line."""
     vals = [float(v) for v in values if v is not None]
