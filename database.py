@@ -13,13 +13,22 @@ import time
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
+
+
+class UserRow(TypedDict):
+    id: str
+    email: str
+    display_name: str | None
+    created_at: str
+    timezone: str
+    units: str
 
 DEFAULT_DB_PATH = "workout_agent.db"
 
@@ -1679,7 +1688,7 @@ def get_or_create_user(
     email: str,
     display_name: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any]:
+) -> UserRow:
     """Return the user row for an email, creating one on first login."""
     import uuid
     from datetime import datetime
@@ -1691,14 +1700,14 @@ def get_or_create_user(
             (email,),
         ).fetchone()
         if row:
-            return {
-                "id": row[0],
-                "email": row[1],
-                "display_name": row[2],
-                "created_at": row[3],
-                "timezone": row[4],
-                "units": row[5],
-            }
+            return UserRow(
+                id=row[0],
+                email=row[1],
+                display_name=row[2],
+                created_at=row[3],
+                timezone=row[4],
+                units=row[5],
+            )
 
         user_id = str(uuid.uuid4())
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -1709,20 +1718,20 @@ def get_or_create_user(
             """,
             (user_id, email, display_name, now),
         )
-        return {
-            "id": user_id,
-            "email": email,
-            "display_name": display_name,
-            "created_at": now,
-            "timezone": "UTC",
-            "units": "metric",
-        }
+        return UserRow(
+            id=user_id,
+            email=email,
+            display_name=display_name,
+            created_at=now,
+            timezone="UTC",
+            units="metric",
+        )
 
 
 def get_user_by_id(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
+) -> UserRow | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1732,31 +1741,31 @@ def get_user_by_id(
         ).fetchone()
     if not row:
         return None
-    return {
-        "id": row[0],
-        "email": row[1],
-        "display_name": row[2],
-        "created_at": row[3],
-        "timezone": row[4],
-        "units": row[5],
-    }
+    return UserRow(
+        id=row[0],
+        email=row[1],
+        display_name=row[2],
+        created_at=row[3],
+        timezone=row[4],
+        units=row[5],
+    )
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, email, display_name, created_at, timezone, units FROM users",
         ).fetchall()
     return [
-        {
-            "id": row[0],
-            "email": row[1],
-            "display_name": row[2],
-            "created_at": row[3],
-            "timezone": row[4],
-            "units": row[5],
-        }
+        UserRow(
+            id=row[0],
+            email=row[1],
+            display_name=row[2],
+            created_at=row[3],
+            timezone=row[4],
+            units=row[5],
+        )
         for row in rows
     ]
 
