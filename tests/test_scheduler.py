@@ -108,19 +108,16 @@ def test_run_scheduler_bootstrap_calls_jobs(monkeypatch: pytest.MonkeyPatch) -> 
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
-    def _mock_coaching(uid: str) -> bool:
+    def _record_coaching(uid: str) -> bool:
         coaching_calls.append(uid)
         return True
 
-    def _mock_insight(flag: str) -> bool:
+    def _record_insight(flag: str) -> bool:
         insight_calls.append(flag)
         return True
 
-    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
-    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
-    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_connector_health", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_coaching", _record_coaching)
+    monkeypatch.setattr(scheduler, "_run_insight_job", _record_insight)
 
     iteration = [0]
 
@@ -146,18 +143,16 @@ def test_run_scheduler_dispatches_due_users(monkeypatch: pytest.MonkeyPatch) -> 
     coaching_calls: list[str] = []
     insight_calls: list[str] = []
 
-    def _mock_coaching(uid: str) -> bool:
+    def _record_coaching(uid: str) -> bool:
         coaching_calls.append(uid)
         return True
 
-    def _mock_insight(flag: str) -> bool:
+    def _record_insight(flag: str) -> bool:
         insight_calls.append(flag)
         return True
 
-    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
-    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
-    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
+    monkeypatch.setattr(scheduler, "_run_coaching", _record_coaching)
+    monkeypatch.setattr(scheduler, "_run_insight_job", _record_insight)
     monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
 
     users = [
