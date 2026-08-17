@@ -1100,7 +1100,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     response = model.generate_content(prompt)
     reasoning = (response.text or "Could not determine reasoning.").strip()
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
     return {"reasoning": reasoning}
 
 

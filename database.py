@@ -1493,9 +1493,17 @@ def get_dashboard_insight(
 
 
 def save_reasoning_log(
-    context_id: str, exercise_name: str, reasoning: str, db_path: str = DEFAULT_DB_PATH
+    context_id: str,
+    exercise_name: str,
+    reasoning: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Save an AI reasoning log for an exercise change."""
+    """Save an AI reasoning log for an exercise change.
+
+    If *user_id* is provided, the log is scoped to that user.
+    """
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1519,9 +1527,19 @@ def get_reasoning_log(
     If *user_id* is provided, results are scoped to that user.
     """
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT reasoning FROM reasoning_logs WHERE context_id = ?", (context_id,)
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                """
+                SELECT reasoning FROM reasoning_logs
+                WHERE context_id = ? AND user_id = ?
+                """,
+                (context_id, user_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
+                (context_id,),
+            ).fetchone()
     return row[0] if row else None
 
 
