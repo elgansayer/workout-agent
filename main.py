@@ -13,8 +13,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 import checkin
 import google_health_client
@@ -25,6 +27,7 @@ from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
@@ -41,6 +44,7 @@ from hevy_parser import parse_workout
 from hevy_sync import sync_routines
 from program import (
     REST_DAY_FOCUS,
+    Block,
     block_for_week,
     day_focus,
     rep_targets,
@@ -106,12 +110,19 @@ def _changes_footer(statuses: list[str]) -> str:
     return "\n\nHevy routines refreshed: " + ", ".join(changed) + "."
 
 
-def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
+def _maybe_check_in(
+    config: Config,
+    week: int,
+    block: Block,
+    preview: bool,
+    *,
+    user_id: str | None = None,
+) -> None:
     """Run a programme check-in if one is due, delivering it as its own message."""
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config)
+        due_info = checkin.due(config, user_id=user_id)
     except Exception as exc:  # noqa: BLE001  # a check-in must never block the daily message
         logger.warning("Check-in scheduling failed: %s", exc)
         return
@@ -123,18 +134,20 @@ def _maybe_check_in(config: Config, week: int, block, preview: bool) -> None:
         due_info.workouts_done,
         due_info.weeks_elapsed,
     )
-    message = checkin.run_checkin(config, due_info, week, block)
+    message = checkin.run_checkin(config, due_info, week, block, user_id=user_id)
     _deliver(config, message, preview)
     if not preview:
-        checkin.record(config, due_info, message)
+        checkin.record(config, due_info, message, user_id=user_id)
 
 
 def _maybe_self_review(
     config: Config,
-    recovery: dict | None,
+    recovery: dict[str, Any] | None,
     week: int,
-    block,
+    block: Block,
     preview: bool,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """On the configured weekday, send a self-review of how training is going."""
     if not config.self_review_enabled:
@@ -142,8 +155,8 @@ def _maybe_self_review(
     if datetime.now(tz=timezone.utc).date().weekday() != config.self_review_weekday:
         return
     review = insights_engine.build_insights(
-        get_progress_history(db_path=config.database_path),
-        get_body_metrics(db_path=config.database_path),
+        get_progress_history(db_path=config.database_path, user_id=user_id),
+        get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
     )
     if not review.lifts:
@@ -161,7 +174,33 @@ def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -
     return text + footer
 
 
-def run(preview: bool = False) -> int:
+def _resolve_provider(
+    config: Config,
+    *,
+    user_id: str | None = None,
+) -> AIProvider:
+    """Resolve the AI provider for a run, scoping to *user_id* when given."""
+    return resolve_provider(
+        user_id=user_id,
+        db_path=config.database_path,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+    )
+
+
+def _resolve_run_user(db_path: str) -> str:
+    """Return the user_id the scheduled run should operate under.
+
+    Prefers $SCHEDULER_USER_ID (set by scheduler.py when dispatching per-user).
+    Falls back to the first legacy user for single-tenant backwards compat.
+    """
+    env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
+    if env_id:
+        return env_id
+    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+
+
+def run(preview: bool = False, user_id: str | None = None) -> int:
     try:
         config = Config.load()
     except ConfigError as exc:
@@ -170,16 +209,24 @@ def run(preview: bool = False) -> int:
 
     init_db(config.database_path)
 
+    if user_id is None:
+        user_id = _resolve_run_user(config.database_path)
+    logger.info("Running daily cycle for user %s", user_id)
+
+    provider = _resolve_provider(config, user_id=user_id)
+
     statuses = _sync_hevy_routines(config)
     footer = _changes_footer(statuses)
 
     today = datetime.now(tz=timezone.utc).date()
     when = today.isoformat()
-    week = week_in_cycle(get_programme_start_date(config.database_path), today)
+    week = week_in_cycle(
+        get_programme_start_date(config.database_path, user_id=user_id), today
+    )
     block = block_for_week(week)
     logger.info("Week %s of 12, Block %s: %s.", week, block.number, block.name)
 
-    _maybe_check_in(config, week, block, preview)
+    _maybe_check_in(config, week, block, preview, user_id=user_id)
 
     recovery = read_recovery_metrics(config.health_connect_file)
     synced = google_health_client.sync_body_metrics(
@@ -193,7 +240,10 @@ def run(preview: bool = False) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(
-            body_metrics_from_recovery(recovery), when, config.database_path
+            body_metrics_from_recovery(recovery),
+            when,
+            config.database_path,
+            user_id=user_id,
         )
 
     _maybe_self_review(config, recovery, week, block, preview)
@@ -210,6 +260,9 @@ def run(preview: bool = False) -> int:
         message = generate_rest_day_message(
             provider=provider,
             recovery=recovery,
+            server_gemini_key=config.gemini_api_key,
+            server_gemini_model=config.gemini_model,
+            db_path=config.database_path,
         )
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
@@ -225,6 +278,7 @@ def run(preview: bool = False) -> int:
                 message,
                 guidance.as_text() if guidance else "",
                 config.database_path,
+                user_id=user_id,
             )
         return _deliver(config, _compose(message, guidance, footer), preview)
 
@@ -235,19 +289,19 @@ def run(preview: bool = False) -> int:
     )
     summary = parse_workout(recent_workout, rep_targets(block))
     if not preview:
-        save_workout(recent_workout, config.database_path)
-        save_progress(summary, config.database_path)
+        save_workout(recent_workout, config.database_path, user_id=user_id)
+        save_progress(summary, config.database_path, user_id=user_id)
 
-    history = get_recent_bests(config.database_path)
+    history = get_recent_bests(config.database_path, user_id=user_id)
 
     review = insights_engine.build_insights(
-        get_progress_history(db_path=config.database_path),
-        get_body_metrics(db_path=config.database_path),
+        get_progress_history(db_path=config.database_path, user_id=user_id),
+        get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
     )
     logger.info("%s", review.headline)
 
-    logs = get_daily_logs(limit=5, db_path=config.database_path)
+    logs = get_daily_logs(limit=5, db_path=config.database_path, user_id=user_id)
     last_plan = None
     for log in logs:
         if log.get("day") is not None and log.get("plan"):
@@ -269,6 +323,9 @@ def run(preview: bool = False) -> int:
         history=history,
         insights=review,
         last_plan=last_plan,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)
@@ -284,13 +341,14 @@ def run(preview: bool = False) -> int:
             plan,
             guidance.as_text() if guidance else "",
             config.database_path,
+            user_id=user_id,
         )
     return _deliver(config, _compose(plan, guidance, footer), preview)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Autonomous workout agent: builds and delivers today's plan."
+        description="Autonomous workout agent: builds and delivers today's plan.",
     )
     parser.add_argument(
         "--preview",
