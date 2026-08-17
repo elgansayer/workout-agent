@@ -165,10 +165,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
-
-        # Note: For new databases the initial programme_state row is
-        # inserted by the migration block below (after table recreation).
-
+        try:
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO programme_state (id, current_day, split_name)
+                VALUES (1, 1, ?)
+                """,
+                (SPLIT_NAME,),
+            )
+        except sqlite3.OperationalError:
+            # Table has already been migrated to user_id-scoped schema (no 'id' column)
+            pass
         cursor.execute(
             """
             INSERT OR IGNORE INTO hevy_meta (key, value)
@@ -546,42 +553,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 """
                 CREATE TABLE IF NOT EXISTS programme_state_new (
                     user_id TEXT NOT NULL REFERENCES users(id),
-                    current_day INTEGER NOT NULL DEFAULT 1,
-                    split_name TEXT NOT NULL,
-                    PRIMARY KEY (user_id)
-                )
-                """,
-            )
-            old_row = cursor.execute(
-                "SELECT current_day, split_name FROM programme_state WHERE id = 1",
-            ).fetchone()
-            if old_row:
-                ps_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO programme_state_new "
-                    "(user_id, current_day, split_name) VALUES (?, ?, ?)",
-                    (ps_legacy_id, old_row[0], old_row[1]),
-                )
-            else:
-                # Brand-new database: seed a default row for the legacy user
-                ps_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO programme_state_new "
-                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-                    (ps_legacy_id, SPLIT_NAME),
-                )
-            cursor.execute("DROP TABLE programme_state")
-            cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
-
-        # Migration: Migrate programme_state from singleton to user_id-scoped
-        cursor.execute("PRAGMA table_info(programme_state)")
-        ps_columns = {row[1] for row in cursor.fetchall()}
-        if "user_id" not in ps_columns:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS programme_state_new (
-                    user_id TEXT NOT NULL REFERENCES users(id),
-                    current_day INTEGER NOT NULL DEFAULT 1,
+                    current_day INTEGER NOT NULL,
                     split_name TEXT NOT NULL,
                     PRIMARY KEY (user_id)
                 )
@@ -597,29 +569,31 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                     "(user_id, current_day, split_name) VALUES (?, ?, ?)",
                     (ps_legacy_id, old_row[0], old_row[1]),
                 )
-            else:
-                # Brand-new database: seed a default row for the legacy user
-                ps_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO programme_state_new "
-                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-                    (ps_legacy_id, SPLIT_NAME),
-                )
             cursor.execute("DROP TABLE programme_state")
             cursor.execute(
                 "ALTER TABLE programme_state_new RENAME TO programme_state"
             )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_state_user "
+            "ON programme_state (user_id)"
+        )
+
+
+def _resolve_legacy_user_id(conn: sqlite3.Connection) -> str:
+    """Return the legacy user id, or '' if no legacy user exists."""
+    row = conn.execute(
+        "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+    ).fetchone()
+    return row[0] if row else ""
 
 
 def get_current_day(
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
+    db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
 ) -> int:
     """Return the current day in the cycle (1-6).
 
-    When *user_id* is provided, the day is scoped to that user.
-    When None, returns the first row found (backward-compatible single-tenant path).
+    If *user_id* is provided, the query is scoped to that user.
+    Without *user_id*, falls back to the legacy user record.
     """
     with _connect(db_path) as conn:
         if user_id is not None:
@@ -628,35 +602,47 @@ def get_current_day(
                 (user_id,),
             ).fetchone()
         else:
-            row = conn.execute(
-                "SELECT current_day FROM programme_state LIMIT 1"
-            ).fetchone()
+            # Backward-compat: resolve legacy user
+            legacy = _resolve_legacy_user_id(conn)
+            if legacy:
+                row = conn.execute(
+                    "SELECT current_day FROM programme_state WHERE user_id = ?",
+                    (legacy,),
+                ).fetchone()
+            else:
+                row = None
     return int(row[0]) if row else 1
 
 
 def advance_day(
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
+    db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
 ) -> int:
     """Move to the next day, wrapping from TOTAL_DAYS back to 1.
 
-    When *user_id* is provided, scoped to that user.
+    If *user_id* is provided, the update is scoped to that user.
+    Without *user_id*, falls back to the legacy user record.
     """
     current = get_current_day(db_path, user_id=user_id)
     nxt = current + 1 if current < TOTAL_DAYS else 1
     with _connect(db_path) as conn:
         if user_id is not None:
             conn.execute(
-                "UPDATE programme_state SET current_day = ? WHERE user_id = ?",
-                (nxt, user_id),
+                "INSERT INTO programme_state (user_id, current_day, split_name) "
+                "VALUES (?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET current_day = excluded.current_day",
+                (user_id, nxt, SPLIT_NAME),
             )
         else:
-            conn.execute(
-                "UPDATE programme_state SET current_day = ?",
-                (nxt,),
-            )
-
+            legacy = _resolve_legacy_user_id(conn)
+            if legacy:
+                conn.execute(
+                    "INSERT INTO programme_state (user_id, current_day, split_name) "
+                    "VALUES (?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET "
+                    "current_day = excluded.current_day",
+                    (legacy, nxt, SPLIT_NAME),
+                )
+            # else: no-op; can't update without a user_id
     return nxt
 
 
@@ -2128,9 +2114,7 @@ def set_active_programme(
             ),
         )
         # Reset current_day to 1 for the new programme.
-
         conn.execute(
             "UPDATE programme_state SET current_day = 1 WHERE user_id = ?",
             (user_id,),
         )
-

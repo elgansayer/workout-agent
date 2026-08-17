@@ -1049,14 +1049,13 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
     assert get_deep_correlation(db_path=db, user_id=None) is None
 
 
-
 # ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: programme_state user_id scoping
+# Multi-tenant isolation tests: programme_state singleton-to-user_id migration
 # ---------------------------------------------------------------------------
 
 
-def test_programme_state_migration_and_isolation(tmp_path):
-    """programme_state is migrated from singleton to user_id-scoped."""
+def test_programme_state_migration_from_singleton(tmp_path):
+    """Running init_db on a pre-migration singleton DB migrates to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
 
@@ -1074,7 +1073,7 @@ def test_programme_state_migration_and_isolation(tmp_path):
     )
     conn.execute(
         "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
-        "VALUES (1, 3, 'Legacy Split')"
+        "VALUES (1, 4, 'Custom Split')"
     )
     conn.commit()
     conn.close()
@@ -1087,73 +1086,60 @@ def test_programme_state_migration_and_isolation(tmp_path):
             for row in conn2.execute("PRAGMA table_info(programme_state)").fetchall()
         }
         assert "user_id" in cols
-        assert "id" not in cols  # old singleton id column is gone
+        assert "id" not in cols  # singleton "id" column is gone
         rows = conn2.execute(
             "SELECT user_id, current_day, split_name FROM programme_state"
         ).fetchall()
         assert len(rows) == 1
-        assert rows[0][1] == 3  # current_day preserved
-        assert rows[0][2] == "Legacy Split"  # split_name preserved
-        assert rows[0][0] is not None  # user_id backfilled
+        assert rows[0][1] == 4  # current_day preserved
+        assert rows[0][2] == "Custom Split"  # split_name preserved
 
 
 def test_programme_state_user_isolation(tmp_path):
-    """Two users have independent programme_state rows."""
+    """Two users' programme_state rows are independent."""
     db = _db(tmp_path)
     init_db(db)
 
     user_a = "user-a-123"
     user_b = "user-b-456"
 
-    # Seed rows for both users directly
-    import sqlite3
+    # Advance user A twice
+    advance_day(db, user_id=user_a)
+    advance_day(db, user_id=user_a)
 
-    from database import advance_day, get_current_day
+    # Advance user B once
+    advance_day(db, user_id=user_b)
 
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
-        "VALUES (?, 2, ?)",
-        (user_a, "Test Split"),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
-        "VALUES (?, 5, ?)",
-        (user_b, "Test Split"),
-    )
-    conn.commit()
-    conn.close()
-
-    assert get_current_day(db, user_id=user_a) == 2
-    assert get_current_day(db, user_id=user_b) == 5
-
-    # Advancing one user does not affect the other
-    assert advance_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_b) == 5
+    assert get_current_day(db, user_id=user_a) == 3  # 1 + 2
+    assert get_current_day(db, user_id=user_b) == 2  # 1 + 1
 
 
 def test_programme_state_backward_compat(tmp_path):
-    """get_current_day / advance_day without user_id still work."""
+    """Callers not passing user_id still work via legacy user fallback."""
     db = _db(tmp_path)
     init_db(db)
 
-    # Without user_id, the legacy user's row should exist and work
-    day = get_current_day(db)
-    assert isinstance(day, int)
-    assert 1 <= day <= 6
-
-    nxt = advance_day(db)
-    assert nxt == get_current_day(db)
-    assert nxt != day
-
-
-def test_programme_state_brand_new_db_seeds_legacy(tmp_path):
-    """A brand-new database seeds a programme_state row for the legacy user."""
-    db = _db(tmp_path)
-    init_db(db)
-    from database import get_current_day
-
+    # Backward-compat call without user_id
     assert get_current_day(db) == 1
+    assert advance_day(db) == 2
+    assert get_current_day(db) == 2
 
+
+def test_programme_state_migration_idempotent(tmp_path):
+    """Running init_db twice on migrated DB does not break programme_state."""
+    db = _db(tmp_path)
+    init_db(db)  # migration runs
+    init_db(db)  # second run must be no-op
+
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(programme_state)").fetchall()
+        }
+        assert "user_id" in cols
+        assert "id" not in cols
+        # Only one row for legacy user (not duplicated)
+        rows = conn.execute("SELECT COUNT(*) FROM programme_state").fetchone()
+        assert rows[0] == 1
