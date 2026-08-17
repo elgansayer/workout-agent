@@ -85,6 +85,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """,
         )
+        # Bolt: Index for faster grouping and filtering by exercise_name
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_name_id ON exercise_progress(exercise_name, id)"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS hevy_routines (
