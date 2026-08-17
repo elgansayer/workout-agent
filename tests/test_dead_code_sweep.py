@@ -18,6 +18,7 @@ from dead_code_sweep import (
     _build_import_graph,
     _cleanup_pycache,
     _extract_imports,
+    _extract_subprocess_module_refs,
     _get_github_repo,
     _get_github_token,
     _grep_import,
@@ -86,6 +87,60 @@ class TestExtractImports:
 
 
 # ---------------------------------------------------------------------------
+# _extract_subprocess_module_refs
+# ---------------------------------------------------------------------------
+
+
+class TestExtractSubprocessModuleRefs:
+    def test_single_subprocess_call(self) -> None:
+        source = 'import subprocess\nsubprocess.run([sys.executable, "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_multiple_subprocess_calls(self) -> None:
+        source = textwrap.dedent("""
+            import subprocess
+            subprocess.run([sys.executable, "main.py"])
+            subprocess.run([sys.executable, "insight_cron.py", "--daily"])
+            subprocess.run([sys.executable, "commit_hygiene.py", "--fix", "--create-issues"])
+        """)
+        assert _extract_subprocess_module_refs(source) == {
+            "main",
+            "insight_cron",
+            "commit_hygiene",
+        }
+
+    def test_ignores_non_subprocess_calls(self) -> None:
+        source = 'import foo\nfoo.bar(["x.py"])\n'
+        assert _extract_subprocess_module_refs(source) == set()
+
+    def test_detects_python_string_executable(self) -> None:
+        source = 'subprocess.run(["python", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_detects_python3_string_executable(self) -> None:
+        source = 'subprocess.run(["python3", "foo.py"])\n'
+        assert _extract_subprocess_module_refs(source) == {"foo"}
+
+    def test_ignores_non_python_executable(self) -> None:
+        source = 'subprocess.run(["node", "foo.js"])\n'
+        assert _extract_subprocess_module_refs(source) == set()
+
+    def test_ignores_non_py_script(self) -> None:
+        source = 'subprocess.run([sys.executable, "echo", "hello"])\n'
+        assert _extract_subprocess_module_refs(source) == set()
+
+    def test_syntax_error_returns_empty(self) -> None:
+        assert _extract_subprocess_module_refs("this is not python !!!") == set()
+
+    def test_no_subprocess_returns_empty(self) -> None:
+        assert _extract_subprocess_module_refs("x = 1\ny = 2\n") == set()
+
+    def test_nested_list_not_false_positive(self) -> None:
+        source = 'def fn(x=["module.py"]): pass\n'
+        assert _extract_subprocess_module_refs(source) == set()
+
+
+# ---------------------------------------------------------------------------
 # ModuleInfo
 # ---------------------------------------------------------------------------
 
@@ -133,6 +188,9 @@ class TestEntryPoints:
     def test_insight_cron_is_entry_point(self) -> None:
         assert "insight_cron.py" in ENTRY_POINTS
 
+    def test_connector_health_is_entry_point(self) -> None:
+        assert "connector_health.py" in ENTRY_POINTS
+
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
         expected = {
@@ -142,6 +200,7 @@ class TestEntryPoints:
             "insight_cron.py",
             "dead_code_sweep.py",
             "commit_hygiene.py",
+            "connector_health.py",
         }
         assert ENTRY_POINTS == expected
 
