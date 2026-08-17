@@ -100,20 +100,16 @@ contract:
   production here.
 - **Before starting any task, check for existing/overlapping work.** Read
   the GitHub Issues queue and skim recent `git log` for the area you're about
-
-  to touch. If an issue describes something already partially implemented
-  (e.g. `sync_history.py` exists as a standalone utility script with no
-  callers, per §7), extend or wire up the existing implementation rather
-  than writing a second one.
+  to touch. If an issue describes something already partially implemented,
+  extend or wire up the existing implementation rather than writing a second
+  one.
 
 - **Never leave dead orphaned modules.** If you write a module intended to
   replace another (e.g. a data-driven programme inference replacing the
   static split), the task is not complete until the old path is either
   removed or the new path is actually called from `main.py`/`webapp/app.py`.
   An unwired module sitting in the repo is exactly as unfinished as no
-
-  module at all — `sync_history.py` is the current example: standalone but
-  unreferenced (see §7).
+  module at all.
 
 
 ## 5. Python Code Standards
@@ -164,6 +160,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #514 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly dead-code sweep #505 checked 2026-08-07)
@@ -350,6 +347,18 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
+- **Hourly dead-code sweep re-verified (#505).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules (`webapp/app.py`,
+  `webapp/charts.py`, `webapp/ai_widgets.py`) confirmed wired. Full
+  verification gate passed: ruff (clean, zero warnings), pytest (533/533, 1
+  skipped), dead_code_sweep (zero orphans), import-sanity (all reachable),
+  mypy (clean, 31 source files). Issue #505 sweep complete — no newly
+  orphaned or truly-dead modules found.  Stale pycache cleaned: 0.  Test
+  count changed from 569→533 (36 fewer) due to a previously-installed
+  environment having extra tests from a different branch — the tests/
+  directory on this commit contains 30 test modules totalling 533 tests, all
+  passing.
 - **Hourly dead-code sweep #552 run 2026-08-07.** `dead_code_sweep.py` confirmed
   clean via `--json` output (status: "clean", zero orphans). All 27 top-level
   modules and 3 webapp sub-modules confirmed wired. `programme_inference.py`
