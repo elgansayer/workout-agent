@@ -443,29 +443,31 @@ def _grep_import(module_name: str) -> list[str]:
     # For top-level-package sub-modules (e.g. "webapp.charts"), also search
     # for the ``from <package> import <short>`` pattern.
     if "." in module_name:
-        pkg, short = module_name.split(".", 1)
-        if short:
-            try:
-                result = subprocess.run(
-                    [
-                        "grep",
-                        "-rn",
-                        rf"^\s*from\s+{pkg}\s+import\s+.*\b{short}\b",
-                        "--include=*.py",
-                        str(ROOT),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                    check=False,
-                )
-                for line in result.stdout.splitlines():
-                    file_part = line.split(":", 1)[0]
-                    rel = os.path.relpath(file_part, ROOT)
-                    if rel != own_file and rel != test_file:
-                        hits.append(rel)
-            except (subprocess.TimeoutExpired, OSError):
-                pass
+        pkg, short = module_name.rsplit(".", 1)
+        # Escape dots in pkg so "webapp.sub" doesn't match "webappXsub".
+        escaped_pkg = pkg.replace(".", "\\.")
+        try:
+            result = subprocess.run(
+                [
+                    "grep",
+                    "-rn",
+                    "-E",
+                    f"^\\s*from {pkg} import .*\\b{short}\\b",
+                    "--include=*.py",
+                    str(ROOT),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            for line in result.stdout.splitlines():
+                file_part = line.split(":", 1)[0]
+                rel = os.path.relpath(file_part, ROOT)
+                if rel != own_file and rel != test_file:
+                    hits.append(rel)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
 
     return sorted(set(hits))
 
@@ -894,7 +896,8 @@ def main() -> int:
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
-    merely_orphaned = [r for r in orphans if r not in truly_dead]
+    dead_names = {r.module.name for r in truly_dead}
+    merely_orphaned = [r for r in orphans if r.module.name not in dead_names]
 
     exit_code = 0
 
