@@ -13,9 +13,10 @@ Design
 * Import-discovery is AST-based (not ``grep``) so we don't false-positive on
   string literals or comments that happen to contain a module name.
 * Entry-point modules (``main.py``, ``scheduler.py``, ``sync_history.py``,
-  ``insight_cron.py``) and ``conftest.py`` are excluded from the orphan check
-  because they are invoked directly by a human, a shell script, or the test
-  runner — not by another Python module.
+  ``insight_cron.py``, ``commit_hygiene.py``, ``connector_health.py``,
+  ``dead_code_sweep.py``) and ``conftest.py`` are excluded from the orphan
+  check because they are invoked directly by a human, a shell script,
+  subprocess, or the test runner — not by another Python module.
 * Web-app sub-modules (``webapp/*.py``) are likewise checked.
 * When an orphan is discovered the script **does not delete it** — it emits a
   structured report and exits non-zero so the calling automation can file a
@@ -91,6 +92,7 @@ ENTRY_POINTS: set[str] = {
     "insight_cron.py",
     "dead_code_sweep.py",
     "commit_hygiene.py",
+    "connector_health.py",
 }
 
 # Files that are not modules in the import sense.
@@ -152,9 +154,13 @@ def _discover_modules() -> list[ModuleInfo]:
 
 
 def _extract_imports(source: str) -> set[str]:
-    """Return the set of top-level module names imported by *source*.
+    """Return the set of module names imported by *source*.
 
     Handles ``import foo``, ``from foo import bar``, and ``from foo.baz import ...``.
+
+    Returns only the top-level package name (e.g. ``webapp`` from
+    ``from webapp import charts``).  Use :func:`_extract_full_imports` when
+    you need the fully-qualified module name.
     """
     try:
         tree = ast.parse(source)
@@ -165,17 +171,28 @@ def _extract_imports(source: str) -> set[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add(alias.name.split(".")[0])
+                parts = alias.name.split(".")
+                imports.add(parts[0])
+                for i in range(2, len(parts) + 1):
+                    imports.add(".".join(parts[:i]))
         elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imports.add(node.module.split(".")[0])
+            parts = node.module.split(".")
+            imports.add(parts[0])
+            for i in range(2, len(parts) + 1):
+                imports.add(".".join(parts[:i]))
     return imports
 
 
-def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str]:
-    """Return dot-separated sub-module names from intra-package imports.
+def _extract_full_imports(source: str) -> set[str]:
+    """Return the set of **fully-qualified** module names imported by *source*.
 
-    Example: ``from webapp import charts`` → ``{"webapp.charts"}`` when
-    ``"webapp"`` is in *local_packages*.
+    Unlike :func:`_extract_imports`, this preserves sub-module resolution
+    from ``from X import Y`` patterns: ``from webapp import charts``
+    yields ``{"webapp", "webapp.charts"}`` (both forms), while
+    ``from webapp.charts import line_chart`` yields ``{"webapp", "webapp.charts"}``.
+
+    This allows transitive-import resolution to find the defining file for
+    ``webapp.charts`` without falling back to grep.
     """
     try:
         tree = ast.parse(source)
@@ -204,9 +221,11 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
 # ---------------------------------------------------------------------------
 
 
-def _build_import_graph() -> dict[str, set[str]]:
-    """Return {importing_file_stem -> {module_names_it_imports}}."""
+def _build_import_graph(
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Return ``({importing_file_rel -> {module_names_it_imports}}, {file_rel -> module_name})``."""
     graph: dict[str, set[str]] = {}
+    file_to_mod: dict[str, str] = {}
 
     # Discover local packages (directories with __init__.py) so we can
     # resolve intra-package imports like ``from webapp import charts`` to the
@@ -228,17 +247,62 @@ def _build_import_graph() -> dict[str, set[str]]:
 
         rel = str(py_file.relative_to(ROOT))
         source = py_file.read_text(encoding="utf-8")
-        graph[rel] = _extract_imports(source) | _extract_submodule_imports(
-            source, local_packages
+        graph[rel] = (
+            _extract_imports(source)
+            | _extract_submodule_imports(source, local_packages)
+            | _extract_subprocess_module_refs(source)
         )
 
     return graph
 
 
+def _build_full_import_graph() -> dict[str, set[str]]:
+    """Return {importing_file_rel -> {fully_qualified_module_names_it_imports}}.
+
+    Uses :func:`_extract_full_imports` so that ``from webapp import charts``
+    records both ``webapp`` and ``webapp.charts`` in the graph.  This lets
+    the BFS in :func:`find_orphans` resolve ``webapp.charts`` to its
+    defining file without a grep fallback.
+    """
+    graph: dict[str, set[str]] = {}
+
+    for py_file in sorted(ROOT.rglob("*.py")):
+        parts = py_file.parts
+        if any(
+            p.startswith(".") or p in ("__pycache__", ".venv", "venv") for p in parts
+        ):
+            continue
+
+        rel = str(py_file.relative_to(ROOT))
+        source = py_file.read_text(encoding="utf-8")
+        graph[rel] = _extract_full_imports(source)
+
+        # Build module name from file path
+        if rel.startswith("webapp/"):
+            # webapp/foo.py -> webapp.foo
+            file_to_mod[rel] = "webapp." + rel.rsplit("/", 1)[-1].replace(".py", "")
+        elif rel.startswith("tests/"):
+            # Test modules are never source modules; skip them
+            pass
+        else:
+            if (
+                rel.endswith(".py")
+                and not rel.startswith("test_")
+                and rel != "conftest.py"
+                and rel != "__init__.py"
+            ):
+                file_to_mod[rel] = rel.replace(".py", "")
+
+    return graph, file_to_mod
+
+
 def find_orphans() -> list[OrphanReport]:
     """Return every module that is never imported by any reachable code."""
     modules = _discover_modules()
-    import_graph = _build_import_graph()
+    import_graph, file_to_mod = _build_import_graph()
+
+    # Build reverse mapping: module_name -> file_rel that defines it
+    mod_to_file: dict[str, str] = {v: k for k, v in file_to_mod.items()}
 
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
@@ -249,15 +313,19 @@ def find_orphans() -> list[OrphanReport]:
         if mi.is_entry_point:
             wired.add(mi.name)
 
-    # Also seed with modules that are imported by test files — tests count as
-    # reachable (they exercise the module at runtime via pytest).
-    for file_rel, imports in import_graph.items():
-        if file_rel.startswith("tests/"):
-            wired |= imports
-
     # Treat webapp/app.py as an effective entry point — it's the web server
     # entry point, not imported by anyone else.
     _WEB_ENTRY = "webapp/app.py"
+    wired.add("webapp.app")
+
+    # Discover modules referenced in shell scripts, Dockerfiles, etc. and
+    # treat them as entry-point-adjacent (they're invoked at runtime).
+    shell_refs = _discover_shell_module_refs()
+    for ref in shell_refs:
+        wired.add(ref)
+
+    # Also seed wired with webapp.app so it's never flagged as orphan
+    wired.add("webapp.app")
 
     # BFS from entry-point files: anything they import is reachable, and
     # anything *those* import is reachable, etc.
@@ -265,34 +333,36 @@ def find_orphans() -> list[OrphanReport]:
         f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
     }
 
-    # Also seed wired with webapp.app so it's never flagged as orphan
-    wired.add("webapp.app")
-
-    # Build a look-up: module_name -> file_rel that defines it
-    module_to_file: dict[str, str] = {}
-    for file_rel in import_graph:
-        stem = file_rel.replace("/", ".").replace(".py", "")
-        module_to_file[stem] = file_rel
-
     queue: list[str] = []
-    for ep in entry_point_files:
-        for imp in import_graph.get(ep, set()):
-            if imp not in wired:
-                wired.add(imp)
-                queue.append(imp)
+    for file_rel, imports in import_graph.items():
+        if file_rel.startswith("tests/") or file_rel in entry_point_files:
+            for imp in imports:
+                if imp not in wired:
+                    wired.add(imp)
+                    queue.append(imp)
+
+    # Map module names to their defining file path for transitive lookups.
+    module_file: dict[str, str] = {}
+    for mi in modules:
+        rel = str(mi.path.relative_to(ROOT))
+        module_file[mi.name] = rel
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file that defines this module and add everything IT imports.
-        # (The old approach looked at files that import module_name and added
-        # what those files import — that only discovers transitive
-        # dependencies by coincidence when two modules share a common importer.)
-        defining_file = module_to_file.get(module_name)
-        if defining_file is not None:
-            for transitive in import_graph.get(defining_file, set()):
+        # Look at the module's own file's imports (transitive closure).
+        def_file = module_file.get(module_name)
+        if def_file and def_file in import_graph:
+            for transitive in import_graph[def_file]:
                 if transitive not in wired:
                     wired.add(transitive)
                     queue.append(transitive)
+        # Also find files that import this module and add their imports.
+        for file_rel, imports in import_graph.items():
+            if module_name in imports:
+                for transitive in import_graph.get(file_rel, set()):
+                    if transitive not in wired:
+                        wired.add(transitive)
+                        queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -302,8 +372,8 @@ def find_orphans() -> list[OrphanReport]:
         if mi.is_entry_point:
             continue
 
-        # Double-check with a simple grep: is the module imported via dynamic
-        # patterns that AST can't catch (e.g. __import__ or importlib)?
+        # Double-check with grep: is the module imported via dynamic patterns
+        # that AST can't catch (e.g. __import__ or importlib)?
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
@@ -333,13 +403,22 @@ def _grep_import(module_name: str) -> list[str]:
     own_file = f"{module_name.replace('.', '/')}.py"
     test_file = f"tests/test_{module_name.replace('webapp.', '')}.py"
 
+    # Build a safe regex: ``import module_name`` or ``from module_name``
+    # followed by a space, dot, or end-of-line.  Word boundaries (\b) guard
+    # against prefix false-positives.
     try:
+        # Escape dots so "webapp.charts" matches only the literal dot, not
+        # any character (e.g. would otherwise also match "webapp_charts").
+        escaped = module_name.replace(".", "\\.")
+        # Word-boundary anchors prevent partial-name matches:
+        #   "import charts"  must NOT match  "import charts_legacy"
+        #   "from webapp\\.charts" must NOT match "from webapp\\.charts_legacy"
         result = subprocess.run(
             [
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {module_name}|from {module_name}( |\\.))",
+                rf"^(import {module_name}|from {module_name}( |\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -356,16 +435,19 @@ def _grep_import(module_name: str) -> list[str]:
     except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Also check for `from <package> import <short_name>` pattern for any
-    # sub-package (e.g. ``from webapp import charts``, or future sub-packages).
+    # For top-level-package sub-modules (e.g. "webapp.charts"), also search
+    # for the ``from <package> import <short>`` pattern.
     if "." in module_name:
         pkg, short = module_name.rsplit(".", 1)
+        # Escape dots in pkg so "webapp.sub" doesn't match "webappXsub".
+        escaped_pkg = pkg.replace(".", "\\.")
         try:
             result = subprocess.run(
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from {pkg} import .*{short}",
+                    "-E",
+                    f"^\\s*from {pkg} import .*\\b{short}\\b",
                     "--include=*.py",
                     str(ROOT),
                 ],
@@ -390,6 +472,28 @@ def _grep_import(module_name: str) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def _is_shallow_repo() -> bool:
+    """Detect whether we're inside a shallow git clone.
+
+    In a shallow clone every file has only one commit, so ``few_commits``
+    is never a reliable signal for "never wired in" — every module would
+    look equally orphaned.  ``--prune`` is effectively a no-op in shallow
+    repos unless *replacement_keywords* are present.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=str(ROOT),
+            check=False,
+        )
+        return result.stdout.strip() == "true"
+    except (subprocess.TimeoutExpired, OSError):
+        return True  # defensive: treat unreadable repos as shallow
+
+
 def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     """From a list of orphans, return those confirmed as truly dead.
 
@@ -400,6 +504,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     * No references in documentation or skill files
     """
     truly_dead: list[OrphanReport] = []
+    shallow = _is_shallow_repo()
 
     for report in orphans:
         module_path = str(report.module.path.relative_to(ROOT))
@@ -419,9 +524,12 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
             log_lines = []
 
         # Check if referenced in docs / skill files
+        # Use -F (fixed-string) to avoid regex interpretation of dots in
+        # dotted module names like "webapp.charts" (where "." would match
+        # any character and produce false positives).
         try:
             doc_result = subprocess.run(
-                ["grep", "-rn", report.module.name, "--include=*.md", str(ROOT)],
+                ["grep", "-rn", "-F", report.module.name, "--include=*.md", str(ROOT)],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -448,7 +556,9 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
         # We require at least one commit to exist (len > 0) — zero commits
         # means we couldn't access git (e.g. running in a temp dir during
         # tests), so we can't make a determination.
-        few_commits = len(log_lines) >= 1 and len(log_lines) <= 1
+        # In a shallow clone every file has a single commit so we never use
+        # *few_commits* alone — it would flag *every* module.
+        few_commits = not shallow and len(log_lines) >= 1 and len(log_lines) <= 1
         has_doc_refs = len(doc_refs) > 0
 
         if (has_replacement_keywords or few_commits) and not has_doc_refs:
@@ -681,6 +791,38 @@ def _cleanup_pycache(module_path: Path) -> int:
     return cleaned
 
 
+def clean_stale_pycache() -> int:
+    """Remove ``__pycache__/*.pyc`` entries whose corresponding ``.py`` no longer exists.
+
+    This handles modules deleted outside the sweep (e.g. in prior commits)
+    that left orphaned bytecode behind.  Safe to run on every sweep.
+
+    Returns the number of files removed.
+    """
+    removed = 0
+    for cache_dir in ROOT.rglob("__pycache__"):
+        # Skip hidden / venv / test cache dirs
+        try:
+            rel = cache_dir.relative_to(ROOT)
+        except ValueError:
+            continue
+        if any(p.startswith(".") or p in (".venv", "venv") for p in rel.parts):
+            continue
+        for pyc in sorted(cache_dir.glob("*.pyc")):
+            pyc_stem = pyc.stem
+            # Strip cpython version suffix: "foo.cpython-312" → "foo"
+            module_stem = re.sub(r"\.cpython-\d+.*", "", pyc_stem)
+            py_file = cache_dir.parent / f"{module_stem}.py"
+            if not py_file.exists():
+                try:
+                    pyc.unlink()
+                    logger.info("Removed stale bytecode: %s", pyc.relative_to(ROOT))
+                    removed += 1
+                except OSError:
+                    logger.debug("Failed to remove stale pyc: %s", pyc)
+    return removed
+
+
 def prune_dead_modules(reports: list[OrphanReport]) -> int:
     """Remove truly-dead modules.  Returns count of files removed."""
     removed = 0
@@ -734,6 +876,13 @@ def main() -> int:
 
     os.chdir(ROOT)
 
+    # Always clean stale bytecode (safe no-op when nothing is orphaned).
+    stale_cleaned = clean_stale_pycache()
+    if stale_cleaned:
+        logger.info(
+            "Cleaned %d stale bytecode file(s) from prior removals.", stale_cleaned
+        )
+
     orphans = find_orphans()
 
     if not orphans:
@@ -742,7 +891,8 @@ def main() -> int:
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
-    merely_orphaned = [r for r in orphans if r not in truly_dead]
+    dead_names = {r.module.name for r in truly_dead}
+    merely_orphaned = [r for r in orphans if r.module.name not in dead_names]
 
     exit_code = 0
 
