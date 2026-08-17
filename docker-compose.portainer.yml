@@ -22,7 +22,7 @@
 #   GOOGLE_HEALTH_CLIENT_ID         smart-scale body-composition auto-sync
 #   GOOGLE_HEALTH_CLIENT_SECRET     (run google_health_auth.py once on your
 #   GOOGLE_HEALTH_REFRESH_TOKEN      laptop to obtain the refresh token)
-#   RUN_AT (00:00,05:00)  TZ (Europe/London)  WEB_PORT (8770)
+#   RUN_AT (00:00,05:00)  TZ (Europe/London)  WEB_PORT (8088)
 #   GEMINI_MODEL  HEVY_SYNC_ROUTINES  HEVY_PREFILL_WEIGHTS  CHECKIN_ENABLED
 #   LIFESTYLE_ENABLED  SELF_REVIEW_ENABLED  SELF_REVIEW_WEEKDAY  TELEGRAM_PARSE_MODE
 services:
@@ -76,7 +76,7 @@ services:
       WEB_AUTH_SECRET: ${WEB_AUTH_SECRET:-}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
     ports:
-      - "${WEB_PORT:-8770}:8000"
+      - "${WEB_PORT:-8088}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
       - ./data:/data

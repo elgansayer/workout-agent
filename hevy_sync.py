@@ -127,7 +127,7 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
     if best is None:
         return None
     weight = best.get("weight_kg")
-    if weight is None:
+    if not isinstance(weight, (int, float)):
         return None
     reps = best.get("reps")
     start, end = _parse_rep_range(exercise.rep_range)
@@ -331,28 +331,15 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            provider = resolve_provider(
-                db_path=config.database_path,
-                server_gemini_key=config.gemini_api_key,
-                server_gemini_model=config.gemini_model,
-            )
-            logger.info(
-                "Requesting autonomous routine adjustments from %s...",
-                provider.name(),
-            )
+            logger.info("Requesting autonomous routine adjustments from Gemini...")
             updated_routines = apply_autonomous_adjustments(
-                provider,
+                provider=ai_provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, "is_catabolic", False),
             )
-        except ImportError as exc:
-            logger.warning(
-                "Failed to import a module for autonomous adjustments: %s",
-                exc,
-            )
-        except (ValueError, TypeError, RuntimeError, KeyError, AttributeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
 
     statuses: list[str] = []

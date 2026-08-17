@@ -33,22 +33,14 @@ class WeatherConditions:
 
 
 def get_current_weather(
-    lat: float = LATITUDE,
-    lon: float = LONGITUDE,
+    lat: float = LATITUDE, lon: float = LONGITUDE
 ) -> WeatherConditions | None:
     """Fetch current temperature and relative humidity from Open-Meteo."""
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m"
     try:
         response = requests.get(url, timeout=TIMEOUT)
         response.raise_for_status()
-        response_data = response.json()
-        if not isinstance(response_data, dict):
-            logger.warning("Weather API returned non-object JSON")
-            return None
-        data = response_data.get("current", {})
-        if not isinstance(data, dict):
-            logger.warning("Weather API returned non-object current data")
-            return None
+        data = response.json().get("current", {})
 
         temp = data.get("temperature_2m")
         hum = data.get("relative_humidity_2m")
@@ -60,10 +52,8 @@ def get_current_weather(
         is_extreme = temp > 30.0 or (temp > 28.0 and hum > 60.0)
 
         return WeatherConditions(
-            temperature_c=temp,
-            humidity_pct=hum,
-            is_extreme_heat=is_extreme,
+            temperature_c=temp, humidity_pct=hum, is_extreme_heat=is_extreme
         )
-    except (requests.RequestException, ValueError, KeyError) as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Could not fetch weather data: %s", exc)
         return None

@@ -5,7 +5,7 @@ from __future__ import annotations
 import urllib.parse
 from typing import Any
 
-import requests
+import pytest
 
 import google_health_auth
 
@@ -33,7 +33,7 @@ def test_build_authorize_url_custom_redirect_and_scope() -> None:
     assert params["scope"] == ["custom"]
 
 
-def test_exchange_code_posts_and_returns_json(monkeypatch: Any) -> None:
+def test_exchange_code_posts_and_returns_json(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
     class _Resp:
@@ -43,12 +43,7 @@ def test_exchange_code_posts_and_returns_json(monkeypatch: Any) -> None:
         def json(self) -> dict[str, str]:
             return {"refresh_token": "RT", "access_token": "AT"}
 
-    def _fake_post(
-        url: str,
-        headers: dict[str, str] | None = None,
-        data: dict[str, str] | None = None,
-        timeout: int | None = None,
-    ) -> _Resp:
+    def _fake_post(url: str, headers: dict[str, str] | None = None, data: dict[str, str] | None = None, timeout: int | None = None) -> _Resp:
         captured["url"] = url
         captured["data"] = data
         captured["headers"] = headers
@@ -59,19 +54,17 @@ def test_exchange_code_posts_and_returns_json(monkeypatch: Any) -> None:
     assert tokens is not None
     assert tokens["refresh_token"] == "RT"
     assert captured["url"] == google_health_auth.TOKEN_URL
+    assert isinstance(captured["data"], dict)
     assert captured["data"]["grant_type"] == "authorization_code"
     assert captured["data"]["code"] == "CODE"
     assert captured["data"]["client_id"] == "CID"
     assert captured["data"]["client_secret"] == "SECRET"
 
 
-def test_exchange_code_request_exception_no_response(monkeypatch: Any) -> None:
-    def _fake_post(
-        url: str,
-        headers: dict[str, str] | None = None,
-        data: dict[str, str] | None = None,
-        timeout: int | None = None,
-    ) -> None:
+def test_exchange_code_request_exception_no_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests
+
+    def _fake_post(url: str, headers: dict[str, str] | None = None, data: dict[str, str] | None = None, timeout: int | None = None) -> None:
         raise requests.RequestException("network down")
 
     monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
@@ -79,19 +72,16 @@ def test_exchange_code_request_exception_no_response(monkeypatch: Any) -> None:
     assert tokens is None
 
 
-def test_exchange_code_request_exception_with_response(monkeypatch: Any) -> None:
+def test_exchange_code_request_exception_with_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    import requests
+
     class _Resp:
         text: str = "bad request error"
 
     exc = requests.RequestException("bad request")
-    exc.response = _Resp()  # type: ignore[assignment,attr-defined]
+    exc.response = _Resp()  # type: ignore[assignment]
 
-    def _fake_post(
-        url: str,
-        headers: dict[str, str] | None = None,
-        data: dict[str, str] | None = None,
-        timeout: int | None = None,
-    ) -> None:
+    def _fake_post(url: str, headers: dict[str, str] | None = None, data: dict[str, str] | None = None, timeout: int | None = None) -> None:
         raise exc
 
     monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)
@@ -99,20 +89,15 @@ def test_exchange_code_request_exception_with_response(monkeypatch: Any) -> None
     assert tokens is None
 
 
-def test_exchange_code_value_error_on_bad_json(monkeypatch: Any) -> None:
+def test_exchange_code_value_error_on_bad_json(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Resp:
         def raise_for_status(self) -> None:
             pass
 
-        def json(self) -> dict[str, str]:
+        def json(self) -> None:
             raise ValueError("not JSON")
 
-    def _fake_post(
-        url: str,
-        headers: dict[str, str] | None = None,
-        data: dict[str, str] | None = None,
-        timeout: int | None = None,
-    ) -> _Resp:
+    def _fake_post(url: str, headers: dict[str, str] | None = None, data: dict[str, str] | None = None, timeout: int | None = None) -> _Resp:
         return _Resp()
 
     monkeypatch.setattr(google_health_auth.requests, "post", _fake_post)

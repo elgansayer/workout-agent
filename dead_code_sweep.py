@@ -29,24 +29,19 @@ Usage
 -----
 ::
 
-    python dead_code_sweep.py               # report only; exit 1 if orphans found
-    python dead_code_sweep.py --prune       # also remove confirmed-dead modules
-    python dead_code_sweep.py --json        # machine-readable output
-    python dead_code_sweep.py --create-issues  # file GitHub issues for orphans
+    python dead_code_sweep.py           # report only; exit 1 if orphans found
+    python dead_code_sweep.py --prune   # also remove confirmed-dead modules
+    python dead_code_sweep.py --json    # machine-readable output
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import json
 import logging
 import os
-import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
@@ -81,16 +76,11 @@ class OrphanReport(NamedTuple):
 ROOT = Path(__file__).resolve().parent
 
 # Scripts invoked directly (not imported by another Python module).
-# Included in this set are scripts called via subprocess by scheduled
-# processes (e.g. scheduler.py) — they are not ``import``-ed but are
-# reachable at runtime.
 ENTRY_POINTS: set[str] = {
     "main.py",
     "scheduler.py",
     "sync_history.py",
     "insight_cron.py",
-    "dead_code_sweep.py",
-    "commit_hygiene.py",
 }
 
 # Files that are not modules in the import sense.
@@ -113,7 +103,7 @@ def _discover_modules() -> list[ModuleInfo]:
                 name=p.stem,
                 path=p,
                 is_entry_point=p.name in ENTRY_POINTS,
-            ),
+            )
         )
 
     # webapp/ sub-package
@@ -127,7 +117,7 @@ def _discover_modules() -> list[ModuleInfo]:
                     name=f"webapp.{p.stem}",
                     path=p,
                     is_entry_point=False,  # webapp modules are never entry points
-                ),
+                )
             )
 
     return modules
@@ -153,30 +143,6 @@ def _extract_imports(source: str) -> set[str]:
     return imports
 
 
-def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str]:
-    """Return dot-separated sub-module names from intra-package imports.
-
-    Example: ``from webapp import charts`` → ``{"webapp.charts"}`` when
-    ``"webapp"`` is in *local_packages*.
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return set()
-
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.level == 0
-            and node.module in local_packages
-        ):
-            for alias in node.names:
-                imports.add(f"{node.module}.{alias.name}")
-    return imports
-
-
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -185,16 +151,6 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
 def _build_import_graph() -> dict[str, set[str]]:
     """Return {importing_file_stem -> {module_names_it_imports}}."""
     graph: dict[str, set[str]] = {}
-
-    # Discover local packages (directories with __init__.py) so we can
-    # resolve intra-package imports like ``from webapp import charts`` to the
-    # full ``webapp.charts`` module name directly via AST, without relying on
-    # the grep fallback.
-    local_packages: set[str] = set()
-    for d in ROOT.rglob("__init__.py"):
-        pkg = d.parent.relative_to(ROOT)
-        if not any(part.startswith(".") for part in pkg.parts):
-            local_packages.add(str(pkg).replace("/", "."))
 
     for py_file in sorted(ROOT.rglob("*.py")):
         # Skip virtual envs, caches, etc.
@@ -206,9 +162,7 @@ def _build_import_graph() -> dict[str, set[str]]:
 
         rel = str(py_file.relative_to(ROOT))
         source = py_file.read_text(encoding="utf-8")
-        graph[rel] = _extract_imports(source) | _extract_submodule_imports(
-            source, local_packages
-        )
+        graph[rel] = _extract_imports(source)
 
     return graph
 
@@ -246,12 +200,6 @@ def find_orphans() -> list[OrphanReport]:
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
-    # Build a look-up: module_name -> file_rel that defines it
-    module_to_file: dict[str, str] = {}
-    for file_rel in import_graph:
-        stem = file_rel.replace("/", ".").replace(".py", "")
-        module_to_file[stem] = file_rel
-
     queue: list[str] = []
     for ep in entry_point_files:
         for imp in import_graph.get(ep, set()):
@@ -261,16 +209,13 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file that defines this module and add everything IT imports.
-        # (The old approach looked at files that import module_name and added
-        # what those files import — that only discovers transitive
-        # dependencies by coincidence when two modules share a common importer.)
-        defining_file = module_to_file.get(module_name)
-        if defining_file is not None:
-            for transitive in import_graph.get(defining_file, set()):
-                if transitive not in wired:
-                    wired.add(transitive)
-                    queue.append(transitive)
+        # Find the file(s) that define this module
+        for file_rel, imports in import_graph.items():
+            if module_name in imports:
+                for transitive in import_graph.get(file_rel, set()):
+                    if transitive not in wired:
+                        wired.add(transitive)
+                        queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -285,9 +230,7 @@ def find_orphans() -> list[OrphanReport]:
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
-                "%s: AST missed but grep found imports in %s",
-                mi.name,
-                grep_hits,
+                "%s: AST missed but grep found imports in %s", mi.name, grep_hits
             )
             continue
 
@@ -295,7 +238,7 @@ def find_orphans() -> list[OrphanReport]:
             OrphanReport(
                 module=mi,
                 evidence=f"No imports of '{mi.name}' found in any reachable module.",
-            ),
+            )
         )
 
     return orphans
@@ -317,7 +260,7 @@ def _grep_import(module_name: str) -> list[str]:
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {module_name}|from {module_name}( |\\.))",
+                f"^(import {module_name}|from {module_name}( |\\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -342,7 +285,7 @@ def _grep_import(module_name: str) -> list[str]:
                 [
                     "grep",
                     "-rn",
-                    f"^\\s*from webapp import .*{short}",
+                    f"from webapp import .*{short}",
                     "--include=*.py",
                     str(ROOT),
                 ],
@@ -372,8 +315,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
 
     "Truly dead" means:
     * No plausible future caller (the module was superseded by another)
-    * Confirmed via ``git log`` that it was intentionally replaced, OR has so
-      few commits that it was never really wired in
+    * Confirmed via ``git log`` that it was intentionally replaced
     * No references in documentation or skill files
     """
     truly_dead: list[OrphanReport] = []
@@ -381,7 +323,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
     for report in orphans:
         module_path = str(report.module.path.relative_to(ROOT))
 
-        # Check git log for clues that this module was replaced or is stale.
+        # Check git log for clues that this module was replaced
         try:
             log_result = subprocess.run(
                 ["git", "log", "--oneline", "-20", "--", module_path],
@@ -412,36 +354,28 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
         except (subprocess.TimeoutExpired, OSError):
             doc_refs = []
 
-        has_replacement_keywords = any(
+        # A module is "truly dead" if it has no recent commits (wasn't
+        # recently created for a purpose) AND no documentation references.
+        # We err on the side of NOT marking something as dead — the default
+        # orphan path (file a task) is always safer.
+        has_recent_commits = any(
             "replace" in l.lower()
             or "supersed" in l.lower()
             or "remove" in l.lower()
             or "deprecat" in l.lower()
             for l in log_lines
         )
-        # A module that was only added once (or has a single trivial commit)
-        # and never referenced in docs may be genuinely dead — it was created
-        # as part of an unfinished task and never wired.
-        # We require at least one commit to exist (len > 0) — zero commits
-        # means we couldn't access git (e.g. running in a temp dir during
-        # tests), so we can't make a determination.
-        few_commits = len(log_lines) >= 1 and len(log_lines) <= 1
         has_doc_refs = len(doc_refs) > 0
 
-        if (has_replacement_keywords or few_commits) and not has_doc_refs:
-            if has_replacement_keywords:
-                evidence = (
-                    f"git log shows replacement/supersession: "
-                    f"{log_lines[0] if log_lines else 'N/A'}. "
-                    "No documentation references remain."
-                )
-            else:
-                evidence = (
-                    f"Only {len(log_lines)} commit(s) in git history — "
-                    "likely never wired in. No documentation references remain."
-                )
+        if has_recent_commits and not has_doc_refs:
             truly_dead.append(
-                OrphanReport(module=report.module, evidence=evidence),
+                OrphanReport(
+                    module=report.module,
+                    evidence=(
+                        f"git log shows replacement/supersession: {log_lines[0] if log_lines else 'N/A'}. "
+                        "No documentation references remain."
+                    ),
+                )
             )
 
     return truly_dead
@@ -468,125 +402,6 @@ def _task_add_text(report: OrphanReport) -> str:
         f"the module's domain.\n\n"
         f"> Auto-filed by `dead_code_sweep.py` hourly sweep.\n"
     )
-
-
-def _get_github_repo() -> tuple[str, str] | None:
-    """Parse `owner/repo` from the git remote origin URL.
-
-    Returns a ``(owner, repo)`` tuple on success, or ``None`` if the remote
-    cannot be identified (e.g. non-GitHub hosting).
-    """
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(ROOT),
-            check=False,
-        )
-        url = result.stdout.strip()
-        # Handles both https://github.com/owner/repo.git and
-        # https://x-access-token:TOKEN@github.com/owner/repo.git
-        m = re.search(r"github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?$", url)
-        if m:
-            return m.group(1), m.group(2)
-        return None
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-
-
-def _get_github_token() -> str | None:
-    """Return a GitHub token from env or the git remote URL credential."""
-    # Check GITHUB_TOKEN env var first
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if token:
-        return token
-
-    # Fall back to extracting from the remote URL
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(ROOT),
-            check=False,
-        )
-        url = result.stdout.strip()
-        # x-access-token:TOKEN@github.com/...
-        m = re.search(r"://x-access-token:([^@]+)@", url)
-        if m:
-            return m.group(1)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    return None
-
-
-def create_github_issues(reports: list[OrphanReport]) -> list[str]:
-    """Create a GitHub issue for each orphaned module.
-
-    Returns a list of created issue URLs (or error strings).
-    """
-    token = _get_github_token()
-    if not token:
-        logger.warning(
-            "No GitHub token found (set GITHUB_TOKEN or configure git remote credentials). "
-            "Skipping issue creation.",
-        )
-        return []
-
-    repo = _get_github_repo()
-    if not repo:
-        logger.warning("Could not determine GitHub owner/repo from git remote.")
-        return []
-
-    owner, repo_name = repo
-    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/issues"
-    created: list[str] = []
-
-    for report in reports:
-        title = f"Orphaned module: `{report.module.name}` needs wiring or removal"
-        body = _task_add_text(report)
-        labels = ["orphaned-module", "dead-code-sweep"]
-
-        payload = json.dumps({"title": title, "body": body, "labels": labels}).encode(
-            "utf-8",
-        )
-
-        req = urllib.request.Request(
-            api_url,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "Content-Type": "application/json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                issue_data = json.loads(resp.read().decode("utf-8"))
-                issue_url = issue_data.get("html_url", "unknown")
-                logger.info(
-                    "Created issue for '%s': %s",
-                    report.module.name,
-                    issue_url,
-                )
-                created.append(issue_url)
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            msg = f"Failed to create issue for '{report.module.name}': HTTP {e.code} — {err_body[:300]}"
-            logger.error(msg)
-            created.append(f"ERROR: {msg}")
-        except (urllib.error.URLError, OSError, ValueError, TypeError) as e:
-            msg = f"Failed to create issue for '{report.module.name}': {e}"
-            logger.error(msg)
-            created.append(f"ERROR: {msg}")
-
-    return created
 
 
 def _rel_path(p: Path) -> str:
@@ -638,26 +453,6 @@ def report_orphans(orphans: list[OrphanReport], *, json_output: bool = False) ->
     return 1
 
 
-def _cleanup_pycache(module_path: Path) -> int:
-    """Remove stale ``__pycache__/*.pyc`` bytecode for *module_path*.
-
-    Returns the number of files removed.
-    """
-    cleaned = 0
-    cache_dir = module_path.parent / "__pycache__"
-    if not cache_dir.is_dir():
-        return cleaned
-    stem = module_path.stem
-    # Match ``stem.cpython-*.pyc`` patterns (CPython 3.x).
-    for pyc in cache_dir.glob(f"{stem}.cpython-*.pyc"):
-        try:
-            pyc.unlink()
-            cleaned += 1
-        except OSError:
-            logger.debug("Failed to remove stale pyc: %s", pyc)
-    return cleaned
-
-
 def prune_dead_modules(reports: list[OrphanReport]) -> int:
     """Remove truly-dead modules.  Returns count of files removed."""
     removed = 0
@@ -666,13 +461,6 @@ def prune_dead_modules(reports: list[OrphanReport]) -> int:
         logger.info("Removing truly-dead module: %s", path.relative_to(ROOT))
         path.unlink(missing_ok=True)
         removed += 1
-        pyc_cleaned = _cleanup_pycache(path)
-        if pyc_cleaned:
-            logger.info(
-                "Cleaned %d stale bytecode file(s) for %s",
-                pyc_cleaned,
-                path.relative_to(ROOT),
-            )
     return removed
 
 
@@ -696,16 +484,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit machine-readable JSON to stdout.",
     )
-    parser.add_argument(
-        "--create-issues",
-        action="store_true",
-        dest="create_issues",
-        help="Create GitHub issues for orphaned modules via the GitHub API.",
-    )
     return parser
 
 
-def main() -> int:
+def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
@@ -715,7 +497,7 @@ def main() -> int:
 
     if not orphans:
         report_orphans([], json_output=args.json_output)
-        return 0
+        sys.exit(0)
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
@@ -733,11 +515,6 @@ def main() -> int:
                 )
                 logger.info("  Suggested issue body:\n%s", _task_add_text(r))
 
-        if args.create_issues:
-            created = create_github_issues(merely_orphaned)
-            if created:
-                logger.info("Created %d GitHub issue(s).", len(created))
-
     if truly_dead:
         if args.prune:
             removed = prune_dead_modules(truly_dead)
@@ -751,15 +528,13 @@ def main() -> int:
             for r in truly_dead:
                 if not args.json_output:
                     logger.warning(
-                        "  %s  (%s)",
-                        r.module.name,
-                        r.module.path.relative_to(ROOT),
+                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT)
                     )
                     logger.warning("    %s", r.evidence)
             exit_code = 1
 
-    return exit_code
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
