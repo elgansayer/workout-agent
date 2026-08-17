@@ -105,19 +105,25 @@ def get_config() -> Config:
     return Config.load()
 
 
-def _client_ip(request: Request) -> str:
+def _extract_ip(request: Request) -> str:
+    """Extract the client IP from request headers or client info."""
     forwarded = request.headers.get("x-forwarded-for")
+    real_ip = request.headers.get("x-real-ip")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
     if real_ip:
         return real_ip.strip()
     return request.client.host if request.client else "unknown"
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    ip = _client_ip(request)
-    if check_rate_limit(ip, limit, window, db_path=DB_PATH):
+    """Enforce a sliding-window rate limit backed by the SQLite database.
+
+    Replaces the old in-process dict so rate limits are correctly shared
+    across multiple web app replicas behind a load balancer.
+    """
+    ip = _extract_ip(request)
+    if not check_rate_limit(ip, limit=limit, window=window, db_path=DB_PATH):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 

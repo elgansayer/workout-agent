@@ -223,6 +223,20 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         if "hrv" not in columns:
             cursor.execute("ALTER TABLE body_metrics ADD COLUMN hrv REAL")
 
+        # Rate limiting table (replaces in-process dict for multi-replica safety).
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ip TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rate_limits_ip_ts ON rate_limits (ip, timestamp)"
+        )
+
         # ---- Multi-user tables (Sprint 1) ----
         cursor.execute(
             """
@@ -1148,40 +1162,39 @@ def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> N
         return False
 
 
-def delete_routine_record(
-    routine_key: str,
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
-) -> None:
-    """Remove a tracked routine record (used when a routine is renamed).
+def check_rate_limit(
+    ip: str, limit: int = 10, window: float = 60, db_path: str = DEFAULT_DB_PATH
+) -> bool:
+    """Return True if the IP is within the rate limit, False if exceeded.
 
-    If *user_id* is provided, the delete is scoped to that user.
-    When None, deletes any matching row (backward-compatible).
+    Records the current request and prunes expired entries from the sliding
+    window.  Multi-replica-safe because the window is stored in SQLite.
+
+    Args:
+        ip: Client IP address (string).
+        limit: Maximum requests allowed in the window.
+        window: Sliding window in seconds.
+        db_path: Path to the database.
     """
+    now = time.time()
+    cutoff = now - window
     with _connect(db_path) as conn:
-        if user_id is not None:
-            conn.execute(
-                "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
-                (user_id, routine_key),
-            )
-        else:
-            conn.execute(
-                "DELETE FROM hevy_routines WHERE routine_key = ?",
-                (routine_key,),
-            )
+        conn.execute(
+            "INSERT INTO rate_limits (ip, timestamp) VALUES (?, ?)", (ip, now)
+        )
+        count = conn.execute(
+            "SELECT COUNT(*) FROM rate_limits WHERE ip = ? AND timestamp > ?",
+            (ip, cutoff),
+        ).fetchone()[0]
+        # Periodically clean expired entries (lazy, amortised).
+        if now % 10 < 1:  # roughly once per ~10 seconds
+            conn.execute("DELETE FROM rate_limits WHERE timestamp < ?", (cutoff,))
+    return count <= limit
 
 
-def get_programme_start_date(
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
-) -> date:
-    """Return the programme start date, defaulting to today if unset.
-
-    If *user_id* is provided, the lookup is scoped to that user.
-    """
-    value = get_meta("programme_start_date", db_path, user_id=user_id)
+def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
+    """Return the programme start date, defaulting to today if unset."""
+    value = get_meta("programme_start_date", db_path)
     if value:
         try:
             return date.fromisoformat(value)
