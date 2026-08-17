@@ -126,8 +126,8 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
     best = _latest_top_set(history)
     if best is None:
         return None
-    weight: Any = best.get("weight_kg")
-    if weight is None:
+    weight = best.get("weight_kg")
+    if not isinstance(weight, (int, float)):
         return None
     reps = best.get("reps")
     start, end = _parse_rep_range(exercise.rep_range)

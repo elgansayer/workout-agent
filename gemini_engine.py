@@ -27,10 +27,7 @@ __all__ = [
     "get_provider",
 ]
 
-try:
-    from weather import WeatherConditions
-except ImportError:
-    WeatherConditions = Any  # type: ignore[assignment,misc]
+from weather import WeatherConditions
 
 logger = logging.getLogger(__name__)
 

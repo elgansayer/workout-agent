@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+from _pytest.monkeypatch import MonkeyPatch
 
 import checkin
 from config import Config
@@ -10,7 +13,7 @@ from database import get_checkins, get_meta, init_db, set_meta
 from program import BLOCKS
 
 
-def _config(tmp_path, hevy_api_key="key") -> Config:
+def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
     db_path = str(tmp_path / "test.db")
     init_db(db_path)
     return Config(
@@ -34,8 +37,8 @@ def _config(tmp_path, hevy_api_key="key") -> Config:
     )
 
 
-def test_session_top_sets_picks_heaviest_per_session():
-    history = [
+def test_session_top_sets_picks_heaviest_per_session() -> None:
+    history: list[dict[str, object]] = [
         {"workout_start_time": "2026-01-01T08:00:00Z", "weight_kg": 90, "reps": 8},
         {"workout_start_time": "2026-01-01T08:00:00Z", "weight_kg": 100, "reps": 5},
         {"workout_start_time": "2026-01-08T08:00:00Z", "weight_kg": 105, "reps": 5},
@@ -44,8 +47,8 @@ def test_session_top_sets_picks_heaviest_per_session():
     assert tops == [(100, 5), (105, 5)]
 
 
-def test_review_exercise_detects_progress():
-    history = [
+def test_review_exercise_detects_progress() -> None:
+    history: list[dict[str, object]] = [
         {"workout_start_time": "2026-01-01T08:00:00Z", "weight_kg": 100, "reps": 8},
         {"workout_start_time": "2026-01-08T08:00:00Z", "weight_kg": 110, "reps": 8},
     ]
@@ -57,8 +60,8 @@ def test_review_exercise_detects_progress():
     assert review.latest == "110 kg x 8"
 
 
-def test_review_exercise_detects_stall():
-    history = [
+def test_review_exercise_detects_stall() -> None:
+    history: list[dict[str, object]] = [
         {"workout_start_time": f"2026-01-0{i}T08:00:00Z", "weight_kg": 100, "reps": 12}
         for i in range(1, 4)
     ]
@@ -68,7 +71,9 @@ def test_review_exercise_detects_stall():
     assert review.stalled is True
 
 
-def test_due_seeds_baseline_then_not_due(monkeypatch, tmp_path):
+def test_due_seeds_baseline_then_not_due(
+    monkeypatch: MonkeyPatch, tmp_path: Any
+) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
     # First ever call seeds the baseline at the current total and is not due.
@@ -77,7 +82,9 @@ def test_due_seeds_baseline_then_not_due(monkeypatch, tmp_path):
     assert get_meta("checkin_number", config.database_path) == "0"
 
 
-def test_due_fires_after_target_workouts(monkeypatch, tmp_path):
+def test_due_fires_after_target_workouts(
+    monkeypatch: MonkeyPatch, tmp_path: Any
+) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
     checkin.due(config)  # seed at 40
@@ -90,7 +97,7 @@ def test_due_fires_after_target_workouts(monkeypatch, tmp_path):
     assert due_info.total_count == 64
 
 
-def test_due_calendar_fallback_without_hevy(tmp_path):
+def test_due_calendar_fallback_without_hevy(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
     checkin.due(config)  # seeds number=0, last date today
     # Pretend five weeks have passed since the last check-in.
@@ -104,7 +111,7 @@ def test_due_calendar_fallback_without_hevy(tmp_path):
     assert due_info.total_count is None
 
 
-def test_record_persists_and_resets_baseline(tmp_path):
+def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
     config = _config(tmp_path)
     due_info = checkin.CheckinDue(
         number=2,
@@ -127,6 +134,6 @@ def test_record_persists_and_resets_baseline(tmp_path):
     assert saved[0]["workouts_done"] == 24
 
 
-def test_analyse_without_hevy_returns_empty(tmp_path):
+def test_analyse_without_hevy_returns_empty(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
     assert checkin._analyse(config, BLOCKS[1]) == []
