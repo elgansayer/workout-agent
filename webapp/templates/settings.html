@@ -338,7 +338,7 @@ async function syncHistory() {
 
 function toggleChip(el) {
     el.classList.toggle('selected');
-    el.setAttribute('aria-pressed', el.classList.contains('selected') ? 'true' : 'false');
+    el.setAttribute('aria-pressed', el.classList.contains('selected'));
 }
 
 function selectSingle(el, groupId) {
