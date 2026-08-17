@@ -1,5 +1,6 @@
 ---
 name: scheduler-job
+description: 'Add or consolidate a periodic background job (daily coaching run, insight generation, connector polling) instead of adding a second hand-rolled sleep loop. Use when touching docker-entrypoint.sh, scheduler.py, or adding any new recurring job.'
 description: 'Add a new periodic background job (daily coaching run, insight generation, connector polling) to the unified scheduler.py. Use when adding any new recurring job dispatch from the scheduler loop.'
 ---
 
@@ -7,6 +8,15 @@ description: 'Add a new periodic background job (daily coaching run, insight gen
 
 ## Why This Exists
 
+There was previously **two independent, hand-rolled sleep loops** in the
+`agent` container: `docker-entrypoint.sh`'s bash loop (ran `main.py` at
+`RUN_AT` times) and a separate Python `while True` loop for insight jobs.
+These have been **consolidated** into a single `scheduler.py` process that
+wakes every minute, iterates over all users, and dispatches both coaching
+runs (`main.py`) and insight jobs (`insight_cron.py --daily`/`--weekly`) at
+the configured `RUN_AT` times. Per-user schedule isolation (different users
+at different run times) still needs per-user timezone/run-time preferences
+once multi-tenancy lands.
 The agent container runs a single unified scheduler (`scheduler.py`) that
 wakes every 60 seconds, checks each user's local time against the configured
 `RUN_AT` times, and dispatches due coaching runs (`main.py`) and insight
@@ -18,6 +28,9 @@ consolidated into this one process — do not add additional sleep loops.
 
 - Adding a new recurring job (e.g. periodic connector re-sync, a weekly
   digest email).
+- Touching `docker-entrypoint.sh` or `scheduler.py`.
+- Doing the actual consolidation work described below (a good first task
+  once multi-tenancy has landed for at least one domain table).
 - Touching the dispatch logic in `scheduler.py`.
 
 ## How to Add a New Job
