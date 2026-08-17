@@ -160,6 +160,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #514 checked 2026-08-07)
@@ -288,6 +289,12 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
   advisory clean). No drift between code and test suite.
 
+- **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (533/533), dead_code_sweep
+  (zero orphans), import-sanity (all reachable). Issue #505 sweep complete
+  — no newly orphaned or truly-dead modules found.
 - **Hourly dead-code sweep #552 re-verified.** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Full
