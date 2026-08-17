@@ -1,0 +1,36 @@
+name: Import Curated Product Backlog
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/product-backlog/catalogue.*.b64
+      - scripts/import_product_backlog.py
+      - .github/workflows/import-product-backlog.yml
+  workflow_dispatch:
+
+concurrency:
+  group: curated-product-backlog-import
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish missing catalogue entries
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/import_product_backlog.py
+      - name: Upload import report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-backlog-import-report
+          path: product-backlog-import-report.json
+          if-no-files-found: warn
