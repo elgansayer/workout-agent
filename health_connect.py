@@ -65,6 +65,9 @@ def body_metrics_from_recovery(
         "muscle_pct": recovery.get("muscle_pct"),
         "resting_hr": recovery.get("resting_hr"),
     }
-    if all(metrics[key] is None for key in ("weight_kg", "body_fat_pct", "muscle_pct")):
+    if all(
+        metrics[key] is None
+        for key in ("weight_kg", "body_fat_pct", "muscle_pct")
+    ):
         return None
     return metrics

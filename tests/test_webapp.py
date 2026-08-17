@@ -90,9 +90,9 @@ def test_nudge_button_and_endpoint_removed(client: Any) -> None:
 def test_dashboard_shows_automated_quote_and_charts(client: Any) -> None:
     response = client.get("/")
     assert response.status_code == 200
-    # The daily quote is rendered automatically and an SVG ring is present.
-    assert "svg-ring" in response.text
-    assert "Week" in response.text
+    # The daily quote is rendered automatically and the calendar heatmap is present.
+    assert "svg-cal" in response.text
+    assert "&ldquo;" in response.text      # daily quote rendered
 
 
 def test_progress_renders_svg_charts(client: Any) -> None:
