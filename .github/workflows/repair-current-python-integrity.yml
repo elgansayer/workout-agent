@@ -1,0 +1,123 @@
+name: Repair Current Python Integrity
+
+on:
+  push:
+    branches:
+      - fix/webapp-main-integrity
+    paths:
+      - .github/workflows/repair-current-python-integrity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Restore and patch exact damaged sections
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # This commit contains the last complete ai_provider.py immediately
+          # before a later automatic merge dropped the resolve_provider header.
+          git show 768c3a6cca5297e0f1312e2d10db3acc154389b9:ai_provider.py > ai_provider.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str, label: str) -> None:
+              file_path = Path(path)
+              text = file_path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"{label}: expected exactly one match in {path}, found {count}"
+                  )
+              file_path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "analytics.py",
+              """    for group, keywords in _GROUP_RULES:\n<<<<<<< HEAD\n        # Bolt Optimization: Explode `any()` into a double for-loop to prevent\n        # creating a generator on every lookup, significantly speeding up classification.\n=======\n>>>>>>> main\n        for keyword in keywords:\n""",
+              """    for group, keywords in _GROUP_RULES:\n        for keyword in keywords:\n""",
+              "analytics conflict block",
+          )
+
+          replace_once(
+              "webapp/app.py",
+              """<<<<<<< HEAD\n=======\n    _check_rate_limit(request, limit=5)\n>>>>>>> main\n""",
+              """    _check_rate_limit(request, limit=5)\n""",
+              "Google Health disconnect conflict block",
+          )
+
+          replace_once(
+              "webapp/app.py",
+              """import secrets\nfrom contextlib import asynccontextmanager\n""",
+              """import secrets\nimport time\nfrom collections.abc import AsyncIterator, Iterator\nfrom contextlib import asynccontextmanager\n""",
+              "missing runtime imports",
+          )
+
+          replace_once(
+              "webapp/app.py",
+              "from ai_provider import available_providers\n",
+              "from ai_provider import AIProvider, available_providers, resolve_provider\n",
+              "AI provider imports",
+          )
+
+          replace_once(
+              "webapp/app.py",
+              """@lru_cache(maxsize=1)\n\ndef _resolve_provider_for_request""",
+              """@lru_cache(maxsize=1)\ndef _resolve_provider_for_request""",
+              "provider cache decorator spacing",
+          )
+
+          replace_once(
+              "webapp/app.py",
+              """            response = provider.generate(prompt, stream=True)\n            for chunk in response:\n                if chunk.text:\n                    collected.append(chunk.text)\n                    yield chunk.text\n""",
+              """            response = cast(Iterator[str], provider.generate(prompt, stream=True))\n            for chunk in response:\n                if chunk:\n                    collected.append(chunk)\n                    yield chunk\n""",
+              "provider stream contract",
+          )
+
+          for path in ("analytics.py", "webapp/app.py", "ai_provider.py"):
+              text = Path(path).read_text()
+              if "<<<<<<< " in text or ">>>>>>> " in text:
+                  raise SystemExit(f"unresolved merge marker remains in {path}")
+          PY
+
+      - name: Compile all tracked Python files
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Commit exact repair and remove one-time workflow
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-current-python-integrity.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add analytics.py ai_provider.py webapp/app.py .github/workflows/repair-current-python-integrity.yml
+          git diff --cached --check
+          git commit -m "fix: repair Python merge damage"
+          git push origin HEAD:fix/webapp-main-integrity
+
+      - name: Preserve compile failure after committing diagnostics
+        if: always()
+        env:
+          COMPILE_OUTCOME: ${{ steps.compile.outcome }}
+        run: |
+          echo "repository-wide compile outcome: $COMPILE_OUTCOME"
+          [[ "$COMPILE_OUTCOME" == "success" ]]
