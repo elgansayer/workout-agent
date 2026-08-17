@@ -107,6 +107,9 @@ def _recovery() -> str:
 def _protein_target(recovery: dict[str, Any] | None) -> str | None:
     if not recovery:
         return None
+    weight = recovery.get("weight_kg")
+    if weight is None:
+        return None
     try:
         weight = recovery.get("weight_kg")
         if weight is None:
@@ -118,7 +121,9 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None
+    day: int | None,
+    is_rest: bool,
+    recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
     """Resolve the lifestyle pillars for the given cycle day.
 

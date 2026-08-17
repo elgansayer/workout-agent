@@ -93,7 +93,7 @@ class RecoveryInsight:
             bits.append(f"Body fat {self.body_fat_pct:g}%{trend}.")
         if self.is_catabolic:
             bits.append(
-                "CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight."
+                "CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight.",
             )
         bits.append(f"Directive: {self.directive}")
         return " ".join(bits)
@@ -207,7 +207,9 @@ def _sessions_since_best(scores: Sequence[float]) -> int | None:
 
 
 def _intervention(
-    trend: str, since_best: int | None, recovery_status: str
+    trend: str,
+    since_best: int | None,
+    recovery_status: str,
 ) -> str | None:
     """Suggest a concrete change for a lift that is not progressing."""
     if trend == "progressing" or trend == "new":
@@ -223,7 +225,9 @@ def _intervention(
 
 
 def analyse_lift(
-    name: str, entries: Sequence[dict[str, Any]], recovery_status: str = "unknown"
+    name: str,
+    entries: Sequence[dict[str, Any]],
+    recovery_status: str = "unknown",
 ) -> LiftInsight:
     """Build a trend judgement for one exercise from its logged top sets."""
     scores, metric = _series_scores(entries)
@@ -282,13 +286,22 @@ def analyse_recovery(
 
     recent = readings[-14:]
     rhr_trend = _trend_of(
-        [r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3
+        [v for r in recent[-7:] if (v := r.get("resting_hr")) is not None],
+        "rising",
+        "falling",
+        0.3,
     )
     weight_trend = _trend_of(
-        [r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05
+        [v for r in recent[-7:] if (v := r.get("weight_kg")) is not None],
+        "rising",
+        "falling",
+        0.05,
     )
     bf_trend = _trend_of(
-        [r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05
+        [v for r in recent[-7:] if (v := r.get("body_fat_pct")) is not None],
+        "rising",
+        "falling",
+        0.05,
     )
 
     is_catabolic = False
