@@ -4,9 +4,10 @@ A private, local Python agent that acts as an elite hypertrophy / stage-prep
 bodybuilding coach. Every morning it works out what you should train today from
 the real calendar day, pulls your latest workout from the
 [Hevy API](https://api.hevyapp.com/docs/), reads your recovery metrics from
-Google Health Connect (via an exported JSON file), asks Google Gemini to apply
-progressive overload, then sends today's exact routine plus one daily
-improvement tip to your phone via Telegram. On Sundays it sends a short rest and
+Google Health Connect (via an exported JSON file), asks your configured AI
+provider (Gemini, Claude, OpenAI, or DeepSeek) to apply progressive overload,
+then sends today's exact routine plus one daily improvement tip to your phone
+via Telegram. On Sundays it sends a short rest and
 recovery message instead.
 
 Built as a small, focused script rather than a heavyweight generalist agent
@@ -26,7 +27,8 @@ framework. It does one thing well: read your data, reason about it, message you.
 ## Why a custom agent (not OpenClaw / generalist frameworks)
 
 - **Precision** – one job: parse Hevy JSON against a 6-day split and message you.
-- **Privacy** – your health data stays on your machine and is only sent to Gemini.
+- **Privacy** – your health data stays on your machine and is only sent to your
+  configured AI provider.
 - **Low complexity** – a script on a cron job. Set it and forget it.
 - **Safety** – no broad shell/file access, no sandbox to harden.
 
@@ -34,11 +36,14 @@ framework. It does one thing well: read your data, reason about it, message you.
 
 ## AI-Native "Insight-First" Dashboard & Correlation Engine
 
-The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by **Gemini 1.5 Pro**:
+The dashboard acts as an intelligent, reactive interface that treats your SQLite
+database as a knowledge graph, powered by your configured AI provider (Gemini,
+Claude, OpenAI, or DeepSeek):
+The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by your configured AI provider (defaults to **Gemini 2.5 Flash**):
 
 - **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
 - **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.
-- **Explainable UI (XAI) Overlays**: Trend charts have a "Why did this happen?" toggle. The frontend queries Gemini with the specific exercise history and block goal to give a clear causal explanation, stored in the database.
+- **Explainable UI (XAI) Overlays**: Trend charts have a "Why did this happen?" toggle. The frontend queries your configured AI provider with the specific exercise history and block goal to give a clear causal explanation, stored in the database.
 - **Predictive Progressive Overload Visuals**: Projects your estimated 1RM to the end of the peaking phase and validates whether the forecast is physiologically aggressive or conservative based on recent "bad" sessions.
 - **RAG-Enabled Search (Log Investigator)**: A search bar in the dashboard to ask questions like *"Why did I fail my squats in week 3?"*. The backend vectorizes logs and retrieves relevant session context via streaming LLM generation.
 
@@ -117,7 +122,7 @@ workout_agent/
 ├── health_connect.py    # Reads sleep/weight JSON exported from Health Connect
 ├── google_health_client.py # Auto-syncs weight/body fat from Google Health (Eufy scale)
 ├── google_health_auth.py   # One-time OAuth helper to obtain the first refresh token
-├── gemini_engine.py     # Asks Gemini to apply progressive overload
+├── gemini_engine.py     # Asks the configured AI provider to apply progressive overload
 ├── checkin.py           # Periodic planned-vs-actual check-in engine
 ├── lifestyle.py         # Daily lifestyle pillars (nutrition/cardio/recovery)
 ├── telegram_notifier.py # Sends the message to your phone
@@ -133,7 +138,7 @@ Data flow each morning:
 
 ```
 Hevy API ─┐  parsed by hevy_parser
-          ├─► gemini_engine ─► Telegram (your phone)
+          ├─► gemini_engine (via ai_provider) ─► Telegram (your phone)
 Health ───┤        ▲
 Connect   │        │
 SQLite ───┘   (workout history + per-exercise bests)
@@ -158,7 +163,7 @@ count is available). A check-in:
 - compares **planned vs actual** progression for each main lift,
 - flags lifts that are progressing well and lifts that have **stalled**
   (three or more sessions at the top of the rep range with no load increase),
-- asks Gemini to summarise the findings and **auto-applies** them, then
+- asks your AI provider to summarise the findings and **auto-applies** them, then
 - sends you a Telegram **check-in digest** so you always know what changed.
 
 It is numbered ("Check-in 1", "Check-in 2", ...) and stored in SQLite. Set
@@ -253,20 +258,27 @@ the route to also bring in sleep and resting heart rate.
 
 ## Internal web dashboard
 
-A **FastAPI + Jinja2** web app turns the agent's database into a rich, read-only
-control centre. Every chart is **server-rendered SVG** (no JavaScript, no chart
-library, no external calls), so pages load instantly and work fully offline
-behind a reverse proxy. All motivation is automated: the dashboard shows a daily
-hype line chosen from the date, with no buttons to press.
+A **FastAPI + Jinja2** web app turns the agent's database into a rich,
+control centre. Charts are **server-rendered SVG** (no chart library, no
+external calls), so pages load instantly and work fully offline behind a
+reverse proxy. A lightweight service worker and progressive enhancement
+make the chat and settings pages interactive while keeping the core
+dashboard usable with JavaScript disabled.
 
 | Route        | Shows                                                          |
 | ------------ | -------------------------------------------------------------- |
 | `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
 | `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
+| `/plan`      | The active programme, split and coaching rules; or the fixed 6-day periodisation when no programme is selected |
+| `/programmes`| Programme builder: choose a template, infer from Hevy history, or build a custom workout plan |
+| `/programmes`| Select a workout programme template, infer from Hevy history, or build a custom split |
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
+| `/programmes`| Select a workout programme template or infer one from Hevy history |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
+| `/chat`      | RAG-enabled AI chat (streaming) for digging into your training history |
+| `/settings`  | Profile, AI provider/key/model, connectors, and programme setup |
 
 Run it with Docker alongside the agent (it shares the same SQLite volume):
 
@@ -274,8 +286,19 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
-Then open `http://<host-ip>:8770` from any device on your network. To run it
+Then open `http://<host-ip>:8088` from any device on your network. To run it
 directly instead:
+Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
+
+Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
+network. (Both compose files default to port 8770.) To run it directly instead:
+network. (Both compose files default to port 8770.) To run
+
+it directly instead:
 
 ```bash
 pip install -r requirements.txt -r requirements-web.txt
@@ -292,19 +315,41 @@ The app includes Google OAuth login (configurable via `WEB_AUTH_SECRET`). You ca
 run it with or without authentication behind Apache, nginx, or Caddy. Point the
 proxy at the container's published port. Example Apache virtual host mapping
 `gym.example.com` to the dashboard:
+The app supports Google OAuth login (configure `WEB_GOOGLE_CLIENT_ID`,
+`WEB_GOOGLE_CLIENT_SECRET`, `WEB_AUTH_SECRET`, and `ALLOWED_EMAILS` in `.env`).
+Point your reverse proxy at the container's published port. Example Apache
+virtual host mapping `gym.example.com` to the dashboard:
+The dashboard supports **Google OAuth login** for multi-user access. The
+login page and authentication flow are built into `webapp/app.py`, backed by
+a `users` table in SQLite with Fernet-encrypted API keys. To enable it, set:
+
+| Variable | Description |
+|---|---|
+| `WEB_AUTH_SECRET` | A long random string for session-signing |
+| `WEB_GOOGLE_CLIENT_ID` | OAuth web client ID |
+| `WEB_GOOGLE_CLIENT_SECRET` | OAuth web client secret |
+| `ALLOWED_EMAILS` | Optional: comma-separated list of emails to restrict login |
+
+When configured, every page requires authentication. Without those variables
+the dashboard runs without auth — point it at a reverse proxy and add HTTP
+basic auth there if you want to gate it on a private network.
+
+Example Apache virtual host mapping `gym.example.com` to the dashboard:
 
 ```apache
 <VirtualHost *:443>
     ServerName gym.example.com
     ProxyPreserveHost On
-    ProxyPass        / http://127.0.0.1:8770/
-    ProxyPassReverse / http://127.0.0.1:8770/
+    ProxyPass        / http://127.0.0.1:8088/
+    ProxyPassReverse / http://127.0.0.1:8088/
     # ... your TLS configuration ...
 </VirtualHost>
 ```
 
 If you run without authentication, only expose data you are happy to be public,
 or add HTTP basic auth at the proxy if you want to gate it.
+Without authentication configured, the dashboard is open to anyone on the
+network — only do that on a trusted LAN.
 
 ---
 
@@ -427,6 +472,16 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
    from any device on your LAN. Google OAuth login is available when
    `WEB_AUTH_SECRET` is configured; keep it on a trusted network otherwise.
+   It listens on `http://<host-ip>:8088` (or the `WEB_PORT` you set in `.env`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. On a
+   trusted network the dashboard is open; to gate access, set the
+   `WEB_GOOGLE_CLIENT_ID` and related env vars for Google OAuth login.
+   It listens on `http://<host-ip>:8088`. Host it on a Proxmox LXC and reach it
+   from any device on your LAN. Configure Google OAuth if hosting on a public network.
+   It listens on `http://<host-ip>:8770` (or the port you set with `WEB_PORT`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. Keep it on
+   a trusted network, or configure Google OAuth (set `WEB_AUTH_SECRET`,
+   `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`).
 
 ---
 
@@ -442,7 +497,7 @@ Pre-built images are published to the GitHub Container Registry (GHCR) by the
 The [Portainer stack](docker-compose.portainer.yml) runs **both**: the agent
 wakes at `RUN_AT` every day (default midnight and 5am in your `TZ`), builds the plan, syncs
 Hevy routines and Google Health body composition, and messages you on Telegram;
-the dashboard serves a live view of the same data on port `8770`.
+the dashboard serves a live view of the same data on port `8088`.
 
 **Credentials live only in Portainer, never in git** — the compose references
 variable names (`${...}`) and you supply the values in the stack's
@@ -487,28 +542,48 @@ without it.
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
+   | `WEB_GOOGLE_CLIENT_ID` | optional | Google OAuth client ID for dashboard login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | optional | Google OAuth client secret for dashboard login |
+   | `WEB_AUTH_SECRET` | optional | long random string to encrypt login session cookies |
+   | `ALLOWED_EMAILS` | optional | comma-separated Google emails allowed to log in |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8088` |
+
+3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8088` — keep it behind a reverse proxy / firewall and
+   configure Google OAuth for public access.
+   | `WEB_AUTH_SECRET` | optional | enable Google OAuth login |
+   | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
+   | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
+   | `ENCRYPTION_KEY` | optional | Fernet key for encrypting user API keys at rest |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
    `http://<vps-ip>:8770`. Google OAuth login is available when
    `WEB_AUTH_SECRET` is configured; keep the dashboard behind a reverse proxy
    / firewall either way.
+   `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, and
+   optionally enable Google OAuth by setting `WEB_AUTH_SECRET`,
+   `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`.
 
 > Want the agent to message you immediately to confirm it works? Temporarily set
 > `MODE=once` as an env var and redeploy, then set it back to `schedule`.
 
 ---
 
-## Continuous AI development (the swarm)
+## Continuous AI development (OpenHands + GitHub Issues)
 
+This repo uses OpenHands to autonomously build and maintain the project,
+controlled entirely via GitHub Issues. Tasks are scheduled through GitHub
+Actions workflows (`.github/workflows/`) and processed by OpenHands agents
+following the rules in `AGENTS.md`. Every issue labelled `ai-agent-task` is a
+direct instruction to the AI that gets worked on and shipped unattended.
+When you encounter a bug or need a feature, open a GitHub issue.
 This repo also runs an autonomous coding swarm that continuously works
 through a task backlog (bug fixes, the multi-tenant migration, wiring "bring
 your own AI" all the way through, the workout-programme builder UI, and
-routine maintenance) using a rotating fallback across Claude, Gemini
-(Antigravity), GitHub Copilot, and DeepSeek. See `AGENTS.md` for the rules it
-follows and `SWARM.md` for how to start/stop/monitor it (`./swarmctl start`,
-`./swarmctl status`). It is off by default — nothing runs or auto-commits
-until you explicitly start it.
+routine maintenance) via OpenHands driven by GitHub Issues. See `AGENTS.md`
+for the full rules it follows.
 
 ---
 

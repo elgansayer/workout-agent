@@ -52,8 +52,8 @@ app, a sleep tracker, a new wearable, etc.
    endpoint, matching `/api/settings/verify-hevy`) — see `fastapi-route`
    skill.
 6. **Scheduling**: if the connector needs periodic polling independent of
-   the main daily run, use the `scheduler-job` skill rather than adding a
-   third hand-rolled sleep loop.
+   the main daily run, use the `scheduler-job` skill to add a dispatch
+   function to the unified `scheduler.py`.
 
 ## Verification
 
