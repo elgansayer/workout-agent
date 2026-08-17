@@ -248,7 +248,7 @@ def analyse_lift(
 
 
 def _trend_of(
-    values: Sequence[float | None], rising_is: str, falling_is: str, tol: float
+    values: Sequence[float], rising_is: str, falling_is: str, tol: float
 ) -> str | None:
     """Classify the direction of a short numeric series."""
     clean = [v for v in values if v is not None]
@@ -282,22 +282,13 @@ def analyse_recovery(
 
     recent = readings[-14:]
     rhr_trend = _trend_of(
-        [v for r in recent[-7:] if (v := r.get("resting_hr")) is not None],
-        "rising",
-        "falling",
-        0.3,
+        [r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3
     )
     weight_trend = _trend_of(
-        [v for r in recent[-7:] if (v := r.get("weight_kg")) is not None],
-        "rising",
-        "falling",
-        0.05,
+        [r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05
     )
     bf_trend = _trend_of(
-        [v for r in recent[-7:] if (v := r.get("body_fat_pct")) is not None],
-        "rising",
-        "falling",
-        0.05,
+        [r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05
     )
 
     is_catabolic = False

@@ -118,7 +118,9 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    day: int | None, is_rest: bool, recovery: dict[str, Any] | None = None
+    day: int | None,
+    is_rest: bool,
+    recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
     """Resolve the lifestyle pillars for the given cycle day.
 
@@ -127,12 +129,11 @@ def daily_guidance(
     """
     rest = is_rest or day is None
     tier = _carb_tier(None if rest else day)
-    training: str
     if rest:
         training = "Rest and recovery, no lifting today"
     else:
-        assert day is not None
-        training = day_focus(day)
+        # day is guaranteed non-None when not rest
+        training = day_focus(day)  # type: ignore[arg-type]
     return DailyGuidance(
         training=training,
         carb_tier=tier,
