@@ -1,0 +1,59 @@
+name: Validate Integrity Repair Branch
+
+on:
+  push:
+    branches:
+      - fix/webapp-main-integrity
+    paths:
+      - .github/workflows/validate-integrity-branch.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Reject unresolved merge markers
+        shell: bash
+        run: |
+          matches="$(git grep -nE '^(<<<<<<< .+|>>>>>>> .+)$' -- '*.py' '*.yml' '*.yaml' '*.toml' '*.json' '*.sh' || true)"
+          if [[ -n "$matches" ]]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+
+      - name: Compile every tracked Python file
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt
+
+      - name: Import production modules
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+        run: |
+          python - <<'PY'
+          import ai_provider
+          import analytics
+          import database
+          import insight_cron
+          import webapp.app
+
+          print("Production module imports succeeded.")
+          PY
