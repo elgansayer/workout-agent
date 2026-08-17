@@ -1,0 +1,121 @@
+name: Finalise Source Integrity Repair
+
+on:
+  push:
+    branches:
+      - fix/webapp-main-integrity
+    paths:
+      - .github/workflows/finalise-source-integrity.yml
+
+concurrency:
+  group: finalise-source-integrity-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  finalise:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out the exact triggering commit
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Align restored provider and progress-persistence contracts
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          app_path = Path("webapp/app.py")
+          app = app_path.read_text(encoding="utf-8")
+          old_provider = (
+              "        fallback_api_key=config.gemini_api_key,\n"
+              "        fallback_model=config.gemini_model,\n"
+          )
+          new_provider = (
+              "        server_gemini_key=config.gemini_api_key,\n"
+              "        server_gemini_model=config.gemini_model,\n"
+          )
+          if app.count(old_provider) != 1:
+              raise SystemExit("expected exactly one legacy provider call")
+          app_path.write_text(
+              app.replace(old_provider, new_provider),
+              encoding="utf-8",
+          )
+
+          database_path = Path("database.py")
+          database = database_path.read_text(encoding="utf-8")
+          old_progress = (
+              "def save_progress(\n"
+              "    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH\n"
+              ") -> None:\n"
+          )
+          new_progress = (
+              "def save_progress(\n"
+              "    summary: WorkoutSummary | None,\n"
+              "    db_path: str = DEFAULT_DB_PATH,\n"
+              "    *,\n"
+              "    user_id: str | None = None,\n"
+              ") -> None:\n"
+          )
+          if database.count(old_progress) != 1:
+              raise SystemExit("expected exactly one damaged save_progress signature")
+          database_path.write_text(
+              database.replace(old_progress, new_progress),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
+
+      - name: Validate repaired source and affected contracts
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+        shell: bash
+        run: |
+          matches="$(git grep -nE '^(<<<<<<< .+|>>>>>>> .+)$' -- '*.py' '*.yml' '*.yaml' '*.toml' '*.json' '*.sh' || true)"
+          if [[ -n "$matches" ]]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+          python -m pytest -q \
+            tests/test_webapp.py \
+            tests/test_database.py \
+            tests/test_ai_provider.py \
+            tests/test_insight_cron.py \
+            tests/test_analytics.py
+
+      - name: Commit the verified repair without overwriting concurrent work
+        shell: bash
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
+        run: |
+          remote_sha="$(git ls-remote origin refs/heads/fix/webapp-main-integrity | cut -f1)"
+          if [[ "$remote_sha" != "$TRIGGER_SHA" ]]; then
+            echo "Branch moved from $TRIGGER_SHA to $remote_sha; refusing to overwrite it."
+            exit 1
+          fi
+          git rm .github/workflows/finalise-source-integrity.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add webapp/app.py database.py
+          git commit -m "fix: align restored provider and persistence contracts"
+          git push origin HEAD:fix/webapp-main-integrity

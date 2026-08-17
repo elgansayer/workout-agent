@@ -1,0 +1,87 @@
+name: Python Source Integrity
+
+on:
+  pull_request:
+    paths:
+      - "**/*.py"
+      - "requirements*.txt"
+      - ".github/workflows/diagnose-python-integrity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.py"
+      - "requirements*.txt"
+      - ".github/workflows/diagnose-python-integrity.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Reject unresolved merge markers
+        id: markers
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          matches="$(git grep -nE '^(<<<<<<< .+|>>>>>>> .+)$' -- '*.py' '*.yml' '*.yaml' '*.toml' '*.json' '*.sh' || true)"
+          if [[ -n "$matches" ]]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+          echo "No unresolved merge markers found in source/config files."
+
+      - name: Compile every tracked Python file
+        id: compile
+        continue-on-error: true
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Enforce source integrity
+        if: always()
+        env:
+          MARKERS: ${{ steps.markers.outcome }}
+          COMPILE: ${{ steps.compile.outcome }}
+        shell: bash
+        run: |
+          echo "merge-marker scan: $MARKERS"
+          echo "Python compilation: $COMPILE"
+          [[ "$MARKERS" == "success" && "$COMPILE" == "success" ]]
+
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt
+
+      # Compilation cannot detect undefined bases, missing imports, or broken
+      # cross-module symbols introduced by an automatic merge.
+      - name: Import production modules
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+        run: |
+          python - <<'PY'
+          import ai_provider
+          import analytics
+          import database
+          import insight_cron
+          import webapp.app
+
+          print("Production module imports succeeded.")
+          PY
