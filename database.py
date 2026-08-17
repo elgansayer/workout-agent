@@ -13,13 +13,22 @@ import time
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
+
+
+class UserRow(TypedDict):
+    id: str
+    email: str
+    display_name: str | None
+    created_at: str
+    timezone: str
+    units: str
 
 DEFAULT_DB_PATH = "workout_agent.db"
 
@@ -163,14 +172,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Note: For new databases the initial programme_state row is
         # inserted by the migration block below (after table recreation).
-
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO hevy_meta (key, value)
-            VALUES ('programme_start_date', ?)
-            """,
-            (datetime.now(tz=timezone.utc).date().isoformat(),),
-        )
 
         cursor.execute(
             """
@@ -1004,13 +1005,27 @@ def get_personal_records(
 def get_routine_record(
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> tuple[str, str] | None:
-    """Return (routine_id, content_hash) for a synced routine, or None."""
+    """Return (routine_id, content_hash) for a synced routine, or None.
+
+    If *user_id* is provided, the lookup is scoped to that user.
+    When None, returns the first matching row (backward-compatible path).
+    """
     with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT routine_id, content_hash FROM hevy_routines WHERE routine_key = ?",
-            (routine_key,),
-        ).fetchone()
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT routine_id, content_hash FROM hevy_routines "
+                "WHERE user_id = ? AND routine_key = ?",
+                (user_id, routine_key),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT routine_id, content_hash FROM hevy_routines "
+                "WHERE routine_key = ? LIMIT 1",
+                (routine_key,),
+            ).fetchone()
     return (row[0], row[1]) if row else None
 
 
@@ -1019,18 +1034,33 @@ def save_routine_record(
     routine_id: str,
     content_hash: str,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Persist the Hevy routine id and content hash for a routine key."""
+    """Persist the Hevy routine id and content hash for a routine key.
+
+    If *user_id* is provided, the record is scoped to that user.
+    When None, uses the legacy user for backward compatibility.
+    """
     with _connect(db_path) as conn:
+        if user_id is None:
+            # Resolve the legacy user for backward-compat writes
+            row = conn.execute(
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+            ).fetchone()
+            user_id = row[0] if row else None
+        if user_id is None:
+            return  # no legacy user, nothing to do
         conn.execute(
             """
-            INSERT INTO hevy_routines (routine_key, routine_id, content_hash)
-            VALUES (?, ?, ?)
-            ON CONFLICT(routine_key) DO UPDATE SET
+            INSERT INTO hevy_routines
+                (user_id, routine_key, routine_id, content_hash)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, routine_key) DO UPDATE SET
                 routine_id = excluded.routine_id,
                 content_hash = excluded.content_hash
             """,
-            (routine_key, routine_id, content_hash),
+            (user_id, routine_key, routine_id, content_hash),
         )
 
 
@@ -1122,10 +1152,28 @@ def check_rate_limit(
         return False
 
 
-def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Remove a tracked routine record (used when a routine is renamed)."""
+def delete_routine_record(
+    routine_key: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Remove a tracked routine record (used when a routine is renamed).
+
+    If *user_id* is provided, the delete is scoped to that user.
+    When None, deletes any matching row (backward-compatible).
+    """
     with _connect(db_path) as conn:
-        conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
+        if user_id is not None:
+            conn.execute(
+                "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
+                (user_id, routine_key),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM hevy_routines WHERE routine_key = ?",
+                (routine_key,),
+            )
 
 
 def get_programme_start_date(
@@ -1418,7 +1466,7 @@ def get_dashboard_insight(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Get the latest dashboard insight JSON as a dict.
 
     If *user_id* is provided, returns only that user's insight.
@@ -1622,7 +1670,7 @@ def get_or_create_user(
     email: str,
     display_name: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any]:
+) -> UserRow:
     """Return the user row for an email, creating one on first login."""
     import uuid
     from datetime import datetime
@@ -1634,14 +1682,14 @@ def get_or_create_user(
             (email,),
         ).fetchone()
         if row:
-            return {
-                "id": row[0],
-                "email": row[1],
-                "display_name": row[2],
-                "created_at": row[3],
-                "timezone": row[4],
-                "units": row[5],
-            }
+            return UserRow(
+                id=row[0],
+                email=row[1],
+                display_name=row[2],
+                created_at=row[3],
+                timezone=row[4],
+                units=row[5],
+            )
 
         user_id = str(uuid.uuid4())
         now = datetime.now(tz=timezone.utc).isoformat()
@@ -1652,20 +1700,20 @@ def get_or_create_user(
             """,
             (user_id, email, display_name, now),
         )
-        return {
-            "id": user_id,
-            "email": email,
-            "display_name": display_name,
-            "created_at": now,
-            "timezone": "UTC",
-            "units": "metric",
-        }
+        return UserRow(
+            id=user_id,
+            email=email,
+            display_name=display_name,
+            created_at=now,
+            timezone="UTC",
+            units="metric",
+        )
 
 
 def get_user_by_id(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
+) -> UserRow | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1675,31 +1723,31 @@ def get_user_by_id(
         ).fetchone()
     if not row:
         return None
-    return {
-        "id": row[0],
-        "email": row[1],
-        "display_name": row[2],
-        "created_at": row[3],
-        "timezone": row[4],
-        "units": row[5],
-    }
+    return UserRow(
+        id=row[0],
+        email=row[1],
+        display_name=row[2],
+        created_at=row[3],
+        timezone=row[4],
+        units=row[5],
+    )
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT id, email, display_name, created_at, timezone, units FROM users",
         ).fetchall()
     return [
-        {
-            "id": row[0],
-            "email": row[1],
-            "display_name": row[2],
-            "created_at": row[3],
-            "timezone": row[4],
-            "units": row[5],
-        }
+        UserRow(
+            id=row[0],
+            email=row[1],
+            display_name=row[2],
+            created_at=row[3],
+            timezone=row[4],
+            units=row[5],
+        )
         for row in rows
     ]
 

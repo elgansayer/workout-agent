@@ -394,7 +394,7 @@ def _dashboard_context(
 ) -> dict[str, Any]:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
     bests = get_recent_bests(DB_PATH, user_id=user_id)
@@ -579,7 +579,7 @@ def stats(request: Request) -> Any:
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
@@ -753,7 +753,7 @@ def plan(request: Request) -> Any:
     if active and active.get("definition"):
         return _render_active_plan(request, active, today)
 
-    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
+    week = week_in_cycle(get_programme_start_date(DB_PATH, user_id=user_id), today)
     current_block = block_for_week(week)
     day = today_day(today)
 
@@ -807,6 +807,7 @@ def plan(request: Request) -> Any:
 
 def _render_active_plan(request: Request, active: dict[str, Any], today: date) -> Any:
     """Render /plan from a user's active programme definition (DB-stored)."""
+    user_id = request.session.get("user_id")
     defn = active.get("definition", {})
     split_name = defn.get("name", "Active Programme")
     cycle_weeks = defn.get("cycle_weeks", 4)
@@ -815,7 +816,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     rules = defn.get("rules", [])
 
     # Determine today's day in the split (simple round-robin based on start date).
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     # current_day is the 1-based day index in the split, wrapping
     total_days = len(days_data) or 1
     current_day = ((today - start).days % total_days) + 1
@@ -1467,6 +1468,10 @@ def google_health_callback(request: Request) -> RedirectResponse:
 @app.post("/google-health/disconnect")
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
+<<<<<<< HEAD
+=======
+    _check_rate_limit(request, limit=5)
+>>>>>>> main
     user_id = request.session.get("user_id")
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)

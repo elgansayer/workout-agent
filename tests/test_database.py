@@ -6,21 +6,27 @@ from typing import Any
 
 from database import (
     advance_day,
+    delete_routine_record,
     get_body_metrics,
     get_current_day,
     get_daily_logs,
     get_exercise_volumes,
     get_meta,
+=======
+    get_or_create_user,
+>>>>>>> main
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
     get_recent_hevy_logs,
+    get_routine_record,
     get_session_volumes,
     init_db,
     save_body_metrics,
     save_daily_log,
     save_progress,
+    save_routine_record,
     save_workout,
     set_meta,
 )
@@ -1153,6 +1159,7 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
     assert get_current_day(db) == 1
 
 
+<<<<<<< HEAD
 # --- Multi-tenant isolation tests: hevy_meta user_id scoping ---
 
 

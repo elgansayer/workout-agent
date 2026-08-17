@@ -167,7 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
-## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-08, daily docs sync #684 checked 2026-08-08, hourly dead-code sweep #688 checked 2026-08-08, hourly test watch #687 checked 2026-08-08)
 
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
@@ -206,25 +206,58 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   per-minute wake loop, with per-user timezone support.~~ ✅ Resolved.
 - ~~**Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
-  `8770` across README, both compose files, and `.env.example`
-  (reconciled 2026-08-06).~~
+  `8770` across README, both compose files, and `.env.example`.
+  README no longer references a non-existent Portainer agent on port 9001
+  (docker-compose.portainer.yml has no Portainer-agent service, confirmed
+  2026-08-08, #684).~~ ✅ Resolved.
 
-- **Test coverage audit** (last updated 2026-08-07, re-verified
-  2026-08-07): all source modules have corresponding test files. The
-  full test suite stands at 533 passing tests covering 30 test modules.
-  Zero coverage gaps — every source module has a corresponding test
-  file. All verification gates clean (compileall, ruff, pytest, mypy,
-  import-sanity). Hourly test watch #514 confirmed no drift; all gates
-  green with no failures to resolve and zero test coverage gaps.
+- **Test coverage audit** (last updated 2026-08-08, re-verified
+  2026-08-08 by hourly dead-code sweep #688, hourly lint #685, hourly
+  test watch #706, and hourly test watch #717): all 611 tests passing,
+  covering 31 test modules. Zero coverage gaps — every source module
+  has a corresponding test file. All verification gates clean
+  (compileall, ruff, pytest, webapp + main import-sanity, mypy
+  advisory clean). No drift between code and test suite.
 
-- **Hourly dead-code sweep re-verified.** Issue #505 audit complete.
-  `dead_code_sweep.py` executed
-  clean via `--json` output (status: "clean", zero orphans). All 27
-  top-level modules and 3 webapp sub-modules confirmed wired. Full
-  verification gate passed: ruff (clean), pytest (533/533), dead_code_sweep
-  (zero orphans), import-sanity (all reachable), mypy (clean, 31 source files).
-  Issue #491 sweep complete — no newly orphaned or truly-dead modules found.
-  Stale pycache cleaned: 0.
+- **Hourly dead-code sweep #593 verified (2026-08-07).** `dead_code_sweep.py`
+  executed clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Entry-point
+  modules (`main.py`, `scheduler.py`, `commit_hygiene.py`, `connector_health.py`,
+  `dead_code_sweep.py`, `insight_cron.py`, `sync_history.py`) correctly excluded
+  from orphan check. Full verification gate passed: ruff (clean), pytest (601/601),
+  dead_code_sweep (zero orphans), import-sanity (all reachable). `hevy_reader.py`
+  and `programme_inference.py` remain wired (imported by `webapp/app.py`).
+  No dead code to prune, no new issues to file.
+- **Hourly test watch #717 executed (2026-08-08).** Full verification
+  gate passed: compileall (pass), ruff (clean), pytest (611/611),
+  webapp.app import-sanity (OK), main import-sanity (OK), mypy (clean
+  on all 63 source files). All 31 test modules present — zero coverage
+  gaps. No test failures, no drift to fix. Status: clean.
+
+- **Hourly dead-code sweep #688 executed (2026-08-08).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 28
+  top-level modules (including `conftest.py`) and 4 webapp sub-modules confirmed wired.
+  Full verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
+  (zero orphans), compileall (pass), import-sanity (all reachable), mypy (clean on all 63 source files).
+  `hevy_reader.py` and `programme_inference.py` confirmed wired (imported by
+  `webapp/app.py` — `_run_hevy_inference()` helper, `/api/hevy/infer` route).
+  `ai_widgets.py` and `charts.py` confirmed wired (imported by `webapp/app.py`).
+  `main.py`, `scheduler.py`, `insight_cron.py`, `dead_code_sweep.py`,
+  `commit_hygiene.py`, `connector_health.py`, `sync_history.py` all confirmed as entry points
+  (invoked directly or via subprocess). No truly dead code found. Stale pycache cleaned: 0.
+
+- **Hourly dead-code sweep #718 executed (2026-08-08).** `dead_code_sweep.py --json`
+  status: "clean", zero orphans. All 25 top-level source modules (excluding
+  `conftest.py` and test files) and 4 webapp sub-modules confirmed wired via
+  AST-based import graph BFS from entry points + grep fallback.
+  Full verification gate passed: ruff (clean), pytest (611/611),
+  dead_code_sweep (zero orphans), compileall (pass), import-sanity
+  (`webapp.app` + `main` OK), mypy (clean on all 32 source files).
+  `hevy_reader.py` and `programme_inference.py` remain wired via
+  `webapp/app.py` (`_run_hevy_inference()` / `/api/hevy/infer`).
+  `commit_hygiene.py` and `connector_health.py` invoked by `scheduler.py`
+  via subprocess. `sync_history.py` imported by `main.py` and
+  `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
 
 
