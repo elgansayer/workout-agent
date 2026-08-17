@@ -44,8 +44,8 @@ class GeminiProvider(AIProvider):
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         import google.generativeai as genai
 
-        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
-        self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
+        genai.configure(api_key=api_key)
+        self._model = genai.GenerativeModel(model)
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
