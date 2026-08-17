@@ -34,7 +34,7 @@ framework. It does one thing well: read your data, reason about it, message you.
 
 ## AI-Native "Insight-First" Dashboard & Correlation Engine
 
-The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by **Gemini 1.5 Pro**:
+The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by your configured AI provider (defaults to **Gemini 2.5 Flash**):
 
 - **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
 - **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.
@@ -267,6 +267,7 @@ dashboard usable with JavaScript disabled.
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
 | `/programmes`| Select a workout programme template, infer from Hevy history, or build a custom split |
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
+| `/programmes`| Select a workout programme template or infer one from Hevy history |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
 | `/chat`      | RAG-enabled AI chat (streaming) for digging into your training history |
