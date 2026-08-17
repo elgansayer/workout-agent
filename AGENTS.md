@@ -394,6 +394,12 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 
 - **Test coverage audit** (last updated 2026-08-06, re-verified
   2026-08-06): all source modules have corresponding test files. The
+  full test suite stands at 559 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #391 confirmed no drift.
+- **Test coverage audit** (last updated 2026-08-06, re-verified
+  2026-08-06): all source modules have corresponding test files. The
   full test suite stands at 564 passing tests covering 30 test modules.
   Zero coverage gaps — every source module has a corresponding test
   file. All verification gates clean (compileall, ruff, pytest, mypy,
