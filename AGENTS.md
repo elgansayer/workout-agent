@@ -215,6 +215,26 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Scheduling has been consolidated** into a single unified `scheduler.py`
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
+
+- **`scheduler.py` and `insight_cron.py` are wired.** `scheduler.py` is the
+  main long-running process when `MODE=schedule` (`docker-entrypoint.sh`).
+  `insight_cron.py` is invoked as a subprocess by `scheduler.py` for daily
+  and weekly insight jobs. Both have test coverage
+  (`tests/test_scheduler.py`, `tests/test_insight_cron.py`).
+
+- **`sync_history.py` is orphaned** (no callers, no test coverage). Issue
+  #185 tracks wiring decisions. It remains a standalone utility for one-off
+  historical Hevy backfills (`python sync_history.py`).
+
+- **No workout-programme selection UI.** `/plan` only renders the fixed
+  split read-only. No route lets a user choose a template or build a custom
+  one.
+
+- **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
+  for a single replica, will silently break correctness (not just
+  performance) the moment the web app runs as more than one instance behind
+  a load balancer. Flag before deploying multi-replica.
+
 - **`sync_history.py` is now wired** via `main.py`'s `--sync-history`
   flag and `webapp/app.py`'s `sync_history_endpoint` (`/api/sync-history`).
 - **No workout-programme selection UI.** `/plan` only renders the fixed
@@ -320,6 +340,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `tests/test_ai_provider.py` (7 tests, PR #85),
   `tests/test_gemini_engine.py` (32 tests, PR #164),
   `tests/test_encryption.py` (PR #146),
+  `tests/test_config.py` (PR #146),
+  `tests/test_scheduler.py` (PR #38),
+  `tests/test_insight_cron.py` (PR #38).
   `tests/test_config.py` (PR #146).
 - **Test coverage audit** (last updated 2026-08-06, re-verified
   2026-08-06, re-verified 2026-08-07): all source modules have
