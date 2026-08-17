@@ -119,7 +119,7 @@ def _latest_value(
         if not isinstance(data, dict):
             logger.warning("Google Health returned non-object JSON for %s", data_type)
             return None
-        points = data.get("dataPoints", [])
+        points = data.get("dataPoints") or []
     except requests.RequestException as exc:
         logger.warning("Could not fetch Google Health %s: %s", data_type, exc)
         return None
