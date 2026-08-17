@@ -367,13 +367,11 @@ def apply_autonomous_adjustments(
             :func:`ai_provider.resolve_provider`.
     """
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+        provider = get_provider("gemini", api_key, model_name)
         prompt = _build_autonomous_prompt(
             base_routines, hevy_logs, weather, is_catabolic
         )
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
