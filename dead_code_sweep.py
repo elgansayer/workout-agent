@@ -185,8 +185,16 @@ def _extract_imports(source: str) -> set[str]:
 def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str]:
     """Return dot-separated sub-module names from intra-package imports.
 
-    Example: ``from webapp import charts`` → ``{"webapp.charts"}`` when
-    ``"webapp"`` is in *local_packages*.
+    Handles two patterns:
+
+    1. ``from webapp import charts`` → ``{"webapp.charts"}``
+       (``node.module`` matches a local package, alias is the submodule)
+
+    2. ``from webapp.charts import line_chart`` → ``{"webapp.charts"}``
+       (``node.module`` is a dotted path rooted at a local package)
+
+    3. ``from webapp.sub.dir import foo`` → ``{"webapp.sub.dir"}``
+       (deeply nested submodules)
     """
     try:
         tree = ast.parse(source)
@@ -199,10 +207,19 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
             isinstance(node, ast.ImportFrom)
             and node.module is not None
             and node.level == 0
-            and node.module in local_packages
         ):
-            for alias in node.names:
-                imports.add(f"{node.module}.{alias.name}")
+            if node.module in local_packages:
+                # Pattern 1: from webapp import charts
+                for alias in node.names:
+                    imports.add(f"{node.module}.{alias.name}")
+            else:
+                # Patterns 2 & 3: from webapp.X import Y
+                # Check if node.module is a dotted child of a local package
+                for pkg in local_packages:
+                    prefix = pkg + "."
+                    if node.module.startswith(prefix):
+                        imports.add(node.module)
+                        break
     return imports
 
 

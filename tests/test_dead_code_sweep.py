@@ -18,7 +18,7 @@ from dead_code_sweep import (
     _build_import_graph,
     _cleanup_pycache,
     _extract_imports,
-    _extract_subprocess_module_refs,
+    _extract_submodule_imports,
     _get_github_repo,
     _get_github_token,
     _grep_import,
@@ -87,57 +87,63 @@ class TestExtractImports:
 
 
 # ---------------------------------------------------------------------------
-# _extract_subprocess_module_refs
+# _extract_submodule_imports
 # ---------------------------------------------------------------------------
 
 
-class TestExtractSubprocessModuleRefs:
-    def test_single_subprocess_call(self) -> None:
-        source = 'import subprocess\nsubprocess.run([sys.executable, "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
+class TestExtractSubmoduleImports:
+    def test_from_webapp_import_charts(self) -> None:
+        """Pattern 1: from webapp import charts → webapp.charts"""
+        assert _extract_submodule_imports(
+            "from webapp import charts\n", {"webapp"}
+        ) == {"webapp.charts"}
 
-    def test_multiple_subprocess_calls(self) -> None:
-        source = textwrap.dedent("""
-            import subprocess
-            subprocess.run([sys.executable, "main.py"])
-            subprocess.run([sys.executable, "insight_cron.py", "--daily"])
-            subprocess.run([sys.executable, "commit_hygiene.py", "--fix", "--create-issues"])
-        """)
-        assert _extract_subprocess_module_refs(source) == {
-            "main",
-            "insight_cron",
-            "commit_hygiene",
+    def test_from_webapp_dot_charts_import_line_chart(self) -> None:
+        """Pattern 2: from webapp.charts import line_chart → webapp.charts"""
+        assert _extract_submodule_imports(
+            "from webapp.charts import line_chart\n", {"webapp"}
+        ) == {"webapp.charts"}
+
+    def test_deeply_nested_submodule(self) -> None:
+        """Pattern 3: from webapp.sub.dir import foo → webapp.sub.dir"""
+        assert _extract_submodule_imports(
+            "from webapp.sub.dir import foo\n", {"webapp"}
+        ) == {"webapp.sub.dir"}
+
+    def test_mixed_patterns(self) -> None:
+        source = "from webapp import charts\nfrom webapp.charts import line_chart\nfrom webapp import ai_widgets\n"
+        assert _extract_submodule_imports(source, {"webapp"}) == {
+            "webapp.charts",
+            "webapp.ai_widgets",
         }
 
-    def test_ignores_non_subprocess_calls(self) -> None:
-        source = 'import foo\nfoo.bar(["x.py"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_multiple_local_packages(self) -> None:
+        """imports from non-webapp local packages should also resolve."""
+        assert _extract_submodule_imports(
+            "from foo import bar\n", {"webapp", "foo"}
+        ) == {"foo.bar"}
 
-    def test_detects_python_string_executable(self) -> None:
-        source = 'subprocess.run(["python", "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
+    def test_non_local_imports_not_captured(self) -> None:
+        """stdlib imports should not be captured."""
+        assert (
+            _extract_submodule_imports(
+                "from os import path\nfrom collections import defaultdict\n",
+                {"webapp"},
+            )
+            == set()
+        )
 
-    def test_detects_python3_string_executable(self) -> None:
-        source = 'subprocess.run(["python3", "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
-
-    def test_ignores_non_python_executable(self) -> None:
-        source = 'subprocess.run(["node", "foo.js"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
-
-    def test_ignores_non_py_script(self) -> None:
-        source = 'subprocess.run([sys.executable, "echo", "hello"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_import_not_from_local_package(self) -> None:
+        """from thirdparty.lib import x should not match local packages."""
+        assert (
+            _extract_submodule_imports(
+                "from mypy.nodes import Node\n", {"webapp"}
+            )
+            == set()
+        )
 
     def test_syntax_error_returns_empty(self) -> None:
-        assert _extract_subprocess_module_refs("this is not python !!!") == set()
-
-    def test_no_subprocess_returns_empty(self) -> None:
-        assert _extract_subprocess_module_refs("x = 1\ny = 2\n") == set()
-
-    def test_nested_list_not_false_positive(self) -> None:
-        source = 'def fn(x=["module.py"]): pass\n'
-        assert _extract_subprocess_module_refs(source) == set()
+        assert _extract_submodule_imports("this is not python !!!", {"webapp"}) == set()
 
 
 # ---------------------------------------------------------------------------
