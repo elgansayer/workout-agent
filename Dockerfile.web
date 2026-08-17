@@ -2,9 +2,13 @@
 # same SQLite database. Reach it on the LAN, e.g. http://<lxc-ip>:8080
 FROM python:3.12-slim
 
+# The image itself is production-safe. Local Compose may override APP_ENV, but
+# anonymous access still requires ALLOW_ANONYMOUS_WEB=1 explicitly.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    DATABASE_PATH=/data/workout_agent.db
+    DATABASE_PATH=/data/workout_agent.db \
+    APP_ENV=production \
+    ALLOW_ANONYMOUS_WEB=0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends tzdata ca-certificates \
