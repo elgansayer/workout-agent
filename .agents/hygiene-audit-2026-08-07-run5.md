@@ -45,6 +45,9 @@ Checked all tracked files — none larger than 1 MB outside `data/` (which is gi
 ## Status: ✅ Clean
 
 ### 1. Commit Message Quality
+Last 10 commits reviewed (shallow clone, grafted at `b293de9`):
+- `b293de9` — "type-check sweep: tests/test_sync_history.py (#601)"
+  Descriptive, includes issue reference. No low-quality messages like
 Last commit reviewed (shallow clone, grafted at `9c9a729`):
 - `9c9a729` — "Fixes #629: Hourly test watch - verify zero drift and update audit notes (#632)"
   Descriptive, includes issue references. No low-quality messages like
@@ -74,12 +77,17 @@ Confirmed `.gitignore` covers:
 All required patterns present.
 
 ### 4. Large Files
+No files larger than 2 MB found outside `data/` and `.git/`. Largest tracked
 No files larger than 1 MB found outside `data/` and `.git/`. Largest tracked
 files are source code (database.py: 71K, webapp/app.py: 52K) — all well
 within acceptable limits.
 
 ## Verification
 - ruff check: clean
+- pytest: 565 passed, 1 skipped, 2 warnings
+- mypy (commit_hygiene.py): clean
+- commit_hygiene.py --json: status=clean, 0 findings
+- No binary/log/cache files in tracked tree
 - pytest: 609 passed, 2 warnings
 - mypy (commit_hygiene.py): clean
 - commit_hygiene.py --json: status=clean, 0 findings
