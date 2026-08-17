@@ -32,10 +32,13 @@ services:
     environment:
       DATABASE_PATH: /data/workout_agent.db
       TZ: "Europe/London"
+      APP_ENV: ${APP_ENV:-development}
+      # Deliberately defaults off. Set ALLOW_ANONYMOUS_WEB=1 only for a trusted
+      # local network, or configure the three WEB_* Google auth variables.
+      ALLOW_ANONYMOUS_WEB: ${ALLOW_ANONYMOUS_WEB:-0}
     ports:
       - "${WEB_PORT:-8770}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
       - ./data:/data
     restart: unless-stopped
-
