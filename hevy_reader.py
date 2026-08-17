@@ -204,7 +204,7 @@ def _parse_routine(
                 target_weight_kg=target_weight,
                 target_reps=target_reps,
                 target_rep_range=target_range,
-            )
+            ),
         )
 
     return Routine(
@@ -268,7 +268,7 @@ def _parse_workout(
                 top_weight_kg=top_w,
                 top_reps=top_r,
                 total_sets=len(sets_raw),
-            )
+            ),
         )
 
     # Duration.

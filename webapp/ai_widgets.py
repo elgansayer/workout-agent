@@ -74,7 +74,7 @@ def systemic_recovery_correlation(
 
     data_points = []
     for b in biometrics:
-        d = b["date"]
+        d = str(b["date"])
         rhr = b.get("resting_hr")
         if rhr and d in vol_by_date:
             data_points.append({"rhr": rhr, "vol": vol_by_date[d], "date": d})
