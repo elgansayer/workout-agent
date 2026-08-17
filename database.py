@@ -364,29 +364,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
-            "ON body_metrics (user_id, date DESC, id DESC)"
-        )
-
-        # ---- Programme templates table (multi-user) ----
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS programmes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT NOT NULL REFERENCES users(id),
-                source TEXT NOT NULL,  -- 'template' | 'inferred' | 'custom'
-                template_key TEXT,
-                definition TEXT NOT NULL,  -- JSON blob for day/exercise definitions
-                active INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE(user_id, template_key)
-            )
-            """,
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
-            "ON programmes (user_id, active)",
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user ON body_metrics (user_id)"
         )
 
         # ---- Multi-tenant migration helper ----

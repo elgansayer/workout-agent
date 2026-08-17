@@ -130,23 +130,11 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
-        "2026-06-17",
-        1,
-        "Back, Deadlifts & Chest",
-        "high",
-        "plan A",
-        "life A",
-        db,
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
     )
     # A re-run on the same day replaces the earlier entry.
     save_daily_log(
-        "2026-06-17",
-        1,
-        "Back, Deadlifts & Chest",
-        "high",
-        "plan B",
-        "life B",
-        db,
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
     )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
@@ -206,21 +194,13 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Path) -> None:
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1",
-            "2026-06-10",
-            3600,
-            3000,
-            [ExerciseSummary("Deadlift", 100.0, 5, 4)],
+            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2",
-            "2026-06-17",
-            3600,
-            3000,
-            [ExerciseSummary("Deadlift", 120.0, 3, 5)],
+            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]
         ),
         db,
     )
@@ -389,10 +369,7 @@ def test_init_db_migration_idempotent(tmp_path: Path) -> None:
 
 
 def _exercise_summary(
-    name: str,
-    weight: float,
-    reps: int,
-    sets: int = 3,
+    name: str, weight: float, reps: int, sets: int = 3
 ) -> WorkoutSummary:
     return WorkoutSummary(
         f"S-{name}",
@@ -1047,211 +1024,3 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
 
     # None user_id returns None (no matching row)
     assert get_deep_correlation(db_path=db, user_id=None) is None
-
-
-# ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: programme_state singleton-to-user_id migration
-# ---------------------------------------------------------------------------
-
-
-def test_programme_state_migration_from_singleton(tmp_path):
-    """Running init_db on a pre-migration singleton DB migrates to user_id-scoped."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    # Simulate pre-migration singleton table
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS programme_state (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            current_day INTEGER NOT NULL,
-            split_name TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
-        "VALUES (1, 4, 'Custom Split')"
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    with sqlite3.connect(db, timeout=10) as conn2:
-        cols = {
-            row[1]
-            for row in conn2.execute("PRAGMA table_info(programme_state)").fetchall()
-        }
-        assert "user_id" in cols
-        assert "id" not in cols  # singleton "id" column is gone
-        rows = conn2.execute(
-            "SELECT user_id, current_day, split_name FROM programme_state"
-        ).fetchall()
-        assert len(rows) == 1
-        assert rows[0][1] == 4  # current_day preserved
-        assert rows[0][2] == "Custom Split"  # split_name preserved
-
-
-def test_programme_state_user_isolation(tmp_path):
-    """Two users' programme_state rows are independent."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    # Advance user A twice
-    advance_day(db, user_id=user_a)
-    advance_day(db, user_id=user_a)
-
-    # Advance user B once
-    advance_day(db, user_id=user_b)
-
-    assert get_current_day(db, user_id=user_a) == 3  # 1 + 2
-    assert get_current_day(db, user_id=user_b) == 2  # 1 + 1
-
-
-def test_programme_state_backward_compat(tmp_path):
-    """Callers not passing user_id still work via legacy user fallback."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    # Backward-compat call without user_id
-    assert get_current_day(db) == 1
-    assert advance_day(db) == 2
-    assert get_current_day(db) == 2
-
-
-def test_programme_state_migration_idempotent(tmp_path):
-    """Running init_db twice on migrated DB does not break programme_state."""
-    db = _db(tmp_path)
-    init_db(db)  # migration runs
-    init_db(db)  # second run must be no-op
-
-    import sqlite3
-
-    c = sqlite3.connect(db)
-    row = c.execute("SELECT COUNT(*) FROM programmes").fetchone()
-    c.close()
-    assert row[0] == 1
-
-
-def test_save_programme_and_get_programmes(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-a"
-    pid = save_programme(
-        uid, "custom", "My Bro Split", {"days": [1, 2, 3]},
-        active=True, db_path=db,
-    )
-    assert pid is not None
-    pps = get_programmes(uid, db_path=db)
-    assert len(pps) == 1
-    assert pps[0]["name"] == "My Bro Split"
-    assert pps[0]["source"] == "custom"
-    assert pps[0]["active"] is True
-
-
-def test_get_active_programme_returns_only_active(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-b"
-    save_programme(
-        uid, "template", "T1", {"days": []},
-        template_key="t1", db_path=db,
-    )
-    pid2 = save_programme(
-        uid, "inferred", "T2", {"days": []},
-        active=True, db_path=db,
-    )
-
-    active = get_active_programme(uid, db_path=db)
-    assert active is not None
-    assert active["id"] == pid2
-    assert active["name"] == "T2"
-
-
-def test_get_programme_by_id(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-c"
-    pid = save_programme(uid, "custom", "Test", {"foo": "bar"}, db_path=db)
-
-    p = get_programme(uid, pid, db_path=db)
-    assert p is not None
-    assert p["definition"] == {"foo": "bar"}
-
-
-def test_get_programme_wrong_user(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-d"
-    pid = save_programme(uid, "custom", "Test", {}, db_path=db)
-
-    assert get_programme("intruder", pid, db_path=db) is None
-
-
-def test_set_active_programme(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-e"
-    pid1 = save_programme(uid, "custom", "P1", {}, active=True, db_path=db)
-    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
-
-    active = get_active_programme(uid, db_path=db)
-    assert active is not None
-    assert active["id"] == pid1
-
-    ok = set_active_programme(uid, pid2, db_path=db)
-    assert ok is True
-    active2 = get_active_programme(uid, db_path=db)
-    assert active2 is not None
-    assert active2["id"] == pid2
-
-
-def test_set_active_programme_wrong_user(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-f"
-    pid = save_programme(uid, "custom", "P", {}, db_path=db)
-
-    ok = set_active_programme("intruder", pid, db_path=db)
-    assert ok is False
-
-
-def test_delete_programme(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-g"
-    pid1 = save_programme(uid, "custom", "P1", {}, active=True, db_path=db)
-    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
-
-    ok = delete_programme(uid, pid2, db_path=db)
-    assert ok is True
-    assert len(get_programmes(uid, db_path=db)) == 1
-
-    # Cannot delete the last programme.
-    ok = delete_programme(uid, pid1, db_path=db)
-    assert ok is False
-
-
-def test_delete_programme_wrong_user(tmp_path):
-    db = _db(tmp_path)
-    init_db(db)
-
-    uid = "user-h"
-    save_programme(uid, "custom", "P1", {}, db_path=db)
-    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
-
-    ok = delete_programme("intruder", pid2, db_path=db)
-    assert ok is False

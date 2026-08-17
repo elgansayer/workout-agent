@@ -1239,10 +1239,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             full_response = "".join(collected)
             if full_response:
                 save_chat_message(
-                    "assistant",
-                    full_response,
-                    db_path=DB_PATH,
-                    user_id=user_id,
+                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
                 )
 
     return StreamingResponse(generate(), media_type="text/plain")

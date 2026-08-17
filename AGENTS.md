@@ -201,6 +201,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `main.py`, `checkin.py`, and `hevy_sync.py` with full test coverage
   (`tests/test_ai_provider.py`). `webapp/app.py` and `insight_cron.py`
   still use hardcoded Gemini SDK calls — they are the next wiring targets.
+- **Two orphaned modules**: `programme_inference.py` and `hevy_reader.py`
+  implement a data-driven "infer the user's real training split from their
+  Hevy history" path but are never imported by `main.py` or
+  `webapp/app.py`. Tracked by GitHub Issue #37
+  ("[TASK] Programme Inference: Wire hevy_reader.py into the app") —
+  deliberate wiring belongs in a dedicated task, not a drive-by sweep.
+- **`sync_history.py` has zero callers outside itself.** It is never
+  imported by any module, referenced by any shell script, or invoked from
+  any Dockerfile/compose file. It is a standalone utility script for
+  one-off historical Hevy backfills (`python sync_history.py`) and
+  could be moved to a `scripts/` directory or documented in README.
 - **Two previously-orphaned modules now wired**: `programme_inference.py` and
   `hevy_reader.py` implement a data-driven "infer the user's real training
   split from their Hevy history" path and are now imported by
