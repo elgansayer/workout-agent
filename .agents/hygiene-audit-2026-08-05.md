@@ -1,3 +1,4 @@
+# Commit Hygiene Audit — 2026-08-05 (Run #3)
 # Commit Hygiene Audit — 2026-08-05 (Run #4 — Issue #323, Run #5 — Issue #338)
 
 **Result: CLEAN** — No issues found.
@@ -22,6 +23,8 @@
 ## Run #4 (Issue #323)
 
 - **Commit messages**: Reviewed last 10 commits (shallow clone, HEAD grafted
+  at 0051214). The sole available commit message is descriptive ("type-check
+  sweep: tests/test_scheduler.py (#283)"). No "fix" or "wip" commits found.
   at 657f3f1). The sole available commit message is descriptive ("Fixes #311:
   [Hourly] Hourly Lint & Format Fix"). No "fix" or "wip" commits found.
 - **Sensitive files**: `git log -p -10 -- .env .env.* data/ '*.db'` —
@@ -30,6 +33,9 @@
 - **`.gitignore` coverage**: `*.db`, `.env`, `__pycache__/`,
   `.pytest_cache/`, `.venv/` all present with comprehensive variants
   (including `*.db-wal`, `*.db-shm`, `*.db-journal`, `*.sqlite*`, `*.log`,
+  binary formats). Also covers `*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.ico`
+  (binary images). No missing entries.
+- **Large files**: No files >1MB outside `data/` (which is gitignored).
   binary formats). No missing entries.
 - **Large files**: No files >3MB outside `data/` (which is gitignored).
   Largest tracked source file is `database.py` at ~64KB — well within limits.
@@ -37,5 +43,7 @@
 - **`commit_hygiene.py`**: Wired into `scheduler.py` for hourly execution.
   All 37 tests pass. Tool reports clean with zero findings.
 
+**Verification gates (re-run)**: ruff clean (0 warnings), mypy source check
+  passes, 481 pytest tests pass. No action required.
 **Verification gates (re-run)**: ruff clean (0 warnings), mypy clean (0 issues),
   pytest 40/40 commit_hygiene tests pass. No action required.
