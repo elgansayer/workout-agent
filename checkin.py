@@ -11,7 +11,9 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import Any
 
+from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
@@ -65,33 +67,49 @@ def _weeks_between(start: date, today: date) -> int:
     return max((today - start).days // 7, 0)
 
 
-def _last_checkin_date(config: Config) -> date:
-    value = get_meta(_KEY_LAST_DATE, config.database_path)
+def _last_checkin_date(config: Config, *, user_id: str | None = None) -> date:
+    value = get_meta(_KEY_LAST_DATE, config.database_path, user_id=user_id)
     if value:
         try:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return get_programme_start_date(config.database_path)
+    return get_programme_start_date(config.database_path, user_id=user_id)
 
 
-def _seed_baseline_if_missing(config: Config, total_count: int | None) -> None:
+def _seed_baseline_if_missing(
+    config: Config,
+    total_count: int | None,
+    *,
+    user_id: str | None = None,
+) -> None:
     """Initialise check-in tracking the first time we ever see this account."""
-    if get_meta(_KEY_NUMBER, config.database_path) is None:
-        set_meta(_KEY_NUMBER, "0", config.database_path)
+    if get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) is None:
+        set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
         set_meta(
             _KEY_LAST_DATE,
             datetime.now(tz=timezone.utc).date().isoformat(),
             config.database_path,
+            user_id=user_id,
         )
     if (
         total_count is not None
-        and get_meta(_KEY_LAST_COUNT, config.database_path) is None
+        and get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id) is None
     ):
-        set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
+        set_meta(
+            _KEY_LAST_COUNT,
+            str(total_count),
+            config.database_path,
+            user_id=user_id,
+        )
 
 
-def due(config: Config, today: date | None = None) -> CheckinDue | None:
+def due(
+    config: Config,
+    today: date | None = None,
+    *,
+    user_id: str | None = None,
+) -> CheckinDue | None:
     """Return check-in details if one is due, otherwise None."""
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
@@ -99,13 +117,15 @@ def due(config: Config, today: date | None = None) -> CheckinDue | None:
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
     )
-    _seed_baseline_if_missing(config, total_count)
+    _seed_baseline_if_missing(config, total_count, user_id=user_id)
 
-    last_date = _last_checkin_date(config)
+    last_date = _last_checkin_date(config, user_id=user_id)
     weeks = _weeks_between(last_date, today)
-    number = int(get_meta(_KEY_NUMBER, config.database_path) or "0") + 1
+    number = (
+        int(get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) or "0") + 1
+    )
 
-    last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path)
+    last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id)
     if total_count is not None and last_count_raw is not None:
         workouts_done = max(total_count - int(last_count_raw), 0)
         if workouts_done >= CHECKIN_WORKOUT_TARGET or weeks >= CHECKIN_MAX_WEEKS:
@@ -119,7 +139,7 @@ def due(config: Config, today: date | None = None) -> CheckinDue | None:
 
 
 def _session_top_sets(
-    history: list[dict],
+    history: list[dict[str, Any]],
 ) -> list[tuple[float | None, int | None]]:
     """Return each session's top set (heaviest, reps tie-break), oldest first."""
     best: dict[str, tuple[float | None, int | None]] = {}
@@ -146,7 +166,7 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict]
+    name: str, planned: str, rep_range: str, history: list[dict[str, Any]],
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
@@ -181,11 +201,16 @@ def _review_exercise(
     return LiftReview(name, planned, sessions, latest, change, hit_top, stalled)
 
 
-def _analyse(config: Config, block: Block) -> list[LiftReview]:
+def _analyse(
+    config: Config,
+    block: Block,
+    *,
+    user_id: str | None = None,
+) -> list[LiftReview]:
     """Compare planned targets to logged data for each lift in the block."""
     if not config.hevy_api_key:
         return []
-    start_iso = _last_checkin_date(config).isoformat()
+    start_iso = _last_checkin_date(config, user_id=user_id).isoformat()
     reviews: list[LiftReview] = []
     seen: set[str] = set()
     for day in (1, 2, 3):
@@ -221,7 +246,9 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+    due_info: CheckinDue,
+    block: Block,
+    reviews: list[LiftReview],
 ) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
@@ -244,13 +271,23 @@ def _fallback_message(
     return "\n".join(lines)
 
 
-def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -> str:
+def run_checkin(
+    config: Config,
+    due_info: CheckinDue,
+    week: int,
+    block: Block,
+    *,
+    user_id: str | None = None,
+) -> str:
     """Build the check-in message from logged data versus the plan."""
-    reviews = _analyse(config, block)
+    reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
+    provider = resolve_provider(
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
     return generate_checkin_message(
-        api_key=config.gemini_api_key,
-        model_name=config.gemini_model,
+        provider=provider,
         number=due_info.number,
         week=week,
         block=block,
@@ -258,19 +295,42 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),
         fallback=fallback,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
 
 
 def record(
-    config: Config, due_info: CheckinDue, message: str, today: date | None = None
+    config: Config,
+    due_info: CheckinDue,
+    message: str,
+    today: date | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    set_meta(_KEY_NUMBER, str(due_info.number), config.database_path)
-    set_meta(_KEY_LAST_DATE, today.isoformat(), config.database_path)
+    set_meta(
+        _KEY_NUMBER,
+        str(due_info.number),
+        config.database_path,
+        user_id=user_id,
+    )
+    set_meta(
+        _KEY_LAST_DATE,
+        today.isoformat(),
+        config.database_path,
+        user_id=user_id,
+    )
     if due_info.total_count is not None:
-        set_meta(_KEY_LAST_COUNT, str(due_info.total_count), config.database_path)
+        set_meta(
+            _KEY_LAST_COUNT,
+            str(due_info.total_count),
+            config.database_path,
+            user_id=user_id,
+        )
     save_checkin(
         due_info.number,
         today.isoformat(),
@@ -278,4 +338,5 @@ def record(
         due_info.weeks_elapsed,
         message,
         config.database_path,
+        user_id=user_id,
     )

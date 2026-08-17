@@ -1,7 +1,7 @@
-google-generativeai>=0.8.0
-requests>=2.31.0
-python-dotenv>=1.0.0
-cryptography>=42.0
+google-generativeai>=0.8.6
+requests>=2.34.0  # Bumped for CVE-2024-35195, CVE-2024-47081, CVE-2026-25645
+python-dotenv>=1.2.0
+cryptography>=50.0.0  # Bumped for CVE-2026-69247, CVE-2026-39892, CVE-2026-34073, CVE-2026-26007
 
 # AI provider abstraction (ai_provider.py) - openai backs both the OpenAI
 # and DeepSeek providers (DeepSeek uses an OpenAI-compatible API).
@@ -9,6 +9,8 @@ openai>=1.30.0
 anthropic>=0.42.0
 
 # Development / testing
-pytest>=8.0.0
-ruff>=0.6.0
+pytest>=8.0.0,<9
+ruff>=0.16.2
 mypy>=1.10.0
+types-requests>=2.31.0
+types-Authlib>=1.7.2
