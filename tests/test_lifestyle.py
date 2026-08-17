@@ -54,7 +54,7 @@ def test_protein_target_absent_without_weight() -> None:
     )
 
 
-def test_as_text_includes_all_pillars():
+def test_as_text_includes_all_pillars() -> None:
     text = lifestyle.daily_guidance(
         1, is_rest=False, recovery={"weight_kg": 80}
     ).as_text()
