@@ -1395,9 +1395,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
-    set_meta(
-        _GH_STATE_KEY, "", DB_PATH, user_id=user_id
-    )  # one-time use, regardless of outcome
+    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
@@ -1415,7 +1413,10 @@ def google_health_callback(request: Request) -> RedirectResponse:
 @app.post("/google-health/disconnect")
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
+<<<<<<< HEAD
+=======
     _check_rate_limit(request, limit=5)
+>>>>>>> main
     user_id = request.session.get("user_id")
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)

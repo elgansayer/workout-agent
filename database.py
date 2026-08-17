@@ -94,6 +94,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """,
         )
+        # Note: hevy_meta is migrated from key PK to (user_id, key) composite
+        # PK below (see the migration block after user_preferences). In brand-new
+        # databases the migration block creates it from scratch; for existing DBs
+        # it was created above and will be migrated when the block runs.
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS hevy_meta (
@@ -369,8 +373,311 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
-            "ON workout_history (user_id, date DESC, id DESC)"
+            "ON workout_history (user_id, date DESC, id DESC)",
         )
+
+        # Migration: Add user_id column to exercise_progress for multi-tenancy
+        cursor.execute("PRAGMA table_info(exercise_progress)")
+        ep_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ep_columns:
+            cursor.execute(
+                "ALTER TABLE exercise_progress ADD COLUMN user_id TEXT REFERENCES users(id)",
+            )
+            cursor.execute(
+                "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute("DROP INDEX IF EXISTS idx_exercise_progress_user")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_name_id "
+            "ON exercise_progress (user_id, exercise_name, id DESC)",
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_date "
+            "ON exercise_progress (user_id, date ASC)",
+        )
+
+        # Migration: Add user_id column to body_metrics for multi-tenancy
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        bm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in bm_columns:
+            cursor.execute(
+                "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)",
+            )
+            cursor.execute(
+                "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
+            "ON body_metrics (user_id, date DESC, id DESC)",
+        )
+
+        # ---- Programme templates table (multi-user) ----
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programmes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                source TEXT NOT NULL,  -- 'template' | 'inferred' | 'custom'
+                template_key TEXT,
+                definition TEXT NOT NULL,  -- JSON blob for day/exercise definitions
+                active INTEGER DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, template_key)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
+            "ON programmes (user_id, active)",
+        )
+
+        # ---- Multi-tenant migration helper ----
+        def _ensure_legacy_user(cur: sqlite3.Cursor) -> str:
+            """Return the stable legacy user id, creating the user row if needed."""
+            from uuid import uuid4
+
+            row = cur.execute(
+                "SELECT id FROM users WHERE email = ?",
+                ("legacy@local",),
+            ).fetchone()
+            if row:
+                return str(row[0])
+            legacy_id2 = str(uuid4())
+            cur.execute(
+                "INSERT INTO users (id, email, display_name, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    legacy_id2,
+                    "legacy@local",
+                    "Legacy Data",
+                    datetime.now(tz=timezone.utc).isoformat(),
+                ),
+            )
+            return legacy_id2
+
+        # Migration: Add user_id column to chat_messages
+        cursor.execute("PRAGMA table_info(chat_messages)")
+        cm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in cm_columns:
+            cursor.execute(
+                "ALTER TABLE chat_messages ADD COLUMN user_id TEXT REFERENCES users(id)",
+            )
+            chat_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE chat_messages SET user_id = ? WHERE user_id IS NULL",
+                (chat_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_chat_messages_user "
+            "ON chat_messages (user_id, id DESC)",
+        )
+
+        # Migration: Migrate reasoning_logs to user_id-scoped composite PK
+        cursor.execute("PRAGMA table_info(reasoning_logs)")
+        rl_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in rl_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reasoning_logs_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    context_id TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    exercise_name TEXT NOT NULL,
+                    reasoning TEXT NOT NULL,
+                    PRIMARY KEY (user_id, context_id)
+                )
+                """,
+            )
+            old_rows = cursor.execute(
+                "SELECT context_id, date, exercise_name, reasoning FROM reasoning_logs",
+            ).fetchall()
+            if old_rows:
+                rl_legacy_id = _ensure_legacy_user(cursor)
+                for row in old_rows:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO reasoning_logs_new "
+                        "(user_id, context_id, date, exercise_name, reasoning) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (rl_legacy_id, row[0], row[1], row[2], row[3]),
+                    )
+            cursor.execute("DROP TABLE reasoning_logs")
+            cursor.execute(
+                "ALTER TABLE reasoning_logs_new RENAME TO reasoning_logs",
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reasoning_logs_user "
+            "ON reasoning_logs (user_id, context_id)",
+        )
+
+        # Migration: Migrate dashboard_insights from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(dashboard_insights)")
+        di_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in di_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dashboard_insights_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    date TEXT NOT NULL,
+                    insight_json TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """,
+            )
+            old_row = cursor.execute(
+                "SELECT date, insight_json FROM dashboard_insights WHERE id = 1",
+            ).fetchone()
+            if old_row:
+                di_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO dashboard_insights_new "
+                    "(user_id, date, insight_json) VALUES (?, ?, ?)",
+                    (di_legacy_id, old_row[0], old_row[1]),
+                )
+            cursor.execute("DROP TABLE dashboard_insights")
+            cursor.execute(
+                "ALTER TABLE dashboard_insights_new RENAME TO dashboard_insights",
+            )
+
+        # Migration: Migrate deep_correlations from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(deep_correlations)")
+        dc_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in dc_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS deep_correlations_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    date TEXT NOT NULL,
+                    insight_markdown TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """,
+            )
+            old_row = cursor.execute(
+                "SELECT date, insight_markdown FROM deep_correlations WHERE id = 1",
+            ).fetchone()
+            if old_row:
+                dc_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO deep_correlations_new "
+                    "(user_id, date, insight_markdown) VALUES (?, ?, ?)",
+                    (dc_legacy_id, old_row[0], old_row[1]),
+                )
+            cursor.execute("DROP TABLE deep_correlations")
+            cursor.execute(
+                "ALTER TABLE deep_correlations_new RENAME TO deep_correlations",
+            )
+
+        # Migration: Add user_id column to daily_log for multi-tenancy
+        cursor.execute("PRAGMA table_info(daily_log)")
+        dl_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in dl_columns:
+            cursor.execute(
+                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)",
+            )
+            dl_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE daily_log SET user_id = ? WHERE user_id IS NULL",
+                (dl_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
+            "ON daily_log (user_id, date DESC, id DESC)",
+        )
+
+        # Migration: Add user_id column to check_ins for multi-tenancy
+        cursor.execute("PRAGMA table_info(check_ins)")
+        ci_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ci_columns:
+            cursor.execute(
+                "ALTER TABLE check_ins ADD COLUMN user_id TEXT REFERENCES users(id)",
+            )
+            ci_legacy_id = _ensure_legacy_user(cursor)
+            cursor.execute(
+                "UPDATE check_ins SET user_id = ? WHERE user_id IS NULL",
+                (ci_legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_check_ins_user "
+            "ON check_ins (user_id, id DESC)",
+        )
+
+        # Migration: Migrate programme_state from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(programme_state)")
+        ps_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ps_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS programme_state_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    current_day INTEGER NOT NULL DEFAULT 1,
+                    split_name TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """,
+            )
+            old_row = cursor.execute(
+                "SELECT current_day, split_name FROM programme_state WHERE id = 1",
+            ).fetchone()
+            if old_row:
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, ?, ?)",
+                    (ps_legacy_id, old_row[0], old_row[1]),
+                )
+            else:
+                # Brand-new database: seed a default row for the legacy user
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
+                    (ps_legacy_id, SPLIT_NAME),
+                )
+            cursor.execute("DROP TABLE programme_state")
+            cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
+
+        # Migration: Migrate hevy_meta from key PK to (user_id, key) composite PK
+        cursor.execute("PRAGMA table_info(hevy_meta)")
+        hm_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in hm_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hevy_meta_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                )
+                """,
+            )
+            old_rows = cursor.execute(
+                "SELECT key, value FROM hevy_meta",
+            ).fetchall()
+            if old_rows:
+                hm_legacy_id = _ensure_legacy_user(cursor)
+                for row in old_rows:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO hevy_meta_new "
+                        "(user_id, key, value) VALUES (?, ?, ?)",
+                        (hm_legacy_id, row[0], row[1]),
+                    )
+            else:
+                # Brand-new database: seed programme_start_date for legacy user
+                hm_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO hevy_meta_new (user_id, key, value) "
+                    "VALUES (?, 'programme_start_date', ?)",
+                    (hm_legacy_id, datetime.now(tz=timezone.utc).date().isoformat()),
+                )
+            cursor.execute("DROP TABLE hevy_meta")
+            cursor.execute("ALTER TABLE hevy_meta_new RENAME TO hevy_meta")
+
+        # Note: The programme_start_date INSERT OR IGNORE below is now redundant
+        # for new DBs (migration above handles it) but harmless as a fallback.
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -796,9 +1103,8 @@ def get_meta(
 ) -> str | None:
     """Return a stored metadata value, or None if absent.
 
-    If *user_id* is provided, the lookup is scoped to that user.
-    When None, returns the first matching row (backward-compatible path).
-    """
+    When *user_id* is provided, the lookup is scoped to that user.
+    When None, returns a legacy match (first row found)."""
     with _connect(db_path) as conn:
         if user_id is not None:
             row = conn.execute(
@@ -822,24 +1128,31 @@ def set_meta(
 ) -> None:
     """Store a metadata value under the given key.
 
-    If *user_id* is provided, the value is scoped to that user.
-    When None, uses the legacy user for backward compatibility.
-    """
+    When *user_id* is provided, the value is scoped to that user.
+    When None, falls back to the legacy user."""
     with _connect(db_path) as conn:
-        if user_id is None:
-            # Resolve the legacy user for backward-compat writes
+        uid = user_id
+        if uid is None:
             row = conn.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
             ).fetchone()
-            user_id = row[0] if row else None
-        if user_id is None:
-            return  # no legacy user, nothing to do
+            if row:
+                uid = row[0]
+            else:
+                from uuid import uuid4
+                uid = str(uuid4())
+                conn.execute(
+                    "INSERT INTO users (id, email, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (uid, "legacy@local", "Legacy Data",
+                     datetime.now(tz=timezone.utc).isoformat()),
+                )
         conn.execute(
             """
             INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
             ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
             """,
-            (user_id, key, value),
+            (uid, key, value),
         )
 
 
@@ -849,9 +1162,40 @@ def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> N
         conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
 
 
-def get_programme_start_date(db_path: str = DEFAULT_DB_PATH) -> date:
-    """Return the programme start date, defaulting to today if unset."""
-    value = get_meta("programme_start_date", db_path)
+def delete_routine_record(
+    routine_key: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Remove a tracked routine record (used when a routine is renamed).
+
+    If *user_id* is provided, the delete is scoped to that user.
+    When None, deletes any matching row (backward-compatible).
+    """
+    with _connect(db_path) as conn:
+        if user_id is not None:
+            conn.execute(
+                "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
+                (user_id, routine_key),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM hevy_routines WHERE routine_key = ?",
+                (routine_key,),
+            )
+
+
+def get_programme_start_date(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> date:
+    """Return the programme start date, defaulting to today if unset.
+
+    When *user_id* is provided, the lookup is scoped to that user.
+    """
+    value = get_meta("programme_start_date", db_path, user_id=user_id)
     if value:
         try:
             return date.fromisoformat(value)
