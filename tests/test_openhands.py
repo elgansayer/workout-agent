@@ -1,5 +1,7 @@
 """Tests for issue #46: dummy text file created in the root directory."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 
