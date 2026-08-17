@@ -225,6 +225,15 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   top-level modules and 3 webapp sub-modules confirmed wired. Full
   verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
   (zero orphans), import-sanity (all reachable), mypy (clean on all 32 source files).
+- **Hourly dead-code sweep #593 verified (2026-08-07).** `dead_code_sweep.py`
+  executed clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Entry-point
+  modules (`main.py`, `scheduler.py`, `commit_hygiene.py`, `connector_health.py`,
+  `dead_code_sweep.py`, `insight_cron.py`, `sync_history.py`) correctly excluded
+  from orphan check. Full verification gate passed: ruff (clean), pytest (601/601),
+  dead_code_sweep (zero orphans), import-sanity (all reachable). `hevy_reader.py`
+  and `programme_inference.py` remain wired (imported by `webapp/app.py`).
+  No dead code to prune, no new issues to file.
 - **Hourly test watch #717 executed (2026-08-08).** Full verification
   gate passed: compileall (pass), ruff (clean), pytest (611/611),
   webapp.app import-sanity (OK), main import-sanity (OK), mypy (clean
