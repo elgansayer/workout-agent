@@ -21,6 +21,9 @@
 **Learning:** Found an accessibility issue pattern in the app's components where icon-only buttons rely on `title` attributes instead of explicit `aria-label`, and placeholder-only inputs lack proper `aria-label` definitions, degrading screen reader experience.
 **Action:** Always add `aria-label` to icon-only buttons (while hiding decorative SVGs with `aria-hidden="true"`) and provide explicit labels or `aria-label` tags to input fields lacking a visible `<label>`.
 
+## 2025-03-04 - Adding ARIA properties to custom JS toggles
+**Learning:** Found custom selection chips for goals and experience level that use JS and a `.selected` class but lack proper semantic attributes for assistive technology. They were not announced as selected or grouped.
+**Action:** When implementing custom toggleable elements (like selection chips) in Jinja templates, group them using `role='group'` and `aria-labelledby`, and dynamically manage the `aria-pressed` attribute in JavaScript alongside the active CSS class.
 ## 2025-03-03 - Accessible Selection Chips
 **Learning:** Found that custom toggleable elements (like selection chips) are difficult for screen reader users to understand because they lack grouped context and states are not explicitly announced when toggled via custom JavaScript functions.
 **Action:** Always group custom selection elements using `role="group"` and `aria-labelledby`, and ensure the `aria-pressed` attribute is actively managed via JavaScript to indicate their current toggled/selected state.
