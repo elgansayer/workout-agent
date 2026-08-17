@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 from hevy_reader import (
     CompletedWorkout,
+    ExerciseTemplate,
     HevyTrainingData,
     Routine,
     RoutineExercise,
@@ -72,7 +73,7 @@ class InferredProgramme:
     # Frequency analysis.
     sessions_per_week: float = 0.0
     muscle_frequency: dict[str, float] = field(
-        default_factory=dict
+        default_factory=dict,
     )  # muscle -> sessions/week
 
     # Training history stats.
@@ -129,7 +130,7 @@ _MUSCLE_GROUP_CATEGORIES = {
 
 def _classify_routine_muscles(
     routine: Routine,
-    templates: dict,
+    templates: dict[str, ExerciseTemplate],
 ) -> list[str]:
     """Return a ranked list of primary muscle groups hit by this routine."""
     counts: dict[str, float] = {}
@@ -186,11 +187,13 @@ def _classify_split(days: list[TrainingDay]) -> str:
     # most of the programme. Requiring a mixed push+pull day prevents
     # falsely matching PPL or bro splits.
     mixed_upper = sum(
-        1 for cats in day_categories
+        1
+        for cats in day_categories
         if "push" in cats and "pull" in cats and "legs" not in cats
     )
     lower_only = sum(
-        1 for cats in day_categories
+        1
+        for cats in day_categories
         if "legs" in cats and "push" not in cats and "pull" not in cats
     )
     if (
@@ -211,7 +214,7 @@ def _classify_split(days: list[TrainingDay]) -> str:
 
 def _compute_frequency(
     workouts: list[CompletedWorkout],
-    templates: dict,
+    templates: dict[str, ExerciseTemplate],
     window_days: int = 28,
 ) -> tuple[float, dict[str, float]]:
     """Compute sessions/week and per-muscle frequency from recent workouts."""
@@ -235,7 +238,7 @@ def _compute_frequency(
     weeks = window_days / 7
     sessions_per_week = len(recent) / weeks if weeks > 0 else 0
 
-    muscle_hits: Counter = Counter()
+    muscle_hits: Counter[str] = Counter()
     for w in recent:
         session_muscles: set[str] = set()
         for ex in w.exercises:
@@ -331,7 +334,8 @@ def infer_programme(hevy_data: HevyTrainingData) -> InferredProgramme:
 
     # Next routine suggestion.
     programme.next_routine = _determine_next_routine(
-        programme.training_days, hevy_data.recent_workouts
+        programme.training_days,
+        hevy_data.recent_workouts,
     )
 
     logger.info(
