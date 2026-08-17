@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ai_provider import AIProvider, get_provider
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -20,17 +20,12 @@ from program import (
 
 __all__ = [
     "apply_autonomous_adjustments",
-    "create_provider",
     "generate_checkin_message",
     "generate_next_workout",
     "generate_rest_day_message",
-    "get_provider",
 ]
 
-try:
-    from weather import WeatherConditions
-except ImportError:
-    WeatherConditions = Any  # type: ignore[assignment,misc]
+from weather import WeatherConditions
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +150,14 @@ def generate_next_workout(
     """
     try:
         prompt = _build_prompt(
-            day, week, block, workout_summary, recovery, history, insights, last_plan
+            day,
+            week,
+            block,
+            workout_summary,
+            recovery,
+            history,
+            insights,
+            last_plan,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -215,7 +217,7 @@ def generate_rest_day_message(
         if text:
             return text
         logger.warning(
-            "AI generation returned an empty rest-day response; using fallback."
+            "AI generation returned an empty rest-day response; using fallback.",
         )
     except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
         logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
@@ -284,7 +286,12 @@ def generate_checkin_message(
     """
     try:
         prompt = _build_checkin_prompt(
-            number, week, block, workouts_done, weeks, analysis_text
+            number,
+            week,
+            block,
+            workouts_done,
+            weeks,
+            analysis_text,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -342,7 +349,7 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
@@ -362,7 +369,10 @@ def apply_autonomous_adjustments(
     """
     try:
         prompt = _build_autonomous_prompt(
-            base_routines, hevy_logs, weather, is_catabolic
+            base_routines,
+            hevy_logs,
+            weather,
+            is_catabolic,
         )
         text = str(provider.generate(prompt)).strip()
 
@@ -382,35 +392,8 @@ def apply_autonomous_adjustments(
         logger.warning("AI autonomous routines did not return a dict; using baseline.")
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "AI autonomous adjustment failed (%s); using baseline routines.", exc
+            "AI autonomous adjustment failed (%s); using baseline routines.",
+            exc,
         )
 
     return base_routines
-
-
-def create_provider(
-    provider_name: str,
-    api_key: str,
-    model: str | None = None,
-) -> AIProvider:
-    """Create an AI provider instance from raw credentials.
-
-    Thin wrapper around :func:`ai_provider.get_provider` so callers that
-    already have a provider name and key on hand don't need to import
-    ``ai_provider`` separately.
-
-    Args:
-        provider_name: ``"gemini"``, ``"claude"``, ``"openai"``, or
-            ``"deepseek"``.
-        api_key: The API key for the chosen provider.
-        model: Optional model override (e.g. ``"gemini-2.0-flash"``).
-
-    Returns:
-        A configured :class:`AIProvider` instance ready to call
-        :meth:`~AIProvider.generate`.
-
-    Raises:
-        ValueError: Unknown *provider_name*.
-        ImportError: The provider's SDK is not installed.
-    """
-    return get_provider(provider_name, api_key, model)
