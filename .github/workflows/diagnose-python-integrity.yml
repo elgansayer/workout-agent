@@ -1,0 +1,53 @@
+name: Diagnose Python Integrity
+
+on:
+  push:
+    branches:
+      - fix/webapp-main-integrity
+    paths:
+      - .github/workflows/diagnose-python-integrity.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Find unresolved merge markers
+        id: markers
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          matches="$(git grep -nE '^(<<<<<<< .+|>>>>>>> .+)$' -- '*.py' '*.yml' '*.yaml' '*.toml' '*.json' '*.sh' || true)"
+          if [[ -n "$matches" ]]; then
+            printf '%s\n' "$matches"
+            exit 1
+          fi
+          echo "No unresolved merge markers found in source/config files."
+
+      - name: Compile every tracked Python file
+        id: compile
+        continue-on-error: true
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Fail when either diagnostic found damage
+        if: always()
+        env:
+          MARKERS: ${{ steps.markers.outcome }}
+          COMPILE: ${{ steps.compile.outcome }}
+        run: |
+          echo "merge-marker scan: $MARKERS"
+          echo "Python compilation: $COMPILE"
+          [[ "$MARKERS" == "success" && "$COMPILE" == "success" ]]
