@@ -15,10 +15,11 @@ from dead_code_sweep import (
     ENTRY_POINTS,
     ModuleInfo,
     OrphanReport,
+    _build_full_import_graph,
     _build_import_graph,
-    _cleanup_pycache,
+    _extract_full_imports,
     _extract_imports,
-    _extract_subprocess_module_refs,
+    _extract_submodule_imports,
     _get_github_repo,
     _get_github_token,
     _grep_import,
@@ -87,57 +88,108 @@ class TestExtractImports:
 
 
 # ---------------------------------------------------------------------------
-# _extract_subprocess_module_refs
+# _extract_full_imports
 # ---------------------------------------------------------------------------
 
 
-class TestExtractSubprocessModuleRefs:
-    def test_single_subprocess_call(self) -> None:
-        source = 'import subprocess\nsubprocess.run([sys.executable, "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
+class TestExtractFullImports:
+    """Tests for the enhanced import resolver that preserves sub-module names."""
 
-    def test_multiple_subprocess_calls(self) -> None:
-        source = textwrap.dedent("""
-            import subprocess
-            subprocess.run([sys.executable, "main.py"])
-            subprocess.run([sys.executable, "insight_cron.py", "--daily"])
-            subprocess.run([sys.executable, "commit_hygiene.py", "--fix", "--create-issues"])
-        """)
-        assert _extract_subprocess_module_refs(source) == {
-            "main",
-            "insight_cron",
-            "commit_hygiene",
-        }
+    def test_import_foo(self) -> None:
+        assert _extract_full_imports("import foo\n") == {"foo"}
 
-    def test_ignores_non_subprocess_calls(self) -> None:
-        source = 'import foo\nfoo.bar(["x.py"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_import_foo_dot_bar(self) -> None:
+        result = _extract_full_imports("import foo.bar\n")
+        assert result == {"foo", "foo.bar"}
 
-    def test_detects_python_string_executable(self) -> None:
-        source = 'subprocess.run(["python", "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
+    def test_import_deeply_nested(self) -> None:
+        result = _extract_full_imports("import a.b.c.d\n")
+        assert result == {"a", "a.b.c.d"}
 
-    def test_detects_python3_string_executable(self) -> None:
-        source = 'subprocess.run(["python3", "foo.py"])\n'
-        assert _extract_subprocess_module_refs(source) == {"foo"}
+    def test_from_foo_import_bar(self) -> None:
+        result = _extract_full_imports("from foo import bar\n")
+        assert result == {"foo", "foo.bar"}
 
-    def test_ignores_non_python_executable(self) -> None:
-        source = 'subprocess.run(["node", "foo.js"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_from_foo_dot_baz_import_qux(self) -> None:
+        result = _extract_full_imports("from foo.baz import qux\n")
+        assert result == {"foo", "foo.baz", "foo.baz.qux"}
 
-    def test_ignores_non_py_script(self) -> None:
-        source = 'subprocess.run([sys.executable, "echo", "hello"])\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_from_webapp_import_multiple(self) -> None:
+        """The critical case: ``from webapp import charts, ai_widgets``
+        must produce ``webapp.charts`` and ``webapp.ai_widgets`` so the
+        BFS can find their defining files."""
+        result = _extract_full_imports("from webapp import ai_widgets, charts\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.ai_widgets" in result
+
+    def test_from_webapp_dot_charts_import_function(self) -> None:
+        result = _extract_full_imports("from webapp.charts import line_chart\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.charts.line_chart" in result
+
+    def test_star_import_not_expanded(self) -> None:
+        """``from foo import *`` — can't resolve individual names."""
+        result = _extract_full_imports("from foo import *\n")
+        assert result == {"foo"}
+
+    def test_multiple_imports(self) -> None:
+        source = "import os\nfrom sys import argv\nfrom datetime import datetime\n"
+        result = _extract_full_imports(source)
+        assert result == {"os", "sys", "sys.argv", "datetime", "datetime.datetime"}
 
     def test_syntax_error_returns_empty(self) -> None:
-        assert _extract_subprocess_module_refs("this is not python !!!") == set()
+        assert _extract_full_imports("this is not valid python !!!") == set()
 
-    def test_no_subprocess_returns_empty(self) -> None:
-        assert _extract_subprocess_module_refs("x = 1\ny = 2\n") == set()
+    def test_import_in_function(self) -> None:
+        source = textwrap.dedent("""
+            def foo():
+                import bar
+        """)
+        assert _extract_full_imports(source) == {"bar"}
 
-    def test_nested_list_not_false_positive(self) -> None:
-        source = 'def fn(x=["module.py"]): pass\n'
-        assert _extract_subprocess_module_refs(source) == set()
+    def test_no_imports(self) -> None:
+        assert _extract_full_imports("x = 1\ny = 2\n") == set()
+
+    def test_from_future_import(self) -> None:
+        # __future__ imports shouldn't be treated as module wiring
+        result = _extract_full_imports("from __future__ import annotations\n")
+        assert result == {"__future__", "__future__.annotations"}
+
+    def test_relative_import(self) -> None:
+        """Relative imports (``from . import x``) have ``module is None``."""
+        result = _extract_full_imports("from . import sibling\nfrom .. import parent_mod\n")
+        assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# _build_full_import_graph
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFullImportGraph:
+    def test_returns_dict(self) -> None:
+        graph = _build_full_import_graph()
+        assert isinstance(graph, dict)
+        assert len(graph) > 10
+
+    def test_webapp_app_includes_charts(self) -> None:
+        """webapp/app.py imports charts, so the full graph must include
+        ``webapp.charts`` as a resolved import."""
+        graph = _build_full_import_graph()
+        webapp_imports = graph.get("webapp/app.py", set())
+        assert "webapp.charts" in webapp_imports, (
+            "full import graph must resolve 'from webapp import charts' → webapp.charts"
+        )
+        assert "webapp.ai_widgets" in webapp_imports, (
+            "full import graph must resolve 'from webapp import ai_widgets' → webapp.ai_widgets"
+        )
+
+    def test_includes_test_files(self) -> None:
+        graph = _build_full_import_graph()
+        test_files = [k for k in graph if k.startswith("tests/")]
+        assert len(test_files) > 0, "Test files should be in the full import graph"
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +332,30 @@ class TestFindOrphansWithMockRepo:
             # catches the common patterns.
             # This test validates grep fallback exists, not perfection.
             assert isinstance(orphans, list)
+
+    def test_transitive_bfs_works_without_grep(self, tmp_path: Path) -> None:
+        """BFS should trace transitive imports without relying on grep."""
+        (tmp_path / "main.py").write_text("import a\n")
+        (tmp_path / "a.py").write_text("import b\n")
+        (tmp_path / "b.py").write_text("import c\n")
+        (tmp_path / "c.py").write_text("x = 1\n")
+        (tmp_path / "conftest.py").write_text("")
+
+        orig_grep = dead_code_sweep._grep_import
+        dead_code_sweep._grep_import = lambda module_name: []  # type: ignore[assignment]
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            orphans = find_orphans()
+            orphan_names = {r.module.name for r in orphans}
+            # b and c are transitively reachable via a
+            assert "b" not in orphan_names, (
+                "Transitively imported module 'b' incorrectly flagged as orphan"
+            )
+            assert "c" not in orphan_names, (
+                "Deep transitive import 'c' incorrectly flagged as orphan"
+            )
+
+        dead_code_sweep._grep_import = orig_grep
 
     def test_webapp_submodule_detected(self, tmp_path: Path) -> None:
         webapp_dir = tmp_path / "webapp"
@@ -721,22 +797,33 @@ class TestPruneDeadModules:
 
 
 class TestBuildImportGraph:
-    def test_returns_dict(self) -> None:
-        graph = _build_import_graph()
+    def test_returns_tuple(self) -> None:
+        graph, file_to_mod = _build_import_graph()
         assert isinstance(graph, dict)
+        assert isinstance(file_to_mod, dict)
         # Should have at least a few files
         assert len(graph) > 10
 
     def test_skips_virtual_envs(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         for key in graph:
             assert "__pycache__" not in key
             assert ".venv" not in key
 
     def test_includes_test_files(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         test_files = [k for k in graph if k.startswith("tests/")]
         assert len(test_files) > 0, "Test files should be in the import graph"
+
+    def test_file_to_mod_has_top_level(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["database.py"] == "database"
+        assert file_to_mod["main.py"] == "main"
+
+    def test_file_to_mod_has_webapp(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["webapp/app.py"] == "webapp.app"
+        assert file_to_mod["webapp/charts.py"] == "webapp.charts"
 
 
 # ---------------------------------------------------------------------------
