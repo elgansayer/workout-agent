@@ -6,10 +6,13 @@ and validates that commit messages are descriptive (per AGENTS.md).
 Design
 ------
 * Runs ``git log -10 --stat`` to inspect commit messages.
-* Runs ``git log -p -10 -- .env .env.* data/ '*.db'`` to detect
-  accidentally-committed secrets or database files.
-* Checks ``.gitignore`` for required patterns (``*.db``, ``.env``,
-  ``__pycache__/``, ``.pytest_cache/``, ``.venv/``).
+* Runs ``git log -p -10 --`` with a comprehensive set of glob patterns
+  covering ``.env``, database (``*.db``, ``*.sqlite``, ``*.sqlite3``),
+  log files (``*.log``), and ``data/`` to detect accidentally-committed
+  secrets or database files.
+* Checks ``.gitignore`` for required patterns (``*.db``, ``*.sqlite``,
+  ``*.sqlite3``, ``*.log``, ``.env``, ``__pycache__/``, ``.pytest_cache/``,
+  ``.venv/``).
 * Scans for tracked files >1 MB outside ``data/`` (gitignored).
 
 When an issue is found the script:
@@ -53,10 +56,48 @@ ROOT = Path(__file__).resolve().parent
 # Patterns that .gitignore must cover
 REQUIRED_GITIGNORE = [
     "*.db",
+    "*.db-wal",
+    "*.db-shm",
+    "*.db-journal",
     ".env",
     "__pycache__/",
     ".pytest_cache/",
+    ".mypy_cache/",
+    ".ruff_cache/",
     ".venv/",
+    "venv/",
+    "data/",
+    "*.sqlite",
+    "*.sqlite-wal",
+    "*.sqlite-shm",
+    "*.sqlite-journal",
+    "*.sqlite3",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
+    "*.sqlite3-journal",
+    "*.log",
+    "agent.log",
+]
+
+# Glob patterns for sensitive files to scan via git log (beyond .env and data/)
+SENSITIVE_GLOBS = [
+    ".env",
+    ".env.*",
+    "data/",
+    "*.db",
+    "*.db-wal",
+    "*.db-shm",
+    "*.db-journal",
+    "*.sqlite",
+    "*.sqlite-wal",
+    "*.sqlite-shm",
+    "*.sqlite-journal",
+    "*.sqlite3",
+    "*.sqlite3-wal",
+    "*.sqlite3-shm",
+    "*.sqlite3-journal",
+    "*.log",
+    "agent.log",
 ]
 
 # Size threshold: files larger than this (in bytes) outside data/ are suspicious
@@ -140,9 +181,9 @@ def check_commit_messages() -> list[HygieneFinding]:
 
 
 def check_sensitive_files() -> list[HygieneFinding]:
-    """Check for committed .env, database, or data/ files."""
+    """Check for committed .env, database, sqlite, log, or data/ files."""
     findings: list[HygieneFinding] = []
-    result = _run_git(["log", "-p", "-10", "--", ".env", ".env.*", "data/", "*.db"])
+    result = _run_git(["log", "-p", "-10", "--"] + SENSITIVE_GLOBS)
     if result.returncode != 0:
         logger.warning("git log for sensitive files failed: %s", result.stderr)
         return findings
@@ -160,7 +201,7 @@ def check_sensitive_files() -> list[HygieneFinding]:
             path = line[6:]
             if path == "/dev/null":
                 continue
-            # Skip .env.example (explicitly whitelisted)
+            # Skip .env.example variants (explicitly whitelisted)
             if path.endswith((".env.example", ".env.swarm.example")):
                 continue
             findings.append(
@@ -240,9 +281,9 @@ def check_large_files() -> list[HygieneFinding]:
                 HygieneFinding(
                     severity="error",
                     category="large-file",
-                    message=f"Large tracked file: {f} ({size / (1024*1024):.1f} MB)",
+                    message=f"Large tracked file: {f} ({size / (1024 * 1024):.1f} MB)",
                     details=(
-                        f"File '{f}' is {size / (1024*1024):.1f} MB — "
+                        f"File '{f}' is {size / (1024 * 1024):.1f} MB — "
                         "larger than the {MAX_FILE_SIZE / (1024*1024):.0f} MB limit. "
                         "Consider gitignoring or storing externally."
                     ),
@@ -276,7 +317,9 @@ def fix_missing_gitignore_entries(findings: list[HygieneFinding]) -> list[str]:
         escaped = re.escape(pattern)
         if re.search(rf"^{escaped}\s*$", content, re.MULTILINE):
             continue
-        content += f"\n{pattern}\n"
+        if not content.endswith("\n"):
+            content += "\n"
+        content += f"{pattern}\n"
         added.append(pattern)
 
     if added:
@@ -358,11 +401,13 @@ def create_github_issues(report: HygieneReport) -> list[str]:
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps({
-                    "title": "SECURITY: secret possibly committed, needs human-supervised history rewrite",
-                    "body": body,
-                    "labels": ["security", "ai-agent-task"],
-                }).encode(),
+                data=json.dumps(
+                    {
+                        "title": "SECURITY: secret possibly committed, needs human-supervised history rewrite",
+                        "body": body,
+                        "labels": ["security", "ai-agent-task"],
+                    }
+                ).encode(),
                 headers=headers,
                 method="POST",
             )
@@ -385,11 +430,13 @@ def create_github_issues(report: HygieneReport) -> list[str]:
         try:
             req = urllib.request.Request(
                 url,
-                data=json.dumps({
-                    "title": "Commit hygiene: issues found",
-                    "body": body,
-                    "labels": ["ai-agent-task", "hourly"],
-                }).encode(),
+                data=json.dumps(
+                    {
+                        "title": "Commit hygiene: issues found",
+                        "body": body,
+                        "labels": ["ai-agent-task", "hourly"],
+                    }
+                ).encode(),
                 headers=headers,
                 method="POST",
             )
@@ -423,7 +470,9 @@ def print_report(report: HygieneReport) -> None:
         return
 
     severity_order = {"security": 0, "error": 1, "warning": 2, "info": 3}
-    sorted_findings = sorted(report.findings, key=lambda f: severity_order.get(f.severity, 99))
+    sorted_findings = sorted(
+        report.findings, key=lambda f: severity_order.get(f.severity, 99)
+    )
 
     for f in sorted_findings:
         tag = f"[{f.severity.upper()}]"
