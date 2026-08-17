@@ -160,6 +160,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly commit hygiene #492 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-07)
@@ -355,6 +356,23 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
+- **Test coverage audit** (last updated 2026-08-06, re-verified
+  2026-08-06): all source modules have corresponding test files. The
+  full test suite stands at 569 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #490 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
+
+- ~~**Hourly dead-code sweep is operational.** `dead_code_sweep.py` runs
+  via `scheduler.py`'s `_run_dead_code_sweep()` every hour with
+  `--create-issues`. It uses AST-based import discovery with grep
+  fallback, BFS from entry-point and webapp/app.py to find reachable
+  modules, and git-log analysis to distinguish truly-dead from
+  merely-orphaned modules. 69 focused tests (all passing). No orphaned
+  modules currently detected — repo is clean.~~ ✅ Resolved (Issue #423).
+  ✅ Re-verified 2026-08-06 (Issue #490): all 27 top-level modules and 3
+  webapp sub-modules confirmed wired; zero orphans; sweep exits clean.
 - **Hourly commit hygiene re-verified.** `commit_hygiene.py` executed clean
   via `--json` output (status: "clean", zero findings). Last 10 commits have
   descriptive messages; no sensitive files (.env, *.db, data/) committed;
