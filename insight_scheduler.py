@@ -3,9 +3,6 @@ import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("insight_scheduler")
-
 
 def run_daily():
     logger.info("Running daily insights...")
@@ -48,5 +45,5 @@ if __name__ == "__main__":
         time.sleep(sleep_secs)
 
         run_daily()
-        if datetime.now(tz=timezone.utc).weekday() == 6:  # Sunday
+        if datetime.now(tz=timezone.utc).weekday() == 6: # Sunday
             run_weekly()
