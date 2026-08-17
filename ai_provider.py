@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +233,7 @@ def get_provider(
         )
     p_cls = spec["class"]
     effective_model = model or str(spec["default_model"])
-    return p_cls(api_key=api_key, model=effective_model)
+    return cast(AIProvider, p_cls(api_key=api_key, model=effective_model))
 
 
 _DISPLAY_NAMES = {
