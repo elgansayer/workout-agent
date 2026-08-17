@@ -11,26 +11,24 @@ import weather
 
 class _FakeResponse:
     def __init__(self, payload: Any, ok: bool = True) -> None:
-        self._payload = payload
-        self._ok = ok
+        self._payload: Any = payload
+        self._ok: bool = ok
 
     def raise_for_status(self) -> None:
         if not self._ok:
-            raise weather.requests.RequestException("boom")
+            raise weather.requests.RequestException("boom")  # type: ignore[attr-defined]
 
     def json(self) -> Any:
         return self._payload
 
 
-def _current(temp: float, humidity: float) -> dict[str, object]:
+def _current(temp: float, humidity: float) -> dict[str, dict[str, float]]:
     return {"current": {"temperature_2m": temp, "relative_humidity_2m": humidity}}
 
 
-def test_get_current_weather_returns_conditions(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_get_current_weather_returns_conditions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        weather.requests,
+        weather.requests,  # type: ignore[attr-defined]
         "get",
         lambda url, **kwargs: _FakeResponse(_current(22.0, 50.0)),
     )
@@ -43,7 +41,7 @@ def test_get_current_weather_returns_conditions(
 
 def test_extreme_heat_above_30c(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        weather.requests,
+        weather.requests,  # type: ignore[attr-defined]
         "get",
         lambda url, **kwargs: _FakeResponse(_current(31.0, 40.0)),
     )
@@ -54,7 +52,7 @@ def test_extreme_heat_above_30c(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_extreme_heat_hot_and_humid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        weather.requests,
+        weather.requests,  # type: ignore[attr-defined]
         "get",
         lambda url, **kwargs: _FakeResponse(_current(29.0, 65.0)),
     )
@@ -66,7 +64,7 @@ def test_extreme_heat_hot_and_humid(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_graceful_http_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connector must return None on an HTTP error, not raise."""
     monkeypatch.setattr(
-        weather.requests,
+        weather.requests,  # type: ignore[attr-defined]
         "get",
         lambda url, **kwargs: _FakeResponse({}, ok=False),
     )
@@ -80,17 +78,17 @@ def test_graceful_malformed_response(monkeypatch: pytest.MonkeyPatch) -> None:
         def raise_for_status(self) -> None:
             pass
 
-        def json(self) -> Any:
+        def json(self) -> None:
             raise ValueError("bad json")
 
-    monkeypatch.setattr(weather.requests, "get", lambda url, **kwargs: _Bad())
+    monkeypatch.setattr(weather.requests, "get", lambda url, **kwargs: _Bad())  # type: ignore[attr-defined]
     assert weather.get_current_weather() is None
 
 
 def test_graceful_missing_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connector must return None when required fields are absent."""
     monkeypatch.setattr(
-        weather.requests,
+        weather.requests,  # type: ignore[attr-defined]
         "get",
         lambda url, **kwargs: _FakeResponse({"current": {}}),
     )

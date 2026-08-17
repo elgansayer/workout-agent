@@ -185,6 +185,7 @@
                 {% for goal in ['strength', 'hypertrophy', 'fat_loss', 'endurance', 'general_fitness', 'powerlifting', 'bodybuilding'] %}
                 <button
                     class="chip-option {{ 'selected' if goal in user_goals }}"
+                    aria-pressed="{{ 'true' if goal in user_goals else 'false' }}"
                     data-value="{{ goal }}"
                     aria-pressed="{{ 'true' if goal in user_goals else 'false' }}"
                     onclick="toggleChip(this)"
@@ -199,6 +200,7 @@
                 {% for level in ['beginner', 'intermediate', 'advanced'] %}
                 <button
                     class="chip-option {{ 'selected' if level == user_prefs.get('experience_level', 'intermediate') }}"
+                    aria-pressed="{{ 'true' if level == user_prefs.get('experience_level', 'intermediate') else 'false' }}"
                     data-value="{{ level }}"
                     aria-pressed="{{ 'true' if level == user_prefs.get('experience_level', 'intermediate') else 'false' }}"
                     onclick="selectSingle(this, 'experience-select')"
@@ -338,7 +340,7 @@ async function syncHistory() {
 
 function toggleChip(el) {
     el.classList.toggle('selected');
-    el.setAttribute('aria-pressed', el.classList.contains('selected'));
+    el.setAttribute('aria-pressed', el.classList.contains('selected') ? 'true' : 'false');
 }
 
 function selectSingle(el, groupId) {
