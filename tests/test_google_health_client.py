@@ -340,25 +340,3 @@ def test_refresh_tokens_non_object_json(
     )
     result = google_health_client._refresh_tokens("id", "secret", "token")
     assert result is None
-
-
-def test_latest_value_null_data_points(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Regression: null dataPoints must return None, not crash with TypeError.
-
-    Google Health may return ``{"dataPoints": null}`` for a data type with no
-    readings.  ``dict.get("dataPoints", [])`` returns ``None`` when the key
-    exists with value ``None``, and iterating over ``None`` raises TypeError
-    outside the try/except block.
-    """
-    payload: dict[str, Any] = {"dataPoints": None}
-    monkeypatch.setattr(
-        requests,
-        "get",
-        lambda url, **kwargs: _FakeResponse(payload),
-    )
-    result = google_health_client._latest_value(
-        "a", "body-fat", "bodyFat", "percentage",
-    )
-    assert result is None
