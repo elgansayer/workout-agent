@@ -1,4 +1,8 @@
-"""Uses AI providers to apply progressive overload and write today's plan."""
+"""Applies progressive overload and writes today's plan via any AI provider.
+
+This module builds the prompt and delegates generation to an ``AIProvider``
+instance supplied by the caller, so a user can bring their own key/model.
+"""
 
 from __future__ import annotations
 
@@ -179,12 +183,16 @@ def generate_next_workout(
             insights,
             last_plan,
         )
-        text = str(provider.generate(prompt)).strip()
-        if text:
-            return text
-        logger.warning("AI generation returned an empty response; using baseline plan.")
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI generation failed (%s); using baseline plan.", exc)
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
+        )
 
     return _fallback_plan(day, week, block)
 
@@ -233,14 +241,16 @@ def generate_rest_day_message(
     """
     try:
         prompt = _build_rest_prompt(recovery)
-        text = str(provider.generate(prompt)).strip()
-        if text:
-            return text
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
         logger.warning(
-            "AI generation returned an empty rest-day response; using fallback."
+            "%s returned an empty rest-day response; using fallback.", provider.name()
         )
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s rest-day generation failed (%s); using fallback.", provider.name(), exc
+        )
 
     return _fallback_rest_message()
 
@@ -313,12 +323,16 @@ def generate_checkin_message(
             weeks,
             analysis_text,
         )
-        text = str(provider.generate(prompt)).strip()
-        if text:
-            return text
-        logger.warning("AI generation returned an empty check-in; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
+        )
 
     return fallback
 
@@ -394,7 +408,9 @@ def apply_autonomous_adjustments(
             weather,
             is_catabolic,
         )
-        text = str(provider.generate(prompt)).strip()
+        text = provider.generate(prompt)
+        if not isinstance(text, str) or not text:
+            raise ValueError("Empty response from AI provider")
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
@@ -409,10 +425,14 @@ def apply_autonomous_adjustments(
         if isinstance(updated, dict):
             return updated
 
-        logger.warning("AI autonomous routines did not return a dict; using baseline.")
+        logger.warning(
+            "%s autonomous routines did not return a dict; using baseline.",
+            provider.name(),
+        )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "AI autonomous adjustment failed (%s); using baseline routines.",
+            "%s autonomous adjustment failed (%s); using baseline routines.",
+            provider.name(),
             exc,
         )
 

@@ -252,13 +252,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
-        provider = resolve_provider(
-            db_path=config.database_path,
-            server_gemini_key=config.gemini_api_key,
-            server_gemini_model=config.gemini_model,
-        )
+        provider = resolve_provider(server_gemini_key=config.gemini_api_key)
         message = generate_rest_day_message(
-            provider=resolve_provider(user_id=None, server_gemini_key=config.gemini_api_key, server_gemini_model=config.gemini_model, db_path=config.database_path),
+            provider=provider,
             recovery=recovery,
             server_gemini_key=config.gemini_api_key,
             server_gemini_model=config.gemini_model,
@@ -308,13 +304,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             last_plan = log["plan"]
             break
 
-    provider = resolve_provider(
-        db_path=config.database_path,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    provider = resolve_provider(server_gemini_key=config.gemini_api_key)
     plan = generate_next_workout(
-        provider=resolve_provider(user_id=None, server_gemini_key=config.gemini_api_key, server_gemini_model=config.gemini_model, db_path=config.database_path),
+        provider=provider,
         day=day,
         week=week,
         block=block,

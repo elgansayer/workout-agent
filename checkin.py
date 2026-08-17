@@ -282,12 +282,7 @@ def run_checkin(
     """Build the check-in message from logged data versus the plan."""
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
-    provider = resolve_provider(
-        user_id=None,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-        db_path=config.database_path,
-    )
+    provider = resolve_provider(server_gemini_key=config.gemini_api_key)
     return generate_checkin_message(
         provider=provider,
         number=due_info.number,
