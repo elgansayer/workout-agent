@@ -71,7 +71,9 @@ def test_review_exercise_detects_stall() -> None:
     assert review.stalled is True
 
 
-def test_due_seeds_baseline_then_not_due(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
+def test_due_seeds_baseline_then_not_due(
+    monkeypatch: MonkeyPatch, tmp_path: Any
+) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
     # First ever call seeds the baseline at the current total and is not due.
@@ -80,7 +82,9 @@ def test_due_seeds_baseline_then_not_due(monkeypatch: MonkeyPatch, tmp_path: Any
     assert get_meta("checkin_number", config.database_path) == "0"
 
 
-def test_due_fires_after_target_workouts(monkeypatch: MonkeyPatch, tmp_path: Any) -> None:
+def test_due_fires_after_target_workouts(
+    monkeypatch: MonkeyPatch, tmp_path: Any
+) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
     checkin.due(config)  # seed at 40
