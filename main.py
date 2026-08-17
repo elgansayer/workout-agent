@@ -22,7 +22,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
-from ai_provider import resolve_provider
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -249,6 +249,11 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     _maybe_self_review(config, recovery, week, block, preview)
 
     day = today_day(today)
+
+    provider = resolve_provider(
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
 
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))

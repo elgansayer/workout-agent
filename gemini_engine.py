@@ -1,8 +1,5 @@
-"""Applies progressive overload and writes today's plan via any AI provider.
-
-This module builds the prompt and delegates generation to an ``AIProvider``
-instance supplied by the caller, so a user can bring their own key/model.
-"""
+"""Uses AI (Gemini/Claude/OpenAI/DeepSeek) to apply progressive overload and
+write today's plan, going through ``AIProvider`` from ``ai_provider.py``."""
 
 from __future__ import annotations
 
@@ -193,6 +190,12 @@ def generate_next_workout(
         logger.warning(
             "%s generation failed (%s); using baseline plan.", provider.name(), exc
         )
+        text = str(provider.generate(prompt)).strip()
+        if text:
+            return text
+        logger.warning("AI provider returned an empty response; using baseline plan.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
 
@@ -241,16 +244,12 @@ def generate_rest_day_message(
     """
     try:
         prompt = _build_rest_prompt(recovery)
-        text = provider.generate(prompt)
-        if isinstance(text, str) and text:
-            return str(text)
-        logger.warning(
-            "%s returned an empty rest-day response; using fallback.", provider.name()
-        )
+        text = str(provider.generate(prompt)).strip()
+        if text:
+            return text
+        logger.warning("AI provider returned an empty rest-day response; using fallback.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "%s rest-day generation failed (%s); using fallback.", provider.name(), exc
-        )
+        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
 
@@ -333,6 +332,12 @@ def generate_checkin_message(
         logger.warning(
             "%s check-in generation failed (%s); using fallback.", provider.name(), exc
         )
+        text = str(provider.generate(prompt)).strip()
+        if text:
+            return text
+        logger.warning("AI provider returned an empty check-in; using fallback.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
     return fallback
 
@@ -408,9 +413,7 @@ def apply_autonomous_adjustments(
             weather,
             is_catabolic,
         )
-        text = provider.generate(prompt)
-        if not isinstance(text, str) or not text:
-            raise ValueError("Empty response from AI provider")
+        text = str(provider.generate(prompt)).strip()
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
@@ -426,14 +429,11 @@ def apply_autonomous_adjustments(
             return updated
 
         logger.warning(
-            "%s autonomous routines did not return a dict; using baseline.",
-            provider.name(),
+            "AI provider returned non-dict autonomous data; using baseline."
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "%s autonomous adjustment failed (%s); using baseline routines.",
-            provider.name(),
-            exc,
+            "AI autonomous adjustment failed (%s); using baseline routines.", exc
         )
 
     return base_routines

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from ai_provider import resolve_provider
+from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
@@ -282,7 +282,10 @@ def run_checkin(
     """Build the check-in message from logged data versus the plan."""
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
-    provider = resolve_provider(server_gemini_key=config.gemini_api_key)
+    provider = resolve_provider(
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
     return generate_checkin_message(
         provider=provider,
         number=due_info.number,
