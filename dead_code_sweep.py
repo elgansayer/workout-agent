@@ -13,9 +13,10 @@ Design
 * Import-discovery is AST-based (not ``grep``) so we don't false-positive on
   string literals or comments that happen to contain a module name.
 * Entry-point modules (``main.py``, ``scheduler.py``, ``sync_history.py``,
-  ``insight_cron.py``) and ``conftest.py`` are excluded from the orphan check
-  because they are invoked directly by a human, a shell script, or the test
-  runner — not by another Python module.
+  ``insight_cron.py``, ``commit_hygiene.py``, ``connector_health.py``,
+  ``dead_code_sweep.py``) and ``conftest.py`` are excluded from the orphan
+  check because they are invoked directly by a human, a shell script,
+  subprocess, or the test runner — not by another Python module.
 * Web-app sub-modules (``webapp/*.py``) are likewise checked.
 * When an orphan is discovered the script **does not delete it** — it emits a
   structured report and exits non-zero so the calling automation can file a
@@ -91,6 +92,7 @@ ENTRY_POINTS: set[str] = {
     "insight_cron.py",
     "dead_code_sweep.py",
     "commit_hygiene.py",
+    "connector_health.py",
 }
 
 # Files that are not modules in the import sense.
@@ -204,6 +206,125 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
     return imports
 
 
+def _resolve_call_name(node: ast.expr) -> str | None:
+    """Resolve a callable expression to its dotted name if possible.
+
+    Handles: ``subprocess.run``, ``subprocess.check_output``,
+    ``subprocess.call``, ``subprocess.Popen``, and imported aliases
+    like ``from subprocess import run; run(...)``.
+    """
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        # subprocess.run, subprocess.check_output, etc.
+        return f"{node.value.id}.{node.attr}"
+    if isinstance(node, ast.Name):
+        # imported alias, e.g. ``from subprocess import run; run(...)``
+        return node.id
+    return None
+
+
+def _extract_subprocess_module_refs(source: str) -> set[str]:
+    """Return module names referenced in subprocess-style calls.
+
+    Detects all common subprocess patterns that invoke a local Python
+    module as a standalone script::
+
+        subprocess.run([sys.executable, "module.py"])
+        subprocess.check_output([sys.executable, "module.py"])
+        subprocess.call([sys.executable, "module.py"])
+        subprocess.Popen([sys.executable, "module.py"])
+        run([sys.executable, "module.py"])                # imported alias
+
+    Also detects non-sys.executable patterns like
+    ``subprocess.run(["python3", "module.py"])`` so that shell-script
+    style invocations inside Python are captured.
+    """
+    _SUBPROCESS_FUNCTIONS = {
+        "subprocess.run",
+        "subprocess.check_output",
+        "subprocess.check_call",
+        "subprocess.call",
+        "subprocess.Popen",
+        "run",
+        "check_output",
+        "check_call",
+        "call",
+        "Popen",
+    }
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return set()
+
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        call_name = _resolve_call_name(node.func)
+        if call_name and call_name not in _SUBPROCESS_FUNCTIONS:
+            continue
+        if not node.args:
+            continue
+        cmd_list = node.args[0]
+        if not isinstance(cmd_list, (ast.List, ast.Tuple)) or len(cmd_list.elts) < 2:
+            continue
+        first = cmd_list.elts[0]
+        # Accept sys.executable or a literal "python3" / "python" string.
+        is_sys_exe = (
+            isinstance(first, ast.Attribute)
+            and isinstance(first.value, ast.Name)
+            and first.value.id == "sys"
+            and first.attr == "executable"
+        )
+        is_python_string = (
+            isinstance(first, ast.Constant)
+            and isinstance(first.value, str)
+            and first.value in ("python", "python3", "python3.12")
+        )
+        if not (call_name is not None and (is_sys_exe or is_python_string)):
+            continue
+        second = cmd_list.elts[1]
+        if (
+            isinstance(second, ast.Constant)
+            and isinstance(second.value, str)
+            and second.value.endswith(".py")
+        ):
+            modules.add(second.value[:-3])  # strip ".py"
+    return modules
+
+
+# ---------------------------------------------------------------------------
+# Shell / Docker entry-point discovery
+# ---------------------------------------------------------------------------
+
+
+def _discover_shell_module_refs() -> set[str]:
+    """Find modules referenced in shell scripts, Dockerfiles, and compose files.
+
+    Captures patterns like::
+
+        python main.py
+        python insight_cron.py --daily
+        exec python scheduler.py
+
+    Returns the set of module stems (without ``.py``) found.
+    """
+    refs: set[str] = set()
+    _SHELL_PATTERN = re.compile(r"\bpython3?(?:\.\d+)?\s+([a-z_][a-z0-9_]*)\.py\b")
+    _GLOB_PATTERNS = ("*.sh", "Dockerfile*", "docker-entrypoint*", "*.yml", "*.yaml")
+
+    for pattern in _GLOB_PATTERNS:
+        for p in ROOT.glob(pattern):
+            try:
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
+            for m in _SHELL_PATTERN.finditer(text):
+                refs.add(m.group(1))
+
+    return refs
+
+
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
@@ -233,8 +354,10 @@ def _build_import_graph() -> dict[str, set[str]]:
 
         rel = str(py_file.relative_to(ROOT))
         source = py_file.read_text(encoding="utf-8")
-        graph[rel] = _extract_imports(source) | _extract_submodule_imports(
-            source, local_packages
+        graph[rel] = (
+            _extract_imports(source)
+            | _extract_submodule_imports(source, local_packages)
+            | _extract_subprocess_module_refs(source)
         )
 
     return graph
@@ -245,6 +368,12 @@ def find_orphans() -> list[OrphanReport]:
     modules = _discover_modules()
     import_graph = _build_import_graph()
 
+    # Build a look-up: module_name -> file_rel that defines it
+    module_to_file: dict[str, str] = {}
+    for file_rel in import_graph:
+        stem = file_rel.replace("/", ".").replace(".py", "")
+        module_to_file[stem] = file_rel
+
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
     wired: set[str] = set()
@@ -254,15 +383,16 @@ def find_orphans() -> list[OrphanReport]:
         if mi.is_entry_point:
             wired.add(mi.name)
 
-    # Also seed with modules that are imported by test files — tests count as
-    # reachable (they exercise the module at runtime via pytest).
-    for file_rel, imports in import_graph.items():
-        if file_rel.startswith("tests/"):
-            wired |= imports
-
     # Treat webapp/app.py as an effective entry point — it's the web server
     # entry point, not imported by anyone else.
     _WEB_ENTRY = "webapp/app.py"
+    wired.add("webapp.app")
+
+    # Discover modules referenced in shell scripts, Dockerfiles, etc. and
+    # treat them as entry-point-adjacent (they're invoked at runtime).
+    shell_refs = _discover_shell_module_refs()
+    for ref in shell_refs:
+        wired.add(ref)
 
     # BFS from entry-point files: anything they import is reachable, and
     # anything *those* import is reachable, etc.
@@ -270,28 +400,20 @@ def find_orphans() -> list[OrphanReport]:
         f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
     }
 
-    # Also seed wired with webapp.app so it's never flagged as orphan
-    wired.add("webapp.app")
-
-    # Build a look-up: module_name -> file_rel that defines it
-    module_to_file: dict[str, str] = {}
-    for file_rel in import_graph:
-        stem = file_rel.replace("/", ".").replace(".py", "")
-        module_to_file[stem] = file_rel
-
+    # Also seed with modules that are imported by test files — tests count as
+    # reachable (they exercise the module at runtime via pytest), and the
+    # transitive closure of test-imported modules is also reachable.
     queue: list[str] = []
-    for ep in entry_point_files:
-        for imp in import_graph.get(ep, set()):
-            if imp not in wired:
-                wired.add(imp)
-                queue.append(imp)
+    for file_rel, imports in import_graph.items():
+        if file_rel.startswith("tests/") or file_rel in entry_point_files:
+            for imp in imports:
+                if imp not in wired:
+                    wired.add(imp)
+                    queue.append(imp)
 
     while queue:
         module_name = queue.pop(0)
         # Find the file that defines this module and add everything IT imports.
-        # (The old approach looked at files that import module_name and added
-        # what those files import — that only discovers transitive
-        # dependencies by coincidence when two modules share a common importer.)
         defining_file = module_to_file.get(module_name)
         if defining_file is not None:
             for transitive in import_graph.get(defining_file, set()):
@@ -305,6 +427,11 @@ def find_orphans() -> list[OrphanReport]:
         if mi.name in wired:
             continue
         if mi.is_entry_point:
+            continue
+
+        # Also check shell-refs for non-entry-points that are reachable
+        # at runtime via shell scripts.
+        if mi.name in shell_refs:
             continue
 
         # Double-check with a simple grep: is the module imported via dynamic

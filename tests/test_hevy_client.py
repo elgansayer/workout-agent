@@ -399,3 +399,56 @@ def test_get_exercise_history_non_dict_json() -> None:
         mock_get.return_value.json.return_value = [1, 2, 3]
         result = hevy_client.get_exercise_history("fake-key", "001")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# non-list collection value regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_workouts_non_list_workouts() -> None:
+    """Regression: non-list 'workouts' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": 42,
+            "page_count": 1,
+        }
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result is None
+
+
+def test_get_recent_workouts_non_list_workouts() -> None:
+    """Regression: non-list 'workouts' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": "not-a-list",
+            "page_count": 1,
+        }
+        result = hevy_client.get_recent_workouts("fake-key")
+        assert result is None
+
+
+def test_get_routines_non_list_collection() -> None:
+    """Regression: non-list 'routines' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "routines": None,
+            "page_count": 1,
+        }
+        result = hevy_client.get_routines("fake-key")
+        assert result is None
+
+
+def test_get_exercise_templates_non_list_collection() -> None:
+    """Regression: non-list 'exercise_templates' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "exercise_templates": {"id": "001"},
+            "page_count": 1,
+        }
+        result = hevy_client.get_exercise_templates("fake-key")
+        assert result is None
