@@ -3,16 +3,20 @@
 This is useful if you have lost your local database or want to sync to a
 new device without losing your PRs and training history.
 
-Wire points:
-- CLI: ``python main.py --sync-history``
-- Web: POST ``/api/settings/sync-history`` (authenticated)
-- Standalone: ``python sync_history.py`` (reads HEVY_API_KEY from env)
+Run from the repo root:
+    python scripts/sync_history.py
 """
 
 from __future__ import annotations
 
 import logging
-import sqlite3
+import sys
+from pathlib import Path
+
+# Allow the script to find sibling modules when run from the repo root.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from config import Config
 from database import init_db, save_progress, save_workout

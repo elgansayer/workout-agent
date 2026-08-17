@@ -196,6 +196,20 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
+- **`ai_provider.py` multi-provider wiring is in progress.** PR #85
+  (`wire-ai-provider`) integrates `resolve_provider()` into `gemini_engine.py`,
+  `main.py`, `checkin.py`, and `hevy_sync.py` with full test coverage
+  (`tests/test_ai_provider.py`). `webapp/app.py` and `insight_cron.py`
+  still use hardcoded Gemini SDK calls — they are the next wiring targets.
+- **Two previously-orphaned modules now wired**: `programme_inference.py` and
+  `hevy_reader.py` implement a data-driven "infer the user's real training
+  split from their Hevy history" path and are now imported by
+  `webapp/app.py` (the `/plan/infer-from-hevy` route). Previously tracked
+  by GitHub Issue #37 — confirmed wired as of the 2026-08-05 hourly sweep.
+- **`scripts/sync_history.py` (moved from root).** This standalone utility
+  script for one-off historical Hevy backfills (`python scripts/sync_history.py`)
+  has been moved from the repo root into `scripts/` per the hourly dead-code
+  sweep. It is not imported by any module — it's a run-directly utility.
 - **`ai_provider.py` multi-provider wiring is complete.** PR #85
 
 - **`ai_provider.py` multi-provider wiring is complete.** PR #85
@@ -304,6 +318,23 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   split read-only. No route lets a user choose a template or build a custom
   one.
 - **Two independent, hand-rolled scheduling loops in one container**
+  (`docker-entrypoint.sh`'s bash sleep-loop and `insight_scheduler.py`'s
+  Python sleep-loop), each single-timezone/single-recipient by construction.
+  Needs consolidating into one scheduler that can support per-user run times
+  once multi-tenancy lands.
+- **Docs drift from code**: README.md claims the dashboard "has no login" —
+  it has a working Google OAuth login (`webapp/app.py`). README's documented
+  web port (8088/8080/8770 appear inconsistently across README and the two
+  compose files) needs reconciling. `SWARM_RELAXED_TESTS`-style "aspirational
+  comment" drift is exactly the kind of thing `task-daily-documentation-sync`
+  (§9) exists to catch — don't let it recur here.
+- **Zero test coverage** on the newest/most product-relevant modules:
+  `gemini_engine.py`, `programme_inference.py`,
+  `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
+  `encryption.py`, `scripts/sync_history.py`, `ai_widgets.py`, `config.py`,
+  `weather.py`. Any task that touches these should add tests as part of the
+  same change, not as a follow-up. Note: `ai_provider.py` now has
+  `tests/test_ai_provider.py` (7 tests, added in PR #85).
   (`docker-entrypoint.sh`'s bash sleep-loop and the old `insight_scheduler.py`
   Python sleep-loop) have been consolidated into a single unified `scheduler.py`
   that supports per-user timezones (PR #TBD).
