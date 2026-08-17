@@ -1049,12 +1049,13 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
     assert get_deep_correlation(db_path=db, user_id=None) is None
 
 
+
 # ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: programme_state user_id scoping
 # ---------------------------------------------------------------------------
 
 
-def test_programme_state_migration_and_isolation(tmp_path: Path) -> None:
+def test_programme_state_migration_and_isolation(tmp_path):
     """programme_state is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -1069,11 +1070,11 @@ def test_programme_state_migration_and_isolation(tmp_path: Path) -> None:
             current_day INTEGER NOT NULL,
             split_name TEXT NOT NULL
         )
-        """,
+        """
     )
     conn.execute(
         "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
-        "VALUES (1, 3, 'Legacy Split')",
+        "VALUES (1, 3, 'Legacy Split')"
     )
     conn.commit()
     conn.close()
@@ -1088,7 +1089,7 @@ def test_programme_state_migration_and_isolation(tmp_path: Path) -> None:
         assert "user_id" in cols
         assert "id" not in cols  # old singleton id column is gone
         rows = conn2.execute(
-            "SELECT user_id, current_day, split_name FROM programme_state",
+            "SELECT user_id, current_day, split_name FROM programme_state"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][1] == 3  # current_day preserved
@@ -1096,7 +1097,7 @@ def test_programme_state_migration_and_isolation(tmp_path: Path) -> None:
         assert rows[0][0] is not None  # user_id backfilled
 
 
-def test_programme_state_user_isolation(tmp_path: Path) -> None:
+def test_programme_state_user_isolation(tmp_path):
     """Two users have independent programme_state rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -1133,7 +1134,7 @@ def test_programme_state_user_isolation(tmp_path: Path) -> None:
     assert get_current_day(db, user_id=user_b) == 5
 
 
-def test_programme_state_backward_compat(tmp_path: Path) -> None:
+def test_programme_state_backward_compat(tmp_path):
     """get_current_day / advance_day without user_id still work."""
     db = _db(tmp_path)
     init_db(db)
@@ -1148,10 +1149,11 @@ def test_programme_state_backward_compat(tmp_path: Path) -> None:
     assert nxt != day
 
 
-def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Path) -> None:
+def test_programme_state_brand_new_db_seeds_legacy(tmp_path):
     """A brand-new database seeds a programme_state row for the legacy user."""
     db = _db(tmp_path)
     init_db(db)
     from database import get_current_day
 
     assert get_current_day(db) == 1
+

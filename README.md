@@ -288,6 +288,8 @@ docker compose up -d web
 
 
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
 network. (Both compose files default to port 8770.) To run it directly instead:
 network. (Both compose files default to port 8770.) To run
 

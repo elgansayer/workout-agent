@@ -163,7 +163,18 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 exercise_name TEXT NOT NULL,
                 reasoning TEXT NOT NULL
             )
+            """
+        )
+
+        # Note: For new databases the initial programme_state row is
+        # inserted by the migration block below (after table recreation).
+
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO hevy_meta (key, value)
+            VALUES ('programme_start_date', ?)
             """,
+            (datetime.now(tz=timezone.utc).date().isoformat(),),
         )
 
         # Note: For new databases the initial programme_state row is
@@ -562,6 +573,43 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("DROP TABLE programme_state")
             cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
 
+        # Migration: Migrate programme_state from singleton to user_id-scoped
+        cursor.execute("PRAGMA table_info(programme_state)")
+        ps_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in ps_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS programme_state_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    current_day INTEGER NOT NULL DEFAULT 1,
+                    split_name TEXT NOT NULL,
+                    PRIMARY KEY (user_id)
+                )
+                """
+            )
+            old_row = cursor.execute(
+                "SELECT current_day, split_name FROM programme_state WHERE id = 1"
+            ).fetchone()
+            if old_row:
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, ?, ?)",
+                    (ps_legacy_id, old_row[0], old_row[1]),
+                )
+            else:
+                # Brand-new database: seed a default row for the legacy user
+                ps_legacy_id = _ensure_legacy_user(cursor)
+                cursor.execute(
+                    "INSERT OR REPLACE INTO programme_state_new "
+                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
+                    (ps_legacy_id, SPLIT_NAME),
+                )
+            cursor.execute("DROP TABLE programme_state")
+            cursor.execute(
+                "ALTER TABLE programme_state_new RENAME TO programme_state"
+            )
+
 
 def get_current_day(
     db_path: str = DEFAULT_DB_PATH,
@@ -581,7 +629,7 @@ def get_current_day(
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT current_day FROM programme_state LIMIT 1",
+                "SELECT current_day FROM programme_state LIMIT 1"
             ).fetchone()
     return int(row[0]) if row else 1
 
@@ -2085,3 +2133,4 @@ def set_active_programme(
             "UPDATE programme_state SET current_day = 1 WHERE user_id = ?",
             (user_id,),
         )
+

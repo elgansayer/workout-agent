@@ -100,6 +100,11 @@ contract:
   production here.
 - **Before starting any task, check for existing/overlapping work.** Read
   the GitHub Issues queue and skim recent `git log` for the area you're about
+
+  to touch. If an issue describes something already partially implemented
+  (e.g. `sync_history.py` exists as a standalone utility script with no
+  callers, per §7), extend or wire up the existing implementation rather
+  than writing a second one.
   to touch. If an issue describes something already partially implemented,
   extend or wire up the existing implementation rather than writing a second
   one.
@@ -109,7 +114,11 @@ contract:
   static split), the task is not complete until the old path is either
   removed or the new path is actually called from `main.py`/`webapp/app.py`.
   An unwired module sitting in the repo is exactly as unfinished as no
+
+  module at all — `sync_history.py` is the current example: standalone but
+  unreferenced (see §7).
   module at all.
+
 
 
 ## 5. Python Code Standards
@@ -144,6 +153,13 @@ The end goal is a product where a user can, entirely from their own account:
    which connectors to link) — the Settings UI shell for this already
    exists; §3 and §2 are what make it actually take effect.
 3. **Select or build their workout programme** from the app rather than
+   inheriting a hardcoded split — this UI does not exist yet (only read-only
+   rendering of the fixed split does); building it is a first-class product
+   feature, not a stretch goal. `programme_inference.py`/`hevy_reader.py`
+
+   (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
+   natural foundation for an "infer from my Hevy history" option alongside
+   manually-authored templates.
    inheriting a hardcoded split. The `/programmes` page now provides
    template selection, Hevy-inference, and custom programme activation
    (PR #142 onward). `programme_inference.py`/`hevy_reader.py` are wired
@@ -172,6 +188,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
 
+- **No real data isolation between users** (§2). Logging in as a different
+  Google account today shares the exact same programme/history/chat as
+  everyone else. This is the top-priority backlog item.
+
+- **`ai_provider.py` multi-provider wiring is complete.** PR #85
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly dead-code sweep #552 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly test watch #565 checked 2026-08-07)
@@ -200,6 +221,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   call sites are fully migrated to the provider abstraction.
   `tests/test_ai_provider.py` covers the provider abstraction (7 tests);
   `tests/test_gemini_engine.py` covers the prompt/fallback functions
+  (32 tests).
+
+- **`hevy_reader.py` and `programme_inference.py` are now wired** into
   (32 tests).~~ ✅ Resolved.
 
 - ~~**`hevy_reader.py` and `programme_inference.py` are wired** into
@@ -310,6 +334,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   agent on port 9001" claim removed from README (2026-08-08); `ENCRYPTION_KEY`
   added to README env var table (2026-08-08).~~ ✅ Resolved.
   `8770` across README and both compose files (reconciled 2026-08-05).
+
   README.md AI-provider language updated to reflect multi-provider support
   (no longer Gemini-only). Portainer-agent-on-port-9001 claim removed from
   README (docker-compose.portainer.yml never had it). Dashboard route table
