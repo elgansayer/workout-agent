@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
@@ -18,6 +18,9 @@ from program import (
     day_focus,
     format_day,
 )
+
+if TYPE_CHECKING:
+    from ai_provider import AIProvider
 
 try:
     from weather import WeatherConditions
