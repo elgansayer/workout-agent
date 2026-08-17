@@ -13,9 +13,10 @@ Design
 * Import-discovery is AST-based (not ``grep``) so we don't false-positive on
   string literals or comments that happen to contain a module name.
 * Entry-point modules (``main.py``, ``scheduler.py``, ``sync_history.py``,
-  ``insight_cron.py``) and ``conftest.py`` are excluded from the orphan check
-  because they are invoked directly by a human, a shell script, or the test
-  runner — not by another Python module.
+  ``insight_cron.py``, ``commit_hygiene.py``, ``connector_health.py``,
+  ``dead_code_sweep.py``) and ``conftest.py`` are excluded from the orphan
+  check because they are invoked directly by a human, a shell script,
+  subprocess, or the test runner — not by another Python module.
 * Web-app sub-modules (``webapp/*.py``) are likewise checked.
 * When an orphan is discovered the script **does not delete it** — it emits a
   structured report and exits non-zero so the calling automation can file a
