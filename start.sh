@@ -12,7 +12,7 @@ docker compose exec -d agent python insight_cron.py --daily
 docker compose exec -d agent python insight_cron.py --weekly
 
 echo "Done!"
-echo "Dashboard is running at: http://localhost:${WEB_PORT:-8088}"
+echo "Dashboard is running at: http://localhost:${WEB_PORT:-8770}"
 echo ""
 echo "To view agent logs: docker compose logs -f agent"
 echo "To view web logs: docker compose logs -f web"

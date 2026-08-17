@@ -27,10 +27,7 @@ __all__ = [
     "get_provider",
 ]
 
-try:
-    from weather import WeatherConditions
-except ImportError:
-    WeatherConditions = Any  # type: ignore[assignment,misc]
+from weather import WeatherConditions
 
 logger = logging.getLogger(__name__)
 
@@ -354,7 +351,7 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
