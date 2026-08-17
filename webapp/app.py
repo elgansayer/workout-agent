@@ -376,7 +376,7 @@ def _format_best(best: dict[str, Any] | None) -> str:
     return "No data yet"
 
 
-def _training_levels(*, user_id: str | None = None) -> dict[str, int]:
+def _training_levels(user_id: str | None = None) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
     for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
@@ -400,11 +400,7 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(
-    today: date | None = None,
-    *,
-    user_id: str | None = None,
-) -> dict:
+def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH, user_id=user_id)
@@ -585,13 +581,13 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
 
 
 @app.get("/stats")
-def stats(request: Request) -> Any:
+def stats(request: Request):
     user_id = request.session.get("user_id")
-    volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    volumes = get_session_volumes(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH, user_id=user_id)
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
+    series = get_progress_history(db_path=DB_PATH)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
@@ -1049,7 +1045,7 @@ def _run_hevy_inference(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/history")
-def history(request: Request) -> Any:
+def history(request: Request):
     user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1170,10 +1166,11 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH)
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    user_id = request.session.get("user_id")
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    history = get_progress_history(db_path=DB_PATH)
+    biometrics = get_body_metrics(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
 
     context = json.dumps(
         {

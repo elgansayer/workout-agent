@@ -144,6 +144,10 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     assert logs[1]["plan"] == "plan B"
     assert logs[1]["carb_tier"] == "high"
 
+    # Same logs scoped to a different user must see nothing.
+    logs2 = get_daily_logs(db_path=db, user_id="nonexistent-user")
+    assert logs2 == []
+
 
 def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
