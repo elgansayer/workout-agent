@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,8 @@ class GeminiProvider(AIProvider):
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         import google.generativeai as genai
 
-        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
-        self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
+        genai.configure(api_key=api_key)
+        self._model = genai.GenerativeModel(model)
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
@@ -91,7 +91,10 @@ class ClaudeProvider(AIProvider):
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
-        return response.content[0].text.strip()  # type: ignore[union-attr]
+        for block in response.content:
+            if hasattr(block, "text"):
+                return block.text.strip()
+        return ""
 
     def _stream(self, prompt: str) -> Iterator[str]:
         with self._client.messages.stream(
@@ -212,7 +215,9 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 
 def get_provider(
-    provider_name: str, api_key: str, model: str | None = None
+    provider_name: str,
+    api_key: str,
+    model: str | None = None,
 ) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 
@@ -226,9 +231,9 @@ def get_provider(
             f"Unknown AI provider '{provider_name}'. "
             f"Choose from: {', '.join(PROVIDERS)}",
         )
-    p_cls = spec["class"]
-    effective_model = model or str(spec["default_model"])
-    return cast(AIProvider, p_cls(api_key=api_key, model=effective_model))
+    cls = spec["class"]
+    effective_model = model or spec["default_model"]
+    return cls(api_key=api_key, model=effective_model)
 
 
 _DISPLAY_NAMES = {
@@ -237,6 +242,62 @@ _DISPLAY_NAMES = {
     "openai": "OpenAI",
     "deepseek": "DeepSeek",
 }
+
+
+def resolve_provider(
+    user_id: str | None = None,
+    *,
+    server_gemini_key: str | None = None,
+    server_gemini_model: str | None = None,
+    db_path: str = "workout_agent.db",
+) -> AIProvider:
+    """Resolve a user's preferred AI provider from their settings.
+
+    When *user_id* is provided, preferences and stored API keys are read from
+    the database.  Falls back to *server_gemini_key* / *server_gemini_model*
+    (typically the server's shared GEMINI_API_KEY) when the user has
+    chosen the default provider ("gemini") but has not stored their own key.
+
+    When *user_id* is None (e.g. single-tenant cron jobs), the function
+    returns a Gemini provider built from *server_gemini_key* /
+    *server_gemini_model* directly -- no database lookup is attempted.
+
+    Raises ValueError when a non-default provider is selected but no key
+    is configured, or when no server key is available.
+    """
+    from database import get_user_api_key, get_user_preferences
+
+    if user_id is not None:
+        prefs = get_user_preferences(user_id, db_path=db_path)
+        provider_name: str = (prefs and prefs.get("preferred_ai")) or "gemini"
+        provider_name = provider_name.lower().strip()
+        model: str | None = prefs and prefs.get("ai_model") or None
+        record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        api_key: str | None = record["api_key"] if record else None
+
+        if api_key:
+            return get_provider(provider_name, api_key, model)
+
+        if provider_name != "gemini":
+            raise ValueError(
+                f"No {provider_name} API key configured. "
+                "Add a key in Settings -> AI Providers.",
+            )
+
+        # Fall through to server-fallback for the default provider.
+        api_key = server_gemini_key
+        effective_model: str | None = model or server_gemini_model
+    else:
+        api_key = server_gemini_key
+        effective_model = server_gemini_model
+
+    if not api_key:
+        raise ValueError(
+            "No AI provider key available. Set GEMINI_API_KEY in the "
+            "environment or store a key in Settings.",
+        )
+
+    return get_provider("gemini", api_key, effective_model)
 
 
 def available_providers() -> list[dict[str, str]]:
@@ -249,56 +310,3 @@ def available_providers() -> list[dict[str, str]]:
         }
         for key, spec in PROVIDERS.items()
     ]
-def resolve_provider(
-    user_id: str | None = None,
-    *,
-    fallback_api_key: str | None = None,
-    fallback_model: str | None = None,
-    db_path: str = "workout.db",
-) -> AIProvider:
-    """Resolve the AIProvider based on user preferences or fallbacks.
-
-    When *user_id* is provided, preferences and stored API keys are read from
-    the database.  Falls back to *fallback_api_key* / *fallback_model*
-    (typically the server's shared ``GEMINI_API_KEY``) when the user has
-    chosen the default provider ("gemini") but has not stored their own key.
-
-    When *user_id* is ``None`` (e.g. single-tenant cron jobs), the function
-    returns a Gemini provider built from *fallback_api_key* /
-    *fallback_model* directly — no database lookup is attempted.
-
-    Raises ``ValueError`` when a non-default provider is selected but no key
-    is configured, or when no fallback key is available.
-    """
-    from database import get_user_api_key, get_user_preferences
-
-    if user_id is not None:
-        prefs = get_user_preferences(user_id, db_path=db_path)
-        provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
-        model = prefs and prefs.get("ai_model") or None
-        record = get_user_api_key(user_id, provider_name, db_path=db_path)
-        api_key = record["api_key"] if record else None
-
-        if api_key:
-            return get_provider(provider_name, api_key, model)
-
-        if provider_name != "gemini":
-            raise ValueError(
-                f"No {provider_name} API key configured. "
-                "Add a key in Settings -> AI Providers."
-            )
-
-        # Fall through to server-fallback for the default provider.
-        api_key = fallback_api_key
-        effective_model = model or fallback_model
-    else:
-        api_key = fallback_api_key
-        effective_model = fallback_model
-
-    if not api_key:
-        raise ValueError(
-            "No AI provider key available. Set GEMINI_API_KEY in the "
-            "environment or store a key in Settings."
-        )
-
-    return get_provider("gemini", api_key, effective_model)

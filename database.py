@@ -1184,13 +1184,7 @@ def set_meta(
         )
 
 
-def delete_routine_record(routine_key: str, db_path: str = DEFAULT_DB_PATH) -> None:
-    """Remove a tracked routine record (used when a routine is renamed)."""
-    with _connect(db_path) as conn:
-        conn.execute("DELETE FROM hevy_routines WHERE routine_key = ?", (routine_key,))
-
-
-def delete_routine_record(  # noqa: F811
+def delete_routine_record(
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
