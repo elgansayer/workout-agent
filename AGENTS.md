@@ -144,13 +144,11 @@ The end goal is a product where a user can, entirely from their own account:
    which connectors to link) — the Settings UI shell for this already
    exists; §3 and §2 are what make it actually take effect.
 3. **Select or build their workout programme** from the app rather than
-   inheriting a hardcoded split — this UI does not exist yet (only read-only
-   rendering of the fixed split does); building it is a first-class product
-   feature, not a stretch goal. `programme_inference.py`/`hevy_reader.py`
-
-   (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
-   natural foundation for an "infer from my Hevy history" option alongside
-   manually-authored templates.
+   inheriting a hardcoded split. The `/programmes` page now provides
+   template selection, Hevy-inference, and custom programme activation
+   (PR #142 onward). `programme_inference.py`/`hevy_reader.py` are wired
+   via `webapp/app.py`'s `_run_hevy_inference()` for the
+   "infer from my Hevy history" option.
 
 4. Have the agent **continuously track, adjust, and improve** that
    programme from connector data (Hevy sessions, body metrics, recovery)
@@ -160,6 +158,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06)
 <!-- Hourly lint & format pass #465: 2026-08-06 -- ruff check --fix: clean, ruff format: clean, mypy: clean, pytest: 569/569 -->
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
@@ -206,6 +205,14 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - ~~**`hevy_reader.py` and `programme_inference.py` are wired** into
   `webapp/app.py` via the `_run_hevy_inference()` helper, which powers the
   "Infer from my Hevy history" programme builder flow (PR #142). Neither is
+  orphaned.
+- **`sync_history.py` is wired** — it is imported by `main.py`
+  (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
+  endpoint). It is also executable standalone (`python sync_history.py`).
+- ~~**No workout-programme selection UI.**~~ **RESOLVED (2026-08-05).**
+  `/programmes` route and `programmes.html` template now provide template
+  selection, Hevy-inference, and custom programme activation (PR #142 onward).
+- **Scheduling has been consolidated** into a single unified `scheduler.py`
   orphaned; the remaining work is a full programme-selection UI (see next
   item).~~ ✅ Resolved.
 - ~~**`sync_history.py` is wired** — it is imported by `main.py`
@@ -230,6 +237,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   per-minute wake loop, with per-user timezone support.~~ ✅ Resolved.
 - ~~**Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
+  `8770` across README and both compose files (reconciled 2026-08-05).
+  README.md AI-provider language updated to reflect multi-provider support
+  (no longer Gemini-only). Portainer-agent-on-port-9001 claim removed from
+  README (docker-compose.portainer.yml never had it). Dashboard route table
+  now includes `/programmes`. (Reconciled 2026-08-06.)
   `8770` across README, both compose files, and `.env.example`.
   README no longer references a non-existent Portainer agent on port 9001
   (docker-compose.portainer.yml has no Portainer-agent service, confirmed
