@@ -1,15 +1,10 @@
-from __future__ import annotations
-
 import logging
 import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
-logger = logging.getLogger("insight_scheduler")
 
-
-def run_daily() -> None:
+def run_daily():
     logger.info("Running daily insights...")
     try:
         subprocess.run(["python", "insight_cron.py", "--daily"], check=True)
@@ -17,7 +12,7 @@ def run_daily() -> None:
         logger.error("Daily insights failed with exit code %s", e.returncode)
 
 
-def run_weekly() -> None:
+def run_weekly():
     logger.info("Running weekly deep correlations...")
     try:
         subprocess.run(["python", "insight_cron.py", "--weekly"], check=True)
@@ -25,7 +20,7 @@ def run_weekly() -> None:
         logger.error("Weekly insights failed with exit code %s", e.returncode)
 
 
-def get_next_run(hour: int = 6, minute: int = 0) -> datetime:
+def get_next_run(hour=6, minute=0):
     now = datetime.now(tz=timezone.utc)
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
@@ -50,5 +45,5 @@ if __name__ == "__main__":
         time.sleep(sleep_secs)
 
         run_daily()
-        if datetime.now(tz=timezone.utc).weekday() == 6:  # Sunday
+        if datetime.now(tz=timezone.utc).weekday() == 6: # Sunday
             run_weekly()
