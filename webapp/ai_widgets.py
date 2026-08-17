@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 # Colors
 ACCENT = "#4ade80"
 ACCENT_2 = "#38bdf8"
@@ -10,7 +12,7 @@ TRACK = "#1e232c"
 MUTED = "#9aa3b2"
 
 
-def block_phase_tracker(session_volumes: list[dict]) -> str:
+def block_phase_tracker(session_volumes: list[dict[str, Any]]) -> str:
     """Widget 1: Automated Block Phase Tracker Widget
     Renders a line chart highlighting volume accumulation vs intensification.
     """
@@ -22,8 +24,8 @@ def block_phase_tracker(session_volumes: list[dict]) -> str:
     plot_w = width - pad_l - pad_r
     plot_h = height - pad_t - pad_b
 
-    volumes = [v["volume"] for v in session_volumes[-30:]]  # last 30 sessions
-    dates = [v["date"][5:] for v in session_volumes[-30:]]
+    volumes = [float(v["volume"]) for v in session_volumes[-30:]]  # last 30 sessions
+    dates = [str(v["date"])[5:] for v in session_volumes[-30:]]
     if not volumes:
         return ""
 
@@ -59,7 +61,8 @@ def block_phase_tracker(session_volumes: list[dict]) -> str:
 
 
 def systemic_recovery_correlation(
-    biometrics: list[dict], session_volumes: list[dict],
+    biometrics: list[dict[str, Any]],
+    session_volumes: list[dict[str, Any]],
 ) -> str:
     """Widget 2: Systemic Recovery Correlation Grid
     Scatter plot: X = Sleep/RHR, Y = Volume. Highlights anomalies.
@@ -70,11 +73,11 @@ def systemic_recovery_correlation(
     plot_h = height - pad_t - pad_b
 
     # We need to map biometrics (resting_hr) to volume on the same date
-    vol_by_date = {v["date"]: v["volume"] for v in session_volumes}
+    vol_by_date: dict[str, Any] = {str(v["date"]): v["volume"] for v in session_volumes}
 
-    data_points = []
+    data_points: list[dict[str, Any]] = []
     for b in biometrics:
-        d = b["date"]
+        d = str(b["date"])
         rhr = b.get("resting_hr")
         if rhr and d in vol_by_date:
             data_points.append({"rhr": rhr, "vol": vol_by_date[d], "date": d})
@@ -132,7 +135,7 @@ def systemic_recovery_correlation(
     return f"<div class='chart-card ai-glass'>{svg}</div>"
 
 
-def volume_distribution(groups: dict) -> str:
+def volume_distribution(groups: dict[str, Any]) -> str:
     """Widget 3: Automated Volume Distribution Chart
     Bar chart comparing actual vs ideal balance.
     """

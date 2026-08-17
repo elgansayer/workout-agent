@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,8 @@ class GeminiProvider(AIProvider):
     def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
         import google.generativeai as genai
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(model)
+        genai.configure(api_key=api_key)  # type: ignore[attr-defined]
+        self._model = genai.GenerativeModel(model)  # type: ignore[attr-defined]
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
@@ -215,7 +215,9 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 
 
 def get_provider(
-    provider_name: str, api_key: str, model: str | None = None,
+    provider_name: str,
+    api_key: str,
+    model: str | None = None,
 ) -> AIProvider:
     """Instantiate the right AI provider from a name and key.
 
@@ -229,9 +231,9 @@ def get_provider(
             f"Unknown AI provider '{provider_name}'. "
             f"Choose from: {', '.join(PROVIDERS)}",
         )
-    cls = spec["class"]
-    effective_model = model or spec["default_model"]
-    return cls(api_key=api_key, model=effective_model)
+    p_cls = spec["class"]
+    effective_model = model or str(spec["default_model"])
+    return cast(AIProvider, p_cls(api_key=api_key, model=effective_model))
 
 
 _DISPLAY_NAMES = {
@@ -304,7 +306,7 @@ def available_providers() -> list[dict[str, str]]:
         {
             "id": key,
             "name": _DISPLAY_NAMES.get(key, key.title()),
-            "default_model": spec["default_model"],
+            "default_model": str(spec["default_model"]),
         }
         for key, spec in PROVIDERS.items()
     ]

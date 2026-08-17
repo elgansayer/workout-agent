@@ -236,7 +236,10 @@ def make_training_data() -> hevy_reader.HevyTrainingData:
             title="Push Day",
             exercises=[
                 hevy_reader.RoutineExercise(
-                    template_id="001", title="Bench Press", sets=3, rest_seconds=90,
+                    template_id="001",
+                    title="Bench Press",
+                    sets=3,
+                    rest_seconds=90,
                 ),
             ],
         ),

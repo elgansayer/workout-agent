@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 pytest.importorskip("fastapi")
+pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient
@@ -36,7 +37,13 @@ def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path)
     save_body_metrics({"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path)
     save_daily_log(
-        "2026-03-02", 1, "Back, Deadlifts & Chest", "high", "plan", "life", db_path,
+        "2026-03-02",
+        1,
+        "Back, Deadlifts & Chest",
+        "high",
+        "plan",
+        "life",
+        db_path,
     )
     summary = WorkoutSummary(
         title="Day 1",
@@ -177,7 +184,8 @@ def _configured_app(tmp_path: Any, monkeypatch: Any) -> tuple[Any, str]:
 
 
 def test_google_health_connect_redirects_to_google(
-    tmp_path: Any, monkeypatch: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
 ) -> None:
     app_module, _ = _configured_app(tmp_path, monkeypatch)
     with TestClient(app_module.app) as c:
@@ -189,18 +197,22 @@ def test_google_health_connect_redirects_to_google(
 
 
 def test_google_health_callback_stores_refresh_token(
-    tmp_path: Any, monkeypatch: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
 ) -> None:
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        app_module, "exchange_code", lambda *a, **k: {"refresh_token": "rt-123"},
+        app_module,
+        "exchange_code",
+        lambda *a, **k: {"refresh_token": "rt-123"},
     )
     set_meta("google_health_oauth_state", "st-1", db_path)
     with TestClient(app_module.app) as c:
         resp = c.get(
-            "/google-health/callback?code=abc&state=st-1", follow_redirects=False,
+            "/google-health/callback?code=abc&state=st-1",
+            follow_redirects=False,
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=connected"
@@ -208,7 +220,8 @@ def test_google_health_callback_stores_refresh_token(
 
 
 def test_google_health_callback_rejects_bad_state(
-    tmp_path: Any, monkeypatch: Any,
+    tmp_path: Any,
+    monkeypatch: Any,
 ) -> None:
     from database import get_meta, set_meta
 
@@ -216,7 +229,8 @@ def test_google_health_callback_rejects_bad_state(
     set_meta("google_health_oauth_state", "real-state", db_path)
     with TestClient(app_module.app) as c:
         resp = c.get(
-            "/google-health/callback?code=abc&state=forged", follow_redirects=False,
+            "/google-health/callback?code=abc&state=forged",
+            follow_redirects=False,
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"
@@ -408,7 +422,8 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
             return "ok"
 
     monkeypatch.setattr(
-        "webapp.app.resolve_provider", lambda user_id=None, **kw: _StubProvider(),
+        "webapp.app.resolve_provider",
+        lambda user_id=None, **kw: _StubProvider(),
     )
     from config import Config
 
@@ -464,7 +479,6 @@ def test_sync_history_no_workouts(monkeypatch: Any, tmp_path: Any) -> None:
     result = sync_all("fake-hevy-key", str(tmp_path / "test.db"))
     assert result["workouts_found"] == 0
     assert result["processed"] == 0
-
 
 
 # -- auth / login / logout ----------------------------------------------

@@ -315,7 +315,8 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
 
 
 def _find_lift_series(
-    series: dict[str, Any], *keywords: str,
+    series: dict[str, Any],
+    *keywords: str,
 ) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
@@ -393,7 +394,7 @@ def _dashboard_context(
 ) -> dict[str, Any]:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
     bests = get_recent_bests(DB_PATH, user_id=user_id)
@@ -412,7 +413,8 @@ def _dashboard_context(
         total_days = len(days_data) or 1
         current_day = ((today - start).days % total_days) + 1
         active_day = next(
-            (d for d in days_data if d.get("number") == current_day), None,
+            (d for d in days_data if d.get("number") == current_day),
+            None,
         )
         if active_day:
             focus = active_day.get("focus", "Training")
@@ -452,14 +454,18 @@ def _dashboard_context(
 
     weight_spark = charts.sparkline([m["weight_kg"] for m in metrics if m["weight_kg"]])
     fat_spark = charts.sparkline(
-        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]], colour=charts.WARN,
+        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]],
+        colour=charts.WARN,
     )
     latest_fat = next(
-        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]), None,
+        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]),
+        None,
     )
 
     review = insights.build_insights(
-        get_progress_history(db_path=DB_PATH, user_id=user_id), metrics, None,
+        get_progress_history(db_path=DB_PATH, user_id=user_id),
+        metrics,
+        None,
     )
 
     return {
@@ -476,7 +482,9 @@ def _dashboard_context(
         "rows": rows,
         "lifestyle": guidance.as_lines(),
         "cycle_ring": charts.progress_ring(
-            week / CYCLE_WEEKS * 100, label=f"Wk {week}", sub=f"of {CYCLE_WEEKS}",
+            week / CYCLE_WEEKS * 100,
+            label=f"Wk {week}",
+            sub=f"of {CYCLE_WEEKS}",
         ),
         "block_ring": charts.progress_ring(
             week_in_block / BLOCK_WEEKS * 100,
@@ -501,7 +509,9 @@ def _dashboard_context(
 def dashboard(request: Request) -> Any:
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
-        request, "dashboard.html", _dashboard_context(user_id=user_id),
+        request,
+        "dashboard.html",
+        _dashboard_context(user_id=user_id),
     )
 
 
@@ -569,7 +579,7 @@ def stats(request: Request) -> Any:
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
@@ -694,7 +704,11 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto",
+    label: str,
+    entries: list[Any],
+    target_ordinal: int,
+    *,
+    metric: str = "auto",
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
@@ -739,7 +753,7 @@ def plan(request: Request) -> Any:
     if active and active.get("definition"):
         return _render_active_plan(request, active, today)
 
-    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
+    week = week_in_cycle(get_programme_start_date(DB_PATH, user_id=user_id), today)
     current_block = block_for_week(week)
     day = today_day(today)
 
@@ -793,6 +807,7 @@ def plan(request: Request) -> Any:
 
 def _render_active_plan(request: Request, active: dict[str, Any], today: date) -> Any:
     """Render /plan from a user's active programme definition (DB-stored)."""
+    user_id = request.session.get("user_id")
     defn = active.get("definition", {})
     split_name = defn.get("name", "Active Programme")
     cycle_weeks = defn.get("cycle_weeks", 4)
@@ -801,7 +816,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     rules = defn.get("rules", [])
 
     # Determine today's day in the split (simple round-robin based on start date).
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     # current_day is the 1-based day index in the split, wrapping
     total_days = len(days_data) or 1
     current_day = ((today - start).days % total_days) + 1
@@ -1067,7 +1082,9 @@ def checkins(request: Request) -> Any:
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
     # context_id is expected to be {date}_{exercise_name}
-    existing = get_reasoning_log(context_id, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+
+    existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
         return {"reasoning": existing}
 
@@ -1078,7 +1095,6 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    user_id = request.session.get("user_id")
     provider = resolve_provider(
         user_id,
         db_path=DB_PATH,
@@ -1093,7 +1109,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         str(provider.generate(prompt)).strip() or "Could not determine reasoning."
     )
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
     return {"reasoning": reasoning}
 
 
@@ -1137,12 +1153,14 @@ def chat_page(request: Request) -> Any:
 
 @app.get("/api/chat/history")
 def chat_history(request: Request) -> list[dict[str, Any]]:
+    _check_rate_limit(request)
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request) -> dict[str, str]:
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
@@ -1226,7 +1244,10 @@ Respond naturally as Coach. If the question is about their training data, refere
             full_response = "".join(collected)
             if full_response:
                 save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id,
+                    "assistant",
+                    full_response,
+                    db_path=DB_PATH,
+                    user_id=user_id,
                 )
 
     return StreamingResponse(generate(), media_type="text/plain")
@@ -1264,7 +1285,7 @@ def settings(request: Request) -> Any:
         {
             "active": "settings",
             "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
-            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH)),
+            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id)),
             "gh_status": request.query_params.get("gh"),
             "user_keys": masked_keys,
             "user_prefs": user_prefs,
@@ -1278,6 +1299,7 @@ def settings(request: Request) -> Any:
 @app.post("/api/settings/key")
 async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1289,7 +1311,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
 
-    valid_providers = {"hevy", "gemini", "claude", "openai"}
+    valid_providers = {"hevy", "gemini", "claude", "openai", "deepseek"}
     if provider not in valid_providers:
         raise HTTPException(
             status_code=400,
@@ -1315,6 +1337,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
 @app.post("/api/settings/key/delete")
 async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1379,6 +1402,7 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
 @app.post("/api/settings/preferences")
 async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1401,12 +1425,16 @@ async def save_preferences(request: Request) -> dict[str, str]:
 @app.get("/google-health/connect")
 def google_health_connect(request: Request) -> RedirectResponse:
     """Start the Google Health OAuth flow and redirect to the consent screen."""
+    _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+    user_id = request.session.get("user_id")
     state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH)
+    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
     url = build_authorize_url(
-        GH_CLIENT_ID, state, redirect_uri=_gh_redirect_uri(request),
+        GH_CLIENT_ID,
+        state,
+        redirect_uri=_gh_redirect_uri(request),
     )
     return RedirectResponse(url, status_code=303)
 
@@ -1418,25 +1446,33 @@ def google_health_callback(request: Request) -> RedirectResponse:
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
+    user_id = request.session.get("user_id")
     code = request.query_params.get("code")
     state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH)
-    set_meta(_GH_STATE_KEY, "", DB_PATH)  # one-time use, regardless of outcome
+    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
+    set_meta(
+        _GH_STATE_KEY, "", DB_PATH, user_id=user_id
+    )  # one-time use, regardless of outcome
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
-        GH_CLIENT_ID, GH_CLIENT_SECRET, code, redirect_uri=_gh_redirect_uri(request),
+        GH_CLIENT_ID,
+        GH_CLIENT_SECRET,
+        code,
+        redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH)
+    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
 @app.post("/google-health/disconnect")
-def google_health_disconnect() -> RedirectResponse:
+def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH)
+    _check_rate_limit(request, limit=5)
+    user_id = request.session.get("user_id")
+    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 

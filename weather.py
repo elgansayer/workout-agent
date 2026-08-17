@@ -33,14 +33,22 @@ class WeatherConditions:
 
 
 def get_current_weather(
-    lat: float = LATITUDE, lon: float = LONGITUDE,
+    lat: float = LATITUDE,
+    lon: float = LONGITUDE,
 ) -> WeatherConditions | None:
     """Fetch current temperature and relative humidity from Open-Meteo."""
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m"
     try:
         response = requests.get(url, timeout=TIMEOUT)
         response.raise_for_status()
-        data = response.json().get("current", {})
+        response_data = response.json()
+        if not isinstance(response_data, dict):
+            logger.warning("Weather API returned non-object JSON")
+            return None
+        data = response_data.get("current", {})
+        if not isinstance(data, dict):
+            logger.warning("Weather API returned non-object current data")
+            return None
 
         temp = data.get("temperature_2m")
         hum = data.get("relative_humidity_2m")
@@ -48,11 +56,23 @@ def get_current_weather(
         if temp is None or hum is None:
             return None
 
+        # Defensively coerce to float; the API spec says number but a
+        # malformed response could deliver a string that makes the comparison
+        # below raise TypeError — that must not crash the caller.
+        try:
+            temp_f = float(temp)
+            hum_f = float(hum)
+        except (TypeError, ValueError):
+            logger.warning("Weather API returned non-numeric current values")
+            return None
+
         # Define extreme heat (e.g. >28C and >60% humidity, or just >30C)
-        is_extreme = temp > 30.0 or (temp > 28.0 and hum > 60.0)
+        is_extreme = temp_f > 30.0 or (temp_f > 28.0 and hum_f > 60.0)
 
         return WeatherConditions(
-            temperature_c=temp, humidity_pct=hum, is_extreme_heat=is_extreme,
+            temperature_c=temp_f,
+            humidity_pct=hum_f,
+            is_extreme_heat=is_extreme,
         )
     except (requests.RequestException, ValueError, KeyError) as exc:
         logger.warning("Could not fetch weather data: %s", exc)
