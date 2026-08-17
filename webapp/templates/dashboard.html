@@ -3,6 +3,10 @@
 {% block content %}
 <section class="hero">
     <div class="cycle">Week {{ week }} of {{ cycle_weeks }} | {{ weekday }}</div>
+    <div class="rings">
+        {{ cycle_ring|safe }}
+        {{ block_ring|safe }}
+    </div>
     <h1>Block {{ block.number }}: {{ block.name }}</h1>
     <p class="muted">{{ block.focus }}</p>
     <div class="schemes">
@@ -11,6 +15,10 @@
         <span class="chip ghost">{{ block.accessory_emphasis }}</span>
     </div>
     <p class="quote">&ldquo;{{ quote }}&rdquo;</p>
+    <div class="rings">
+        {{ cycle_ring|safe }}
+        {{ block_ring|safe }}
+    </div>
 </section>
 
 {% if dashboard_insight %}
@@ -84,6 +92,7 @@
 
     <section class="panel" style="grid-column: 1 / -1;">
         <h2>Consistency</h2>
+        <p class="streak">{{ streak }} day streak</p>
         <div class="cal-scroll">{{ calendar|safe }}</div>
     </section>
 </div>

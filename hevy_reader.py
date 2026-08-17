@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 # Data models
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ExerciseTemplate:
     """Metadata for a single exercise from the Hevy template library."""
@@ -150,6 +151,7 @@ class HevyTrainingData:
 # Parsing helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_exercise_template(raw: dict[str, Any]) -> ExerciseTemplate:
     return ExerciseTemplate(
         id=str(raw.get("id", "")),
@@ -202,7 +204,7 @@ def _parse_routine(
                 target_weight_kg=target_weight,
                 target_reps=target_reps,
                 target_rep_range=target_range,
-            )
+            ),
         )
 
     return Routine(
@@ -266,7 +268,7 @@ def _parse_workout(
                 top_weight_kg=top_w,
                 top_reps=top_r,
                 total_sets=len(sets_raw),
-            )
+            ),
         )
 
     # Duration.
@@ -298,6 +300,7 @@ def _parse_workout(
 # Main fetch function
 # ---------------------------------------------------------------------------
 
+
 def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainingData:
     """Pull everything we need from Hevy to understand what this user trains.
 
@@ -318,7 +321,9 @@ def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainin
         for raw in raw_templates:
             tmpl = _parse_exercise_template(raw)
             data.exercise_templates[tmpl.id] = tmpl
-        logger.info("Fetched %d exercise templates from Hevy.", len(data.exercise_templates))
+        logger.info(
+            "Fetched %d exercise templates from Hevy.", len(data.exercise_templates)
+        )
     else:
         logger.warning("Could not fetch exercise templates from Hevy.")
 
@@ -336,17 +341,13 @@ def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainin
         data.recent_workouts = [
             _parse_workout(w, data.exercise_templates) for w in raw_workouts
         ]
-        logger.info(
-            "Fetched %d recent workouts from Hevy.", len(data.recent_workouts)
-        )
+        logger.info("Fetched %d recent workouts from Hevy.", len(data.recent_workouts))
 
     # 4. Folders.
     raw_folders = get_routine_folders(api_key)
     if raw_folders:
         data.folders = {
-            int(f["id"]): f.get("title", "")
-            for f in raw_folders
-            if "id" in f
+            int(f["id"]): f.get("title", "") for f in raw_folders if "id" in f
         }
 
     # 5. Account info.

@@ -120,13 +120,15 @@ BLOCKS: dict[int, Block] = {
         weeks="1-4",
         focus="Rebuild strength capacity and high-volume hypertrophy.",
         deadlift=LiftScheme(
-            4, "5-8",
+            4,
+            "5-8",
             "Moderate-heavy, leave about 2 reps in the tank. Trap bar is a fine "
             "joint-friendly swap.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "6-10",
+            4,
+            "6-10",
             "Bodyweight, stop 1 rep shy of failure. Use a band only if you cannot "
             "hit 6 clean reps.",
             _PULL_UP,
@@ -139,12 +141,14 @@ BLOCKS: dict[int, Block] = {
         weeks="5-8",
         focus="Peak strength development.",
         deadlift=LiftScheme(
-            5, "3-5",
+            5,
+            "3-5",
             "Heavy, push the last set close to failure with a hard brace.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "4-6",
+            4,
+            "4-6",
             "Add a weight belt, leave about 1 rep in reserve.",
             _PULL_UP_WEIGHTED,
         ),
@@ -156,13 +160,15 @@ BLOCKS: dict[int, Block] = {
         weeks="9-12",
         focus="Competition prep, fat loss, and a strength display.",
         deadlift=LiftScheme(
-            5, "1-2",
+            5,
+            "1-2",
             "Ramp over the first sets to a heavy 1-2 rep max. Stop if bar speed or "
             "form breaks down.",
             _DEADLIFT_BARBELL,
         ),
         pullups=LiftScheme(
-            4, "3",
+            4,
+            "3",
             "Weighted 3-rep max, ramp up over the first two sets.",
             _PULL_UP_WEIGHTED,
         ),
@@ -187,26 +193,46 @@ def week_in_cycle(start: date, today: date | None = None) -> int:
 
 # Accessory pools. Main lifts are added on top of the back day per block.
 _BACK_DL_CHEST = [
-    Exercise("Incline Dumbbell Flyes", 4, "12-15", "pre-exhaust upper chest", "D3E2AB55"),
-    Exercise("Incline Smith Machine Press", 3, "10-12", "focus on the top half", "3A6FA3D1"),
-    Exercise("Chest-Supported T-Bar Rows", 3, "10-12", "mid-back thickness", "08A2974E"),
+    Exercise(
+        "Incline Dumbbell Flyes", 4, "12-15", "pre-exhaust upper chest", "D3E2AB55"
+    ),
+    Exercise(
+        "Incline Smith Machine Press", 3, "10-12", "focus on the top half", "3A6FA3D1"
+    ),
+    Exercise(
+        "Chest-Supported T-Bar Rows", 3, "10-12", "mid-back thickness", "08A2974E"
+    ),
 ]
 
 _SHOULDERS_ARMS = [
     Exercise("Cable Lateral Raises", 5, "15-20", "maximum shoulder width", "BE289E45"),
     Exercise("Reverse Pec Deck Flyes", 4, "15", "rear delts", "D8281C62"),
-    Exercise("Incline Dumbbell Curls", 4, "12", "deep stretch, bicep long head", "8BAB2735"),
-    Exercise("Tricep Overhead Cable Extensions", 4, "12-15", "triceps long head", "B5EFBF9C"),
+    Exercise(
+        "Incline Dumbbell Curls", 4, "12", "deep stretch, bicep long head", "8BAB2735"
+    ),
+    Exercise(
+        "Tricep Overhead Cable Extensions", 4, "12-15", "triceps long head", "B5EFBF9C"
+    ),
     Exercise("Reverse-Grip Cable Curls", 3, "15", "brachialis and forearm", "9F48F858"),
 ]
 
 _LEGS_ABS = [
     Exercise("Lying Leg Curls", 4, "12", "hamstring isolation", "B8127AD1"),
     Exercise("Leg Press", 4, "10-12", "feet flat, 3-second negative", "C7973E0E"),
-    Exercise("Leg Extensions", 3, "12", "quad sweep; toe-friendly split-squat swap", "75A4F6C4"),
-    Exercise("Leg Press Calf Raises", 4, "15-20", "feet flat, gastrocnemius", "91237BDD"),
+    Exercise(
+        "Leg Extensions",
+        3,
+        "12",
+        "quad sweep; toe-friendly split-squat swap",
+        "75A4F6C4",
+    ),
+    Exercise(
+        "Leg Press Calf Raises", 4, "15-20", "feet flat, gastrocnemius", "91237BDD"
+    ),
     Exercise("Hanging Leg Raises", 4, "12-15", "lower abs", "F8356514"),
-    Exercise("Kneeling Cable Crunches", 4, "10-12", "upper abs, heavy resistance", "23A48484"),
+    Exercise(
+        "Kneeling Cable Crunches", 4, "10-12", "upper abs, heavy resistance", "23A48484"
+    ),
 ]
 
 # Day-of-cycle (1-6) to session focus. Days 1-3 repeat as 4-6.

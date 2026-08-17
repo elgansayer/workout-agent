@@ -14,6 +14,7 @@ import logging
 import re
 from typing import Any
 
+from ai_provider import resolve_provider
 from config import Config
 from database import (
     delete_routine_record,
@@ -78,7 +79,8 @@ def _build_set(rep_range: str, weight_kg: float | None = None) -> dict[str, Any]
 
 
 def _build_exercise(
-    exercise: Exercise, weight_kg: float | None = None
+    exercise: Exercise,
+    weight_kg: float | None = None,
 ) -> dict[str, Any] | None:
     template_id = exercise.template_id
     if template_id is None:
@@ -99,7 +101,8 @@ def _build_exercise(
 
 
 def _build_exercises(
-    exercises: list[Exercise], weights: dict[str, float] | None = None
+    exercises: list[Exercise],
+    weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     weights = weights or {}
     built = [_build_exercise(ex, weights.get(ex.name)) for ex in exercises]
@@ -124,7 +127,7 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
     if best is None:
         return None
     weight = best.get("weight_kg")
-    if weight is None:
+    if not isinstance(weight, (int, float)):
         return None
     reps = best.get("reps")
     start, end = _parse_rep_range(exercise.rep_range)
@@ -136,6 +139,9 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
 
 def _compute_target_weights(config: Config, block: Block) -> dict[str, float]:
     """Fetch Hevy history per exercise and compute today's target weights."""
+    api_key = config.hevy_api_key
+    if api_key is None:
+        return {}
     weights: dict[str, float] = {}
     seen: set[str] = set()
     for day in _SESSION_DAYS:
@@ -146,14 +152,13 @@ def _compute_target_weights(config: Config, block: Block) -> dict[str, float]:
             template_id = exercise.template_id
             if template_id is None:
                 continue
-            history = get_exercise_history(config.hevy_api_key, template_id)
+            history = get_exercise_history(api_key, template_id)
             if not history:
                 continue
             target = _target_weight(exercise, history)
             if target is not None:
                 weights[exercise.name] = target
     return weights
-
 
 
 def _content_hash(title: str, exercises: list[dict[str, Any]], notes: str) -> str:
@@ -180,14 +185,16 @@ def _routine_id_from_response(result: dict[str, Any] | None) -> str | None:
     return None
 
 
-
 def _ensure_folder(config: Config) -> int | None:
     """Return the Hevy folder id for our routines, creating it if needed."""
+    api_key = config.hevy_api_key
+    if api_key is None:
+        return None
     stored = get_meta(FOLDER_META_KEY, config.database_path)
     if stored is not None:
         return int(stored)
 
-    folders = get_routine_folders(config.hevy_api_key)
+    folders = get_routine_folders(api_key)
     if folders is not None:
         for folder in folders:
             if folder.get("title") == FOLDER_NAME:
@@ -195,7 +202,7 @@ def _ensure_folder(config: Config) -> int | None:
                 set_meta(FOLDER_META_KEY, str(folder_id), config.database_path)
                 return folder_id
 
-    created = create_routine_folder(config.hevy_api_key, FOLDER_NAME)
+    created = create_routine_folder(api_key, FOLDER_NAME)
     if created is None:
         logger.warning("Could not create the '%s' folder in Hevy.", FOLDER_NAME)
         return None
@@ -230,15 +237,23 @@ def _migrate_titles(config: Config) -> None:
         delete_routine_record(old_title, config.database_path)
 
 
-def _sync_session(config: Config, title: str, built: list[dict[str, Any]],
-                  folder_id: int | None, notes: str) -> str:
+def _sync_session(
+    config: Config,
+    title: str,
+    built: list[dict[str, Any]],
+    folder_id: int | None,
+    notes: str,
+) -> str:
     """Create or update a single routine. Returns a short status string."""
+    api_key = config.hevy_api_key
+    if api_key is None:
+        return f"{title}: skipped (no Hevy API key)"
     content_hash = _content_hash(title, built, notes)
 
     record = get_routine_record(title, config.database_path)
     if record is None:
         # Maybe it exists in Hevy already but is not tracked locally.
-        existing_id = _find_existing_routine_id(config.hevy_api_key, title)
+        existing_id = _find_existing_routine_id(api_key, title)
         if existing_id is not None:
             record = (existing_id, "")
 
@@ -246,28 +261,32 @@ def _sync_session(config: Config, title: str, built: list[dict[str, Any]],
         routine_id, previous_hash = record
         if previous_hash == content_hash:
             return f"{title}: up to date"
-        payload = {"routine": {"title": title, "notes": notes, "exercises": built}}
-        result = update_routine(config.hevy_api_key, routine_id, payload)
+        update_payload = {
+            "routine": {"title": title, "notes": notes, "exercises": built},
+        }
+        result = update_routine(api_key, routine_id, update_payload)
         if result is None:
             return f"{title}: update failed"
         save_routine_record(title, routine_id, content_hash, config.database_path)
         return f"{title}: updated"
 
-    payload = {
+    create_payload: dict[str, Any] = {
         "routine": {
             "title": title,
-            "folder_id": folder_id,
             "notes": notes,
             "exercises": built,
-        }
+        },
     }
-    result = create_routine(config.hevy_api_key, payload)
+    if folder_id is not None:
+        create_payload["routine"]["folder_id"] = folder_id
+
+    result = create_routine(api_key, create_payload)
     if result is None:
         return f"{title}: create failed"
-    routine_id = _routine_id_from_response(result)
-    if routine_id is None:
+    new_routine_id = _routine_id_from_response(result)
+    if new_routine_id is None:
         return f"{title}: created (id missing)"
-    save_routine_record(title, routine_id, content_hash, config.database_path)
+    save_routine_record(title, new_routine_id, content_hash, config.database_path)
     return f"{title}: created"
 
 
@@ -299,25 +318,26 @@ def sync_routines(config: Config) -> list[str]:
             from gemini_engine import apply_autonomous_adjustments
             from health_connect import read_recovery_metrics
             from insights import analyse_recovery
+
             try:
                 from weather import get_current_weather
+
                 weather = get_current_weather()
             except ImportError:
                 weather = None
-                
+
             logs = get_recent_hevy_logs(limit=15, db_path=config.database_path)
             body_metrics = get_body_metrics(limit=14, db_path=config.database_path)
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
-            
+
             logger.info("Requesting autonomous routine adjustments from Gemini...")
             updated_routines = apply_autonomous_adjustments(
-                api_key=config.gemini_api_key,
-                model_name=config.gemini_model,
+                provider=ai_provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
-                is_catabolic=getattr(recovery_insight, 'is_catabolic', False)
+                is_catabolic=getattr(recovery_insight, "is_catabolic", False),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
@@ -331,6 +351,6 @@ def sync_routines(config: Config) -> list[str]:
                 built,
                 folder_id,
                 notes,
-            )
+            ),
         )
     return statuses

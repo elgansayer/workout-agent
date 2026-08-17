@@ -1,15 +1,20 @@
+from __future__ import annotations
+
 import argparse
 import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_or_create_user,
     get_progress_history,
     init_db,
     save_dashboard_insight,
@@ -19,10 +24,10 @@ from database import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
+
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _get_provider(config)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
@@ -30,10 +35,18 @@ def generate_daily_header(config: Config) -> None:
     metrics = [m for m in get_body_metrics(limit=14, db_path=config.database_path) if m["date"] >= cutoff]
     logs = [log for log in get_daily_logs(limit=14, db_path=config.database_path) if log["date"] >= cutoff]
 
-    data = {
-        "metrics": metrics,
-        "logs": logs
-    }
+    metrics = [
+        m
+        for m in get_body_metrics(limit=14, db_path=config.database_path)
+        if m["date"] >= cutoff
+    ]
+    logs = [
+        log
+        for log in get_daily_logs(limit=14, db_path=config.database_path)
+        if log["date"] >= cutoff
+    ]
+
+    data = {"metrics": metrics, "logs": logs}
 
     prompt = f"""You are a high-performance strength coach. Analyze the following JSON representing the user's training and recovery data for the last 7 days.
 
@@ -57,17 +70,19 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
-            logger.info("Daily insight generated successfully.")
+            save_dashboard_insight(
+                json.dumps(parsed), db_path=config.database_path, user_id=user_id
+            )
+            logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
 
+
 def generate_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
-    genai.configure(api_key=config.gemini_api_key)
-    model = genai.GenerativeModel(config.gemini_model)
+    provider = _get_provider(config)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
@@ -76,7 +91,9 @@ def generate_weekly_correlations(config: Config) -> None:
     logs = [log for log in get_daily_logs(limit=120, db_path=config.database_path) if log["date"] >= cutoff]
     
     # Also fetch training history for the last 60 days
-    all_history = get_progress_history(limit_per_exercise=60, db_path=config.database_path)
+    all_history = get_progress_history(
+        limit_per_exercise=60, db_path=config.database_path
+    )
     filtered_history = {}
     for ex, sets in all_history.items():
         recent = [s for s in sets if s["date"] >= cutoff]
@@ -86,10 +103,10 @@ def generate_weekly_correlations(config: Config) -> None:
     data = {
         "body_metrics": metrics,
         "daily_logs": logs,
-        "exercise_history": filtered_history
+        "exercise_history": filtered_history,
     }
 
-    prompt = f"""You are an elite data-driven strength coach and analyst. 
+    prompt = f"""You are an elite data-driven strength coach and analyst.
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
 Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
@@ -97,24 +114,28 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(data, indent=2)}
 
-Analyze this data and produce a "Deep Correlation Engine" report. 
+Analyze this data and produce a "Deep Correlation Engine" report.
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
 """
 
     try:
-        response = model.generate_content(prompt)
-        text = (response.text or "").strip()
+        text = str(provider.generate(prompt)).strip()
         if text:
             save_deep_correlation(text, db_path=config.database_path)
             logger.info("Weekly deep correlation generated successfully.")
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--daily", action="store_true", help="Generate daily insight header")
-    parser.add_argument("--weekly", action="store_true", help="Generate weekly deep correlations")
+    parser.add_argument(
+        "--daily", action="store_true", help="Generate daily insight header"
+    )
+    parser.add_argument(
+        "--weekly", action="store_true", help="Generate weekly deep correlations"
+    )
     args = parser.parse_args()
 
     try:
@@ -126,9 +147,10 @@ def main():
 
     if args.daily:
         generate_daily_header(config)
-    
+
     if args.weekly:
         generate_weekly_correlations(config)
+
 
 if __name__ == "__main__":
     main()
