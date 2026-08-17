@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
 
 from database import (
     advance_day,
@@ -31,17 +31,17 @@ from database import (
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
-def _db(tmp_path: Any) -> str:
+def _db(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
 
 
-def test_init_seeds_day_one(tmp_path: Any) -> None:
+def test_init_seeds_day_one(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_current_day(db) == 1
 
 
-def test_init_is_idempotent(tmp_path: Any) -> None:
+def test_init_is_idempotent(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     advance_day(db)
@@ -49,7 +49,7 @@ def test_init_is_idempotent(tmp_path: Any) -> None:
     assert get_current_day(db) == 2
 
 
-def test_advance_increments(tmp_path: Any) -> None:
+def test_advance_increments(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert advance_day(db) == 2
@@ -57,20 +57,20 @@ def test_advance_increments(tmp_path: Any) -> None:
     assert get_current_day(db) == 3
 
 
-def test_advance_wraps_at_six(tmp_path: Any) -> None:
+def test_advance_wraps_at_six(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     days = [advance_day(db) for _ in range(6)]
     assert days == [2, 3, 4, 5, 6, 1]
 
 
-def test_save_workout_ignores_none(tmp_path: Any) -> None:
+def test_save_workout_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_workout(None, db)  # should not raise
 
 
-def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
+def test_save_progress_and_get_recent_bests(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     summary = WorkoutSummary(
@@ -91,7 +91,7 @@ def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
     assert bests["Leg Extensions"]["sets"] == 4
 
 
-def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
+def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -119,14 +119,14 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
     assert bests["Leg Press"]["top_reps"] == 12
 
 
-def test_save_progress_ignores_none(tmp_path: Any) -> None:
+def test_save_progress_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(None, db)
     assert get_recent_bests(db) == {}
 
 
-def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
+def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
@@ -157,7 +157,7 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     assert logs[1]["carb_tier"] == "high"
 
 
-def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
+def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db)
@@ -171,14 +171,14 @@ def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     assert readings[-1]["body_fat_pct"] == 14.2
 
 
-def test_save_body_metrics_ignores_none(tmp_path: Any) -> None:
+def test_save_body_metrics_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics(None, "2026-06-17", db)
     assert get_body_metrics(db_path=db) == []
 
 
-def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
+def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -201,7 +201,7 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
     assert volumes[0]["exercises"] == 2
 
 
-def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
+def test_get_personal_records_uses_best_epley_1rm(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -233,13 +233,13 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
     assert pr["weight_kg"] == 120.0
 
 
-def test_get_personal_records_empty_without_data(tmp_path: Any) -> None:
+def test_get_personal_records_empty_without_data(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_personal_records(db) == []
 
 
-def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
+def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -276,7 +276,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_workout_history_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_workout_history_migration_adds_user_id_column(tmp_path: Path) -> None:
     """Running init_db on a pre-migration DB backfills user_id via a legacy user."""
     db = _db(tmp_path)
     # Simulate a pre-migration DB by creating workout_history without user_id
@@ -315,7 +315,7 @@ def test_workout_history_migration_adds_user_id_column(tmp_path: Any) -> None:
         assert rows[0][0] is not None  # backfilled to the legacy user
 
 
-def test_workout_history_user_isolation(tmp_path: Any) -> None:
+def test_workout_history_user_isolation(tmp_path: Path) -> None:
     """Two users writing to workout_history do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -335,7 +335,7 @@ def test_workout_history_user_isolation(tmp_path: Any) -> None:
     assert logs_b[0]["user"] == "b"
 
 
-def test_workout_history_user_isolation_same_payload(tmp_path: Any) -> None:
+def test_workout_history_user_isolation_same_payload(tmp_path: Path) -> None:
     """Scoped reads only return the correct user's data."""
     db = _db(tmp_path)
     init_db(db)
@@ -356,7 +356,7 @@ def test_workout_history_user_isolation_same_payload(tmp_path: Any) -> None:
     assert {w["count"] for w in logs_b} == {100, 101, 102}
 
 
-def test_workout_history_null_user_id_backward_compat(tmp_path: Any) -> None:
+def test_workout_history_null_user_id_backward_compat(tmp_path: Path) -> None:
     """Calling save_workout/get_recent_hevy_logs without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
@@ -368,7 +368,7 @@ def test_workout_history_null_user_id_backward_compat(tmp_path: Any) -> None:
     assert logs[0]["exercise"] == "Deadlift"
 
 
-def test_init_db_migration_idempotent(tmp_path: Any) -> None:
+def test_init_db_migration_idempotent(tmp_path: Path) -> None:
     """Running init_db twice on the same migrated DB does not crash."""
     db = _db(tmp_path)
     init_db(db)
@@ -403,7 +403,7 @@ def _exercise_summary(
     )
 
 
-def test_exercise_progress_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_exercise_progress_migration_adds_user_id_column(tmp_path: Path) -> None:
     """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
     db = _db(tmp_path)
     import sqlite3
@@ -444,7 +444,7 @@ def test_exercise_progress_migration_adds_user_id_column(tmp_path: Any) -> None:
         assert rows[0][0] is not None  # backfilled
 
 
-def test_exercise_progress_user_isolation(tmp_path: Any) -> None:
+def test_exercise_progress_user_isolation(tmp_path: Path) -> None:
     """Two users writing exercise_progress do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -462,7 +462,7 @@ def test_exercise_progress_user_isolation(tmp_path: Any) -> None:
     assert bests_b["Squat"]["top_weight_kg"] == 120.0
 
 
-def test_progress_history_user_isolation(tmp_path: Any) -> None:
+def test_progress_history_user_isolation(tmp_path: Path) -> None:
     """get_progress_history scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
@@ -481,7 +481,7 @@ def test_progress_history_user_isolation(tmp_path: Any) -> None:
     assert history_b["Bench Press"][0]["top_weight_kg"] == 90.0
 
 
-def test_session_volumes_user_isolation(tmp_path: Any) -> None:
+def test_session_volumes_user_isolation(tmp_path: Path) -> None:
     """get_session_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
@@ -499,7 +499,7 @@ def test_session_volumes_user_isolation(tmp_path: Any) -> None:
     assert vols_b[0]["volume"] == 2100.0  # 140*3*5
 
 
-def test_exercise_volumes_user_isolation(tmp_path: Any) -> None:
+def test_exercise_volumes_user_isolation(tmp_path: Path) -> None:
     """get_exercise_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
@@ -517,7 +517,7 @@ def test_exercise_volumes_user_isolation(tmp_path: Any) -> None:
     assert vols_b["Leg Press"]["volume"] == 4800.0
 
 
-def test_personal_records_user_isolation(tmp_path: Any) -> None:
+def test_personal_records_user_isolation(tmp_path: Path) -> None:
     """get_personal_records scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
@@ -535,7 +535,7 @@ def test_personal_records_user_isolation(tmp_path: Any) -> None:
     assert prs_b[0]["weight_kg"] == 150.0
 
 
-def test_exercise_progress_null_user_id_backward_compat(tmp_path: Any) -> None:
+def test_exercise_progress_null_user_id_backward_compat(tmp_path: Path) -> None:
     """Calling save_progress without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
@@ -550,7 +550,7 @@ def test_exercise_progress_null_user_id_backward_compat(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_body_metrics_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_body_metrics_migration_adds_user_id_column(tmp_path: Path) -> None:
     """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
     db = _db(tmp_path)
     import sqlite3
@@ -591,7 +591,7 @@ def test_body_metrics_migration_adds_user_id_column(tmp_path: Any) -> None:
         assert rows[0][0] is not None  # backfilled
 
 
-def test_body_metrics_user_isolation(tmp_path: Any) -> None:
+def test_body_metrics_user_isolation(tmp_path: Path) -> None:
     """Two users writing body_metrics do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -611,7 +611,7 @@ def test_body_metrics_user_isolation(tmp_path: Any) -> None:
     assert metrics_b[0]["weight_kg"] == 90.0
 
 
-def test_body_metrics_same_date_different_users_preserved(tmp_path: Any) -> None:
+def test_body_metrics_same_date_different_users_preserved(tmp_path: Path) -> None:
     """Dedup only within the same user_id."""
     db = _db(tmp_path)
     init_db(db)
@@ -633,7 +633,7 @@ def test_body_metrics_same_date_different_users_preserved(tmp_path: Any) -> None
     assert metrics_b[0]["weight_kg"] == 90.0
 
 
-def test_body_metrics_null_user_id_backward_compat(tmp_path: Any) -> None:
+def test_body_metrics_null_user_id_backward_compat(tmp_path: Path) -> None:
     """Calling save_body_metrics/get_body_metrics without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
@@ -649,7 +649,7 @@ def test_body_metrics_null_user_id_backward_compat(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_chat_messages_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_chat_messages_migration_adds_user_id_column(tmp_path: Path) -> None:
     """Running init_db on a pre-migration DB with chat_messages adds user_id."""
     db = _db(tmp_path)
     import sqlite3
@@ -688,7 +688,7 @@ def test_chat_messages_migration_adds_user_id_column(tmp_path: Any) -> None:
         assert rows[0][0] is not None  # backfilled
 
 
-def test_chat_messages_user_isolation(tmp_path: Any) -> None:
+def test_chat_messages_user_isolation(tmp_path: Path) -> None:
     """Two users writing to chat_messages don't see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -716,7 +716,7 @@ def test_chat_messages_user_isolation(tmp_path: Any) -> None:
     assert len(get_chat_messages(limit=50, db_path=db, user_id=user_b)) == 1
 
 
-def test_chat_messages_backward_compat(tmp_path: Any) -> None:
+def test_chat_messages_backward_compat(tmp_path: Path) -> None:
     """Calling save/get/clear without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
@@ -737,7 +737,7 @@ def test_chat_messages_backward_compat(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
+def test_dashboard_insights_migration_and_isolation(tmp_path: Path) -> None:
     """dashboard_insights is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -793,7 +793,7 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_daily_log_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_daily_log_migration_adds_user_id_column(tmp_path: Path) -> None:
     """daily_log gets a user_id column via migration and backfills legacy."""
     db = _db(tmp_path)
     import sqlite3
@@ -829,7 +829,7 @@ def test_daily_log_migration_adds_user_id_column(tmp_path: Any) -> None:
     assert logs[0]["focus"] == "Deadlift"
 
 
-def test_daily_log_user_isolation(tmp_path: Any) -> None:
+def test_daily_log_user_isolation(tmp_path: Path) -> None:
     """Two different user_ids don't see each other's daily_log rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -868,7 +868,7 @@ def test_daily_log_user_isolation(tmp_path: Any) -> None:
     assert logs_b[0]["focus"] == "Pull-ups"
 
 
-def test_daily_log_backward_compat(tmp_path: Any) -> None:
+def test_daily_log_backward_compat(tmp_path: Path) -> None:
     """Callers not passing user_id still work (backward compat)."""
     db = _db(tmp_path)
     init_db(db)
@@ -888,7 +888,7 @@ def test_daily_log_backward_compat(tmp_path: Any) -> None:
     assert len(logs) == 1
 
 
-def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
+def test_daily_log_dedupes_per_user_per_date(tmp_path: Path) -> None:
     """Same user/date writes replace the prior entry; different users don't clash."""
     db = _db(tmp_path)
     init_db(db)
@@ -940,7 +940,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_check_ins_migration_adds_user_id_column(tmp_path: Any) -> None:
+def test_check_ins_migration_adds_user_id_column(tmp_path: Path) -> None:
     """check_ins gets a user_id column via migration and backfills legacy."""
     db = _db(tmp_path)
     import sqlite3
@@ -975,7 +975,7 @@ def test_check_ins_migration_adds_user_id_column(tmp_path: Any) -> None:
     assert cks[0]["number"] == 1
 
 
-def test_check_ins_user_isolation(tmp_path: Any) -> None:
+def test_check_ins_user_isolation(tmp_path: Path) -> None:
     """Two different user_ids don't see each other's check_ins rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -994,7 +994,7 @@ def test_check_ins_user_isolation(tmp_path: Any) -> None:
     assert cks_b[0]["message"] == "Message B"
 
 
-def test_check_ins_backward_compat(tmp_path: Any) -> None:
+def test_check_ins_backward_compat(tmp_path: Path) -> None:
     """Callers not passing user_id still work."""
     db = _db(tmp_path)
     init_db(db)
@@ -1006,7 +1006,7 @@ def test_check_ins_backward_compat(tmp_path: Any) -> None:
     assert len(cks) == 1
 
 
-def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
+def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
     """deep_correlations is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -1054,7 +1054,7 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_programme_state_migration_and_isolation(tmp_path: Any) -> None:
+def test_programme_state_migration_and_isolation(tmp_path: Path) -> None:
     """programme_state is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -1096,7 +1096,7 @@ def test_programme_state_migration_and_isolation(tmp_path: Any) -> None:
         assert rows[0][0] is not None  # user_id backfilled
 
 
-def test_programme_state_user_isolation(tmp_path: Any) -> None:
+def test_programme_state_user_isolation(tmp_path: Path) -> None:
     """Two users have independent programme_state rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -1133,7 +1133,7 @@ def test_programme_state_user_isolation(tmp_path: Any) -> None:
     assert get_current_day(db, user_id=user_b) == 5
 
 
-def test_programme_state_backward_compat(tmp_path: Any) -> None:
+def test_programme_state_backward_compat(tmp_path: Path) -> None:
     """get_current_day / advance_day without user_id still work."""
     db = _db(tmp_path)
     init_db(db)
@@ -1148,7 +1148,7 @@ def test_programme_state_backward_compat(tmp_path: Any) -> None:
     assert nxt != day
 
 
-def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
+def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Path) -> None:
     """A brand-new database seeds a programme_state row for the legacy user."""
     db = _db(tmp_path)
     init_db(db)
