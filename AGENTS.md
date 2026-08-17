@@ -215,6 +215,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Scheduling has been consolidated** into a single unified `scheduler.py`
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
+- **`sync_history.py` is now wired** via `main.py`'s `--sync-history`
+  flag and `webapp/app.py`'s `sync_history_endpoint` (`/api/sync-history`).
+- **No workout-programme selection UI.** `/plan` only renders the fixed
+  split read-only. No route lets a user choose a template or build a custom
+  one.
+- **`scheduler.py` unified the two previous scheduling loops** into one
+  Python process that wakes every minute, dispatches per-user coaching runs
+  (`main.py`) and insight jobs (`insight_cron.py --daily`/`--weekly`) at the
+  configured `RUN_AT` times, and isolates per-user failures. Still iterates a
+  single `RUN_AT`/`TZ` for all users — needs per-user schedule preferences
+  once multi-tenancy lands.
 
 - **`sync_history.py` is now wired.** It is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py`
@@ -303,6 +314,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Test coverage gaps** remain on the following modules (any task that
   touches these should add tests as part of the same change, not as a
   follow-up): `programme_inference.py`, `hevy_reader.py`,
+  `insight_cron.py`, `scheduler.py`, `main.py`, `sync_history.py`,
   `insight_cron.py`, `main.py`, `sync_history.py`,
   `ai_widgets.py`, `weather.py`. Now-covered modules:
   `tests/test_ai_provider.py` (7 tests, PR #85),
