@@ -131,7 +131,7 @@ def test_parse_routine_resolves_template_title() -> None:
             title="Bench Press",
             exercise_type="weight_reps",
             primary_muscle_group="chest",
-        )
+        ),
     }
     raw: dict[str, object] = {
         "id": "R2",
@@ -236,7 +236,10 @@ def make_training_data() -> hevy_reader.HevyTrainingData:
             title="Push Day",
             exercises=[
                 hevy_reader.RoutineExercise(
-                    template_id="001", title="Bench Press", sets=3, rest_seconds=90
+                    template_id="001",
+                    title="Bench Press",
+                    sets=3,
+                    rest_seconds=90,
                 ),
             ],
         ),
