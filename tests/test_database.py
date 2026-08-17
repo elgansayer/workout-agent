@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from database import (
     advance_day,
     delete_routine_record,
@@ -176,7 +178,7 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
     volumes = get_session_volumes(db)
     # save_progress uses the date from the WorkoutSummary.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == "2026-06-10"
+    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 

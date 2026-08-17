@@ -31,6 +31,9 @@ def generate_daily_header(config: Config) -> None:
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
+    
+    metrics = [m for m in get_body_metrics(limit=14, db_path=config.database_path) if m["date"] >= cutoff]
+    logs = [log for log in get_daily_logs(limit=14, db_path=config.database_path) if log["date"] >= cutoff]
 
     metrics = [
         m
@@ -83,18 +86,10 @@ def generate_weekly_correlations(config: Config) -> None:
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
-
-    metrics = [
-        m
-        for m in get_body_metrics(limit=120, db_path=config.database_path)
-        if m["date"] >= cutoff
-    ]
-    logs = [
-        log
-        for log in get_daily_logs(limit=120, db_path=config.database_path)
-        if log["date"] >= cutoff
-    ]
-
+    
+    metrics = [m for m in get_body_metrics(limit=120, db_path=config.database_path) if m["date"] >= cutoff]
+    logs = [log for log in get_daily_logs(limit=120, db_path=config.database_path) if log["date"] >= cutoff]
+    
     # Also fetch training history for the last 60 days
     all_history = get_progress_history(
         limit_per_exercise=60, db_path=config.database_path

@@ -172,7 +172,7 @@ def generate_next_workout(
         if text:
             return text
         logger.warning("Gemini returned an empty response; using baseline plan.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
@@ -226,7 +226,7 @@ def generate_rest_day_message(
         if text:
             return text
         logger.warning("Gemini returned an empty rest-day response; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
@@ -314,7 +314,7 @@ def generate_checkin_message(
         if text:
             return text
         logger.warning("Gemini returned an empty check-in; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
 
     return fallback
@@ -405,13 +405,9 @@ def apply_autonomous_adjustments(
         updated = json.loads(text)
         if isinstance(updated, dict):
             return updated
-
-        logger.warning(
-            "Gemini autonomous routines did not return a dict; using baseline."
-        )
+            
+        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Gemini autonomous adjustment failed (%s); using baseline routines.", exc
-        )
+        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
 
     return base_routines

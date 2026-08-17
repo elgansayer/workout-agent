@@ -90,7 +90,7 @@ def _sync_hevy_routines(config: Config) -> list[str]:
         for status in statuses:
             logger.info("Hevy routine %s", status)
         return statuses
-    except Exception as exc:  # noqa: BLE001  # never let a sync issue block the daily message
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Hevy routine sync failed: %s", exc)
         return []
 
@@ -120,7 +120,7 @@ def _maybe_check_in(
         return
     try:
         due_info = checkin.due(config)
-    except Exception as exc:  # noqa: BLE001  # a check-in must never block the daily message
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
     if due_info is None:

@@ -3,10 +3,6 @@ import subprocess
 import time
 from datetime import datetime, timedelta, timezone
 
-This module exists as a backward-compatibility shim.  When invoked directly
-it delegates to the unified scheduler.
-"""
-
 
 def run_daily():
     logger.info("Running daily insights...")
@@ -49,5 +45,5 @@ if __name__ == "__main__":
         time.sleep(sleep_secs)
 
         run_daily()
-        if datetime.now(tz=timezone.utc).weekday() == 6:  # Sunday
+        if datetime.now(tz=timezone.utc).weekday() == 6: # Sunday
             run_weekly()

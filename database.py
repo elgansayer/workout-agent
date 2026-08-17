@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import sqlite3
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
@@ -16,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
@@ -456,8 +459,8 @@ def get_recent_hevy_logs(
                 logs.extend(parsed)
             else:
                 logs.append(parsed)
-        except Exception:  # noqa: BLE001, S110
-            pass
+        except Exception:  # noqa: BLE001
+            logger.debug("Skipping unparseable log row")
     return logs[:limit]
 
 
@@ -470,11 +473,7 @@ def save_progress(
     """
     if summary is None:
         return
-    today = (
-        summary.date[:10]
-        if summary.date
-        else datetime.now(tz=timezone.utc).date().isoformat()
-    )
+    today = summary.date[:10] if summary.date else datetime.now(tz=timezone.utc).date().isoformat()
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(
@@ -1147,12 +1146,7 @@ def save_reasoning_log(
             ON CONFLICT(user_id, context_id) DO UPDATE SET
                 reasoning = excluded.reasoning
             """,
-            (
-                context_id,
-                datetime.now(tz=timezone.utc).date().isoformat(),
-                exercise_name,
-                reasoning,
-            ),
+            (context_id, datetime.now(tz=timezone.utc).date().isoformat(), exercise_name, reasoning),
         )
 
 
@@ -1204,7 +1198,7 @@ def get_deep_correlation(
 
 def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with _connect(db_path) as conn:
         conn.execute(
@@ -1283,7 +1277,7 @@ def get_or_create_user(
 ) -> UserRow:
     """Return the user row for an email, creating one on first login."""
     import uuid
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1376,7 +1370,7 @@ def save_user_api_key(
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Store (or update) an encrypted API key for a user + provider pair."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     now = datetime.now(tz=timezone.utc).isoformat()
     encrypted_key = encrypt(api_key) if api_key else ""
@@ -1502,7 +1496,7 @@ def save_user_preferences(
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Save or update a user's training preferences."""
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:

@@ -85,15 +85,8 @@ def _seed_baseline_if_missing(
     """Initialise check-in tracking the first time we ever see this account."""
     if get_meta(_KEY_NUMBER, config.database_path) is None:
         set_meta(_KEY_NUMBER, "0", config.database_path)
-        set_meta(
-            _KEY_LAST_DATE,
-            datetime.now(tz=timezone.utc).date().isoformat(),
-            config.database_path,
-        )
-    if (
-        total_count is not None
-        and get_meta(_KEY_LAST_COUNT, config.database_path) is None
-    ):
+        set_meta(_KEY_LAST_DATE, datetime.now(tz=timezone.utc).date().isoformat(), config.database_path)
+    if total_count is not None and get_meta(_KEY_LAST_COUNT, config.database_path) is None:
         set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
 
 
