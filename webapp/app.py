@@ -6,11 +6,11 @@ progressive-overload targets, server-rendered SVG charts of every lift and your
 body composition, all-time personal records, training-load trends, a consistency
 calendar, the full periodisation plan, and programme check-ins.
 
-Supports Google OAuth login (configure WEB_GOOGLE_CLIENT_ID,
-WEB_GOOGLE_CLIENT_SECRET, WEB_AUTH_SECRET, and ALLOWED_EMAILS in .env). Without
-authentication configured the dashboard is open; only use that on a trusted LAN
-behind a reverse proxy (e.g. Apache -> Docker -> gym.example.com). All
-motivation is automated; nothing here calls out to an API on a page view.
+Google OAuth login is available when WEB_AUTH_SECRET is configured, providing
+user-scoped data isolation. When auth is disabled, it is read-only and meant to
+sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
+gym.example.com). All motivation is automated; nothing here calls out to an API
+on a page view.
 
 Run locally:   uvicorn webapp.app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
@@ -404,7 +404,7 @@ def _dashboard_context(
     today: date | None = None,
     *,
     user_id: str | None = None,
-) -> dict[str, Any]:
+) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH, user_id=user_id)
@@ -519,12 +519,10 @@ def _dashboard_context(
 
 
 @app.get("/")
-def dashboard(request: Request) -> Any:
+def dashboard(request: Request):
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        _dashboard_context(user_id=user_id),
+        request, "dashboard.html", _dashboard_context(user_id=user_id)
     )
 
 
@@ -1141,7 +1139,7 @@ def project_peak(request: Request) -> dict[str, Any]:
 
 
 @app.get("/chat")
-def chat_page(request: Request) -> Any:
+def chat_page(request: Request):
     user_id = request.session.get("user_id")
     messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1152,15 +1150,13 @@ def chat_page(request: Request) -> Any:
 
 
 @app.get("/api/chat/history")
-def chat_history(request: Request) -> list[dict[str, Any]]:
-    _check_rate_limit(request)
+def chat_history(request: Request):
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
-def chat_clear(request: Request) -> dict[str, str]:
-    _check_rate_limit(request, limit=5)
+def chat_clear(request: Request):
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
@@ -1238,9 +1234,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             # Save the full assistant response
             full_response = "".join(collected)
             if full_response:
-                save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
-                )
+                save_chat_message("assistant", full_response, db_path=DB_PATH, user_id=user_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
 

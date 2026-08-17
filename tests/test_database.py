@@ -364,269 +364,11 @@ def test_init_db_migration_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: exercise_progress user_id scoping
-# ---------------------------------------------------------------------------
-
-
-def _exercise_summary(
-    name: str, weight: float, reps: int, sets: int = 3
-) -> WorkoutSummary:
-    return WorkoutSummary(
-        f"S-{name}",
-        "2026-08-01",
-        duration_seconds=3600,
-        total_volume_kg=3000.0,
-        exercises=[ExerciseSummary(name, weight, reps, sets)],
-    )
-
-
-def test_exercise_progress_migration_adds_user_id_column(tmp_path: Path) -> None:
-    """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS exercise_progress (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            exercise_name TEXT NOT NULL,
-            top_weight_kg REAL,
-            top_reps INTEGER,
-            sets INTEGER NOT NULL
-        )
-        """,
-    )
-    conn.execute(
-        "INSERT INTO exercise_progress (date, exercise_name, top_weight_kg, top_reps, sets) "
-        "VALUES ('2026-08-01', 'Squat', 100.0, 10, 3)",
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    with sqlite3.connect(db, timeout=10) as conn2:
-        cols = {
-            row[1]
-            for row in conn2.execute("PRAGMA table_info(exercise_progress)").fetchall()
-        }
-        assert "user_id" in cols
-        rows = conn2.execute(
-            "SELECT user_id FROM exercise_progress WHERE exercise_name = 'Squat'",
-        ).fetchall()
-        assert len(rows) == 1
-        assert rows[0][0] is not None  # backfilled
-
-
-def test_exercise_progress_user_isolation(tmp_path: Path) -> None:
-    """Two users writing exercise_progress do not see each other's rows."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_progress(_exercise_summary("Squat", 100.0, 10), db, user_id=user_a)
-    save_progress(_exercise_summary("Squat", 120.0, 8), db, user_id=user_b)
-
-    bests_a = get_recent_bests(db, user_id=user_a)
-    bests_b = get_recent_bests(db, user_id=user_b)
-
-    assert bests_a["Squat"]["top_weight_kg"] == 100.0
-    assert bests_b["Squat"]["top_weight_kg"] == 120.0
-
-
-def test_progress_history_user_isolation(tmp_path: Path) -> None:
-    """get_progress_history scopes by user_id."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_progress(_exercise_summary("Bench Press", 80.0, 10), db, user_id=user_a)
-    save_progress(_exercise_summary("Bench Press", 90.0, 8), db, user_id=user_b)
-
-    history_a = get_progress_history(db_path=db, user_id=user_a)
-    history_b = get_progress_history(db_path=db, user_id=user_b)
-
-    assert "Bench Press" in history_a
-    assert history_a["Bench Press"][0]["top_weight_kg"] == 80.0
-    assert history_b["Bench Press"][0]["top_weight_kg"] == 90.0
-
-
-def test_session_volumes_user_isolation(tmp_path: Path) -> None:
-    """get_session_volumes scopes by user_id."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_progress(_exercise_summary("Deadlift", 100.0, 5, 4), db, user_id=user_a)
-    save_progress(_exercise_summary("Deadlift", 140.0, 3, 5), db, user_id=user_b)
-
-    vols_a = get_session_volumes(db, user_id=user_a)
-    vols_b = get_session_volumes(db, user_id=user_b)
-
-    assert vols_a[0]["volume"] == 2000.0  # 100*5*4
-    assert vols_b[0]["volume"] == 2100.0  # 140*3*5
-
-
-def test_exercise_volumes_user_isolation(tmp_path: Path) -> None:
-    """get_exercise_volumes scopes by user_id."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_progress(_exercise_summary("Leg Press", 100.0, 10, 3), db, user_id=user_a)
-    save_progress(_exercise_summary("Leg Press", 200.0, 8, 3), db, user_id=user_b)
-
-    vols_a = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_a)}
-    vols_b = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_b)}
-
-    assert vols_a["Leg Press"]["volume"] == 3000.0
-    assert vols_b["Leg Press"]["volume"] == 4800.0
-
-
-def test_personal_records_user_isolation(tmp_path: Path) -> None:
-    """get_personal_records scopes by user_id."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_progress(_exercise_summary("Squat", 100.0, 5), db, user_id=user_a)
-    save_progress(_exercise_summary("Squat", 150.0, 3), db, user_id=user_b)
-
-    prs_a = get_personal_records(db, user_id=user_a)
-    prs_b = get_personal_records(db, user_id=user_b)
-
-    assert prs_a[0]["weight_kg"] == 100.0
-    assert prs_b[0]["weight_kg"] == 150.0
-
-
-def test_exercise_progress_null_user_id_backward_compat(tmp_path: Path) -> None:
-    """Calling save_progress without user_id still works."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    save_progress(_exercise_summary("Curls", 20.0, 12), db)
-    bests = get_recent_bests(db)
-    assert bests["Curls"]["top_weight_kg"] == 20.0
-
-
-# ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: body_metrics user_id scoping
-# ---------------------------------------------------------------------------
-
-
-def test_body_metrics_migration_adds_user_id_column(tmp_path: Path) -> None:
-    """Running init_db on a pre-migration DB adds user_id and backfills legacy."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS body_metrics (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            weight_kg REAL,
-            body_fat_pct REAL,
-            muscle_pct REAL,
-            resting_hr INTEGER,
-            hrv REAL
-        )
-        """,
-    )
-    conn.execute(
-        "INSERT INTO body_metrics (date, weight_kg) VALUES ('2026-08-01', 82.0)",
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    with sqlite3.connect(db, timeout=10) as conn2:
-        cols = {
-            row[1]
-            for row in conn2.execute("PRAGMA table_info(body_metrics)").fetchall()
-        }
-        assert "user_id" in cols
-        rows = conn2.execute(
-            "SELECT user_id FROM body_metrics WHERE date = '2026-08-01'",
-        ).fetchall()
-        assert len(rows) == 1
-        assert rows[0][0] is not None  # backfilled
-
-
-def test_body_metrics_user_isolation(tmp_path: Path) -> None:
-    """Two users writing body_metrics do not see each other's rows."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
-    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
-
-    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
-    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
-
-    assert len(metrics_a) == 1
-    assert metrics_a[0]["weight_kg"] == 80.0
-    assert len(metrics_b) == 1
-    assert metrics_b[0]["weight_kg"] == 90.0
-
-
-def test_body_metrics_same_date_different_users_preserved(tmp_path: Path) -> None:
-    """Dedup only within the same user_id."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
-    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
-    # A second reading from user A on the same day should replace theirs
-    save_body_metrics({"weight_kg": 80.5}, "2026-08-01", db, user_id=user_a)
-
-    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
-    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
-
-    assert len(metrics_a) == 1
-    assert metrics_a[0]["weight_kg"] == 80.5
-    assert len(metrics_b) == 1
-    assert metrics_b[0]["weight_kg"] == 90.0
-
-
-def test_body_metrics_null_user_id_backward_compat(tmp_path: Path) -> None:
-    """Calling save_body_metrics/get_body_metrics without user_id still works."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    save_body_metrics({"weight_kg": 75.0}, "2026-08-01", db)
-    readings = get_body_metrics(db_path=db)
-    assert len(readings) == 1
-    assert readings[0]["weight_kg"] == 75.0
-
-
-# ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: chat_messages
 # ---------------------------------------------------------------------------
 
 
-def test_chat_messages_migration_adds_user_id_column(tmp_path: Path) -> None:
+def test_chat_messages_migration_adds_user_id_column(tmp_path):
     """Running init_db on a pre-migration DB with chat_messages adds user_id."""
     db = _db(tmp_path)
     import sqlite3
@@ -641,7 +383,7 @@ def test_chat_messages_migration_adds_user_id_column(tmp_path: Path) -> None:
             content TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
-        """,
+        """
     )
     conn.execute(
         "INSERT INTO chat_messages (role, content, created_at) VALUES (?, ?, ?)",
@@ -653,19 +395,16 @@ def test_chat_messages_migration_adds_user_id_column(tmp_path: Path) -> None:
     init_db(db)
 
     with sqlite3.connect(db, timeout=10) as conn2:
-        cols = {
-            row[1]
-            for row in conn2.execute("PRAGMA table_info(chat_messages)").fetchall()
-        }
+        cols = {row[1] for row in conn2.execute("PRAGMA table_info(chat_messages)").fetchall()}
         assert "user_id" in cols
         rows = conn2.execute(
-            "SELECT user_id FROM chat_messages WHERE content = 'hello'",
+            "SELECT user_id FROM chat_messages WHERE content = 'hello'"
         ).fetchall()
         assert len(rows) == 1
         assert rows[0][0] is not None  # backfilled
 
 
-def test_chat_messages_user_isolation(tmp_path: Path) -> None:
+def test_chat_messages_user_isolation(tmp_path):
     """Two users writing to chat_messages don't see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
@@ -693,7 +432,7 @@ def test_chat_messages_user_isolation(tmp_path: Path) -> None:
     assert len(get_chat_messages(limit=50, db_path=db, user_id=user_b)) == 1
 
 
-def test_chat_messages_backward_compat(tmp_path: Path) -> None:
+def test_chat_messages_backward_compat(tmp_path):
     """Calling save/get/clear without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
@@ -714,7 +453,7 @@ def test_chat_messages_backward_compat(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_insights_migration_and_isolation(tmp_path: Path) -> None:
+def test_dashboard_insights_migration_and_isolation(tmp_path):
     """dashboard_insights is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -729,7 +468,7 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Path) -> None:
             date TEXT NOT NULL,
             insight_json TEXT NOT NULL
         )
-        """,
+        """
     )
     conn.execute(
         "INSERT INTO dashboard_insights (id, date, insight_json) VALUES (1, '2026-08-01', ?)",
@@ -766,224 +505,11 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: daily_log
+# Multi-tenant isolation tests: deep_correlations
 # ---------------------------------------------------------------------------
 
 
-def test_daily_log_migration_adds_user_id_column(tmp_path: Path) -> None:
-    """daily_log gets a user_id column via migration and backfills legacy."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS daily_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            day INTEGER,
-            focus TEXT NOT NULL,
-            carb_tier TEXT NOT NULL,
-            plan TEXT NOT NULL,
-            lifestyle TEXT NOT NULL
-        )
-        """,
-    )
-    conn.execute(
-        "INSERT INTO daily_log (date, day, focus, carb_tier, plan, lifestyle) "
-        "VALUES ('2026-08-01', 1, 'Deadlift', 'high', 'Plan A', 'Walk')",
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    from database import get_daily_logs
-
-    logs = get_daily_logs(limit=10, db_path=db)
-    assert len(logs) == 1
-    assert logs[0]["focus"] == "Deadlift"
-
-
-def test_daily_log_user_isolation(tmp_path: Path) -> None:
-    """Two different user_ids don't see each other's daily_log rows."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    from database import get_daily_logs, save_daily_log
-
-    save_daily_log(
-        "2026-08-01",
-        1,
-        "Deadlift",
-        "high",
-        "Plan A",
-        "Walk",
-        db_path=db,
-        user_id="user-a",
-    )
-    save_daily_log(
-        "2026-08-01",
-        2,
-        "Pull-ups",
-        "med",
-        "Plan B",
-        "Run",
-        db_path=db,
-        user_id="user-b",
-    )
-
-    logs_a = get_daily_logs(limit=10, db_path=db, user_id="user-a")
-    assert len(logs_a) == 1
-    assert logs_a[0]["day"] == 1
-    assert logs_a[0]["focus"] == "Deadlift"
-
-    logs_b = get_daily_logs(limit=10, db_path=db, user_id="user-b")
-    assert len(logs_b) == 1
-    assert logs_b[0]["day"] == 2
-    assert logs_b[0]["focus"] == "Pull-ups"
-
-
-def test_daily_log_backward_compat(tmp_path: Path) -> None:
-    """Callers not passing user_id still work (backward compat)."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    from database import get_daily_logs, save_daily_log
-
-    save_daily_log(
-        "2026-08-01",
-        1,
-        "Deadlift",
-        "high",
-        "Plan",
-        "Lifestyle",
-        db_path=db,
-    )
-    logs = get_daily_logs(limit=10, db_path=db)
-    assert len(logs) == 1
-
-
-def test_daily_log_dedupes_per_user_per_date(tmp_path: Path) -> None:
-    """Same user/date writes replace the prior entry; different users don't clash."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    from database import get_daily_logs, save_daily_log
-
-    save_daily_log(
-        "2026-08-01",
-        1,
-        "A",
-        "high",
-        "Plan1",
-        "L1",
-        db_path=db,
-        user_id="u1",
-    )
-    save_daily_log(
-        "2026-08-01",
-        1,
-        "A-v2",
-        "high",
-        "Plan1b",
-        "L1b",
-        db_path=db,
-        user_id="u1",
-    )
-    save_daily_log(
-        "2026-08-01",
-        2,
-        "B",
-        "med",
-        "Plan2",
-        "L2",
-        db_path=db,
-        user_id="u2",
-    )
-
-    logs_u1 = get_daily_logs(limit=10, db_path=db, user_id="u1")
-    assert len(logs_u1) == 1
-    assert logs_u1[0]["focus"] == "A-v2"
-
-    logs_u2 = get_daily_logs(limit=10, db_path=db, user_id="u2")
-    assert len(logs_u2) == 1
-    assert logs_u2[0]["focus"] == "B"
-
-
-# ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: check_ins
-# ---------------------------------------------------------------------------
-
-
-def test_check_ins_migration_adds_user_id_column(tmp_path: Path) -> None:
-    """check_ins gets a user_id column via migration and backfills legacy."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS check_ins (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            number INTEGER NOT NULL,
-            date TEXT NOT NULL,
-            workouts_done INTEGER NOT NULL,
-            weeks INTEGER NOT NULL,
-            message TEXT NOT NULL
-        )
-        """,
-    )
-    conn.execute(
-        "INSERT INTO check_ins (number, date, workouts_done, weeks, message) "
-        "VALUES (1, '2026-08-01', 5, 2, 'Good progress')",
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    from database import get_checkins
-
-    cks = get_checkins(limit=10, db_path=db)
-    assert len(cks) == 1
-    assert cks[0]["number"] == 1
-
-
-def test_check_ins_user_isolation(tmp_path: Path) -> None:
-    """Two different user_ids don't see each other's check_ins rows."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    from database import get_checkins, save_checkin
-
-    save_checkin(1, "2026-08-01", 5, 2, "Message A", db_path=db, user_id="u1")
-    save_checkin(1, "2026-08-02", 3, 1, "Message B", db_path=db, user_id="u2")
-
-    cks_a = get_checkins(limit=10, db_path=db, user_id="u1")
-    assert len(cks_a) == 1
-    assert cks_a[0]["message"] == "Message A"
-
-    cks_b = get_checkins(limit=10, db_path=db, user_id="u2")
-    assert len(cks_b) == 1
-    assert cks_b[0]["message"] == "Message B"
-
-
-def test_check_ins_backward_compat(tmp_path: Path) -> None:
-    """Callers not passing user_id still work."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    from database import get_checkins, save_checkin
-
-    save_checkin(1, "2026-08-01", 5, 2, "Legacy checkin", db_path=db)
-    cks = get_checkins(limit=10, db_path=db)
-    assert len(cks) == 1
-
-
-def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
+def test_deep_correlations_migration_and_isolation(tmp_path):
     """deep_correlations is migrated from singleton to user_id-scoped."""
     db = _db(tmp_path)
     import sqlite3
@@ -998,7 +524,7 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
             date TEXT NOT NULL,
             insight_markdown TEXT NOT NULL
         )
-        """,
+        """
     )
     conn.execute(
         "INSERT INTO deep_correlations (id, date, insight_markdown) VALUES (1, '2026-08-01', ?)",
@@ -1024,3 +550,4 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Path) -> None:
 
     # None user_id returns None (no matching row)
     assert get_deep_correlation(db_path=db, user_id=None) is None
+

@@ -311,6 +311,10 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
+The app includes Google OAuth login (configurable via `WEB_AUTH_SECRET`). You can
+run it with or without authentication behind Apache, nginx, or Caddy. Point the
+proxy at the container's published port. Example Apache virtual host mapping
+`gym.example.com` to the dashboard:
 The app supports Google OAuth login (configure `WEB_GOOGLE_CLIENT_ID`,
 `WEB_GOOGLE_CLIENT_SECRET`, `WEB_AUTH_SECRET`, and `ALLOWED_EMAILS` in `.env`).
 Point your reverse proxy at the container's published port. Example Apache
@@ -342,6 +346,8 @@ Example Apache virtual host mapping `gym.example.com` to the dashboard:
 </VirtualHost>
 ```
 
+If you run without authentication, only expose data you are happy to be public,
+or add HTTP basic auth at the proxy if you want to gate it.
 Without authentication configured, the dashboard is open to anyone on the
 network — only do that on a trusted LAN.
 
@@ -463,6 +469,9 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
+   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
+   from any device on your LAN. Google OAuth login is available when
+   `WEB_AUTH_SECRET` is configured; keep it on a trusted network otherwise.
    It listens on `http://<host-ip>:8088` (or the `WEB_PORT` you set in `.env`).
    Host it on a Proxmox LXC and reach it from any device on your LAN. On a
    trusted network the dashboard is open; to gate access, set the
@@ -550,6 +559,9 @@ without it.
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8770`. Google OAuth login is available when
+   `WEB_AUTH_SECRET` is configured; keep the dashboard behind a reverse proxy
+   / firewall either way.
    `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, and
    optionally enable Google OAuth by setting `WEB_AUTH_SECRET`,
    `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`.
