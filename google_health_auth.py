@@ -72,7 +72,7 @@ def exchange_code(
     code: str,
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Swap an authorisation code for access and refresh tokens."""
     try:
         response = requests.post(
