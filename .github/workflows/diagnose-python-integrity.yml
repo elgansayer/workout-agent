@@ -1,28 +1,34 @@
-name: Diagnose Python Integrity
+name: Python Source Integrity
 
 on:
-  push:
-    branches:
-      - fix/webapp-main-integrity
+  pull_request:
     paths:
-      - .github/workflows/diagnose-python-integrity.yml
+      - "**/*.py"
+      - ".github/workflows/diagnose-python-integrity.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/*.py"
+      - ".github/workflows/diagnose-python-integrity.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  diagnose:
+  source-integrity:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Find unresolved merge markers
+      - name: Reject unresolved merge markers
         id: markers
         continue-on-error: true
         shell: bash
@@ -38,15 +44,17 @@ jobs:
       - name: Compile every tracked Python file
         id: compile
         continue-on-error: true
+        shell: bash
         run: |
           mapfile -d '' files < <(git ls-files -z '*.py')
           python -m py_compile "${files[@]}"
 
-      - name: Fail when either diagnostic found damage
+      - name: Enforce source integrity
         if: always()
         env:
           MARKERS: ${{ steps.markers.outcome }}
           COMPILE: ${{ steps.compile.outcome }}
+        shell: bash
         run: |
           echo "merge-marker scan: $MARKERS"
           echo "Python compilation: $COMPILE"
