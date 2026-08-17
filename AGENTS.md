@@ -160,6 +160,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly commit hygiene #492 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
@@ -354,6 +355,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
+- **Hourly commit hygiene re-verified.** `commit_hygiene.py` executed clean
+  via `--json` output (status: "clean", zero findings). Last 10 commits have
+  descriptive messages; no sensitive files (.env, *.db, data/) committed;
+  `.gitignore` covers all required patterns (`*.db`, `.env`, `__pycache__/`,
+  `.pytest_cache/`, `.venv/`, etc.); no large files (>3 MB) found outside
+  `data/`. Issue #492 hygiene complete — git history clean, no security
+  concerns.
 - **Hourly dead-code sweep re-verified (#505).** `dead_code_sweep.py` executed
   clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules (`webapp/app.py`,
