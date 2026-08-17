@@ -1,5 +1,7 @@
 """Make the project root importable when running the test suite."""
 
+from __future__ import annotations
+
 import os
 import sys
 
