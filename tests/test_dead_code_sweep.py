@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -17,11 +16,7 @@ from dead_code_sweep import (
     OrphanReport,
     _build_import_graph,
     _extract_imports,
-    _get_github_repo,
-    _get_github_token,
     _grep_import,
-    _task_add_text,
-    create_github_issues,
     find_orphans,
     find_truly_dead,
     report_orphans,
@@ -372,208 +367,3 @@ class TestCLISmoke:
         assert result.returncode == 0
         assert "status" in result.stdout
         assert '"clean"' in result.stdout
-
-    def test_create_issues_flag_help(self) -> None:
-        result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        assert "--create-issues" in result.stdout
-
-
-# ---------------------------------------------------------------------------
-# GitHub integration helpers
-# ---------------------------------------------------------------------------
-
-
-class TestGetGitHubRepo:
-    def test_github_https_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
-            return MagicMock(
-                returncode=0,
-                stdout="https://github.com/owner/repo.git\n",
-                stderr="",
-            )
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        result = _get_github_repo()
-        assert result == ("owner", "repo")
-
-    def test_github_token_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
-            return MagicMock(
-                returncode=0,
-                stdout="https://x-access-token:ghp_xyz@github.com/owner/repo.git\n",
-                stderr="",
-            )
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        result = _get_github_repo()
-        assert result == ("owner", "repo")
-
-    def test_non_github_remote(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
-            return MagicMock(
-                returncode=0,
-                stdout="https://gitlab.com/owner/repo.git\n",
-                stderr="",
-            )
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        assert _get_github_repo() is None
-
-    def test_git_failure(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
-            raise subprocess.TimeoutExpired("git", 10)
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        assert _get_github_repo() is None
-
-
-class TestGetGitHubToken:
-    def test_from_env(self, monkeypatch) -> None:
-        monkeypatch.setenv("GITHUB_TOKEN", "ghp_from_env")
-        assert _get_github_token() == "ghp_from_env"
-
-    def test_from_remote_url(self, monkeypatch) -> None:
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-
-        def _mock_run(*args, **kwargs):
-            return MagicMock(
-                returncode=0,
-                stdout="https://x-access-token:ghp_from_remote@github.com/x/y.git\n",
-                stderr="",
-            )
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        assert _get_github_token() == "ghp_from_remote"
-
-    def test_no_token_available(self, monkeypatch) -> None:
-        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-
-        def _mock_run(*args, **kwargs):
-            return MagicMock(
-                returncode=0,
-                stdout="https://github.com/x/y.git\n",
-                stderr="",
-            )
-
-        monkeypatch.setattr(subprocess, "run", _mock_run)
-        assert _get_github_token() is None
-
-
-class TestTaskAddText:
-    def test_includes_module_name(self, tmp_path: Path) -> None:
-        mi = ModuleInfo(
-            name="orphan_mod",
-            path=tmp_path / "orphan_mod.py",
-            is_entry_point=False,
-        )
-        report = OrphanReport(module=mi, evidence="no imports")
-        with patch("dead_code_sweep.ROOT", tmp_path):
-            body = _task_add_text(report)
-        assert "`orphan_mod`" in body
-        assert "orphan_mod.py" in body
-        assert "programme-builder-ui" in body
-
-
-class TestCreateGitHubIssues:
-    def test_no_token_returns_empty(self, tmp_path: Path) -> None:
-        # No token in remote URL either
-        p = tmp_path / "x.py"
-        p.write_text("")
-        with (
-            patch("dead_code_sweep.ROOT", tmp_path),
-            patch("dead_code_sweep._get_github_token", return_value=None),
-        ):
-            reports = [
-                OrphanReport(
-                    module=ModuleInfo(name="x", path=p, is_entry_point=False),
-                    evidence="e",
-                )
-            ]
-            assert create_github_issues(reports) == []
-
-    def test_no_repo_returns_empty(self, tmp_path: Path) -> None:
-        p = tmp_path / "x.py"
-        p.write_text("")
-        with (
-            patch("dead_code_sweep.ROOT", tmp_path),
-            patch("dead_code_sweep._get_github_token", return_value="ghp_test"),
-            patch("dead_code_sweep._get_github_repo", return_value=None),
-        ):
-            reports = [
-                OrphanReport(
-                    module=ModuleInfo(name="x", path=p, is_entry_point=False),
-                    evidence="e",
-                )
-            ]
-            assert create_github_issues(reports) == []
-
-    def test_successful_issue_creation(self, tmp_path: Path) -> None:
-        p = tmp_path / "x.py"
-        p.write_text("")
-        # urlopen is used as a context manager, so configure
-        # __enter__ to return the mock itself.
-        mock_response = MagicMock()
-        mock_response.__enter__.return_value = mock_response
-        mock_response.read.return_value = json.dumps(
-            {"html_url": "https://github.com/own/repo/issues/99"}
-        ).encode("utf-8")
-
-        with (
-            patch("dead_code_sweep.ROOT", tmp_path),
-            patch("dead_code_sweep._get_github_token", return_value="ghp_test"),
-            patch(
-                "dead_code_sweep._get_github_repo",
-                return_value=("own", "repo"),
-            ),
-            patch("urllib.request.urlopen", return_value=mock_response),
-        ):
-            reports = [
-                OrphanReport(
-                    module=ModuleInfo(
-                        name="x",
-                        path=p,
-                        is_entry_point=False,
-                    ),
-                    evidence="e",
-                )
-            ]
-            created = create_github_issues(reports)
-            assert len(created) == 1
-            assert "issues/99" in created[0]
-
-    def test_http_error_graceful(self, tmp_path: Path) -> None:
-        p = tmp_path / "x.py"
-        p.write_text("")
-        import urllib.error
-
-        def _raise(*args, **kwargs):
-            raise urllib.error.HTTPError("url", 422, "Unprocessable", {}, None)
-
-        with (
-            patch("dead_code_sweep.ROOT", tmp_path),
-            patch("dead_code_sweep._get_github_token", return_value="ghp_test"),
-            patch(
-                "dead_code_sweep._get_github_repo",
-                return_value=("own", "repo"),
-            ),
-            patch("urllib.request.urlopen", side_effect=_raise),
-        ):
-            reports = [
-                OrphanReport(
-                    module=ModuleInfo(
-                        name="x",
-                        path=p,
-                        is_entry_point=False,
-                    ),
-                    evidence="e",
-                )
-            ]
-            created = create_github_issues(reports)
-            assert len(created) == 1
-            assert created[0].startswith("ERROR:")

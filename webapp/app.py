@@ -1,16 +1,16 @@
 """Internal progressive-overload web app (FastAPI).
 
 A self-hosted dashboard for the workout agent. It reads the same SQLite database
-the agent writes and renders a rich control centre: today's session and
+the agent writes and renders it as a rich control centre: today's session and
 progressive-overload targets, server-rendered SVG charts of every lift and your
 body composition, all-time personal records, training-load trends, a consistency
-calendar, the full periodisation plan, programme check-ins, and an AI-driven
-chat assistant.
+calendar, the full periodisation plan, and programme check-ins.
 
-When `WEB_AUTH_SECRET`, `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`
-are set, Google OAuth login is active and every page requires authentication.
-Without those variables the dashboard runs without auth — useful behind a
-reverse proxy with its own basic auth or on a trusted network.
+Google OAuth login is available when WEB_AUTH_SECRET is configured, providing
+user-scoped data isolation. When auth is disabled, it is read-only and meant to
+sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
+gym.example.com). All motivation is automated; nothing here calls out to an API
+on a page view.
 
 Run locally:   uvicorn webapp.app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
@@ -23,16 +23,13 @@ import json
 import logging
 import os
 import secrets
-from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-if TYPE_CHECKING:
-    from programme_inference import InferredProgramme
-
+import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
@@ -49,13 +46,11 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers, resolve_provider
+from ai_provider import available_providers
 from config import Config
 from database import (
-    check_rate_limit,
     clear_chat_messages,
     delete_user_api_key,
-    get_active_programme,
     get_body_metrics,
     get_chat_messages,
     get_checkins,
@@ -66,7 +61,6 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
-    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -78,7 +72,6 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
@@ -102,24 +95,39 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def get_config() -> Config:
+
+def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
+    user_id = request.session.get("user_id") if hasattr(request, "session") else None
+    return resolve_provider(
+        user_id=user_id,
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
+
+
+def get_config():
     return Config.load()
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+_RATE_LIMITS: dict[str, list[float]] = {}
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    ip = _client_ip(request)
-    if check_rate_limit(ip, limit, window, db_path=DB_PATH):
+    now = time.time()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    elif request.headers.get("x-real-ip"):
+        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
+    else:
+        ip = request.client.host if request.client else "unknown"
+
+    if ip not in _RATE_LIMITS:
+        _RATE_LIMITS[ip] = []
+    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
+    if len(_RATE_LIMITS[ip]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -314,7 +322,7 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(series: dict, *keywords: str) -> tuple[str | None, list]:
+def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
@@ -332,7 +340,7 @@ def _rep_top(rep_range: str) -> int | None:
     return digits[-1] if digits else None
 
 
-def _overload_nudge(planned_rep_range: str, best: dict | None) -> str:
+def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
     """Suggest the next progressive-overload step for an exercise."""
     if not best or best.get("top_reps") is None:
         return "Log this lift to start tracking progress."
@@ -348,7 +356,7 @@ def _overload_nudge(planned_rep_range: str, best: dict | None) -> str:
     return "Keep the reps strict and progress when it feels easy."
 
 
-def _format_best(best: dict | None) -> str:
+def _format_best(best: dict[str, Any] | None) -> str:
     if not best:
         return "No data yet"
     weight = best.get("top_weight_kg")
@@ -360,7 +368,7 @@ def _format_best(best: dict | None) -> str:
     return "No data yet"
 
 
-def _training_levels(*, user_id: str | None = None) -> dict[str, int]:
+def _training_levels(user_id: str | None = None) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
     for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
@@ -384,11 +392,7 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(
-    today: date | None = None,
-    *,
-    user_id: str | None = None,
-) -> dict:
+def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     start = get_programme_start_date(DB_PATH)
@@ -402,7 +406,7 @@ def _dashboard_context(
     active_defn = active.get("definition") if active else None
 
     day = today_day(today)
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     focus = "Rest & Recovery"
 
     if active_defn:
@@ -410,7 +414,8 @@ def _dashboard_context(
         total_days = len(days_data) or 1
         current_day = ((today - start).days % total_days) + 1
         active_day = next(
-            (d for d in days_data if d.get("number") == current_day), None
+            (d for d in days_data if d.get("number") == current_day),
+            None,
         )
         if active_day:
             focus = active_day.get("focus", "Training")
@@ -423,7 +428,7 @@ def _dashboard_context(
                         "note": ex.get("note", ""),
                         "last": _format_best(best),
                         "nudge": _overload_nudge(ex.get("rep_range", ""), best),
-                    }
+                    },
                 )
     elif day is not None:
         focus = day_focus(day)
@@ -436,7 +441,7 @@ def _dashboard_context(
                     "note": ex.note,
                     "last": _format_best(best),
                     "nudge": _overload_nudge(ex.rep_range, best),
-                }
+                },
             )
 
     metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
@@ -450,14 +455,18 @@ def _dashboard_context(
 
     weight_spark = charts.sparkline([m["weight_kg"] for m in metrics if m["weight_kg"]])
     fat_spark = charts.sparkline(
-        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]], colour=charts.WARN
+        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]],
+        colour=charts.WARN,
     )
     latest_fat = next(
-        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]), None
+        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]),
+        None,
     )
 
     review = insights.build_insights(
-        get_progress_history(db_path=DB_PATH, user_id=user_id), metrics, None
+        get_progress_history(db_path=DB_PATH, user_id=user_id),
+        metrics,
+        None,
     )
 
     return {
@@ -474,7 +483,9 @@ def _dashboard_context(
         "rows": rows,
         "lifestyle": guidance.as_lines(),
         "cycle_ring": charts.progress_ring(
-            week / CYCLE_WEEKS * 100, label=f"Wk {week}", sub=f"of {CYCLE_WEEKS}"
+            week / CYCLE_WEEKS * 100,
+            label=f"Wk {week}",
+            sub=f"of {CYCLE_WEEKS}",
         ),
         "block_ring": charts.progress_ring(
             week_in_block / BLOCK_WEEKS * 100,
@@ -491,12 +502,12 @@ def _dashboard_context(
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH),
     }
 
 
 @app.get("/")
-def dashboard(request: Request) -> Any:
+def dashboard(request: Request):
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
         request, "dashboard.html", _dashboard_context(user_id=user_id)
@@ -518,16 +529,16 @@ def progress(request: Request) -> Any:
             }
             for e in entries
         ]
-        e1rms_raw = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms: list[float] = [v for v in e1rms_raw if v is not None]
-        best_e1rm = max(e1rms) if e1rms else None
+        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
+        e1rms_filtered = [v for v in e1rms if v is not None]
+        best_e1rm: float | None = max(e1rms_filtered) if e1rms_filtered else None
         charts_data.append(
             {
                 "name": name,
                 "svg": charts.line_chart(points, unit="kg"),
                 "best_e1rm": best_e1rm,
                 "sessions": len(entries),
-            }
+            },
         )
     return templates.TemplateResponse(
         request,
@@ -540,7 +551,7 @@ def progress(request: Request) -> Any:
     )
 
 
-def _body_charts(*, user_id: str | None = None) -> dict:
+def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
@@ -562,13 +573,13 @@ def _body_charts(*, user_id: str | None = None) -> dict:
 
 
 @app.get("/stats")
-def stats(request: Request) -> Any:
+def stats(request: Request):
     user_id = request.session.get("user_id")
-    volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    volumes = get_session_volumes(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(DB_PATH)
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
@@ -583,12 +594,12 @@ def stats(request: Request) -> Any:
         if log["day"] is not None:
             focus_counts[log["focus"]] = focus_counts.get(log["focus"], 0) + 1
     distribution = charts.donut(
-        [{"label": k, "value": v} for k, v in sorted(focus_counts.items())]
+        [{"label": k, "value": v} for k, v in sorted(focus_counts.items())],
     )
 
     # Volume broken down by muscle group.
     groups = analytics.group_volumes(
-        get_exercise_volumes(db_path=DB_PATH, user_id=user_id)
+        get_exercise_volumes(db_path=DB_PATH, user_id=user_id),
     )
     muscle_donut = charts.donut(
         [
@@ -692,8 +703,8 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str, entries: list, target_ordinal: int, *, metric: str = "auto"
-) -> dict | None:
+    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
+) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
     unit = "kg"
@@ -728,15 +739,8 @@ def _project_lift(
 
 
 @app.get("/plan")
-def plan(request: Request) -> Any:
-    user_id = request.session.get("user_id")
+def plan(request: Request):
     today = datetime.now(tz=timezone.utc).date()
-
-    # Check for a user-selected active programme first.
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    if active and active.get("definition"):
-        return _render_active_plan(request, active, today)
-
     week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
@@ -756,7 +760,7 @@ def plan(request: Request) -> Any:
                     }
                     for ex in day_exercises(d, current_block)
                 ],
-            }
+            },
         )
 
     blocks = [
@@ -791,6 +795,7 @@ def plan(request: Request) -> Any:
 
 def _render_active_plan(request: Request, active: dict[str, Any], today: date) -> Any:
     """Render /plan from a user's active programme definition (DB-stored)."""
+    user_id = request.session.get("user_id")
     defn = active.get("definition", {})
     split_name = defn.get("name", "Active Programme")
     cycle_weeks = defn.get("cycle_weeks", 4)
@@ -799,7 +804,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     rules = defn.get("rules", [])
 
     # Determine today's day in the split (simple round-robin based on start date).
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(DB_PATH, user_id=user_id)
     # current_day is the 1-based day index in the split, wrapping
     total_days = len(days_data) or 1
     current_day = ((today - start).days % total_days) + 1
@@ -821,7 +826,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
                 "focus": d.get("focus", f"Day {day_num}"),
                 "is_today": day_num == current_day,
                 "exercises": exercises,
-            }
+            },
         )
 
     blocks = []
@@ -836,7 +841,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
                 "pullups": _block_lift_str(b.get("pullups")),
                 "accessory": b.get("accessory_emphasis", ""),
                 "is_current": True,
-            }
+            },
         )
 
     return templates.TemplateResponse(
@@ -855,7 +860,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     )
 
 
-def _block_lift_str(lift: dict | None) -> str:
+def _block_lift_str(lift: dict[str, Any] | None) -> str:
     """Format a lift dict as 'sets x rep_range' or empty string."""
     if not lift:
         return ""
@@ -938,13 +943,13 @@ async def select_programme(request: Request) -> dict[str, Any]:
 
 def _build_inferred_definition(
     inferred: InferredProgramme,
-) -> dict:
+) -> dict[str, Any]:
     """Build a programme definition dict from an InferredProgramme.
 
     Produces a structure compatible with the programme templates system
     so the programmes.html preview and /plan page render correctly.
     """
-    days: list[dict] = []
+    days: list[dict[str, Any]] = []
     for i, day in enumerate(inferred.training_days):
         exercises = []
         for ex in day.exercises:
@@ -955,18 +960,18 @@ def _build_inferred_definition(
                     "rep_range": f"{ex.target_reps or 8}-{ex.target_reps or 12}",
                     "note": ex.notes or "",
                     "template_id": ex.template_id,
-                }
+                },
             )
         days.append(
             {
                 "number": i + 1,
                 "focus": day.focus_summary(),
                 "exercises": exercises,
-            }
+            },
         )
 
     # Build a simple block structure from the inferred data.
-    blocks: list[dict] = [
+    blocks: list[dict[str, Any]] = [
         {
             "number": 1,
             "name": "Inferred",
@@ -978,7 +983,7 @@ def _build_inferred_definition(
             "deadlift": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
             "pullups": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
             "accessory_emphasis": "",
-        }
+        },
     ]
 
     return {
@@ -1025,7 +1030,7 @@ def _run_hevy_inference(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/history")
-def history(request: Request) -> Any:
+def history(request: Request):
     user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1064,8 +1069,11 @@ def checkins(request: Request) -> Any:
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
+    user_id = request.session.get("user_id")
     # context_id is expected to be {date}_{exercise_name}
-    existing = get_reasoning_log(context_id, db_path=DB_PATH)
+    user_id = request.session.get("user_id")
+
+    existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
         return {"reasoning": existing}
 
@@ -1076,20 +1084,14 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    user_id = request.session.get("user_id")
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = (
-        str(provider.generate(prompt)).strip() or "Could not determine reasoning."
-    )
+    response = model.generate_content(prompt)
+    reasoning = (response.text or "Could not determine reasoning.").strip()
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}
@@ -1098,22 +1100,19 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    config = get_config()
     user_id = request.session.get("user_id")
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    config = get_config()
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
 
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = response.text.strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         return json.loads(text.strip())
@@ -1122,7 +1121,7 @@ def project_peak(request: Request) -> dict[str, Any]:
 
 
 @app.get("/chat")
-def chat_page(request: Request) -> Any:
+def chat_page(request: Request):
     user_id = request.session.get("user_id")
     messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1133,13 +1132,13 @@ def chat_page(request: Request) -> Any:
 
 
 @app.get("/api/chat/history")
-def chat_history(request: Request) -> list[dict[str, Any]]:
+def chat_history(request: Request):
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
-def chat_clear(request: Request) -> dict[str, str]:
+def chat_clear(request: Request):
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
@@ -1150,18 +1149,14 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = request.session.get("user_id")
     config = get_config()
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
+    user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    history = get_progress_history(db_path=DB_PATH)
+    biometrics = get_body_metrics(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
 
     context = json.dumps(
         {
@@ -1205,16 +1200,16 @@ User's new message: {q}
 
 Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
 
-    def generate() -> Generator[str, None, None]:
+    def generate():
         collected: list[str] = []
         try:
-            stream = provider.generate(prompt, stream=True)
-            for chunk in stream:  # type: ignore[union-attr]
-                if chunk:
-                    collected.append(str(chunk))
-                    yield str(chunk)
+            response = provider.generate(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    collected.append(chunk.text)
+                    yield chunk.text
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Error during AI streaming: {e}")
+            logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
             collected.append(error_msg)
             yield error_msg
@@ -1222,9 +1217,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             # Save the full assistant response
             full_response = "".join(collected)
             if full_response:
-                save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
-                )
+                save_chat_message("assistant", full_response, db_path=DB_PATH, user_id=user_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -1237,14 +1230,14 @@ def _gh_redirect_uri(request: Request) -> str:
 @app.get("/settings")
 def settings(request: Request) -> Any:
     user_id = request.session.get("user_id")
-    user_keys: dict = {}
-    user_prefs: dict = {}
+    user_keys: dict[str, Any] = {}
+    user_prefs: dict[str, Any] = {}
     if user_id:
         user_keys = get_user_api_keys(user_id, db_path=DB_PATH)
         user_prefs = get_user_preferences(user_id, db_path=DB_PATH)
 
     # Mask keys for display (show last 4 chars only).
-    masked_keys: dict = {}
+    masked_keys: dict[str, Any] = {}
     for provider, data in user_keys.items():
         key = data.get("api_key", "")
         masked_keys[provider] = {
@@ -1261,7 +1254,7 @@ def settings(request: Request) -> Any:
         {
             "active": "settings",
             "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
-            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH)),
+            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id)),
             "gh_status": request.query_params.get("gh"),
             "user_keys": masked_keys,
             "user_prefs": user_prefs,
@@ -1275,6 +1268,7 @@ def settings(request: Request) -> Any:
 @app.post("/api/settings/key")
 async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1286,7 +1280,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
 
-    valid_providers = {"hevy", "gemini", "claude", "openai"}
+    valid_providers = {"hevy", "gemini", "claude", "openai", "deepseek"}
     if provider not in valid_providers:
         raise HTTPException(
             status_code=400,
@@ -1312,6 +1306,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
 @app.post("/api/settings/key/delete")
 async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1349,33 +1344,10 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/api/settings/sync-history")
-async def sync_history_endpoint(request: Request) -> dict[str, Any]:
-    """Rebuild local workout_history and exercise_progress from Hevy (one-off backfill)."""
-    _check_rate_limit(request, limit=2)
-    user_id = request.session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    from sync_history import sync_all
-
-    # Use the user's stored Hevy key, not the server env var.
-    key_info = get_user_api_keys(user_id, db_path=DB_PATH).get("hevy")
-    if not key_info or not str(key_info.get("api_key", "")):
-        raise HTTPException(
-            status_code=400,
-            detail="No Hevy API key configured. Add one in Settings first.",
-        )
-
-    result = sync_all(str(key_info["api_key"]), DB_PATH, user_id=user_id)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=str(result["error"]))
-    return {"status": "ok", **result}
-
-
 @app.post("/api/settings/preferences")
 async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
+    _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -1398,12 +1370,16 @@ async def save_preferences(request: Request) -> dict[str, str]:
 @app.get("/google-health/connect")
 def google_health_connect(request: Request) -> RedirectResponse:
     """Start the Google Health OAuth flow and redirect to the consent screen."""
+    _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+    user_id = request.session.get("user_id")
     state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH)
+    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
     url = build_authorize_url(
-        GH_CLIENT_ID, state, redirect_uri=_gh_redirect_uri(request)
+        GH_CLIENT_ID,
+        state,
+        redirect_uri=_gh_redirect_uri(request),
     )
     return RedirectResponse(url, status_code=303)
 
@@ -1415,25 +1391,34 @@ def google_health_callback(request: Request) -> RedirectResponse:
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
+    user_id = request.session.get("user_id")
     code = request.query_params.get("code")
     state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH)
-    set_meta(_GH_STATE_KEY, "", DB_PATH)  # one-time use, regardless of outcome
+    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
+    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
-        GH_CLIENT_ID, GH_CLIENT_SECRET, code, redirect_uri=_gh_redirect_uri(request)
+        GH_CLIENT_ID,
+        GH_CLIENT_SECRET,
+        code,
+        redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH)
+    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
 @app.post("/google-health/disconnect")
-def google_health_disconnect() -> RedirectResponse:
+def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH)
+<<<<<<< HEAD
+=======
+    _check_rate_limit(request, limit=5)
+>>>>>>> main
+    user_id = request.session.get("user_id")
+    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 

@@ -1,222 +1,204 @@
-"""Unified scheduler: replaces the bash sleep-loop and Python insight scheduler.
+"""Unified scheduler: replaces the bash sleep-loop in docker-entrypoint.sh and
+the Python sleep-loop in insight_scheduler.py with a single process that
+dispatches per-user daily coaching runs and insight generation at the
+configured times.
 
-Wakes every 60 seconds, checks each user's local time against the configured
-RUN_AT times, and dispatches due coaching runs (`main.py`) and insight jobs
-(`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is isolated so
-one user's failures do not block another's.
-
-Also runs the hourly dead-code & orphaned-module sweep (`dead_code_sweep.py`)
-once per hour to catch orphaned modules early.
-
-Designed to be the single long-running process inside the agent container.
-MODE=once / MODE=preview are handled by docker-entrypoint.sh before this
-scheduler is started.
+Supports MODE env var (schedule | once | preview) exactly as the entrypoint
+did, and reads RUN_AT / TZ for backward compatibility.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import sys
 import time
 from datetime import datetime
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
-from database import get_all_users, init_db
+from config import Config, ConfigError
+from database import init_db
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-logger: logging.Logger = logging.getLogger("scheduler")
+logger = logging.getLogger("scheduler")
 
-# ---------------------------------------------------------------------------
-# Time helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_run_at() -> list[str]:
-    """Parse the RUN_AT env var into a sorted list of HH:MM strings."""
-    raw = os.environ.get("RUN_AT", "07:00").strip()
-    times = raw.replace(",", " ").split()
-    times = sorted(t for t in times if t)
-    if not times:
-        times = ["07:00"]
-    return times
+_RUN_AT = os.environ.get("RUN_AT", "07:00")
+_TZ = os.environ.get("TZ", "UTC")
+_INSIGHT_DAILY_AT = os.environ.get("INSIGHT_DAILY_AT", "06:00")
+_INSIGHT_WEEKLY_AT = os.environ.get("INSIGHT_WEEKLY_AT", "08:00")
 
 
-def _now_in_tz(tz_name: str) -> datetime:
-    """Return the current datetime in the given timezone name."""
-    try:
-        return datetime.now(ZoneInfo(tz_name))
-    except (ZoneInfoNotFoundError, KeyError):
-        logger.warning("Invalid timezone '%s', falling back to UTC", tz_name)
-        return datetime.now(ZoneInfo("UTC"))
-
-
-def _is_due(user_tz: str, run_times: list[str]) -> bool:
-    """Check whether the current minute matches any configured run time."""
-    now = _now_in_tz(user_tz)
-    for hhmm in run_times:
+def _parse_times(raw: str) -> list[tuple[int, int]]:
+    """Parse comma/space-separated HH:MM strings into (hour, minute) pairs."""
+    pairs: list[tuple[int, int]] = []
+    for t in raw.replace(",", " ").split():
         try:
-            hour, minute = map(int, hhmm.split(":"))
-        except ValueError:
-            continue
-        if now.hour == hour and now.minute == minute:
-            return True
-    return False
+            h, m = t.strip().split(":")
+            pairs.append((int(h), int(m)))
+        except (ValueError, IndexError):
+            logger.warning("Ignoring unparseable time '%s'", t)
+    return pairs or [(7, 0)]
 
 
-# ---------------------------------------------------------------------------
-# Job dispatch
-# ---------------------------------------------------------------------------
+def _now_in_zone(tz_name: str) -> datetime:
+    """Return the current local time in the given timezone name."""
+    return datetime.now(tz=ZoneInfo(tz_name))
 
 
-def _run_coaching(user_id: str) -> bool:
-    """Run a single coaching cycle (main.py) for one user.  Returns True on success."""
-    logger.info("Running coaching cycle for user %s ...", user_id)
+def run_coaching(config: Config) -> int:
+    """Run the daily coaching message (main.py's run function)."""
+    from main import run as main_run
+
+    logger.info("Running daily coaching cycle...")
     try:
-        subprocess.run(
-            [sys.executable, "main.py"],
-            env={**os.environ, "SCHEDULER_USER_ID": user_id},
-            check=True,
-            timeout=600,
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error("Coaching run failed for user %s (exit %s)", user_id, e.returncode)
-        return False
-    except subprocess.TimeoutExpired:
-        logger.error("Coaching run timed out for user %s", user_id)
-        return False
+        return main_run(preview=False)
+    except Exception:
+        logger.exception("Daily coaching run failed.")
+        return 1
 
 
-def _run_insight_job(flag: str) -> bool:
-    """Run insight_cron.py with --daily or --weekly.  Returns True on success."""
-    label = flag.lstrip("-")
-    logger.info("Running %s insight job ...", label)
+def run_daily_insight(config: Config) -> None:
+    """Generate the daily dashboard insight header."""
+    from insight_cron import generate_daily_header
+
+    logger.info("Generating daily insight header...")
     try:
-        subprocess.run(
-            [sys.executable, "insight_cron.py", flag],
-            check=True,
-            timeout=300,
-        )
-        return True
-    except subprocess.CalledProcessError as e:
-        logger.error("%s insight job failed (exit %s)", label, e.returncode)
-        return False
-    except subprocess.TimeoutExpired:
-        logger.error("%s insight job timed out", label)
-        return False
+        generate_daily_header(config)
+    except Exception:
+        logger.exception("Daily insight generation failed.")
 
 
-def _run_dead_code_sweep() -> bool:
-    """Run the hourly dead-code & orphaned-module sweep.
+def run_weekly_correlations(config: Config) -> None:
+    """Generate weekly deep correlations."""
+    from insight_cron import generate_weekly_correlations
 
-    Uses ``--create-issues`` to file GitHub issues for any newly discovered
-    orphaned modules.  Returns True on success (exit 0 from the sweep).
+    logger.info("Generating weekly deep correlations...")
+    try:
+        generate_weekly_correlations(config)
+    except Exception:
+        logger.exception("Weekly correlations failed.")
+
+
+def run_once(config: Config) -> int:
+    """Run a full scheduled cycle: coaching, daily insight, and weekly (if Sunday)."""
+    logger.info("Running scheduled cycle...")
+    rc = run_coaching(config)
+    run_daily_insight(config)
+
+    now = _now_in_zone(_TZ)
+    if now.weekday() == 6:  # Sunday
+        run_weekly_correlations(config)
+    return rc
+
+
+def run_schedule(config: Config) -> None:
+    """Run forever, waking at the configured times to dispatch jobs.
+
+    This is the single loop that replaces both the bash sleep-loop in
+    docker-entrypoint.sh and the Python sleep-loop in insight_scheduler.py.
     """
-    logger.info("Running dead-code & orphaned-module sweep ...")
-    try:
-        subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--create-issues"],
-            check=False,  # exit 1 means orphans found, which is informational
-            timeout=120,
-        )
-        return True
-    except subprocess.TimeoutExpired:
-        logger.error("Dead-code sweep timed out")
-        return False
+    coaching_times = _parse_times(_RUN_AT)
+    insight_daily_times = _parse_times(_INSIGHT_DAILY_AT)
+    insight_weekly_times = _parse_times(_INSIGHT_WEEKLY_AT)
 
-
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
-
-
-def run_scheduler() -> None:
-    """Entry point: bootstrap, then loop forever dispatching due jobs."""
-    db_path = os.environ.get("DATABASE_PATH", "workout_agent.db")
-    init_db(db_path)
-
-    run_times = _parse_run_at()
-    default_tz = os.environ.get("TZ", "UTC")
     logger.info(
-        "Scheduler starting: RUN_AT=%s, default TZ=%s",
-        " ".join(run_times),
-        default_tz,
+        "Unified scheduler started: coaching at %s, daily insight at %s, "
+        "weekly insight at %s (TZ=%s).",
+        _RUN_AT,
+        _INSIGHT_DAILY_AT,
+        _INSIGHT_WEEKLY_AT,
+        _TZ,
     )
 
-    # Bootstrap: run once on startup so data is available immediately.
-    logger.info("Running bootstrap cycle...")
-    users = get_all_users(db_path)
-    for user in users:
-        try:
-            _run_coaching(user["id"])
-        except Exception:
-            logger.exception("Bootstrap coaching failed for user %s", user["id"])
-    _run_insight_job("--daily")
-    _run_insight_job("--weekly")
+    today = _now_in_zone(_TZ).date()
+    jobs_run: set[str] = set()
 
-    # Track which date we last ran the daily/weekly insight jobs on,
-    # so they fire at most once per UTC day / per Sunday.
-    last_daily_date: str = ""
-    last_weekly_date: str = ""
-    # Track the last hour we ran the dead-code sweep (fires once per hour).
-    last_sweep_hour: str = ""
+    def _reset_if_new_day() -> None:
+        nonlocal today, jobs_run
+        current = _now_in_zone(_TZ).date()
+        if current != today:
+            today = current
+            jobs_run.clear()
+            logger.info("New day: %s, rescheduling jobs.", today)
+
+    # Run once on startup
+    logger.info("Running initial boot cycle...")
+    run_once(config)
+    jobs_run.add("coaching")
+    jobs_run.add("insight_daily")
+    if _now_in_zone(_TZ).weekday() == 6:
+        jobs_run.add("insight_weekly")
+
+    logger.info(
+        "Entering main scheduler loop (wake interval: 30s). "
+        "Coaching: %s, Daily insight: %s, Weekly insight: %s.",
+        _RUN_AT,
+        _INSIGHT_DAILY_AT,
+        _INSIGHT_WEEKLY_AT,
+    )
 
     while True:
-        now_utc = datetime.now(ZoneInfo("UTC"))
+        _reset_if_new_day()
 
-        # --- Dead-code & orphaned-module sweep (fires once per hour) ---
-        current_hour = now_utc.strftime("%Y-%m-%dT%H")
-        if current_hour != last_sweep_hour:
-            try:
-                _run_dead_code_sweep()
-            except Exception:
-                logger.exception("Unhandled error in dead-code sweep")
-            last_sweep_hour = current_hour
+        now_local = _now_in_zone(_TZ)
+        now_h, now_m = now_local.hour, now_local.minute
 
-        # --- Per-user coaching runs ---
-        # Re-read users each loop so newly created accounts are picked up.
-        users = get_all_users(db_path)
-        for user in users:
-            tz = user.get("timezone") or default_tz
-            try:
-                if _is_due(tz, run_times):
-                    logger.info("User %s is due for coaching (tz=%s)", user["id"], tz)
-                    _run_coaching(user["id"])
-            except Exception:
-                logger.exception(
-                    "Unhandled error dispatching coaching for user %s", user["id"]
-                )
+        if "coaching" not in jobs_run:
+            for h, m in coaching_times:
+                if now_h == h and now_m == m:
+                    logger.info("Coaching time %02d:%02d triggered.", h, m)
+                    run_coaching(config)
+                    jobs_run.add("coaching")
+                    break
 
-        # --- Daily insight job (fires once per UTC day, at the earliest RUN_AT) ---
-        today_utc = now_utc.strftime("%Y-%m-%d")
-        if today_utc != last_daily_date:
-            earliest = run_times[0]
-            try:
-                h, m = map(int, earliest.split(":"))
-            except ValueError:
-                h, m = 7, 0
-            # Fire when the default-TZ RUN_AT has passed.
-            tz_now = _now_in_tz(default_tz)
-            if tz_now.hour >= h and tz_now.minute >= m:
-                _run_insight_job("--daily")
-                last_daily_date = today_utc
+        if "insight_daily" not in jobs_run:
+            for h, m in insight_daily_times:
+                if now_h == h and now_m == m:
+                    logger.info("Daily insight time %02d:%02d triggered.", h, m)
+                    run_daily_insight(config)
+                    jobs_run.add("insight_daily")
+                    break
 
-                # Weekly correlations on Sundays.
-                if now_utc.strftime("%A") == "Sunday":
-                    week_key = now_utc.strftime("%Y-%W")
-                    if week_key != last_weekly_date:
-                        _run_insight_job("--weekly")
-                        last_weekly_date = week_key
+        if "insight_weekly" not in jobs_run and now_local.weekday() == 6:
+            for h, m in insight_weekly_times:
+                if now_h == h and now_m == m:
+                    logger.info("Weekly insight time %02d:%02d triggered.", h, m)
+                    run_weekly_correlations(config)
+                    jobs_run.add("insight_weekly")
+                    break
 
-        # Sleep until the next minute boundary so we wake at :00 seconds.
-        sleep_secs = 60 - now_utc.second
-        time.sleep(max(1, sleep_secs))
+        time.sleep(30)
+
+
+def main(argv: list[str] | None = None) -> int:
+    mode = os.environ.get("MODE", "schedule").strip().lower()
+    logger.info("Mode: %s, RUN_AT: %s, TZ: %s", mode, _RUN_AT, _TZ)
+
+    try:
+        config = Config.load()
+        init_db(config.database_path)
+    except ConfigError as exc:
+        logger.error("%s", exc)
+        return 1
+
+    if mode == "once":
+        return run_once(config)
+    elif mode == "preview":
+        from main import run as main_run
+
+        return main_run(preview=True)
+    elif mode == "schedule":
+        run_schedule(config)
+        return 0
+    else:
+        logger.error(
+            "Unknown MODE '%s' -- use schedule, once, or preview.", mode
+        )
+        return 1
 
 
 if __name__ == "__main__":
-    run_scheduler()
+    sys.exit(main())

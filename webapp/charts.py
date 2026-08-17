@@ -44,7 +44,7 @@ def _nice_round(value: float) -> str:
 
 
 def line_chart(
-    points: Sequence[dict],
+    points: Sequence[dict[str, Any]],
     *,
     colour: str = ACCENT,
     unit: str = "",
@@ -91,11 +91,11 @@ def line_chart(
         gy = y(gv)
         grid.append(
             f'<line x1="{pad_l}" y1="{gy:.1f}" x2="{width - pad_r}" y2="{gy:.1f}" '
-            f'stroke="{GRID}" stroke-width="1"/>'
+            f'stroke="{GRID}" stroke-width="1"/>',
         )
         label_axis.append(
             f'<text x="{pad_l - 6}" y="{gy + 3:.1f}" text-anchor="end" '
-            f'class="svg-axis">{_nice_round(gv)}</text>'
+            f'class="svg-axis">{_nice_round(gv)}</text>',
         )
 
     first_date = _esc(pts[0]["date"])
@@ -149,7 +149,7 @@ def progress_ring(
 </svg>"""
 
 
-def donut(segments: Sequence[dict], *, size: int = 160) -> str:
+def donut(segments: Sequence[dict[str, Any]], *, size: int = 160) -> str:
     """A donut chart. ``segments`` = ``[{"label", "value", "colour"?}]``."""
     items = [s for s in segments if float(s.get("value", 0)) > 0]
     total = sum(float(s["value"]) for s in items)
@@ -170,13 +170,13 @@ def donut(segments: Sequence[dict], *, size: int = 160) -> str:
         arcs.append(
             f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{colour}" '
             f'stroke-width="{stroke}" stroke-dasharray="{dash:.2f} {circ:.2f}" '
-            f'stroke-dashoffset="{-offset:.2f}" transform="rotate(-90 {cx} {cy})"/>'
+            f'stroke-dashoffset="{-offset:.2f}" transform="rotate(-90 {cx} {cy})"/>',
         )
         offset += dash
         legend.append(
             f'<div class="legend-row"><span class="legend-dot" style="background:{colour}"></span>'
             f'<span class="legend-label">{_esc(seg["label"])}</span>'
-            f'<span class="legend-val">{_fmt(round(frac * 100))}%</span></div>'
+            f'<span class="legend-val">{_fmt(round(frac * 100))}%</span></div>',
         )
     svg = f"""<svg viewBox="0 0 {size} {size}" class="svg-donut" role="img">
   <circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{TRACK}" stroke-width="{stroke}"/>
@@ -213,12 +213,12 @@ def bar_chart(
         )
         labels.append(
             f'<text x="{x + bar_w / 2:.1f}" y="{height - 8}" text-anchor="middle" '
-            f'class="svg-axis">{_esc(b["label"])}</text>'
+            f'class="svg-axis">{_esc(b["label"])}</text>',
         )
         if bh > 18:
             labels.append(
                 f'<text x="{x + bar_w / 2:.1f}" y="{y - 4:.1f}" text-anchor="middle" '
-                f'class="svg-barval">{_nice_round(v)}</text>'
+                f'class="svg-barval">{_nice_round(v)}</text>',
             )
     return f"""<svg viewBox="0 0 {width} {height}" class="svg-chart" role="img" preserveAspectRatio="none">
   {"".join(rects)}
@@ -255,7 +255,7 @@ def calendar_heatmap(
     for d in range(7):
         if day_labels[d]:
             squares.append(
-                f'<text x="0" y="{22 + d * (cell + gap) + cell - 3}" class="svg-axis">{day_labels[d]}</text>'
+                f'<text x="0" y="{22 + d * (cell + gap) + cell - 3}" class="svg-axis">{day_labels[d]}</text>',
             )
     current = start
     col = 0
@@ -270,11 +270,11 @@ def calendar_heatmap(
         lvl = max(0, min(4, int(levels.get(iso, 0))))
         squares.append(
             f'<rect x="{x}" y="{y}" width="{cell}" height="{cell}" rx="3" '
-            f'fill="{palette[lvl]}"><title>{iso}</title></rect>'
+            f'fill="{palette[lvl]}"><title>{iso}</title></rect>',
         )
         if current.day <= 7 and current.month != last_month:
             month_marks.append(
-                f'<text x="{x}" y="14" class="svg-axis">{current.strftime("%b")}</text>'
+                f'<text x="{x}" y="14" class="svg-axis">{current.strftime("%b")}</text>',
             )
             last_month = current.month
         current += timedelta(days=1)
