@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import MagicMock
+import os
+from unittest.mock import MagicMock, patch
 
 from gemini_engine import (
     _build_autonomous_prompt,
@@ -13,6 +14,7 @@ from gemini_engine import (
     _fallback_plan,
     _fallback_rest_message,
     _format_history,
+    _server_gemini_provider,
     apply_autonomous_adjustments,
     generate_checkin_message,
     generate_next_workout,
@@ -63,34 +65,58 @@ def test_format_history_sorted_by_name() -> None:
 
 
 def test_build_prompt_includes_focus_and_week() -> None:
-    prompt = _build_prompt(day=1, week=3, block=BLOCKS[1],
-                           workout_summary=None, recovery=None, history=None,
-                           insights=None, last_plan=None)
+    prompt = _build_prompt(
+        day=1,
+        week=3,
+        block=BLOCKS[1],
+        workout_summary=None,
+        recovery=None,
+        history=None,
+        insights=None,
+        last_plan=None,
+    )
     assert "Week 3 of 12" in prompt
     assert "Block 1" in prompt
     assert "Day 1" in prompt
 
 
 def test_build_prompt_includes_coaching_rules() -> None:
-    prompt = _build_prompt(day=1, week=1, block=BLOCKS[1],
-                           workout_summary=None, recovery=None, history=None)
+    prompt = _build_prompt(
+        day=1,
+        week=1,
+        block=BLOCKS[1],
+        workout_summary=None,
+        recovery=None,
+        history=None,
+    )
     assert "Coaching rules" in prompt
 
 
 def test_build_prompt_includes_history_and_recovery() -> None:
     history = {"Deadlift": {"top_weight_kg": 100, "top_reps": 5}}
     recovery = {"sleep_hours": 7.5, "weight_kg": 82}
-    prompt = _build_prompt(day=1, week=1, block=BLOCKS[1],
-                           workout_summary=None, recovery=recovery,
-                           history=history)
+    prompt = _build_prompt(
+        day=1,
+        week=1,
+        block=BLOCKS[1],
+        workout_summary=None,
+        recovery=recovery,
+        history=history,
+    )
     assert "Deadlift: 100 kg x 5" in prompt
     assert '"sleep_hours": 7.5' in prompt
 
 
 def test_build_prompt_includes_last_plan() -> None:
-    prompt = _build_prompt(day=1, week=1, block=BLOCKS[1],
-                           workout_summary=None, recovery=None, history=None,
-                           last_plan="Yesterday's plan was great.")
+    prompt = _build_prompt(
+        day=1,
+        week=1,
+        block=BLOCKS[1],
+        workout_summary=None,
+        recovery=None,
+        history=None,
+        last_plan="Yesterday's plan was great.",
+    )
     assert "Yesterday's plan was great." in prompt
 
 
@@ -129,36 +155,42 @@ def _make_mock_provider(response_text: str, *, raise_error: bool = False) -> Mag
     return mock
 
 
-def test_generate_next_workout_success(monkeypatch) -> None:
+def test_generate_next_workout_success() -> None:
     mock_provider = _make_mock_provider(_fake_gemini_plan)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
-        api_key="test-key", model_name="gemini-pro",
-        day=1, week=3, block=BLOCKS[1],
+        api_key="test-key",
+        model_name="gemini-pro",
+        day=1,
+        week=3,
+        block=BLOCKS[1],
     )
     assert result == _fake_gemini_plan
     mock_provider.generate.assert_called_once()
 
 
-def test_generate_next_workout_empty_response_falls_back(monkeypatch) -> None:
+def test_generate_next_workout_empty_response_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
-        api_key="test-key", model_name="gemini-pro",
-        day=1, week=3, block=BLOCKS[1],
+        api_key="test-key",
+        model_name="gemini-pro",
+        day=1,
+        week=3,
+        block=BLOCKS[1],
     )
     assert "Back, Deadlifts & Chest - Week 3" in result
 
 
-def test_generate_next_workout_exception_falls_back(monkeypatch) -> None:
+def test_generate_next_workout_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
-        api_key="test-key", model_name="gemini-pro",
-        day=1, week=3, block=BLOCKS[1],
+        api_key="test-key",
+        model_name="gemini-pro",
+        day=1,
+        week=3,
+        block=BLOCKS[1],
     )
     assert "Back, Deadlifts & Chest - Week 3" in result
 
@@ -183,30 +215,28 @@ def test_build_rest_prompt_none_recovery() -> None:
 _fake_rest_message = "Rest up, champ. Recovery is key."
 
 
-def test_generate_rest_day_message_success(monkeypatch) -> None:
+def test_generate_rest_day_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_rest_message)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_rest_day_message(
-        api_key="test-key", model_name="gemini-pro",
+        api_key="test-key",
+        model_name="gemini-pro",
         recovery={"sleep_hours": 8},
     )
     assert result == _fake_rest_message
 
 
-def test_generate_rest_day_message_empty_falls_back(monkeypatch) -> None:
+def test_generate_rest_day_message_empty_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
-    result = generate_rest_day_message(api_key="test-key", model_name="gemini-pro")
+    result = generate_rest_day_message(provider=mock_provider)
     assert "rest day" in result.lower()
 
 
-def test_generate_rest_day_message_exception_falls_back(monkeypatch) -> None:
+def test_generate_rest_day_message_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
-    result = generate_rest_day_message(api_key="test-key", model_name="gemini-pro")
+    result = generate_rest_day_message(provider=mock_provider)
     assert "rest day" in result.lower()
 
 
@@ -228,8 +258,12 @@ def test_fallback_rest_message_is_non_empty() -> None:
 
 def test_build_checkin_prompt_includes_block_info() -> None:
     prompt = _build_checkin_prompt(
-        number=2, week=5, block=BLOCKS[2],
-        workouts_done=30, weeks=6, analysis_text="Bench is stalling.",
+        number=2,
+        week=5,
+        block=BLOCKS[2],
+        workouts_done=30,
+        weeks=6,
+        analysis_text="Bench is stalling.",
     )
     assert "Check-in number 2" in prompt.lower() or "check-in" in prompt.lower()
     assert "Week 5" in prompt
@@ -240,42 +274,51 @@ def test_build_checkin_prompt_includes_block_info() -> None:
 _fake_checkin = "Check-in 2: Block 2 (Strength)\nDeadlift progressing well.\nBench stalled.\nAdd 2.5 kg to deadlift.\nKeep pushing!"
 
 
-def test_generate_checkin_message_success(monkeypatch) -> None:
+def test_generate_checkin_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_checkin)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
-        api_key="test-key", model_name="gemini-pro",
-        number=2, week=5, block=BLOCKS[2],
-        workouts_done=30, weeks=6,
+        api_key="test-key",
+        model_name="gemini-pro",
+        number=2,
+        week=5,
+        block=BLOCKS[2],
+        workouts_done=30,
+        weeks=6,
         analysis_text="Bench is stalling.",
         fallback="Fallback check-in.",
     )
     assert result == _fake_checkin
 
 
-def test_generate_checkin_message_empty_falls_back(monkeypatch) -> None:
+def test_generate_checkin_message_empty_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
-        api_key="test-key", model_name="gemini-pro",
-        number=2, week=5, block=BLOCKS[2],
-        workouts_done=30, weeks=6,
+        api_key="test-key",
+        model_name="gemini-pro",
+        number=2,
+        week=5,
+        block=BLOCKS[2],
+        workouts_done=30,
+        weeks=6,
         analysis_text="Bench is stalling.",
         fallback="Fallback check-in.",
     )
     assert result == "Fallback check-in."
 
 
-def test_generate_checkin_message_exception_falls_back(monkeypatch) -> None:
+def test_generate_checkin_message_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
-        api_key="test-key", model_name="gemini-pro",
-        number=2, week=5, block=BLOCKS[2],
-        workouts_done=30, weeks=6,
+        api_key="test-key",
+        model_name="gemini-pro",
+        number=2,
+        week=5,
+        block=BLOCKS[2],
+        workouts_done=30,
+        weeks=6,
         analysis_text="Bench is stalling.",
         fallback="Fallback check-in.",
     )
@@ -308,63 +351,66 @@ def test_build_autonomous_prompt_catabolic() -> None:
     assert "catabolic" in prompt.lower()
 
 
-def test_apply_autonomous_adjustments_success(monkeypatch) -> None:
+def test_apply_autonomous_adjustments_success() -> None:
     updated = {"Push Day": [{"name": "Bench Press", "sets": 3}]}
     mock_provider = _make_mock_provider(json.dumps(updated))
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
-        api_key="test-key", model_name="gemini-pro",
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines={"Push Day": [{"name": "Bench Press", "sets": 4}]},
         hevy_logs=[],
     )
     assert result == updated
 
 
-def test_apply_autonomous_adjustments_strips_markdown(monkeypatch) -> None:
+def test_apply_autonomous_adjustments_strips_markdown() -> None:
     updated = {"Day 1": [{"name": "Squat", "sets": 3}]}
     mock_provider = _make_mock_provider(f"```json\n{json.dumps(updated)}\n```")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
-        api_key="test-key", model_name="gemini-pro",
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines={"Day 1": [{"name": "Squat", "sets": 4}]},
         hevy_logs=[],
     )
     assert result == updated
 
 
-def test_apply_autonomous_adjustments_non_dict_falls_back(monkeypatch) -> None:
+def test_apply_autonomous_adjustments_non_dict_falls_back() -> None:
     mock_provider = _make_mock_provider("[1, 2, 3]")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        api_key="test-key", model_name="gemini-pro",
-        base_routines=base, hevy_logs=[],
+        api_key="test-key",
+        model_name="gemini-pro",
+        base_routines=base,
+        hevy_logs=[],
     )
     assert result is base  # returned unchanged
 
 
-def test_apply_autonomous_adjustments_exception_falls_back(monkeypatch) -> None:
+def test_apply_autonomous_adjustments_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        api_key="test-key", model_name="gemini-pro",
-        base_routines=base, hevy_logs=[],
+        api_key="test-key",
+        model_name="gemini-pro",
+        base_routines=base,
+        hevy_logs=[],
     )
     assert result is base  # returned unchanged
 
 
-def test_apply_autonomous_adjustments_invalid_json_falls_back(monkeypatch) -> None:
+def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
     mock_provider = _make_mock_provider("not valid json {")
-    monkeypatch.setattr("gemini_engine.get_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        api_key="test-key", model_name="gemini-pro",
-        base_routines=base, hevy_logs=[],
+        api_key="test-key",
+        model_name="gemini-pro",
+        base_routines=base,
+        hevy_logs=[],
     )
     assert result is base
