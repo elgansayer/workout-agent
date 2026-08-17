@@ -284,8 +284,8 @@ def resolve_provider(
 
         if provider_name != "gemini":
             raise ValueError(
-                f"No {provider_name} key configured for this user. "
-                "Add one in Settings or switch back to Gemini."
+                f"No {provider_name} API key configured. "
+                "Add a key in Settings -> AI Providers."
             )
 
         # Fall through to server-fallback for the default provider.
