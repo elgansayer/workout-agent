@@ -60,4 +60,5 @@ def test_body_metrics_extracted_from_scale_reading() -> None:
         "body_fat_pct": 14.2,
         "muscle_pct": 47.5,
         "resting_hr": 58,
+        "hrv": None,
     }

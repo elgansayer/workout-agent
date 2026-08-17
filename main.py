@@ -16,18 +16,15 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any
 
 import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
-from ai_provider import AIProvider, resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
-    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
@@ -93,7 +90,7 @@ def _sync_hevy_routines(config: Config) -> list[str]:
         for status in statuses:
             logger.info("Hevy routine %s", status)
         return statuses
-    except Exception as exc:  # noqa: BLE001  # never let a sync issue block the daily message
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Hevy routine sync failed: %s", exc)
         return []
 
@@ -122,8 +119,8 @@ def _maybe_check_in(
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config, user_id=user_id)
-    except Exception as exc:  # noqa: BLE001  # a check-in must never block the daily message
+        due_info = checkin.due(config)
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
     if due_info is None:
@@ -240,21 +237,27 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(
-            body_metrics_from_recovery(recovery),
-            when,
-            config.database_path,
-            user_id=user_id,
+            body_metrics_from_recovery(recovery), when, config.database_path
         )
 
     _maybe_self_review(config, recovery, week, block, preview)
 
     day = today_day(today)
 
+    provider = resolve_provider(
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
+
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
+        provider = resolve_provider(server_gemini_key=config.gemini_api_key)
         message = generate_rest_day_message(
-            provider,
+            provider=provider,
             recovery=recovery,
+            server_gemini_key=config.gemini_api_key,
+            server_gemini_model=config.gemini_model,
+            db_path=config.database_path,
         )
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
@@ -300,8 +303,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             last_plan = log["plan"]
             break
 
+    provider = resolve_provider(server_gemini_key=config.gemini_api_key)
     plan = generate_next_workout(
-        provider,
+        provider=provider,
         day=day,
         week=week,
         block=block,
@@ -310,6 +314,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         history=history,
         insights=review,
         last_plan=last_plan,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)
@@ -338,12 +345,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--preview",
         action="store_true",
         help="Dry run: print the generated plan to stdout without sending Telegram.",
-    )
-    parser.add_argument(
-        "--sync-history",
-        action="store_true",
-        help="Rebuild local workout_history and exercise_progress from Hevy API "
-        "(one-off backfill). Requires HEVY_API_KEY.",
     )
     return parser.parse_args(argv)
 

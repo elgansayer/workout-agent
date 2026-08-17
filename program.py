@@ -20,32 +20,54 @@ BLOCK_WEEKS = 4
 
 # Non-negotiable coaching rules the agent must always honour.
 COACHING_RULES = [
-    "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "  # noqa: ISC004
-    "training everything else for hypertrophy.",
-    "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "  # noqa: ISC004
-    "intensity of the main lifts to the current block.",
-    "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "  # noqa: ISC004
-    "set the moment form or bar speed breaks down. Trap bar is a valid joint-friendly "
-    "deadlift swap.",
-    "Accessories: strict 3-second negative on every rep, taken close to failure. No "  # noqa: ISC004
-    "momentum.",
-    "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "  # noqa: ISC004
-    "press instead.",
+    (
+        "Hybrid powerbuilding: build the deadlift and pull-up for raw strength while "
+        "training everything else for hypertrophy."
+    ),
+    (
+        "Periodise in 4-week blocks (Accumulation, Intensification, Peaking). Match the "
+        "intensity of the main lifts to the current block."
+    ),
+    (
+        "Main lifts (deadlift, pull-up): brace hard, keep a neutral spine, and stop a "
+        "set the moment form or bar speed breaks down. Trap bar is a valid joint-friendly "
+        "deadlift swap."
+    ),
+    (
+        "Accessories: strict 3-second negative on every rep, taken close to failure. No "
+        "momentum."
+    ),
+    (
+        "No Bulgarian split squats (bad toes). Use leg extensions or the flat-foot leg "
+        "press instead."
+    ),
     "No stomach vacuums. Train abs for mass with progressive overload.",
-    "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "  # noqa: ISC004
-    "the shoulders and elbows (Thai boxing and bouldering add load).",
-    "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "  # noqa: ISC004
-    "six-pack needs a sustained caloric deficit.",
-    "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "  # noqa: ISC004
-    "days (about 70% around the workout), moderate on leg days, low carb with higher "
-    "healthy fats on the lighter upper days and rest days.",
-    "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "  # noqa: ISC004
-    "20-30 min of joint-friendly Zone 2 (stationary bike or swim) three to four times "
-    "a week. No stair-master or running (bad toes).",
-    "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "  # noqa: ISC004
-    "joints, and Magnesium Glycinate before bed.",
-    "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "  # noqa: ISC004
-    "top deadlift and pull-up set each week.",
+    (
+        "Favour lateral and rear-delt isolation over heavy overhead pressing to protect "
+        "the shoulders and elbows (Thai boxing and bouldering add load)."
+    ),
+    (
+        "Keep protein static at roughly 2.2 g per kg of bodyweight every day; a visible "
+        "six-pack needs a sustained caloric deficit."
+    ),
+    (
+        "Cycle carbohydrates with training load: high carbs on heavy deadlift and back "
+        "days (about 70% around the workout), moderate on leg days, low carb with higher "
+        "healthy fats on the lighter upper days and rest days."
+    ),
+    (
+        "Burn fat with movement, not by frying recovery: 10-12k steps a day (NEAT) plus "
+        "20-30 min of joint-friendly Zone 2 (stationary bike or swim) three to four times "
+        "a week. No stair-master or running (bad toes)."
+    ),
+    (
+        "Protect the central nervous system: 8 hours of sleep minimum, Omega-3 for the "
+        "joints, and Magnesium Glycinate before bed."
+    ),
+    (
+        "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "
+        "top deadlift and pull-up set each week."
+    ),
     "Use British English spelling (e.g. programme). Never use the em dash.",
 ]
 
@@ -172,25 +194,13 @@ def week_in_cycle(start: date, today: date | None = None) -> int:
 # Accessory pools. Main lifts are added on top of the back day per block.
 _BACK_DL_CHEST = [
     Exercise(
-        "Incline Dumbbell Flyes",
-        4,
-        "12-15",
-        "pre-exhaust upper chest",
-        "D3E2AB55",
+        "Incline Dumbbell Flyes", 4, "12-15", "pre-exhaust upper chest", "D3E2AB55"
     ),
     Exercise(
-        "Incline Smith Machine Press",
-        3,
-        "10-12",
-        "focus on the top half",
-        "3A6FA3D1",
+        "Incline Smith Machine Press", 3, "10-12", "focus on the top half", "3A6FA3D1"
     ),
     Exercise(
-        "Chest-Supported T-Bar Rows",
-        3,
-        "10-12",
-        "mid-back thickness",
-        "08A2974E",
+        "Chest-Supported T-Bar Rows", 3, "10-12", "mid-back thickness", "08A2974E"
     ),
 ]
 
@@ -198,18 +208,10 @@ _SHOULDERS_ARMS = [
     Exercise("Cable Lateral Raises", 5, "15-20", "maximum shoulder width", "BE289E45"),
     Exercise("Reverse Pec Deck Flyes", 4, "15", "rear delts", "D8281C62"),
     Exercise(
-        "Incline Dumbbell Curls",
-        4,
-        "12",
-        "deep stretch, bicep long head",
-        "8BAB2735",
+        "Incline Dumbbell Curls", 4, "12", "deep stretch, bicep long head", "8BAB2735"
     ),
     Exercise(
-        "Tricep Overhead Cable Extensions",
-        4,
-        "12-15",
-        "triceps long head",
-        "B5EFBF9C",
+        "Tricep Overhead Cable Extensions", 4, "12-15", "triceps long head", "B5EFBF9C"
     ),
     Exercise("Reverse-Grip Cable Curls", 3, "15", "brachialis and forearm", "9F48F858"),
 ]
@@ -225,19 +227,11 @@ _LEGS_ABS = [
         "75A4F6C4",
     ),
     Exercise(
-        "Leg Press Calf Raises",
-        4,
-        "15-20",
-        "feet flat, gastrocnemius",
-        "91237BDD",
+        "Leg Press Calf Raises", 4, "15-20", "feet flat, gastrocnemius", "91237BDD"
     ),
     Exercise("Hanging Leg Raises", 4, "12-15", "lower abs", "F8356514"),
     Exercise(
-        "Kneeling Cable Crunches",
-        4,
-        "10-12",
-        "upper abs, heavy resistance",
-        "23A48484",
+        "Kneeling Cable Crunches", 4, "10-12", "upper abs, heavy resistance", "23A48484"
     ),
 ]
 

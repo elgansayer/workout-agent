@@ -1,16 +1,16 @@
 """Internal progressive-overload web app (FastAPI).
 
 A self-hosted dashboard for the workout agent. It reads the same SQLite database
-the agent writes and renders a rich control centre: today's session and
+the agent writes and renders it as a rich control centre: today's session and
 progressive-overload targets, server-rendered SVG charts of every lift and your
 body composition, all-time personal records, training-load trends, a consistency
-calendar, the full periodisation plan, programme check-ins, and an AI-driven
-chat assistant.
+calendar, the full periodisation plan, and programme check-ins.
 
-When `WEB_AUTH_SECRET`, `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`
-are set, Google OAuth login is active and every page requires authentication.
-Without those variables the dashboard runs without auth — useful behind a
-reverse proxy with its own basic auth or on a trusted network.
+Google OAuth login is available when WEB_AUTH_SECRET is configured, providing
+user-scoped data isolation. When auth is disabled, it is read-only and meant to
+sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
+gym.example.com). All motivation is automated; nothing here calls out to an API
+on a page view.
 
 Run locally:   uvicorn webapp.app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
@@ -23,16 +23,13 @@ import json
 import logging
 import os
 import secrets
-from collections.abc import AsyncIterator, Generator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-if TYPE_CHECKING:
-    from programme_inference import InferredProgramme
-
+import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
@@ -49,13 +46,11 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers, resolve_provider
+from ai_provider import available_providers
 from config import Config
 from database import (
-    check_rate_limit,
     clear_chat_messages,
     delete_user_api_key,
-    get_active_programme,
     get_body_metrics,
     get_chat_messages,
     get_checkins,
@@ -66,7 +61,6 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
-    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -78,7 +72,6 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from google_health_auth import build_authorize_url, exchange_code
@@ -102,24 +95,39 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-def get_config() -> Config:
+
+def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
+    user_id = request.session.get("user_id") if hasattr(request, "session") else None
+    return resolve_provider(
+        user_id=user_id,
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+    )
+
+
+def get_config():
     return Config.load()
 
 
-def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+_RATE_LIMITS: dict[str, list[float]] = {}
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    ip = _client_ip(request)
-    if check_rate_limit(ip, limit, window, db_path=DB_PATH):
+    now = time.time()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    elif request.headers.get("x-real-ip"):
+        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
+    else:
+        ip = request.client.host if request.client else "unknown"
+
+    if ip not in _RATE_LIMITS:
+        _RATE_LIMITS[ip] = []
+    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
+    if len(_RATE_LIMITS[ip]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -314,10 +322,7 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(
-    series: dict[str, Any],
-    *keywords: str,
-) -> tuple[str | None, list[Any]]:
+def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
@@ -363,7 +368,7 @@ def _format_best(best: dict[str, Any] | None) -> str:
     return "No data yet"
 
 
-def _training_levels(*, user_id: str | None = None) -> dict[str, int]:
+def _training_levels(user_id: str | None = None) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
     for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
@@ -387,14 +392,10 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(
-    today: date | None = None,
-    *,
-    user_id: str | None = None,
-) -> dict[str, Any]:
+def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    start = get_programme_start_date(DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
     bests = get_recent_bests(DB_PATH, user_id=user_id)
@@ -501,17 +502,15 @@ def _dashboard_context(
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH),
     }
 
 
 @app.get("/")
-def dashboard(request: Request) -> Any:
+def dashboard(request: Request):
     user_id = request.session.get("user_id")
     return templates.TemplateResponse(
-        request,
-        "dashboard.html",
-        _dashboard_context(user_id=user_id),
+        request, "dashboard.html", _dashboard_context(user_id=user_id)
     )
 
 
@@ -530,9 +529,9 @@ def progress(request: Request) -> Any:
             }
             for e in entries
         ]
-        e1rms_raw = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms: list[float] = [v for v in e1rms_raw if v is not None]
-        best_e1rm = max(e1rms) if e1rms else None
+        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
+        e1rms_filtered = [v for v in e1rms if v is not None]
+        best_e1rm: float | None = max(e1rms_filtered) if e1rms_filtered else None
         charts_data.append(
             {
                 "name": name,
@@ -552,7 +551,7 @@ def progress(request: Request) -> Any:
     )
 
 
-def _body_charts(*, user_id: str | None = None) -> dict[str, Any]:
+def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
@@ -574,13 +573,13 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, Any]:
 
 
 @app.get("/stats")
-def stats(request: Request) -> Any:
+def stats(request: Request):
     user_id = request.session.get("user_id")
-    volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    volumes = get_session_volumes(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH, user_id=user_id)
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
+    series = get_progress_history(db_path=DB_PATH)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
@@ -606,7 +605,7 @@ def stats(request: Request) -> Any:
         [
             {"label": g, "value": v}
             for g, v in sorted(groups.items(), key=lambda kv: -kv[1])
-        ],
+        ]
     )
 
     # Session-load trend over the most recent sessions.
@@ -639,14 +638,14 @@ def stats(request: Request) -> Any:
         score = analytics.dots_score(bw, e1rm)
         if score:
             dots_points.append(
-                {"date": e["date"][5:], "value": score, "label": f"{score:g}"},
+                {"date": e["date"][5:], "value": score, "label": f"{score:g}"}
             )
         ratio_points.append(
             {
                 "date": e["date"][5:],
                 "value": round(e1rm / bw, 2),
                 "label": f"{e1rm / bw:.2f}x",
-            },
+            }
         )
     dots_chart = (
         charts.line_chart(dots_points, colour=charts.PURPLE)
@@ -704,11 +703,7 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str,
-    entries: list[Any],
-    target_ordinal: int,
-    *,
-    metric: str = "auto",
+    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
@@ -744,16 +739,9 @@ def _project_lift(
 
 
 @app.get("/plan")
-def plan(request: Request) -> Any:
-    user_id = request.session.get("user_id")
+def plan(request: Request):
     today = datetime.now(tz=timezone.utc).date()
-
-    # Check for a user-selected active programme first.
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    if active and active.get("definition"):
-        return _render_active_plan(request, active, today)
-
-    week = week_in_cycle(get_programme_start_date(DB_PATH, user_id=user_id), today)
+    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
 
@@ -1042,7 +1030,7 @@ def _run_hevy_inference(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/history")
-def history(request: Request) -> Any:
+def history(request: Request):
     user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1081,6 +1069,7 @@ def checkins(request: Request) -> Any:
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
+    user_id = request.session.get("user_id")
     # context_id is expected to be {date}_{exercise_name}
     user_id = request.session.get("user_id")
 
@@ -1095,53 +1084,44 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = (
-        str(provider.generate(prompt)).strip() or "Could not determine reasoning."
-    )
+    response = model.generate_content(prompt)
+    reasoning = (response.text or "Could not determine reasoning.").strip()
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}
 
 
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    config = get_config()
     user_id = request.session.get("user_id")
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    config = get_config()
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
 
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = response.text.strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
-        result: dict[str, Any] = json.loads(text.strip())
-        return result
+        return json.loads(text.strip())
     except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
 
 
 @app.get("/chat")
-def chat_page(request: Request) -> Any:
+def chat_page(request: Request):
     user_id = request.session.get("user_id")
     messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
     return templates.TemplateResponse(
@@ -1152,15 +1132,13 @@ def chat_page(request: Request) -> Any:
 
 
 @app.get("/api/chat/history")
-def chat_history(request: Request) -> list[dict[str, Any]]:
-    _check_rate_limit(request)
+def chat_history(request: Request):
     user_id = request.session.get("user_id")
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
-def chat_clear(request: Request) -> dict[str, str]:
-    _check_rate_limit(request, limit=5)
+def chat_clear(request: Request):
     user_id = request.session.get("user_id")
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
@@ -1171,18 +1149,14 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = request.session.get("user_id")
     config = get_config()
-    provider = resolve_provider(
-        user_id,
-        db_path=DB_PATH,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
+    provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
+    user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    history = get_progress_history(db_path=DB_PATH)
+    biometrics = get_body_metrics(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
 
     context = json.dumps(
         {
@@ -1226,16 +1200,16 @@ User's new message: {q}
 
 Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
 
-    def generate() -> Generator[str, None, None]:
+    def generate():
         collected: list[str] = []
         try:
-            stream = provider.generate(prompt, stream=True)
-            for chunk in stream:
-                if chunk:
-                    collected.append(str(chunk))
-                    yield str(chunk)
+            response = provider.generate(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    collected.append(chunk.text)
+                    yield chunk.text
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Error during AI streaming: {e}")
+            logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
             collected.append(error_msg)
             yield error_msg
@@ -1243,12 +1217,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             # Save the full assistant response
             full_response = "".join(collected)
             if full_response:
-                save_chat_message(
-                    "assistant",
-                    full_response,
-                    db_path=DB_PATH,
-                    user_id=user_id,
-                )
+                save_chat_message("assistant", full_response, db_path=DB_PATH, user_id=user_id)
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -1373,30 +1342,6 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
         "status": "error",
         "detail": "Could not connect to Hevy. Check the API key.",
     }
-
-
-@app.post("/api/settings/sync-history")
-async def sync_history_endpoint(request: Request) -> dict[str, Any]:
-    """Rebuild local workout_history and exercise_progress from Hevy (one-off backfill)."""
-    _check_rate_limit(request, limit=2)
-    user_id = request.session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    from sync_history import sync_all
-
-    # Use the user's stored Hevy key, not the server env var.
-    key_info = get_user_api_keys(user_id, db_path=DB_PATH).get("hevy")
-    if not key_info or not str(key_info.get("api_key", "")):
-        raise HTTPException(
-            status_code=400,
-            detail="No Hevy API key configured. Add one in Settings first.",
-        )
-
-    result = sync_all(str(key_info["api_key"]), DB_PATH, user_id=user_id)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=str(result["error"]))
-    return {"status": "ok", **result}
 
 
 @app.post("/api/settings/preferences")
