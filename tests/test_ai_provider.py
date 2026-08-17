@@ -68,7 +68,7 @@ def test_available_providers_returns_all() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture  # type: ignore[untyped-decorator]
+@pytest.fixture
 def fake_calls(monkeypatch: MonkeyPatch) -> list[tuple[str, str, str | None]]:
     """Patch ai_provider.get_provider to record calls and return a GeminiProvider."""
     calls: list[tuple[str, str, str | None]] = []
