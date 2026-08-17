@@ -13,7 +13,7 @@ import sqlite3
 from collections.abc import Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
