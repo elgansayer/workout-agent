@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from insight_cron import generate_daily_header, generate_weekly_correlations
 
@@ -13,7 +16,7 @@ from insight_cron import generate_daily_header, generate_weekly_correlations
 
 
 class _FakeConfig:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path: Path) -> None:
         self.database_path = str(tmp_path / "test_cron.db")
         self.gemini_api_key = "server-gemini-key"
         self.gemini_model = "gemini-2.5-flash"
@@ -24,18 +27,25 @@ class _FakeConfig:
 # ---------------------------------------------------------------------------
 
 
-def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_saves_valid_json(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     # Mock the AI provider to return valid insight JSON
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = json.dumps({
-        "fatigue": "Green",
-        "wins_stalls": "All lifts progressing",
-        "advice": "Keep pushing",
-    })
+    fake_provider.generate.return_value = json.dumps(
+        {
+            "fatigue": "Green",
+            "wins_stalls": "All lifts progressing",
+            "advice": "Keep pushing",
+        }
+    )
     fake_provider.name.return_value = "Gemini (test)"
 
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr(
         "insight_cron.resolve_provider",
         lambda **kw: fake_provider,
@@ -46,7 +56,7 @@ def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
 
     # Mock save
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_dashboard_insight",
         lambda payload, **kw: saved.append(payload),
@@ -60,17 +70,22 @@ def test_generate_daily_header_saves_valid_json(monkeypatch, tmp_path) -> None:
     assert parsed["advice"] == "Keep pushing"
 
 
-def test_generate_daily_header_strips_markdown_code_blocks(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_strips_markdown_code_blocks(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.return_value = '```json\n{"fatigue": "Yellow", "wins_stalls": "Okay", "advice": "Recover"}\n```'
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_dashboard_insight",
         lambda payload, **kw: saved.append(payload),
@@ -82,17 +97,22 @@ def test_generate_daily_header_strips_markdown_code_blocks(monkeypatch, tmp_path
     assert parsed["fatigue"] == "Yellow"
 
 
-def test_generate_daily_header_invalid_json_structure_not_saved(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_invalid_json_structure_not_saved(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.return_value = '{"missing": "fields"}'
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_dashboard_insight",
         lambda payload, **kw: saved.append(payload),
@@ -102,11 +122,16 @@ def test_generate_daily_header_invalid_json_structure_not_saved(monkeypatch, tmp
     assert len(saved) == 0  # nothing persisted on bad structure
 
 
-def test_generate_daily_header_exception_is_handled(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_exception_is_handled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.side_effect = RuntimeError("Boom")
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
@@ -115,34 +140,41 @@ def test_generate_daily_header_exception_is_handled(monkeypatch, tmp_path) -> No
     generate_daily_header(config)  # type: ignore[arg-type]
 
 
-def test_generate_daily_header_filters_by_date_cutoff(monkeypatch, tmp_path) -> None:
+def test_generate_daily_header_filters_by_date_cutoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = json.dumps({
-        "fatigue": "Green",
-        "wins_stalls": "Good",
-        "advice": "Go",
-    })
+    fake_provider.generate.return_value = json.dumps(
+        {
+            "fatigue": "Green",
+            "wins_stalls": "Good",
+            "advice": "Go",
+        }
+    )
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
 
     # Metrics with various dates; only last 7 days should be passed to the prompt
-    body_metrics_calls = []
-    daily_logs_calls = []
+    body_metrics_calls: list[int] = []
+    daily_logs_calls: list[int] = []
 
-    def _fake_body_metrics(**kw):
+    def _fake_body_metrics(**kw: object) -> list[dict[str, str]]:
         body_metrics_calls.append(1)
         return [{"date": "2026-08-01"}]
 
-    def _fake_daily_logs(**kw):
+    def _fake_daily_logs(**kw: object) -> list[dict[str, str]]:
         daily_logs_calls.append(1)
         return [{"date": "2026-08-01"}]
 
     monkeypatch.setattr("insight_cron.get_body_metrics", _fake_body_metrics)
     monkeypatch.setattr("insight_cron.get_daily_logs", _fake_daily_logs)
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_dashboard_insight",
         lambda payload, **kw: saved.append(payload),
@@ -157,18 +189,25 @@ def test_generate_daily_header_filters_by_date_cutoff(monkeypatch, tmp_path) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_generate_weekly_correlations_saves_markdown(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_saves_markdown(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
-    fake_provider.generate.return_value = "## Correlation Report\n\nPull-ups stall after poor sleep."
+    fake_provider.generate.return_value = (
+        "## Correlation Report\n\nPull-ups stall after poor sleep."
+    )
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_progress_history", lambda **kw: {})
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_deep_correlation",
         lambda markdown, **kw: saved.append(markdown),
@@ -179,18 +218,23 @@ def test_generate_weekly_correlations_saves_markdown(monkeypatch, tmp_path) -> N
     assert "Pull-ups stall" in saved[0]
 
 
-def test_generate_weekly_correlations_empty_response_not_saved(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_empty_response_not_saved(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.return_value = ""
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_progress_history", lambda **kw: {})
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_deep_correlation",
         lambda markdown, **kw: saved.append(markdown),
@@ -200,11 +244,16 @@ def test_generate_weekly_correlations_empty_response_not_saved(monkeypatch, tmp_
     assert len(saved) == 0
 
 
-def test_generate_weekly_correlations_exception_is_handled(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_exception_is_handled(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.side_effect = RuntimeError("Boom")
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
@@ -214,12 +263,17 @@ def test_generate_weekly_correlations_exception_is_handled(monkeypatch, tmp_path
     generate_weekly_correlations(config)  # type: ignore[arg-type]
 
 
-def test_generate_weekly_correlations_filters_history_by_date(monkeypatch, tmp_path) -> None:
+def test_generate_weekly_correlations_filters_history_by_date(
+    monkeypatch, tmp_path
+) -> None:
     config = _FakeConfig(tmp_path)
 
     fake_provider = MagicMock()
     fake_provider.generate.return_value = "## Report\nLooking good."
     fake_provider.name.return_value = "Gemini (test)"
+    monkeypatch.setattr(
+        "insight_cron._resolve_insight_user", lambda path: "test-user-id"
+    )
     monkeypatch.setattr("insight_cron.resolve_provider", lambda **kw: fake_provider)
     monkeypatch.setattr("insight_cron.get_body_metrics", lambda **kw: [])
     monkeypatch.setattr("insight_cron.get_daily_logs", lambda **kw: [])
@@ -227,10 +281,12 @@ def test_generate_weekly_correlations_filters_history_by_date(monkeypatch, tmp_p
     # All history entries are newer than 60 days ago, should all be included
     monkeypatch.setattr(
         "insight_cron.get_progress_history",
-        lambda **kw: {"Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]},
+        lambda **kw: {
+            "Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]
+        },
     )
 
-    saved = []
+    saved: list[str] = []
     monkeypatch.setattr(
         "insight_cron.save_deep_correlation",
         lambda markdown, **kw: saved.append(markdown),
