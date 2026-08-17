@@ -21,6 +21,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from ai_provider import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -259,6 +260,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             server_gemini_model=config.gemini_model,
             db_path=config.database_path,
         )
+        message = generate_rest_day_message(provider, recovery=recovery)
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
             if config.lifestyle_enabled
