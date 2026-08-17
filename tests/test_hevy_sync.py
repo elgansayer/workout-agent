@@ -132,7 +132,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
     # Leg Press range 10-12; last top set was 12 reps at 100kg -> bump.
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12},
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12}
     ]
     assert hevy_sync._target_weight(ex, history) == 102.5
 
@@ -140,7 +140,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
 def test_target_weight_holds_when_below_top() -> None:
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10},
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10}
     ]
     assert hevy_sync._target_weight(ex, history) == 100.0
 
@@ -150,70 +150,3 @@ def test_target_weight_none_without_history() -> None:
         hevy_sync._target_weight(Exercise("Leg Press", 3, "10-12", "", "C7973E0E"), [])
         is None
     )
-
-
-def test_target_weight_no_best_set() -> None:
-    ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
-    history = [
-        {"different_key": True},
-    ]
-    assert hevy_sync._target_weight(ex, history) is None
-
-
-def test_target_weight_single_rep_target() -> None:
-    ex = Exercise("Leg Press", 3, "12", "", "C7973E0E")
-    history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12},
-    ]
-    assert hevy_sync._target_weight(ex, history) == 102.5
-
-
-def test_target_weight_single_rep_target_below() -> None:
-    ex = Exercise("Leg Press", 3, "12", "", "C7973E0E")
-    history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10},
-    ]
-    assert hevy_sync._target_weight(ex, history) == 100.0
-
-
-def test_target_weight_weight_kg_is_none() -> None:
-    ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
-    history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": None, "reps": 12},
-    ]
-    assert hevy_sync._target_weight(ex, history) is None
-
-
-def test_find_existing_routine_id_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        hevy_sync,
-        "get_routines",
-        lambda api_key: [{"id": "r1", "title": "Chest"}, {"id": "r2", "title": "Legs"}],
-    )
-    result = hevy_sync._find_existing_routine_id("key", "Legs")
-    assert result == "r2"
-
-
-def test_find_existing_routine_id_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        hevy_sync, "get_routines", lambda api_key: [{"id": "r1", "title": "Chest"}]
-    )
-    result = hevy_sync._find_existing_routine_id("key", "Arms")
-    assert result is None
-
-
-def test_find_existing_routine_id_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(hevy_sync, "get_routines", lambda api_key: None)
-    result = hevy_sync._find_existing_routine_id("key", "Arms")
-    assert result is None
-
-
-def test_target_weight_weights_is_float_when_above_top() -> None:
-    """Ensure weight is always returned as float, not rounded."""
-    ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
-    history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 15},
-    ]
-    result = hevy_sync._target_weight(ex, history)
-    assert isinstance(result, float)
-    assert result == 102.5

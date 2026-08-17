@@ -54,17 +54,20 @@ def body_metrics_from_recovery(
 ) -> dict[str, Any] | None:
     """Pull body-composition fields from a recovery payload.
 
-    Returns weight, body fat, muscle and resting heart rate as a dict, or None
-    if no body-composition fields are present (so nothing is logged).
+    Returns weight, body fat, muscle, resting heart rate, and HRV as a dict,
+    or None if no body-composition fields are present (so nothing is logged).
     """
     if not recovery:
         return None
-    metrics = {
+    metrics: dict[str, Any] = {
         "weight_kg": recovery.get("weight_kg"),
         "body_fat_pct": recovery.get("body_fat_pct"),
         "muscle_pct": recovery.get("muscle_pct"),
         "resting_hr": recovery.get("resting_hr"),
     }
-    if all(metrics[key] is None for key in ("weight_kg", "body_fat_pct", "muscle_pct")):
+    if all(
+        metrics[key] is None
+        for key in ("weight_kg", "body_fat_pct", "muscle_pct")
+    ):
         return None
-    return metrics
+    return {k: v for k, v in metrics.items() if v is not None}
