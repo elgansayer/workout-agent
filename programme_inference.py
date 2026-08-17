@@ -217,7 +217,6 @@ def _classify_split(days: list[TrainingDay]) -> str:
     if specific_days >= len(days) * 0.7 and len(days) >= 4:
         return "bro_split"
 
-
     return "custom"
 
 

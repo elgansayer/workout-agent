@@ -1735,8 +1735,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units "
-            "FROM users"
+            "SELECT id, email, display_name, created_at, timezone, units FROM users"
         ).fetchall()
     return [
         {
