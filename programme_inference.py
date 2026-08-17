@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from hevy_reader import (
     CompletedWorkout,
@@ -72,7 +72,7 @@ class InferredProgramme:
     # Frequency analysis.
     sessions_per_week: float = 0.0
     muscle_frequency: dict[str, float] = field(
-        default_factory=dict,
+        default_factory=dict
     )  # muscle -> sessions/week
 
     # Training history stats.
@@ -169,22 +169,28 @@ def _classify_split(days: list[TrainingDay]) -> str:
     if full_body_days >= len(days) * 0.6:
         return "full_body"
 
-    # Upper/Lower: at least one day mixes push AND pull ("true upper"
-    # day), at least one day is legs-only, and together these account for
-    # most of the programme.  Requiring a mixed push+pull day prevents
-    # falsely matching PPL or bro splits (where each day is single-category).
-    mixed_upper = sum(
-        1 for cats in day_categories
-        if "push" in cats and "pull" in cats and "legs" not in cats
+    # PPL: distinct push, pull, and legs days.
+    has_push = any(
+        "push" == max(cats, key=lambda c: c, default="")
+        for cats in day_categories
+        if "push" in cats
     )
-    lower_only = sum(
-        1 for cats in day_categories
-        if "legs" in cats and "push" not in cats and "pull" not in cats
+    has_pull = any("pull" in cats for cats in day_categories)
+    has_legs = any("legs" in cats for cats in day_categories)
+    if has_push and has_pull and has_legs and len(days) >= 3:
+        return "push_pull_legs"
+
+    # Upper/Lower: days are either upper or lower focused.
+    upper_count = sum(
+        1 for cats in day_categories if cats & {"push", "pull"} and not cats & {"legs"}
+    )
+    lower_count = sum(
+        1 for cats in day_categories if cats & {"legs"} and not cats & {"push", "pull"}
     )
     if (
-        mixed_upper > 0
-        and lower_only > 0
-        and mixed_upper + lower_only >= len(days) * 0.7
+        upper_count > 0
+        and lower_count > 0
+        and upper_count + lower_count >= len(days) * 0.7
     ):
         return "upper_lower"
 

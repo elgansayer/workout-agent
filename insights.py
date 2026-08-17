@@ -93,7 +93,7 @@ class RecoveryInsight:
             bits.append(f"Body fat {self.body_fat_pct:g}%{trend}.")
         if self.is_catabolic:
             bits.append(
-                "CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight.",
+                "CATABOLIC STATE DETECTED. Muscle mass dropping disproportionately to weight."
             )
         bits.append(f"Directive: {self.directive}")
         return " ".join(bits)
@@ -207,9 +207,7 @@ def _sessions_since_best(scores: Sequence[float]) -> int | None:
 
 
 def _intervention(
-    trend: str,
-    since_best: int | None,
-    recovery_status: str,
+    trend: str, since_best: int | None, recovery_status: str
 ) -> str | None:
     """Suggest a concrete change for a lift that is not progressing."""
     if trend == "progressing" or trend == "new":
@@ -225,9 +223,7 @@ def _intervention(
 
 
 def analyse_lift(
-    name: str,
-    entries: Sequence[dict[str, Any]],
-    recovery_status: str = "unknown",
+    name: str, entries: Sequence[dict[str, Any]], recovery_status: str = "unknown"
 ) -> LiftInsight:
     """Build a trend judgement for one exercise from its logged top sets."""
     scores, metric = _series_scores(entries)
@@ -252,7 +248,7 @@ def analyse_lift(
 
 
 def _trend_of(
-    values: Sequence[float | None], rising_is: str, falling_is: str, tol: float
+    values: Sequence[float], rising_is: str, falling_is: str, tol: float
 ) -> str | None:
     """Classify the direction of a short numeric series."""
     clean = [v for v in values if v is not None]
@@ -285,9 +281,15 @@ def analyse_recovery(
     muscle_pct = latest.get("muscle_pct") or (recovery or {}).get("muscle_pct")
 
     recent = readings[-14:]
-    rhr_trend = _trend_of([float(r["resting_hr"]) for r in recent[-7:] if r.get("resting_hr") is not None], "rising", "falling", 0.3)
-    weight_trend = _trend_of([float(r["weight_kg"]) for r in recent[-7:] if r.get("weight_kg") is not None], "rising", "falling", 0.05)
-    bf_trend = _trend_of([float(r["body_fat_pct"]) for r in recent[-7:] if r.get("body_fat_pct") is not None], "rising", "falling", 0.05)
+    rhr_trend = _trend_of(
+        [r.get("resting_hr") for r in recent[-7:]], "rising", "falling", 0.3
+    )
+    weight_trend = _trend_of(
+        [r.get("weight_kg") for r in recent[-7:]], "rising", "falling", 0.05
+    )
+    bf_trend = _trend_of(
+        [r.get("body_fat_pct") for r in recent[-7:]], "rising", "falling", 0.05
+    )
 
     is_catabolic = False
     if len(recent) >= 3 and weight_kg is not None and muscle_pct is not None:

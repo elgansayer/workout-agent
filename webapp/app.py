@@ -24,7 +24,7 @@ import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -109,15 +109,7 @@ def get_config():
     return Config.load()
 
 
-def _extract_ip(request: Request) -> str:
-    """Extract the client IP from request headers or client info."""
-    forwarded = request.headers.get("x-forwarded-for")
-    real_ip = request.headers.get("x-real-ip")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    if real_ip:
-        return real_ip.strip()
-    return request.client.host if request.client else "unknown"
+_RATE_LIMITS: dict[str, list[float]] = {}
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
@@ -128,18 +120,14 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
     elif request.headers.get("x-real-ip"):
         ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
     else:
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            ip = real_ip.strip()
-        else:
-            ip = request.client.host if request.client else "unknown"
+        ip = request.client.host if request.client else "unknown"
 
-    Replaces the old in-process dict so rate limits are correctly shared
-    across multiple web app replicas behind a load balancer.
-    """
-    ip = _extract_ip(request)
-    if not check_rate_limit(ip, limit=limit, window=window, db_path=DB_PATH):
+    if ip not in _RATE_LIMITS:
+        _RATE_LIMITS[ip] = []
+    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
+    if len(_RATE_LIMITS[ip]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -407,7 +395,7 @@ def _current_streak(levels: dict[str, int]) -> int:
 def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    start = get_programme_start_date(DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
     week = week_in_cycle(start, today)
     block = block_for_week(week)
     bests = get_recent_bests(DB_PATH, user_id=user_id)
@@ -514,7 +502,7 @@ def _dashboard_context(today: date | None = None, user_id: str | None = None) ->
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH),
     }
 
 
@@ -617,7 +605,7 @@ def stats(request: Request):
         [
             {"label": g, "value": v}
             for g, v in sorted(groups.items(), key=lambda kv: -kv[1])
-        ],
+        ]
     )
 
     # Session-load trend over the most recent sessions.
@@ -650,14 +638,14 @@ def stats(request: Request):
         score = analytics.dots_score(bw, e1rm)
         if score:
             dots_points.append(
-                {"date": e["date"][5:], "value": score, "label": f"{score:g}"},
+                {"date": e["date"][5:], "value": score, "label": f"{score:g}"}
             )
         ratio_points.append(
             {
                 "date": e["date"][5:],
                 "value": round(e1rm / bw, 2),
                 "label": f"{e1rm / bw:.2f}x",
-            },
+            }
         )
     dots_chart = (
         charts.line_chart(dots_points, colour=charts.PURPLE)
@@ -751,16 +739,9 @@ def _project_lift(
 
 
 @app.get("/plan")
-def plan(request: Request) -> Any:
-    user_id = request.session.get("user_id")
+def plan(request: Request):
     today = datetime.now(tz=timezone.utc).date()
-
-    # Check for a user-selected active programme first.
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    if active and active.get("definition"):
-        return _render_active_plan(request, active, today)
-
-    week = week_in_cycle(get_programme_start_date(DB_PATH, user_id=user_id), today)
+    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
 
@@ -1103,17 +1084,16 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     when, ex_name = parts
 
     config = get_config()
-    provider = _resolve_provider_for_request(request, config)
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    history = get_progress_history(db_path=DB_PATH).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
-    reasoning = str(provider.generate(prompt)).strip()
-    if not reasoning:
-        reasoning = "Could not determine reasoning."
+    response = model.generate_content(prompt)
+    reasoning = (response.text or "Could not determine reasoning.").strip()
 
-
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH)
     return {"reasoning": reasoning}
 
 
@@ -1122,9 +1102,10 @@ def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
     user_id = request.session.get("user_id")
     config = get_config()
-    provider = _resolve_provider_for_request(request, config)
+    genai.configure(api_key=config.gemini_api_key)
+    model = genai.GenerativeModel(config.gemini_model)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
 
@@ -1135,7 +1116,7 @@ def project_peak(request: Request) -> dict[str, Any]:
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         return json.loads(text.strip())
-    except Exception:
+    except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
 
 
@@ -1224,11 +1205,11 @@ Respond naturally as Coach. If the question is about their training data, refere
         try:
             response = provider.generate(prompt, stream=True)
             for chunk in response:
-                if chunk:
-                    collected.append(chunk)
-                    yield chunk
+                if chunk.text:
+                    collected.append(chunk.text)
+                    yield chunk.text
         except Exception as e:  # noqa: BLE001
-            logger.error(f"Error during AI streaming: {e}")
+            logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
             collected.append(error_msg)
             yield error_msg
@@ -1361,30 +1342,6 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
         "status": "error",
         "detail": "Could not connect to Hevy. Check the API key.",
     }
-
-
-@app.post("/api/settings/sync-history")
-async def sync_history_endpoint(request: Request) -> dict[str, Any]:
-    """Rebuild local workout_history and exercise_progress from Hevy (one-off backfill)."""
-    _check_rate_limit(request, limit=2)
-    user_id = request.session.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    from sync_history import sync_all
-
-    # Use the user's stored Hevy key, not the server env var.
-    key_info = get_user_api_keys(user_id, db_path=DB_PATH).get("hevy")
-    if not key_info or not str(key_info.get("api_key", "")):
-        raise HTTPException(
-            status_code=400,
-            detail="No Hevy API key configured. Add one in Settings first.",
-        )
-
-    result = sync_all(str(key_info["api_key"]), DB_PATH, user_id=user_id)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=str(result["error"]))
-    return {"status": "ok", **result}
 
 
 @app.post("/api/settings/preferences")

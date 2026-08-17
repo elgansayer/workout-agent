@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import html
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -130,11 +130,7 @@ def line_chart(
 
 
 def progress_ring(
-    pct: float,
-    *,
-    label: str = "",
-    sub: str = "",
-    colour: str = ACCENT,
+    pct: float, *, label: str = "", sub: str = "", colour: str = ACCENT
 ) -> str:
     """A circular gauge filled to ``pct`` (0-100)."""
     pct = max(0.0, min(100.0, float(pct)))
@@ -190,11 +186,7 @@ def donut(segments: Sequence[dict[str, Any]], *, size: int = 160) -> str:
 
 
 def bar_chart(
-    bars: Sequence[dict[str, Any]],
-    *,
-    colour: str = ACCENT,
-    unit: str = "",
-    height: int = 200,
+    bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", height: int = 200
 ) -> str:
     """Vertical bars. ``bars`` = ``[{"label", "value", "caption"?}]``."""
     items = list(bars)
@@ -217,7 +209,7 @@ def bar_chart(
         rects.append(
             f'<rect x="{x:.1f}" y="{y:.1f}" width="{bar_w:.1f}" height="{bh:.1f}" '
             f'rx="4" fill="{colour}"><title>{_esc(b.get("caption") or b["label"])}: '
-            f"{_nice_round(v)} {_esc(unit)}</title></rect>",
+            f"{_nice_round(v)} {_esc(unit)}</title></rect>"
         )
         labels.append(
             f'<text x="{x + bar_w / 2:.1f}" y="{height - 8}" text-anchor="middle" '
@@ -235,10 +227,7 @@ def bar_chart(
 
 
 def calendar_heatmap(
-    levels: dict[str, int],
-    *,
-    weeks: int = 18,
-    end: date | None = None,
+    levels: dict[str, int], *, weeks: int = 18, end: date | None = None
 ) -> str:
     """A GitHub-style activity calendar.
 
@@ -296,11 +285,7 @@ def calendar_heatmap(
 
 
 def sparkline(
-    values: Sequence[float],
-    *,
-    colour: str = ACCENT,
-    width: int = 120,
-    height: int = 34,
+    values: Sequence[float], *, colour: str = ACCENT, width: int = 120, height: int = 34
 ) -> str:
     """A tiny inline trend line."""
     vals = [float(v) for v in values if v is not None]

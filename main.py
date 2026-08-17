@@ -16,7 +16,6 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any
 
 import checkin
 import google_health_client
@@ -120,7 +119,7 @@ def _maybe_check_in(
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config, user_id=user_id)
+        due_info = checkin.due(config)
     except Exception as exc:  # noqa: BLE001  # a check-in must never block the daily message
         logger.warning("Check-in scheduling failed: %s", exc)
         return
@@ -238,10 +237,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(
-            body_metrics_from_recovery(recovery),
-            when,
-            config.database_path,
-            user_id=user_id,
+            body_metrics_from_recovery(recovery), when, config.database_path
         )
 
     _maybe_self_review(config, recovery, week, block, preview)
@@ -349,12 +345,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--preview",
         action="store_true",
         help="Dry run: print the generated plan to stdout without sending Telegram.",
-    )
-    parser.add_argument(
-        "--sync-history",
-        action="store_true",
-        help="Rebuild local workout_history and exercise_progress from Hevy API "
-        "(one-off backfill). Requires HEVY_API_KEY.",
     )
     return parser.parse_args(argv)
 

@@ -314,7 +314,6 @@ def sync_routines(config: Config) -> list[str]:
     updated_routines = base_routines
     if config.gemini_api_key:
         try:
-            from ai_resolver import resolve_provider as _resolve
             from database import get_body_metrics, get_recent_hevy_logs
             from gemini_engine import apply_autonomous_adjustments
             from health_connect import read_recovery_metrics
@@ -327,43 +326,20 @@ def sync_routines(config: Config) -> list[str]:
             except ImportError:
                 weather = None
 
-            from ai_provider import resolve_provider
-
-            provider = resolve_provider(
-                db_path=config.database_path,
-                server_gemini_key=config.gemini_api_key,
-                server_gemini_model=config.gemini_model,
-            )
-
             logs = get_recent_hevy_logs(limit=15, db_path=config.database_path)
             body_metrics = get_body_metrics(limit=14, db_path=config.database_path)
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            ai_provider = _resolve(
-                fallback_api_key=config.gemini_api_key,
-                fallback_model=config.gemini_model,
-            )
-            logger.info(
-                "Requesting autonomous routine adjustments from %s...",
-                ai_provider.name(),
-            )
+            logger.info("Requesting autonomous routine adjustments from Gemini...")
             updated_routines = apply_autonomous_adjustments(
                 provider=ai_provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, "is_catabolic", False),
-                server_gemini_key=config.gemini_api_key,
-                server_gemini_model=config.gemini_model,
-                db_path=config.database_path,
             )
-        except ImportError as exc:
-            logger.warning(
-                "Failed to import a module for autonomous adjustments: %s",
-                exc,
-            )
-        except (ValueError, TypeError, RuntimeError, KeyError, AttributeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
 
     statuses: list[str] = []

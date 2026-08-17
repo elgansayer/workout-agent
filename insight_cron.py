@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 import google.generativeai as genai
 
@@ -25,13 +25,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger("insight_cron")
 
 
-def _get_provider(config: Config):
-    return resolve_provider(
-        fallback_api_key=config.gemini_api_key,
-        fallback_model=config.gemini_model,
-    )
-
-
 def generate_daily_header(config: Config) -> None:
     logger.info("Generating daily insight header...")
     provider = _get_provider(config)
@@ -41,16 +34,12 @@ def generate_daily_header(config: Config) -> None:
 
     metrics = [
         m
-        for m in get_body_metrics(
-            limit=14, db_path=config.database_path, user_id=user_id
-        )
+        for m in get_body_metrics(limit=14, db_path=config.database_path)
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(
-            limit=14, db_path=config.database_path, user_id=user_id
-        )
+        for log in get_daily_logs(limit=14, db_path=config.database_path)
         if log["date"] >= cutoff
     ]
 
@@ -97,24 +86,18 @@ def generate_weekly_correlations(config: Config) -> None:
 
     metrics = [
         m
-        for m in get_body_metrics(
-            limit=120, db_path=config.database_path, user_id=user_id
-        )
+        for m in get_body_metrics(limit=120, db_path=config.database_path)
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(
-            limit=120, db_path=config.database_path, user_id=user_id
-        )
+        for log in get_daily_logs(limit=120, db_path=config.database_path)
         if log["date"] >= cutoff
     ]
 
     # Also fetch training history for the last 60 days
     all_history = get_progress_history(
-        limit_per_exercise=60,
-        db_path=config.database_path,
-        user_id=user_id,
+        limit_per_exercise=60, db_path=config.database_path
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -144,26 +127,19 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path, user_id=user_id)
-            logger.info(
-                "Weekly deep correlation generated successfully via %s.",
-                provider.name(),
-            )
+            save_deep_correlation(text, db_path=config.database_path)
+            logger.info("Weekly deep correlation generated successfully.")
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--daily",
-        action="store_true",
-        help="Generate daily insight header",
+        "--daily", action="store_true", help="Generate daily insight header"
     )
     parser.add_argument(
-        "--weekly",
-        action="store_true",
-        help="Generate weekly deep correlations",
+        "--weekly", action="store_true", help="Generate weekly deep correlations"
     )
     args = parser.parse_args()
 

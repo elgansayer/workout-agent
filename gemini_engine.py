@@ -28,24 +28,6 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def _server_gemini_provider() -> AIProvider:
-    """Return a Gemini provider from the server's environment-configured key.
-
-    Reads ``GEMINI_API_KEY`` and ``GEMINI_MODEL`` from the environment.  This
-    is a convenience for single-tenant cron jobs and scripts that don't resolve
-    a per-user provider through ``ai_provider.resolve_provider``.
-    """
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY is not set. Provide it in the environment "
-            "or use ai_provider.resolve_provider(user_id=...) for "
-            "per-user resolution."
-        )
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
-    return get_provider("gemini", api_key, model)
-
-
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
     if not history:
         return "None on record yet."
@@ -189,9 +171,9 @@ def generate_next_workout(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI provider returned an empty response; using baseline plan.")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("AI generation failed (%s); using baseline plan.", exc)
+        logger.warning("Gemini returned an empty response; using baseline plan.")
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+        logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
 
@@ -243,9 +225,9 @@ def generate_rest_day_message(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI provider returned an empty rest-day response; using fallback.")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
+        logger.warning("Gemini returned an empty rest-day response; using fallback.")
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+        logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
 
@@ -331,9 +313,9 @@ def generate_checkin_message(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI provider returned an empty check-in; using fallback.")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
+        logger.warning("Gemini returned an empty check-in; using fallback.")
+    except Exception as exc:  # noqa: BLE001  # noqa: BLE001  # the SDK raises a variety of exception types
+        logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
 
     return fallback
 
@@ -403,13 +385,13 @@ def apply_autonomous_adjustments(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
         prompt = _build_autonomous_prompt(
-            base_routines,
-            hevy_logs,
-            weather,
-            is_catabolic,
+            base_routines, hevy_logs, weather, is_catabolic
         )
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = (response.text or "").strip()
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
@@ -425,11 +407,11 @@ def apply_autonomous_adjustments(
             return updated
 
         logger.warning(
-            "AI provider returned non-dict autonomous data; using baseline."
+            "Gemini autonomous routines did not return a dict; using baseline."
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "AI autonomous adjustment failed (%s); using baseline routines.", exc
+            "Gemini autonomous adjustment failed (%s); using baseline routines.", exc
         )
 
     return base_routines
