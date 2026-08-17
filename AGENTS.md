@@ -114,6 +114,8 @@ contract:
   static split), the task is not complete until the old path is either
   removed or the new path is actually called from `main.py`/`webapp/app.py`.
   An unwired module sitting in the repo is exactly as unfinished as no
+  module at all — `sync_history.py` is the current example: standalone but
+  unreferenced (see §7).
 
   module at all — `sync_history.py` is the current example: standalone but
   unreferenced (see §7).
@@ -156,6 +158,9 @@ The end goal is a product where a user can, entirely from their own account:
    inheriting a hardcoded split — this UI does not exist yet (only read-only
    rendering of the fixed split does); building it is a first-class product
    feature, not a stretch goal. `programme_inference.py`/`hevy_reader.py`
+   (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
+   natural foundation for an "infer from my Hevy history" option alongside
+   manually-authored templates.
 
    (now wired via `webapp/app.py`'s `_run_hevy_inference()`, PR #142) are the
    natural foundation for an "infer from my Hevy history" option alongside
@@ -191,6 +196,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
+- **`ai_provider.py` multi-provider wiring is complete.** PR #85
 
 - **`ai_provider.py` multi-provider wiring is complete.** PR #85
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
@@ -334,6 +340,10 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   agent on port 9001" claim removed from README (2026-08-08); `ENCRYPTION_KEY`
   added to README env var table (2026-08-08).~~ ✅ Resolved.
   `8770` across README and both compose files (reconciled 2026-08-05).
+- **Test coverage gaps** remain on the following modules (any task that
+  touches these should add tests as part of the same change, not as a
+  follow-up): `programme_inference.py`, `hevy_reader.py`,
+  `insight_cron.py`, `insight_scheduler.py`, `main.py`, `sync_history.py`,
 
   README.md AI-provider language updated to reflect multi-provider support
   (no longer Gemini-only). Portainer-agent-on-port-9001 claim removed from
@@ -365,6 +375,7 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `tests/test_ai_provider.py` (7 tests, PR #85),
   `tests/test_gemini_engine.py` (32 tests, PR #164),
   `tests/test_encryption.py` (PR #146),
+  `tests/test_config.py` (PR #146).
   `tests/test_config.py` (PR #146),
   `tests/test_scheduler.py` (PR #38),
   `tests/test_insight_cron.py` (PR #38).

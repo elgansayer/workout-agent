@@ -286,6 +286,9 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
+Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
 
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
 network. (Both compose files default to port 8770; the Portainer variant
