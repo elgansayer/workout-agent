@@ -16,3 +16,11 @@
 ## 2026-08-06 - SQLite MAX() and N+1 query loops
 **Learning:** SQLite has a unique, documented feature where un-aggregated "bare" columns in a `GROUP BY` query correspond directly to the row containing the `MAX()` or `MIN()` value. This enables the replacement of slow `IN (SELECT MAX(id) ... GROUP BY)` subqueries with a single `SELECT *, MAX(id) ... GROUP BY` pass. However, be wary of replacing window functions with iterative `LIMIT` queries (N+1 query loops) in Python to avoid temporary B-Trees, as the overhead of switching context and breaking sort order creates far worse regressions than the B-Tree sort.
 **Action:** Next time you need the row corresponding to the latest timestamp/ID in SQLite, use a simple `GROUP BY` with `MAX(id)` directly in the `SELECT` clause, avoiding subqueries entirely. Never replace single bulk SQL queries (like window functions) with a loop in Python making multiple small queries.
+
+## 2024-10-24 - Unrolling `any(...)` Generator Expressions
+**Learning:** Generator expressions within `any()` calls (like `any(keyword in lowered for keyword in keywords)`) incur small instantiation and iteration overheads. In high-frequency O(N*M) lookups running repeatedly (like grouping volumes for hundreds of past exercises), this overhead accumulates noticeably.
+**Action:** Unroll `any(...)` generator expressions into explicit native nested `for` loops in hot paths where small datasets are being scanned. This eliminates the generator instantiation overhead while keeping the short-circuiting logic intact, often cutting execution time roughly in half.
+
+## 2024-05-16 - Expensive String Processing in Loop (group_volumes)
+**Learning:** In `analytics.py`, `group_volumes()` loops through exercises to calculate volumes by muscle group. The mapping function `muscle_group_for()` runs an O(N) regex-like search through keywords. Doing this mapping unconditionally for all sets (including zero-volume ones) wasted CPU cycles.
+**Action:** Skip data processing steps (like expensive matching) if the item itself won't contribute to the final aggregated result (e.g. volume is 0 or less). Add an early continue clause to loops doing data processing.
