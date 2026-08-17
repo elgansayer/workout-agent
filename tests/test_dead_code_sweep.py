@@ -15,15 +15,21 @@ from dead_code_sweep import (
     ENTRY_POINTS,
     ModuleInfo,
     OrphanReport,
+    _build_full_import_graph,
     _build_import_graph,
+    _extract_full_imports,
     _extract_imports,
+    _extract_submodule_imports,
     _get_github_repo,
     _get_github_token,
     _grep_import,
+    _is_shallow_repo,
     _task_add_text,
+    clean_stale_pycache,
     create_github_issues,
     find_orphans,
     find_truly_dead,
+    prune_dead_modules,
     report_orphans,
 )
 
@@ -40,7 +46,7 @@ class TestExtractImports:
         assert _extract_imports("from foo import bar\n") == {"foo"}
 
     def test_from_foo_dot_baz_import_qux(self) -> None:
-        assert _extract_imports("from foo.baz import qux\n") == {"foo"}
+        assert _extract_imports("from foo.baz import qux\n") == {"foo", "foo.baz"}
 
     def test_multiple_imports(self) -> None:
         source = "import os\nfrom sys import argv\nfrom datetime import datetime\n"
@@ -48,7 +54,24 @@ class TestExtractImports:
 
     def test_webapp_dotted(self) -> None:
         assert _extract_imports("from webapp import charts\n") == {"webapp"}
-        assert _extract_imports("from webapp.charts import line_chart\n") == {"webapp"}
+        assert _extract_imports("from webapp.charts import line_chart\n") == {
+            "webapp",
+            "webapp.charts",
+        }
+        # Deeply nested: from webapp.sub.inner import thing
+        assert _extract_imports("from webapp.sub.inner import thing\n") == {
+            "webapp",
+            "webapp.sub",
+            "webapp.sub.inner",
+        }
+        # Import-style: import webapp.sub.inner
+        assert _extract_imports("import webapp.sub.inner\n") == {
+            "webapp",
+            "webapp.sub",
+            "webapp.sub.inner",
+        }
+        # Top-level import stays unchanged
+        assert _extract_imports("import os\n") == {"os"}
 
     def test_syntax_error_returns_empty(self) -> None:
         assert _extract_imports("this is not valid python !!!") == set()
@@ -62,6 +85,111 @@ class TestExtractImports:
 
     def test_no_imports(self) -> None:
         assert _extract_imports("x = 1\ny = 2\n") == set()
+
+
+# ---------------------------------------------------------------------------
+# _extract_full_imports
+# ---------------------------------------------------------------------------
+
+
+class TestExtractFullImports:
+    """Tests for the enhanced import resolver that preserves sub-module names."""
+
+    def test_import_foo(self) -> None:
+        assert _extract_full_imports("import foo\n") == {"foo"}
+
+    def test_import_foo_dot_bar(self) -> None:
+        result = _extract_full_imports("import foo.bar\n")
+        assert result == {"foo", "foo.bar"}
+
+    def test_import_deeply_nested(self) -> None:
+        result = _extract_full_imports("import a.b.c.d\n")
+        assert result == {"a", "a.b.c.d"}
+
+    def test_from_foo_import_bar(self) -> None:
+        result = _extract_full_imports("from foo import bar\n")
+        assert result == {"foo", "foo.bar"}
+
+    def test_from_foo_dot_baz_import_qux(self) -> None:
+        result = _extract_full_imports("from foo.baz import qux\n")
+        assert result == {"foo", "foo.baz", "foo.baz.qux"}
+
+    def test_from_webapp_import_multiple(self) -> None:
+        """The critical case: ``from webapp import charts, ai_widgets``
+        must produce ``webapp.charts`` and ``webapp.ai_widgets`` so the
+        BFS can find their defining files."""
+        result = _extract_full_imports("from webapp import ai_widgets, charts\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.ai_widgets" in result
+
+    def test_from_webapp_dot_charts_import_function(self) -> None:
+        result = _extract_full_imports("from webapp.charts import line_chart\n")
+        assert "webapp" in result
+        assert "webapp.charts" in result
+        assert "webapp.charts.line_chart" in result
+
+    def test_star_import_not_expanded(self) -> None:
+        """``from foo import *`` — can't resolve individual names."""
+        result = _extract_full_imports("from foo import *\n")
+        assert result == {"foo"}
+
+    def test_multiple_imports(self) -> None:
+        source = "import os\nfrom sys import argv\nfrom datetime import datetime\n"
+        result = _extract_full_imports(source)
+        assert result == {"os", "sys", "sys.argv", "datetime", "datetime.datetime"}
+
+    def test_syntax_error_returns_empty(self) -> None:
+        assert _extract_full_imports("this is not valid python !!!") == set()
+
+    def test_import_in_function(self) -> None:
+        source = textwrap.dedent("""
+            def foo():
+                import bar
+        """)
+        assert _extract_full_imports(source) == {"bar"}
+
+    def test_no_imports(self) -> None:
+        assert _extract_full_imports("x = 1\ny = 2\n") == set()
+
+    def test_from_future_import(self) -> None:
+        # __future__ imports shouldn't be treated as module wiring
+        result = _extract_full_imports("from __future__ import annotations\n")
+        assert result == {"__future__", "__future__.annotations"}
+
+    def test_relative_import(self) -> None:
+        """Relative imports (``from . import x``) have ``module is None``."""
+        result = _extract_full_imports("from . import sibling\nfrom .. import parent_mod\n")
+        assert result == set()
+
+
+# ---------------------------------------------------------------------------
+# _build_full_import_graph
+# ---------------------------------------------------------------------------
+
+
+class TestBuildFullImportGraph:
+    def test_returns_dict(self) -> None:
+        graph = _build_full_import_graph()
+        assert isinstance(graph, dict)
+        assert len(graph) > 10
+
+    def test_webapp_app_includes_charts(self) -> None:
+        """webapp/app.py imports charts, so the full graph must include
+        ``webapp.charts`` as a resolved import."""
+        graph = _build_full_import_graph()
+        webapp_imports = graph.get("webapp/app.py", set())
+        assert "webapp.charts" in webapp_imports, (
+            "full import graph must resolve 'from webapp import charts' → webapp.charts"
+        )
+        assert "webapp.ai_widgets" in webapp_imports, (
+            "full import graph must resolve 'from webapp import ai_widgets' → webapp.ai_widgets"
+        )
+
+    def test_includes_test_files(self) -> None:
+        graph = _build_full_import_graph()
+        test_files = [k for k in graph if k.startswith("tests/")]
+        assert len(test_files) > 0, "Test files should be in the full import graph"
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +240,20 @@ class TestEntryPoints:
     def test_insight_cron_is_entry_point(self) -> None:
         assert "insight_cron.py" in ENTRY_POINTS
 
+    def test_connector_health_is_entry_point(self) -> None:
+        assert "connector_health.py" in ENTRY_POINTS
+
     def test_entry_points_are_stable(self) -> None:
         """The set of entry points shouldn't drift without deliberate review."""
-        expected = {"main.py", "scheduler.py", "sync_history.py", "insight_cron.py"}
+        expected = {
+            "main.py",
+            "scheduler.py",
+            "sync_history.py",
+            "insight_cron.py",
+            "dead_code_sweep.py",
+            "commit_hygiene.py",
+            "connector_health.py",
+        }
         assert ENTRY_POINTS == expected
 
 
@@ -193,6 +332,30 @@ class TestFindOrphansWithMockRepo:
             # catches the common patterns.
             # This test validates grep fallback exists, not perfection.
             assert isinstance(orphans, list)
+
+    def test_transitive_bfs_works_without_grep(self, tmp_path: Path) -> None:
+        """BFS should trace transitive imports without relying on grep."""
+        (tmp_path / "main.py").write_text("import a\n")
+        (tmp_path / "a.py").write_text("import b\n")
+        (tmp_path / "b.py").write_text("import c\n")
+        (tmp_path / "c.py").write_text("x = 1\n")
+        (tmp_path / "conftest.py").write_text("")
+
+        orig_grep = dead_code_sweep._grep_import
+        dead_code_sweep._grep_import = lambda module_name: []  # type: ignore[assignment]
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            orphans = find_orphans()
+            orphan_names = {r.module.name for r in orphans}
+            # b and c are transitively reachable via a
+            assert "b" not in orphan_names, (
+                "Transitively imported module 'b' incorrectly flagged as orphan"
+            )
+            assert "c" not in orphan_names, (
+                "Deep transitive import 'c' incorrectly flagged as orphan"
+            )
+
+        dead_code_sweep._grep_import = orig_grep
 
     def test_webapp_submodule_detected(self, tmp_path: Path) -> None:
         webapp_dir = tmp_path / "webapp"
@@ -311,6 +474,322 @@ class TestFindTrulyDead:
             result = find_truly_dead([report])
             assert isinstance(result, list)
 
+    def test_few_commits_and_no_doc_refs_is_truly_dead(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A module with <=1 commit and no doc refs IS truly dead (non-shallow)."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        mock_git_log = MagicMock(
+            returncode=0, stdout="abc123 Initial commit\n", stderr=""
+        )
+        mock_shallow_check = MagicMock(returncode=0, stdout="false\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == [
+                "git",
+                "rev-parse",
+                "--is-shallow-repository",
+            ]:
+                return mock_shallow_check
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            assert len(result) == 1
+            assert result[0].module.name == "stale_mod"
+            assert "Only 1 commit" in result[0].evidence
+
+    def test_shallow_repo_blocks_few_commits_signal(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """In a shallow repo, few_commits is NOT used — every file has 1 commit."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        mock_git_log = MagicMock(
+            returncode=0, stdout="abc123 Initial commit\n", stderr=""
+        )
+        mock_shallow_check = MagicMock(returncode=0, stdout="true\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == [
+                "git",
+                "rev-parse",
+                "--is-shallow-repository",
+            ]:
+                return mock_shallow_check
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            # Shallow repo guards against false positives — NOT truly dead
+            assert result == []
+
+    def test_shallow_repo_still_uses_replacement_keywords(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """In a shallow repo, replacement_keywords still trigger truly-dead."""
+        (tmp_path / "stale_mod.py").write_text("x = 1\n")
+        mi = ModuleInfo(
+            name="stale_mod",
+            path=tmp_path / "stale_mod.py",
+            is_entry_point=False,
+        )
+        report = OrphanReport(module=mi, evidence="no imports")
+
+        mock_git_log = MagicMock(
+            returncode=0, stdout="abc123 Replace stale_mod with new_impl\n", stderr=""
+        )
+        mock_shallow_check = MagicMock(returncode=0, stdout="true\n", stderr="")
+
+        def _mock_subprocess_run(*args: object, **kwargs: object) -> MagicMock:
+            cmd = args[0] if args else []
+            if isinstance(cmd, list) and cmd[:2] == ["git", "log"]:
+                return mock_git_log
+            if isinstance(cmd, list) and cmd == [
+                "git",
+                "rev-parse",
+                "--is-shallow-repository",
+            ]:
+                return mock_shallow_check
+            if (
+                isinstance(cmd, list)
+                and cmd[:2] == ["grep", "-rn"]
+                and "--include=*.md" in cmd
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="")
+            return MagicMock(returncode=1, stdout="", stderr="")
+
+        with (
+            patch("dead_code_sweep.subprocess.run", side_effect=_mock_subprocess_run),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            result = find_truly_dead([report])
+            assert len(result) == 1
+            assert result[0].module.name == "stale_mod"
+            assert "replacement" in result[0].evidence.lower()
+
+
+# ---------------------------------------------------------------------------
+# _is_shallow_repo
+# ---------------------------------------------------------------------------
+
+
+class TestIsShallowRepo:
+    def test_true_when_rev_parse_says_true(self, tmp_path: Path) -> None:
+        mock = MagicMock(returncode=0, stdout="true\n", stderr="")
+        with (
+            patch("dead_code_sweep.subprocess.run", return_value=mock),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            assert _is_shallow_repo() is True
+
+    def test_false_when_rev_parse_says_false(self, tmp_path: Path) -> None:
+        mock = MagicMock(returncode=0, stdout="false\n", stderr="")
+        with (
+            patch("dead_code_sweep.subprocess.run", return_value=mock),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            assert _is_shallow_repo() is False
+
+    def test_true_when_error_defaults_defensive(self, tmp_path: Path) -> None:
+        """On error, we default to True (defensive) to prevent accidental pruning."""
+        with (
+            patch(
+                "dead_code_sweep.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(cmd="git", timeout=5),
+            ),
+            patch("dead_code_sweep.ROOT", tmp_path),
+        ):
+            assert _is_shallow_repo() is True
+
+
+# ---------------------------------------------------------------------------
+# _cleanup_pycache
+# ---------------------------------------------------------------------------
+
+
+class TestCleanupPycache:
+    def test_no_cache_dir_returns_zero(self, tmp_path: Path) -> None:
+        result = _cleanup_pycache(tmp_path / "nonexistent.py")
+        assert result == 0
+
+    def test_removes_matching_pyc_files(self, tmp_path: Path) -> None:
+        module = tmp_path / "dead_mod.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        # Create matching pyc
+        pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        pyc.write_text("")
+        # Create non-matching pyc
+        other_pyc = cache_dir / "other_mod.cpython-312.pyc"
+        other_pyc.write_text("")
+
+        result = _cleanup_pycache(module)
+        assert result == 1
+        assert not pyc.exists()
+        assert other_pyc.exists()  # untouched
+
+    def test_handles_oserror_gracefully(self, tmp_path: Path) -> None:
+        module = tmp_path / "dead_mod.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        pyc.write_text("")
+
+        # Make unlink fail
+        with patch("pathlib.Path.unlink", side_effect=OSError("Permission denied")):
+            result = _cleanup_pycache(module)
+            assert result == 0
+
+
+# ---------------------------------------------------------------------------
+# clean_stale_pycache
+# ---------------------------------------------------------------------------
+
+
+class TestCleanStalePycache:
+    def test_no_pycache_returns_zero(self, tmp_path: Path) -> None:
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            assert clean_stale_pycache() == 0
+
+    def test_removes_stale_pyc_without_corresponding_py(self, tmp_path: Path) -> None:
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        stale_pyc = cache_dir / "removed_mod.cpython-312.pyc"
+        stale_pyc.write_text("")
+        # No removed_mod.py exists
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 1
+            assert not stale_pyc.exists()
+
+    def test_leaves_valid_pyc_untouched(self, tmp_path: Path) -> None:
+        (tmp_path / "live_mod.py").write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        valid_pyc = cache_dir / "live_mod.cpython-312.pyc"
+        valid_pyc.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 0
+            assert valid_pyc.exists()
+
+    def test_mixed_stale_and_valid(self, tmp_path: Path) -> None:
+        (tmp_path / "live_mod.py").write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        valid_pyc = cache_dir / "live_mod.cpython-312.pyc"
+        valid_pyc.write_text("")
+        stale_pyc = cache_dir / "dead_mod.cpython-312.pyc"
+        stale_pyc.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 1
+            assert not stale_pyc.exists()
+            assert valid_pyc.exists()
+
+    def test_skips_hidden_and_venv_dirs(self, tmp_path: Path) -> None:
+        # Create stale pyc in .venv/ — should be skipped
+        venv_dir = tmp_path / ".venv" / "__pycache__"
+        venv_dir.mkdir(parents=True)
+        stale_in_venv = venv_dir / "old_mod.cpython-312.pyc"
+        stale_in_venv.write_text("")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = clean_stale_pycache()
+            assert removed == 0
+            assert stale_in_venv.exists()  # skipped, not removed
+
+
+# ---------------------------------------------------------------------------
+# prune_dead_modules
+# ---------------------------------------------------------------------------
+
+
+class TestPruneDeadModules:
+    def test_removes_module_file(self, tmp_path: Path) -> None:
+        module = tmp_path / "to_remove.py"
+        module.write_text("x = 1\n")
+        mi = ModuleInfo(name="to_remove", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1
+            assert not module.exists()
+
+    def test_missing_ok(self, tmp_path: Path) -> None:
+        """Already-removed file shouldn't crash prune."""
+        module = tmp_path / "already_gone.py"
+        mi = ModuleInfo(name="already_gone", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1  # counted, but didn't crash
+
+    def test_cleans_stale_pycache(self, tmp_path: Path) -> None:
+        module = tmp_path / "to_remove.py"
+        module.write_text("x = 1\n")
+        cache_dir = tmp_path / "__pycache__"
+        cache_dir.mkdir()
+        pyc = cache_dir / "to_remove.cpython-312.pyc"
+        pyc.write_text("")
+        mi = ModuleInfo(name="to_remove", path=module, is_entry_point=False)
+        report = OrphanReport(module=mi, evidence="dead")
+
+        with patch("dead_code_sweep.ROOT", tmp_path):
+            removed = prune_dead_modules([report])
+            assert removed == 1
+            assert not module.exists()
+            assert not pyc.exists()
+
 
 # ---------------------------------------------------------------------------
 # _build_import_graph
@@ -318,22 +797,33 @@ class TestFindTrulyDead:
 
 
 class TestBuildImportGraph:
-    def test_returns_dict(self) -> None:
-        graph = _build_import_graph()
+    def test_returns_tuple(self) -> None:
+        graph, file_to_mod = _build_import_graph()
         assert isinstance(graph, dict)
+        assert isinstance(file_to_mod, dict)
         # Should have at least a few files
         assert len(graph) > 10
 
     def test_skips_virtual_envs(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         for key in graph:
             assert "__pycache__" not in key
             assert ".venv" not in key
 
     def test_includes_test_files(self) -> None:
-        graph = _build_import_graph()
+        graph, _ = _build_import_graph()
         test_files = [k for k in graph if k.startswith("tests/")]
         assert len(test_files) > 0, "Test files should be in the import graph"
+
+    def test_file_to_mod_has_top_level(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["database.py"] == "database"
+        assert file_to_mod["main.py"] == "main"
+
+    def test_file_to_mod_has_webapp(self) -> None:
+        _, file_to_mod = _build_import_graph()
+        assert file_to_mod["webapp/app.py"] == "webapp.app"
+        assert file_to_mod["webapp/charts.py"] == "webapp.charts"
 
 
 # ---------------------------------------------------------------------------
@@ -342,12 +832,16 @@ class TestBuildImportGraph:
 
 
 class TestCLISmoke:
+    _SCRIPT: Path = Path(__file__).resolve().parent.parent / "dead_code_sweep.py"
+    _CWD: Path = Path(__file__).resolve().parent.parent
+
     def test_help(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--help"],
+            [sys.executable, str(self._SCRIPT), "--help"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0
@@ -356,10 +850,11 @@ class TestCLISmoke:
     def test_run_clean(self) -> None:
         """The current repo should be clean — no orphans."""
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py"],
+            [sys.executable, str(self._SCRIPT)],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0, (
@@ -368,10 +863,11 @@ class TestCLISmoke:
 
     def test_json_output(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--json"],
+            [sys.executable, str(self._SCRIPT), "--json"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert result.returncode == 0
@@ -380,10 +876,11 @@ class TestCLISmoke:
 
     def test_create_issues_flag_help(self) -> None:
         result = subprocess.run(
-            [sys.executable, "dead_code_sweep.py", "--help"],
+            [sys.executable, str(self._SCRIPT), "--help"],
             capture_output=True,
             text=True,
             timeout=30,
+            cwd=str(self._CWD),
             check=False,
         )
         assert "--create-issues" in result.stdout
@@ -395,8 +892,8 @@ class TestCLISmoke:
 
 
 class TestGetGitHubRepo:
-    def test_github_https_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_github_https_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://github.com/owner/repo.git\n",
@@ -407,8 +904,8 @@ class TestGetGitHubRepo:
         result = _get_github_repo()
         assert result == ("owner", "repo")
 
-    def test_github_token_url(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_github_token_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://x-access-token:ghp_xyz@github.com/owner/repo.git\n",
@@ -419,8 +916,8 @@ class TestGetGitHubRepo:
         result = _get_github_repo()
         assert result == ("owner", "repo")
 
-    def test_non_github_remote(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_non_github_remote(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://gitlab.com/owner/repo.git\n",
@@ -430,8 +927,8 @@ class TestGetGitHubRepo:
         monkeypatch.setattr(subprocess, "run", _mock_run)
         assert _get_github_repo() is None
 
-    def test_git_failure(self, monkeypatch) -> None:
-        def _mock_run(*args, **kwargs):
+    def test_git_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def _mock_run(*args: object, **kwargs: object) -> None:
             raise subprocess.TimeoutExpired("git", 10)
 
         monkeypatch.setattr(subprocess, "run", _mock_run)
@@ -439,14 +936,14 @@ class TestGetGitHubRepo:
 
 
 class TestGetGitHubToken:
-    def test_from_env(self, monkeypatch) -> None:
+    def test_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GITHUB_TOKEN", "ghp_from_env")
         assert _get_github_token() == "ghp_from_env"
 
-    def test_from_remote_url(self, monkeypatch) -> None:
+    def test_from_remote_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-        def _mock_run(*args, **kwargs):
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://x-access-token:ghp_from_remote@github.com/x/y.git\n",
@@ -456,10 +953,10 @@ class TestGetGitHubToken:
         monkeypatch.setattr(subprocess, "run", _mock_run)
         assert _get_github_token() == "ghp_from_remote"
 
-    def test_no_token_available(self, monkeypatch) -> None:
+    def test_no_token_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
 
-        def _mock_run(*args, **kwargs):
+        def _mock_run(*args: object, **kwargs: object) -> MagicMock:
             return MagicMock(
                 returncode=0,
                 stdout="https://github.com/x/y.git\n",
@@ -557,7 +1054,7 @@ class TestCreateGitHubIssues:
         p.write_text("")
         import urllib.error
 
-        def _raise(*args, **kwargs):
+        def _raise(*args: object, **kwargs: object) -> None:
             raise urllib.error.HTTPError("url", 422, "Unprocessable", None, None)  # type: ignore[arg-type]
 
         with (
