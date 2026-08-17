@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import pathlib
 import sqlite3
-from pathlib import Path
 from unittest.mock import patch
 
 import sync_history
 
 
-def _new_temp_db(tmp_path: Path) -> str:
+def _new_temp_db(tmp_path: pathlib.Path) -> str:
     from database import init_db
 
     db_path = str(tmp_path / "sync_test.db")
@@ -58,21 +57,21 @@ def test_no_api_key_returns_error() -> None:
     assert result == {"error": "No Hevy API key configured."}
 
 
-def test_get_all_workouts_returns_none(tmp_path: Path) -> None:
+def test_get_all_workouts_returns_none(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("sync_history.get_all_workouts", return_value=None):
         result = sync_history.sync_all("fake-key", db_path)
     assert result == {"workouts_found": 0, "processed": 0}
 
 
-def test_get_all_workouts_returns_empty_list(tmp_path: Path) -> None:
+def test_get_all_workouts_returns_empty_list(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("sync_history.get_all_workouts", return_value=[]):
         result = sync_history.sync_all("fake-key", db_path)
     assert result == {"workouts_found": 0, "processed": 0}
 
 
-def test_sync_all_rebuilds_and_saves_workouts(tmp_path: Path) -> None:
+def test_sync_all_rebuilds_and_saves_workouts(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
         result = sync_history.sync_all("fake-key", db_path)
@@ -83,7 +82,7 @@ def test_sync_all_rebuilds_and_saves_workouts(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_sync_all_respects_user_id(tmp_path: Path) -> None:
+def test_sync_all_respects_user_id(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
         result = sync_history.sync_all("fake-key", db_path, user_id="user-1")
@@ -94,7 +93,7 @@ def test_sync_all_respects_user_id(tmp_path: Path) -> None:
     assert user_ids == [("user-1",)]
 
 
-def test_sync_all_workout_missing_start_time(tmp_path: Path) -> None:
+def test_sync_all_workout_missing_start_time(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     workouts: list[dict[str, object]] = [
         {
@@ -111,7 +110,7 @@ def test_sync_all_workout_missing_start_time(tmp_path: Path) -> None:
     assert result == {"workouts_found": 1, "processed": 1}
 
 
-def test_sync_all_parse_failure_skips_progress(tmp_path: Path) -> None:
+def test_sync_all_parse_failure_skips_progress(tmp_path: pathlib.Path) -> None:
     """Exercises key missing — parse_workout returns None, save_progress skipped."""
     db_path = _new_temp_db(tmp_path)
     workouts: list[dict[str, object]] = [
@@ -127,7 +126,7 @@ def test_sync_all_parse_failure_skips_progress(tmp_path: Path) -> None:
     assert result == {"workouts_found": 1, "processed": 0}
 
 
-def test_sync_all_no_date_uses_none(tmp_path: Path) -> None:
+def test_sync_all_no_date_uses_none(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     workouts: list[dict[str, object]] = [
         {
@@ -143,7 +142,7 @@ def test_sync_all_no_date_uses_none(tmp_path: Path) -> None:
     assert result == {"workouts_found": 1, "processed": 1}
 
 
-def test_rebuild_clears_tables(tmp_path: Path) -> None:
+def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
     from database import save_workout
 
     db_path = _new_temp_db(tmp_path)

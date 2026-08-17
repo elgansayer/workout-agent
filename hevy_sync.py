@@ -14,7 +14,6 @@ import logging
 import re
 from typing import Any
 
-from ai_provider import resolve_provider
 from config import Config
 from database import (
     delete_routine_record,

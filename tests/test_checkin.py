@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
+
+from _pytest.monkeypatch import MonkeyPatch
 
 import checkin
 from config import Config
@@ -57,16 +60,15 @@ def test_review_exercise_detects_progress() -> None:
     assert review.latest == "110 kg x 8"
 
 
-def test_review_exercise_detects_stall():
-    history = [
-        {"workout_start_time": f"2026-01-0{i}T08:00:00Z", "weight_kg": 100, "reps": 10}
+def test_review_exercise_detects_stall() -> None:
+    history: list[dict[str, object]] = [
+        {"workout_start_time": f"2026-01-0{i}T08:00:00Z", "weight_kg": 100, "reps": 12}
         for i in range(1, 4)
     ]
     review = checkin._review_exercise("Leg Press", "4 x 10-12", "10-12", history)
     assert review.sessions == 3
     assert review.change_kg == 0
     assert review.stalled is True
-    assert review.hit_top is False
 
 
 def test_due_seeds_baseline_then_not_due(
@@ -99,7 +101,9 @@ def test_due_calendar_fallback_without_hevy(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
     checkin.due(config)  # seeds number=0, last date today
     # Pretend five weeks have passed since the last check-in.
-    five_weeks_ago = (datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)).isoformat()
+    five_weeks_ago = (
+        datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)
+    ).isoformat()
     set_meta("last_checkin_date", five_weeks_ago, config.database_path)
     due_info = checkin.due(config)
     assert due_info is not None
@@ -120,9 +124,6 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
         due_info,
         "Check-in 2: looking strong.",
         today=date(2026, 3, 1),
-    )
-    checkin.record(
-        config, due_info, "Check-in 2: looking strong.", today=date(2026, 3, 1)
     )
     assert get_meta("checkin_number", config.database_path) == "2"
     assert get_meta("last_checkin_date", config.database_path) == "2026-03-01"

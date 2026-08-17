@@ -249,8 +249,14 @@ def available_providers() -> list[dict[str, str]]:
         }
         for key, spec in PROVIDERS.items()
     ]
-
-
+def resolve_provider(
+    user_id: str | None = None,
+    *,
+    fallback_api_key: str | None = None,
+    fallback_model: str | None = None,
+    db_path: str = "workout.db",
+) -> AIProvider:
+    """Resolve the AIProvider based on user preferences or fallbacks.
 
     When *user_id* is provided, preferences and stored API keys are read from
     the database.  Falls back to *server_gemini_key* / *server_gemini_model*

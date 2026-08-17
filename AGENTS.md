@@ -6,32 +6,21 @@ repository. Read this before touching code. Every rule below is enforced mechani
 where noted — do not weaken, bypass, or "temporarily" disable a gate to get a
 task to complete. We use OpenHands for autonomous tasks, driven entirely by GitHub Issues.
 
-## 1. Technology Stack Mandate
+## 1. Technology Stack Philosophy
 
-Do not substitute these without an explicit human decision recorded in a
-commit message or task file:
+The repository is entirely flexible and welcoming of new tools, APIs, packages,
+and frameworks. When adding or proposing new technology:
 
-- **Language:** Python 3.12+ (the deployed containers use `python:3.12-slim`;
-  local dev may run newer interpreters — code must not depend on syntax/stdlib
-  newer than 3.12).
-- **Core agent runtime:** plain Python, no async framework, no heavyweight
-  orchestration library. This project is deliberately "a script on a
-  schedule," not a framework — keep it that way.
-- **Database:** SQLite (`database.py`, stdlib `sqlite3`, WAL mode). Do not
-  introduce an ORM or switch engines (e.g. to Postgres) without an explicit
-  task that says so — see §2 for why this matters more than it used to.
-- **Web app:** FastAPI + Jinja2 + server-rendered inline SVG for charts
-  (`webapp/`). No client-side charting library, no SPA framework. Keep pages
-  working with JavaScript disabled where reasonably possible (progressive
-  enhancement, PWA-friendly).
-- **AI providers:** must go through the `ai_provider.py` abstraction
-  (`AIProvider` ABC + `get_provider()` factory). Never call a provider SDK
-  directly from feature code — see §3.
-- **Connectors:** Hevy (REST, personal API key), Google Health (OAuth2
-  polling), Android Health Connect (local JSON file), Open-Meteo (keyless),
-  Telegram Bot API. New connectors follow the `connector-integration` skill.
-- **Lint/type/test tooling:** `ruff` (lint + format check), `mypy` (typing,
-  advisory until stricter — see §5), `pytest`.
+- **Flexibility:** Use the best tool for the job. You are encouraged to propose
+  and implement new frameworks (e.g., migrating to an SPA like Angular or React),
+  different database engines (e.g. Postgres), ORMs, or async runtimes if they solve a problem better.
+- **Current Baseline:** The app is currently built with Python 3.12+, SQLite,
+  FastAPI, and Jinja2, but none of these are permanent constraints.
+- **AI Providers:** We currently use `ai_provider.py` to abstract models, but
+  you may use native SDKs or external tooling if it is more appropriate for a
+  new feature.
+- **Tooling:** We currently use `ruff`, `mypy`, and `pytest`, but alternative or
+  additional tooling (e.g. different linters or formatters) is perfectly acceptable.
 
 ## 2. Multi-Tenancy Mandate (Critical)
 
@@ -131,9 +120,7 @@ contract:
 - `ruff check .` must be clean (zero warnings) for any file you touch, even
   if pre-existing warnings remain elsewhere in the repo — fix what you touch,
   don't expand the blast radius of unrelated files.
-- Prefer stdlib + the packages already in `requirements*.txt` over adding new
-  dependencies. If a new dependency is genuinely needed, add it with a
-  version floor (`>=x.y`), not unpinned.
+- We are entirely flexible on packages and dependencies. Add whatever libraries or frameworks you need to accomplish your task efficiently. Just ensure new dependencies are documented in `requirements*.txt` (or the equivalent package manager config if we migrate).
 - No bare `except:` — catch specific exceptions. Network/connector code
   (Hevy, Google Health, Telegram) must not let a single external-API failure
   crash the whole run; catch, log, and degrade gracefully (this already

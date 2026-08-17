@@ -27,7 +27,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
@@ -35,6 +35,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
+    JSONResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -257,6 +258,14 @@ async def login_google(request: Request) -> Any:
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse("/login")
+
+
+@app.get("/api/me")
+async def get_current_user_api(request: Request) -> Any:
+    user = request.session.get("user")
+    if not user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse({"user": user})
 
 
 @app.get("/auth")
@@ -1413,10 +1422,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
 @app.post("/google-health/disconnect")
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
-<<<<<<< HEAD
-=======
     _check_rate_limit(request, limit=5)
->>>>>>> main
     user_id = request.session.get("user_id")
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)

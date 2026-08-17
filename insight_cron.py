@@ -3,18 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-import google.generativeai as genai
-
-from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
-    get_or_create_user,
     get_progress_history,
     init_db,
     save_dashboard_insight,
