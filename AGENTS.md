@@ -160,6 +160,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly commit hygiene #492 checked 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #505 checked 2026-08-06)
@@ -407,6 +408,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `.agents/hygiene-audit-2026-08-07-run5.md`.
 
 
+- ~~**Hourly dead-code sweep is operational.** `dead_code_sweep.py` runs
+  via `scheduler.py`'s `_run_dead_code_sweep()` every hour with
+  `--create-issues`. It uses AST-based import discovery with grep
+  fallback, BFS from entry-point and webapp/app.py to find reachable
+  modules, and git-log analysis to distinguish truly-dead from
+  merely-orphaned modules. 69 focused tests (all passing). No orphaned
+  modules currently detected — repo is clean.~~ ✅ Resolved (Issue #423).
+  ✅ Re-verified 2026-08-06 (Issue #458): all 27 top-level modules and 3
+  webapp sub-modules confirmed wired; zero orphans; sweep exits clean.
+  ✅ Re-verified 2026-08-06 (Issue #479): same audit, same result — 29 modules
+  all wired, sweep clean, no regressions from intervening commits.
 
 - **In-process-only rate limiting and OAuth state** in `webapp/app.py` — fine
   for a single replica, will silently break correctness (not just
