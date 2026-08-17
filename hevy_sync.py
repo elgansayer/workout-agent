@@ -339,7 +339,15 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            logger.info("Requesting autonomous routine adjustments via %s...", provider.name())
+            logger.info("Requesting autonomous routine adjustments from AI...")
+            from ai_provider import resolve_provider
+
+            provider = resolve_provider(
+                user_id=None,
+                server_gemini_key=config.gemini_api_key,
+                server_gemini_model=config.gemini_model,
+                db_path=config.database_path,
+            )
             updated_routines = apply_autonomous_adjustments(
                 provider=provider,
                 base_routines=base_routines,

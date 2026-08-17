@@ -283,9 +283,10 @@ def run_checkin(
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
-        db_path=config.database_path,
+        user_id=None,
         server_gemini_key=config.gemini_api_key,
         server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
     return generate_checkin_message(
         provider=provider,

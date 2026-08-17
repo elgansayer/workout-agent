@@ -258,7 +258,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             server_gemini_model=config.gemini_model,
         )
         message = generate_rest_day_message(
-            provider=provider,
+            provider=resolve_provider(user_id=None, server_gemini_key=config.gemini_api_key, server_gemini_model=config.gemini_model, db_path=config.database_path),
             recovery=recovery,
             server_gemini_key=config.gemini_api_key,
             server_gemini_model=config.gemini_model,
@@ -314,7 +314,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         server_gemini_model=config.gemini_model,
     )
     plan = generate_next_workout(
-        provider=provider,
+        provider=resolve_provider(user_id=None, server_gemini_key=config.gemini_api_key, server_gemini_model=config.gemini_model, db_path=config.database_path),
         day=day,
         week=week,
         block=block,
