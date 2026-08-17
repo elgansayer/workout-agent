@@ -562,73 +562,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("DROP TABLE programme_state")
             cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
 
-        # Migration: Migrate hevy_meta from singleton key-value to (user_id, key) composite PK
-        cursor.execute("PRAGMA table_info(hevy_meta)")
-        hm_columns = {row[1] for row in cursor.fetchall()}
-        if "user_id" not in hm_columns:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS hevy_meta_new (
-                    user_id TEXT NOT NULL REFERENCES users(id),
-                    key TEXT NOT NULL,
-                    value TEXT NOT NULL,
-                    PRIMARY KEY (user_id, key)
-                )
-                """,
-            )
-            old_rows = cursor.execute(
-                "SELECT key, value FROM hevy_meta",
-            ).fetchall()
-            hm_legacy_id = _ensure_legacy_user(cursor)
-            for row in old_rows:
-                cursor.execute(
-                    "INSERT OR REPLACE INTO hevy_meta_new "
-                    "(user_id, key, value) VALUES (?, ?, ?)",
-                    (hm_legacy_id, row[0], row[1]),
-                )
-            # Seed programme_start_date for the legacy user if no row exists
-            cursor.execute(
-                "INSERT OR IGNORE INTO hevy_meta_new (user_id, key, value) "
-                "VALUES (?, 'programme_start_date', ?)",
-                (hm_legacy_id, datetime.now(tz=timezone.utc).date().isoformat()),
-            )
-            cursor.execute("DROP TABLE hevy_meta")
-            cursor.execute("ALTER TABLE hevy_meta_new RENAME TO hevy_meta")
-
-        # Migration: Add user_id column to hevy_routines for multi-tenancy
-        cursor.execute("PRAGMA table_info(hevy_routines)")
-        hr_columns = {row[1] for row in cursor.fetchall()}
-        if "user_id" not in hr_columns:
-            # Need to recreate with composite PK since routine_key alone won't be unique across users
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS hevy_routines_new (
-                    user_id TEXT NOT NULL REFERENCES users(id),
-                    routine_key TEXT NOT NULL,
-                    routine_id TEXT NOT NULL,
-                    content_hash TEXT NOT NULL,
-                    PRIMARY KEY (user_id, routine_key)
-                )
-                """,
-            )
-            old_rows = cursor.execute(
-                "SELECT routine_key, routine_id, content_hash FROM hevy_routines",
-            ).fetchall()
-            hr_legacy_id = _ensure_legacy_user(cursor)
-            for row in old_rows:
-                cursor.execute(
-                    "INSERT OR REPLACE INTO hevy_routines_new "
-                    "(user_id, routine_key, routine_id, content_hash) "
-                    "VALUES (?, ?, ?, ?)",
-                    (hr_legacy_id, row[0], row[1], row[2]),
-                )
-            cursor.execute("DROP TABLE hevy_routines")
-            cursor.execute("ALTER TABLE hevy_routines_new RENAME TO hevy_routines")
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_hevy_routines_user "
-            "ON hevy_routines (user_id, routine_key)",
-        )
-
 
 def get_current_day(
     db_path: str = DEFAULT_DB_PATH,
@@ -1755,7 +1688,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units FROM users",
+            "SELECT id, email, display_name, created_at, timezone, units FROM users"
         ).fetchall()
     return [
         UserRow(

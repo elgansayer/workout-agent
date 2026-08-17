@@ -36,9 +36,7 @@ def test_compose_with_guidance_and_footer() -> None:
         protein_target=None,
     )
     result = _compose(
-        "Workout plan here",
-        guidance,
-        "\n\nHevy routines refreshed: Day 1.",
+        "Workout plan here", guidance, "\n\nHevy routines refreshed: Day 1."
     )
     assert result.startswith("Workout plan here")
     assert "Today's lifestyle:" in result
@@ -230,7 +228,7 @@ def test_run_preview_training_day(
                 slope_per_session=1.25,
                 sessions_since_best=0,
                 intervention=None,
-            ),
+            )
         ],
         recovery=RecoveryInsight(
             sleep_hours=7.5,
@@ -248,8 +246,7 @@ def test_run_preview_training_day(
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights",
-        lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -461,7 +458,7 @@ def test_run_preview_training_day_with_checkin(
 
     monkeypatch.setattr(
         "main.checkin.due",
-        lambda cfg, **kw: checkin.CheckinDue(
+        lambda cfg: checkin.CheckinDue(
             number=1,
             workouts_done=24,
             weeks_elapsed=4,
@@ -523,7 +520,7 @@ def test_run_preview_training_day_with_checkin(
                 slope_per_session=1.25,
                 sessions_since_best=0,
                 intervention=None,
-            ),
+            )
         ],
         recovery=RecoveryInsight(
             sleep_hours=7.5,
@@ -541,8 +538,7 @@ def test_run_preview_training_day_with_checkin(
         headline="All lifts progressing.",
     )
     monkeypatch.setattr(
-        "main.insights_engine.build_insights",
-        lambda *a, **kw: fake_insights,
+        "main.insights_engine.build_insights", lambda *a, **kw: fake_insights
     )
     monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
     monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
@@ -606,7 +602,7 @@ def test_run_deliver_sends_telegram(
     # Track Telegram send — must return True for success
     telegram_calls = []
 
-    def _fake_send(token: str, chat_id: str, msg: str, **kw: object) -> bool:
+    def _fake_send(token, chat_id, msg, **kw):
         telegram_calls.append((token, chat_id, msg))
         return True
 
@@ -806,8 +802,8 @@ def test_run_self_review_on_configured_weekday(
         "main.get_progress_history",
         lambda **kw: {
             "Deadlift (Barbell)": [
-                {"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5},
-            ],
+                {"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}
+            ]
         },
     )
     monkeypatch.setattr(

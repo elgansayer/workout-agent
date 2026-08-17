@@ -159,7 +159,8 @@ def test_generate_next_workout_success() -> None:
     mock_provider = _make_mock_provider(_fake_gemini_plan)
 
     result = generate_next_workout(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -172,7 +173,8 @@ def test_generate_next_workout_empty_response_falls_back() -> None:
     mock_provider = _make_mock_provider("")
 
     result = generate_next_workout(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -184,7 +186,8 @@ def test_generate_next_workout_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
 
     result = generate_next_workout(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -216,7 +219,8 @@ def test_generate_rest_day_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_rest_message)
 
     result = generate_rest_day_message(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         recovery={"sleep_hours": 8},
     )
     assert result == _fake_rest_message
@@ -274,7 +278,8 @@ def test_generate_checkin_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_checkin)
 
     result = generate_checkin_message(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -290,7 +295,8 @@ def test_generate_checkin_message_empty_falls_back() -> None:
     mock_provider = _make_mock_provider("")
 
     result = generate_checkin_message(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -306,7 +312,8 @@ def test_generate_checkin_message_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
 
     result = generate_checkin_message(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -349,7 +356,8 @@ def test_apply_autonomous_adjustments_success() -> None:
     mock_provider = _make_mock_provider(json.dumps(updated))
 
     result = apply_autonomous_adjustments(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines={"Push Day": [{"name": "Bench Press", "sets": 4}]},
         hevy_logs=[],
     )
@@ -361,7 +369,8 @@ def test_apply_autonomous_adjustments_strips_markdown() -> None:
     mock_provider = _make_mock_provider(f"```json\n{json.dumps(updated)}\n```")
 
     result = apply_autonomous_adjustments(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines={"Day 1": [{"name": "Squat", "sets": 4}]},
         hevy_logs=[],
     )
@@ -373,7 +382,8 @@ def test_apply_autonomous_adjustments_non_dict_falls_back() -> None:
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines=base,
         hevy_logs=[],
     )
@@ -385,7 +395,8 @@ def test_apply_autonomous_adjustments_exception_falls_back() -> None:
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines=base,
         hevy_logs=[],
     )
@@ -397,41 +408,9 @@ def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
-        provider=mock_provider,
+        api_key="test-key",
+        model_name="gemini-pro",
         base_routines=base,
         hevy_logs=[],
     )
     assert result is base
-
-
-# ---------------------------------------------------------------------------
-# _server_gemini_provider
-# ---------------------------------------------------------------------------
-
-
-def test_server_gemini_provider_creates_gemini_provider() -> None:
-    with patch.dict(
-        os.environ,
-        {"GEMINI_API_KEY": "test-key-123", "GEMINI_MODEL": "gemini-2.0-flash"},
-        clear=True,
-    ):
-        provider = _server_gemini_provider()
-        assert "Gemini" in provider.name()
-        assert "gemini-2.0-flash" in provider.name()
-
-
-def test_server_gemini_provider_default_model() -> None:
-    with patch.dict(
-        os.environ, {"GEMINI_API_KEY": "test-key-123"}, clear=True
-    ):
-        provider = _server_gemini_provider()
-        assert "gemini-2.5-flash" in provider.name()
-
-
-def test_server_gemini_provider_raises_without_key() -> None:
-    with patch.dict(os.environ, {}, clear=True):
-        try:
-            _server_gemini_provider()
-            assert False, "Should have raised ValueError"
-        except ValueError as exc:
-            assert "GEMINI_API_KEY" in str(exc)

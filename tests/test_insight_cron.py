@@ -39,7 +39,7 @@ def test_generate_daily_header_saves_valid_json(
             "fatigue": "Green",
             "wins_stalls": "All lifts progressing",
             "advice": "Keep pushing",
-        },
+        }
     )
     fake_provider.name.return_value = "Gemini (test)"
 
@@ -71,8 +71,7 @@ def test_generate_daily_header_saves_valid_json(
 
 
 def test_generate_daily_header_strips_markdown_code_blocks(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch, tmp_path
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -99,8 +98,7 @@ def test_generate_daily_header_strips_markdown_code_blocks(
 
 
 def test_generate_daily_header_invalid_json_structure_not_saved(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch, tmp_path
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -153,7 +151,7 @@ def test_generate_daily_header_filters_by_date_cutoff(
             "fatigue": "Green",
             "wins_stalls": "Good",
             "advice": "Go",
-        },
+        }
     )
     fake_provider.name.return_value = "Gemini (test)"
     monkeypatch.setattr(
@@ -221,8 +219,7 @@ def test_generate_weekly_correlations_saves_markdown(
 
 
 def test_generate_weekly_correlations_empty_response_not_saved(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch, tmp_path
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -248,8 +245,7 @@ def test_generate_weekly_correlations_empty_response_not_saved(
 
 
 def test_generate_weekly_correlations_exception_is_handled(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch, tmp_path
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -268,8 +264,7 @@ def test_generate_weekly_correlations_exception_is_handled(
 
 
 def test_generate_weekly_correlations_filters_history_by_date(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    monkeypatch, tmp_path
 ) -> None:
     config = _FakeConfig(tmp_path)
 
@@ -287,7 +282,7 @@ def test_generate_weekly_correlations_filters_history_by_date(
     monkeypatch.setattr(
         "insight_cron.get_progress_history",
         lambda **kw: {
-            "Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}],
+            "Deadlift": [{"date": "2026-08-01", "top_weight_kg": 140, "top_reps": 5}]
         },
     )
 

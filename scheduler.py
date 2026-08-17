@@ -57,6 +57,33 @@ def _now_in_tz(tz_name: str) -> datetime:
         return datetime.now(ZoneInfo("UTC"))
 
 
+def _next_run_time(user_tz: str, run_times: list[str]) -> datetime:
+    """Return the earliest upcoming run time today (or tomorrow) in user's TZ."""
+    now = _now_in_tz(user_tz)
+    today = now.date()
+
+    candidates: list[datetime] = []
+    for hhmm in run_times:
+        try:
+            hour, minute = map(int, hhmm.split(":"))
+        except ValueError:
+            continue
+        dt = datetime(
+            today.year, today.month, today.day, hour, minute, tzinfo=now.tzinfo
+        )
+        if dt <= now:
+            dt += timedelta(days=1)
+        candidates.append(dt)
+
+    if not candidates:
+        dt = datetime(today.year, today.month, today.day, 7, 0, tzinfo=now.tzinfo)
+        if dt <= now:
+            dt += timedelta(days=1)
+        return dt
+
+    return min(candidates)
+
+
 def _is_due(user_tz: str, run_times: list[str]) -> bool:
     """Check whether the current minute matches any configured run time."""
     now = _now_in_tz(user_tz)

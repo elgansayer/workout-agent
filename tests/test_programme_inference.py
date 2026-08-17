@@ -310,11 +310,9 @@ def test_infer_programme_empty_data() -> None:
     assert prog.is_rest_day_today() is False
 
 
-def test_training_day_focus_summary() -> None:
+def test_training_day_focus_summary():
     td = TrainingDay(
-        title="Push",
-        routine_id="r1",
-        primary_muscles=["chest", "shoulders", "triceps"],
+        title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"]
     )
     assert "Chest" in td.focus_summary()
     assert "Shoulders" in td.focus_summary()
