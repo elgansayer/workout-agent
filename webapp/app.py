@@ -23,6 +23,8 @@ import json
 import logging
 import os
 import secrets
+import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
@@ -41,13 +43,19 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from programme_state import (
+    get_active_programme,
+    get_programme_state,
+    get_programme_templates,
+    set_active_programme,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers
+from ai_provider import PROVIDERS, AIProvider, available_providers, resolve_provider
 from config import Config
 from database import (
     clear_chat_messages,
@@ -86,9 +94,12 @@ from program import (
     block_for_week,
     day_exercises,
     day_focus,
+    get_focus,
+    get_scheme,
     today_day,
     week_in_cycle,
 )
+from programme_inference import InferredProgramme
 from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
@@ -1449,3 +1460,115 @@ def service_worker() -> FileResponse:
         media_type="application/javascript",
         headers={"Service-Worker-Allowed": "/", "Cache-Control": "no-cache"},
     )
+
+
+# --- AUTO-GENERATED API ROUTES FOR ANGULAR ---
+from fastapi.encoders import jsonable_encoder
+
+
+def _check_api_auth(request: Request):
+    uid = request.session.get("user_id")
+    if not uid:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return uid
+
+@app.get("/api/progress")
+def api_progress(request: Request):
+    user_id = _check_api_auth(request)
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    charts_data = []
+    for name in sorted(series):
+        entries = series[name]
+        points = [{"date": e["date"][5:], "value": e["top_weight_kg"], "label": _format_best(e)} for e in entries]
+        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
+        e1rms_filtered = [v for v in e1rms if v is not None]
+        best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
+        charts_data.append({
+            "name": name,
+            "svg": charts.line_chart(points, unit="kg"),
+            "best_e1rm": best_e1rm,
+            "sessions": len(entries),
+        })
+    return JSONResponse(jsonable_encoder({
+        "charts": charts_data,
+        "body": _body_charts(user_id=user_id)
+    }))
+
+@app.get("/api/stats")
+def api_stats(request: Request):
+    user_id = _check_api_auth(request)
+    volumes = get_session_volumes(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH)
+    logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
+    series = get_progress_history(db_path=DB_PATH)
+    today = datetime.now(tz=timezone.utc).date()
+    week = week_in_cycle(start, today)
+    
+    total_sessions = len(volumes)
+    total_volume = sum(v["volume"] for v in volumes)
+    days_on_programme = (today - start).days
+    
+    focus_counts = {}
+    for log in logs:
+        focus_counts[log.focus] = focus_counts.get(log.focus, 0) + 1
+    
+    return JSONResponse(jsonable_encoder({
+        "total_sessions": total_sessions,
+        "total_volume": total_volume,
+        "days_on_programme": days_on_programme,
+        "prs": len(prs),
+        "donut": charts.donut_chart(focus_counts) if focus_counts else None,
+        "heatmap": charts.calendar_heatmap(_training_levels(user_id=user_id)),
+        "volume_chart": charts.bar_chart([{"label": v["date"][5:], "value": v["volume"]} for v in volumes[-30:]]) if volumes else None,
+    }))
+
+@app.get("/api/history")
+def api_history(request: Request):
+    user_id = _check_api_auth(request)
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    return JSONResponse(jsonable_encoder({"logs": logs}))
+
+@app.get("/api/plan")
+def api_plan(request: Request):
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder({
+        "days": [
+            {
+                "day": d,
+                "focus": get_focus(d),
+                "is_rest": get_focus(d) is None,
+                "scheme": get_scheme(d)
+            } for d in range(1, 8)
+        ]
+    }))
+
+@app.get("/api/programmes")
+def api_programmes(request: Request):
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder({
+        "current_state": get_programme_state(db_path=DB_PATH, user_id=user_id),
+        "templates": [
+            {"id": "base", "name": "Standard PPL", "desc": "6-day Push/Pull/Legs split"}
+        ]
+    }))
+
+@app.get("/api/settings")
+def api_settings(request: Request):
+    user_id = _check_api_auth(request)
+    
+    prefs = get_user_preferences(user_id, DB_PATH)
+    keys = get_user_api_keys(user_id, DB_PATH)
+    providers = list(PROVIDERS.keys()) if 'ai_provider' in globals() else ["gemini", "claude", "openai", "deepseek"]
+    return JSONResponse(jsonable_encoder({
+        "prefs": prefs,
+        "keys": [{"provider": k["provider"], "masked_key": k["masked_key"]} for k in keys],
+        "providers": providers
+    }))
+
+@app.get("/api/chat-history")
+def api_chat_history(request: Request):
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder({
+        "messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)
+    }))

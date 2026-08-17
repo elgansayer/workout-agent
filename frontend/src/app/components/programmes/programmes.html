@@ -1,1 +1,11 @@
-<p>programmes works!</p>
+@if (loading()) {
+  <div class="loading">Loading component...</div>
+}
+@if (error()) {
+  <div class="error">{{ error() }}</div>
+}
+@if (data(); as d) {
+  <div class="container">
+    <pre>{{ d | json }}</pre>
+  </div>
+}
