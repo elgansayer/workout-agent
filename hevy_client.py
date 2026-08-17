@@ -249,10 +249,7 @@ def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:
     ``primary_muscle_group``, and ``secondary_muscle_groups``.
     """
     return _get_all_pages(
-        api_key,
-        "exercise_templates",
-        "exercise_templates",
-        page_size=100,
+        api_key, "exercise_templates", "exercise_templates", page_size=100
     )
 
 
