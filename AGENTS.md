@@ -210,15 +210,15 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (reconciled 2026-08-06).~~
 
 - **Test coverage audit** (last updated 2026-08-08, re-verified
-  2026-08-08 by hourly dead-code sweep #688, hourly lint #685, and
-  hourly test watch #706): all 609 tests passing, covering 31 test
-  modules. Zero coverage gaps — every source module has a corresponding
-  test file. All verification gates clean (compileall, ruff, pytest,
-  webapp + main import-sanity, mypy advisory clean). No drift between
-  code and test suite.
+  2026-08-08 by hourly dead-code sweep #688, hourly lint #685, hourly
+  test watch #706, and hourly test watch #717): all 611 tests passing,
+  covering 31 test modules. Zero coverage gaps — every source module
+  has a corresponding test file. All verification gates clean
+  (compileall, ruff, pytest, webapp + main import-sanity, mypy
+  advisory clean). No drift between code and test suite.
 
-- **Hourly test watch #706 executed (2026-08-08).** Full verification
-  gate passed: compileall (pass), ruff (clean), pytest (609/609),
+- **Hourly test watch #717 executed (2026-08-08).** Full verification
+  gate passed: compileall (pass), ruff (clean), pytest (611/611),
   webapp.app import-sanity (OK), main import-sanity (OK), mypy (clean
   on all 63 source files). All 31 test modules present — zero coverage
   gaps. No test failures, no drift to fix. Status: clean.
