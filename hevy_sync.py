@@ -338,7 +338,7 @@ def sync_routines(config: Config) -> list[str]:
                 server_gemini_model=config.gemini_model,
             )
             updated_routines = apply_autonomous_adjustments(
-                provider=ai_provider,
+                provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,

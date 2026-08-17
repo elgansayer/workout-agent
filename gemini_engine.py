@@ -1,5 +1,5 @@
-"""Uses AI (Gemini/Claude/OpenAI/DeepSeek) to apply progressive overload and
-write today's plan, going through ``AIProvider`` from ``ai_provider.py``."""
+"""Uses the user's preferred AI provider to apply progressive overload and
+write today's plan."""
 
 from __future__ import annotations
 
@@ -160,16 +160,6 @@ def generate_next_workout(
             insights,
             last_plan,
         )
-        text = provider.generate(prompt)
-        if isinstance(text, str) and text:
-            return str(text)
-        logger.warning(
-            "%s returned an empty response; using baseline plan.", provider.name()
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "%s generation failed (%s); using baseline plan.", provider.name(), exc
-        )
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
@@ -301,16 +291,6 @@ def generate_checkin_message(
             workouts_done,
             weeks,
             analysis_text,
-        )
-        text = provider.generate(prompt)
-        if isinstance(text, str) and text:
-            return str(text)
-        logger.warning(
-            "%s returned an empty check-in; using fallback.", provider.name()
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
         )
         text = str(provider.generate(prompt)).strip()
         if text:

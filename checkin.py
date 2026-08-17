@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 
-from ai_resolver import resolve_provider
+from ai_provider import resolve_provider
 from config import Config
 from database import (
     get_meta,
@@ -260,11 +260,13 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
+        user_id=None,
         fallback_api_key=config.gemini_api_key,
         fallback_model=config.gemini_model,
+        db_path=config.database_path,
     )
     return generate_checkin_message(
-        provider=provider,
+        provider,
         number=due_info.number,
         week=week,
         block=block,

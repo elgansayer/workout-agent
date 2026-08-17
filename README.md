@@ -537,11 +537,19 @@ without it.
    | `GEMINI_API_KEY` | ✅ | https://aistudio.google.com/app/apikey |
    | `TELEGRAM_BOT_TOKEN` | ✅ | from @BotFather |
    | `TELEGRAM_CHAT_ID` | ✅ | your chat id |
+   | `WEB_GOOGLE_CLIENT_ID` | ✅ (web) | Google OAuth client for dashboard login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | ✅ (web) | Google OAuth client secret |
+   | `WEB_AUTH_SECRET` | ✅ (web) | random string to sign session cookies |
    | `HEVY_API_KEY` | optional | reference your last logged session |
    | `GOOGLE_HEALTH_CLIENT_ID` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8088` |
+
+3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8088` — keep it behind a reverse proxy / firewall. Sign in
+   with Google when you open it; the OAuth flow creates your account automatically.
    | `WEB_GOOGLE_CLIENT_ID` | optional | Google OAuth client ID for dashboard login |
    | `WEB_GOOGLE_CLIENT_SECRET` | optional | Google OAuth client secret for dashboard login |
    | `WEB_AUTH_SECRET` | optional | long random string to encrypt login session cookies |

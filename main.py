@@ -243,6 +243,13 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     _maybe_self_review(config, recovery, week, block, preview)
 
+    provider = resolve_provider(
+        user_id=None,
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
+        db_path=config.database_path,
+    )
+
     day = today_day(today)
 
     provider = resolve_provider(
@@ -254,7 +261,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
         provider = resolve_provider(server_gemini_key=config.gemini_api_key)
         message = generate_rest_day_message(
-            provider=provider,
+            provider,
             recovery=recovery,
             server_gemini_key=config.gemini_api_key,
             server_gemini_model=config.gemini_model,
@@ -307,7 +314,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     provider = resolve_provider(server_gemini_key=config.gemini_api_key)
     plan = generate_next_workout(
-        provider=provider,
+        provider,
         day=day,
         week=week,
         block=block,
