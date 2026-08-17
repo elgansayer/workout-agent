@@ -1,4 +1,4 @@
-name: Diagnose Backend Regression Boundary
+name: Diagnose Current Backend Contracts
 
 on:
   push:
@@ -12,31 +12,14 @@ permissions:
   contents: read
 
 jobs:
-  affected-suites:
-    name: ${{ matrix.candidate.name }}
+  exact-main:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        candidate:
-          - name: merge-bdfc4ae
-            sha: bdfc4ae7685e4963df0a267f51ae0f0ccaf5799c
-          - name: first-parent-7d23eca
-            sha: 7d23eca77cc8db8c5b9e2d27e0417c27caf4f117
-          - name: pre-merge-98eabd
-            sha: 98eabd31f1407a771b68367d1f83ef0603fb185a
-          - name: side-parent-19098d
-            sha: 19098da5762105dc4b7b99ac99df34f3d98a384b
-          - name: typecheck-side-49b2f1
-            sha: 49b2f112c7ff384815f91d90d6960b28d230f236
-          - name: typecheck-merge-acf75c
-            sha: acf75c8bff5d3fc7c3c0c87814d09276fd3ec47f
+    timeout-minutes: 30
     steps:
-      - name: Check out immutable candidate
+      - name: Check out immutable current main
         uses: actions/checkout@v6
         with:
-          ref: ${{ matrix.candidate.sha }}
+          ref: 0a12db22d5c37843f232c98bd7ca4c076c7421cb
           fetch-depth: 1
 
       - name: Set up Python
@@ -48,8 +31,15 @@ jobs:
             requirements.txt
             requirements-web.txt
 
-      - name: Install candidate dependencies
+      - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
+
+      - name: Report immutable source identity
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git hash-object tests/test_webapp.py
+          grep -n '^def test_' tests/test_webapp.py
 
       - name: Compile every tracked Python file
         shell: bash
@@ -57,26 +47,28 @@ jobs:
           mapfile -d '' files < <(git ls-files -z '*.py')
           python -m py_compile "${files[@]}"
 
-      - name: Run affected suites from the candidate itself
+      - name: Collect current affected tests
         env:
           APP_ENV: test
           ALLOW_ANONYMOUS_WEB: "1"
           WEB_ALLOW_ANONYMOUS: "1"
-        shell: bash
-        run: |
-          tests=(
-            tests/test_webapp.py
-            tests/test_database.py
-            tests/test_ai_provider.py
-            tests/test_insight_cron.py
-            tests/test_analytics.py
-          )
-          present=()
-          for test_path in "${tests[@]}"; do
-            [[ -f "$test_path" ]] && present+=("$test_path")
-          done
-          if [[ ${#present[@]} -eq 0 ]]; then
-            echo "No affected suites exist at ${{ matrix.candidate.sha }}"
-            exit 1
-          fi
-          python -m pytest -q "${present[@]}"
+        run: >-
+          python -m pytest --collect-only -q
+          tests/test_webapp.py
+          tests/test_database.py
+          tests/test_ai_provider.py
+          tests/test_insight_cron.py
+          tests/test_analytics.py
+
+      - name: Run current affected tests
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+          WEB_ALLOW_ANONYMOUS: "1"
+        run: >-
+          python -m pytest -q
+          tests/test_webapp.py
+          tests/test_database.py
+          tests/test_ai_provider.py
+          tests/test_insight_cron.py
+          tests/test_analytics.py
