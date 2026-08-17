@@ -288,6 +288,7 @@ def run_checkin(
         server_gemini_model=config.gemini_model,
     )
     return generate_checkin_message(
+        provider=provider,
         number=due_info.number,
         week=week,
         block=block,

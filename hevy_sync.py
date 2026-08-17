@@ -326,13 +326,22 @@ def sync_routines(config: Config) -> list[str]:
             except ImportError:
                 weather = None
 
+            from ai_provider import resolve_provider
+
+            provider = resolve_provider(
+                db_path=config.database_path,
+                server_gemini_key=config.gemini_api_key,
+                server_gemini_model=config.gemini_model,
+            )
+
             logs = get_recent_hevy_logs(limit=15, db_path=config.database_path)
             body_metrics = get_body_metrics(limit=14, db_path=config.database_path)
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            logger.info("Requesting autonomous routine adjustments...")
+            logger.info("Requesting autonomous routine adjustments via %s...", provider.name())
             updated_routines = apply_autonomous_adjustments(
+                provider=provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,

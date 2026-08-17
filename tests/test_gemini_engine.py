@@ -157,9 +157,9 @@ def _make_mock_provider(response_text: str, *, raise_error: bool = False) -> Mag
 
 def test_generate_next_workout_success() -> None:
     mock_provider = _make_mock_provider(_fake_gemini_plan)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
+        provider=mock_provider,
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -170,9 +170,9 @@ def test_generate_next_workout_success() -> None:
 
 def test_generate_next_workout_empty_response_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
+        provider=mock_provider,
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -182,9 +182,9 @@ def test_generate_next_workout_empty_response_falls_back() -> None:
 
 def test_generate_next_workout_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_next_workout(
+        provider=mock_provider,
         day=1,
         week=3,
         block=BLOCKS[1],
@@ -214,9 +214,9 @@ _fake_rest_message = "Rest up, champ. Recovery is key."
 
 def test_generate_rest_day_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_rest_message)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_rest_day_message(
+        provider=mock_provider,
         recovery={"sleep_hours": 8},
     )
     assert result == _fake_rest_message
@@ -224,17 +224,15 @@ def test_generate_rest_day_message_success() -> None:
 
 def test_generate_rest_day_message_empty_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
-    result = generate_rest_day_message()
+    result = generate_rest_day_message(provider=mock_provider)
     assert "rest day" in result.lower()
 
 
 def test_generate_rest_day_message_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
-    result = generate_rest_day_message()
+    result = generate_rest_day_message(provider=mock_provider)
     assert "rest day" in result.lower()
 
 
@@ -274,9 +272,9 @@ _fake_checkin = "Check-in 2: Block 2 (Strength)\nDeadlift progressing well.\nBen
 
 def test_generate_checkin_message_success() -> None:
     mock_provider = _make_mock_provider(_fake_checkin)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
+        provider=mock_provider,
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -290,9 +288,9 @@ def test_generate_checkin_message_success() -> None:
 
 def test_generate_checkin_message_empty_falls_back() -> None:
     mock_provider = _make_mock_provider("")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
+        provider=mock_provider,
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -306,9 +304,9 @@ def test_generate_checkin_message_empty_falls_back() -> None:
 
 def test_generate_checkin_message_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = generate_checkin_message(
+        provider=mock_provider,
         number=2,
         week=5,
         block=BLOCKS[2],
@@ -349,9 +347,9 @@ def test_build_autonomous_prompt_catabolic() -> None:
 def test_apply_autonomous_adjustments_success() -> None:
     updated = {"Push Day": [{"name": "Bench Press", "sets": 3}]}
     mock_provider = _make_mock_provider(json.dumps(updated))
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
+        provider=mock_provider,
         base_routines={"Push Day": [{"name": "Bench Press", "sets": 4}]},
         hevy_logs=[],
     )
@@ -361,9 +359,9 @@ def test_apply_autonomous_adjustments_success() -> None:
 def test_apply_autonomous_adjustments_strips_markdown() -> None:
     updated = {"Day 1": [{"name": "Squat", "sets": 3}]}
     mock_provider = _make_mock_provider(f"```json\n{json.dumps(updated)}\n```")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     result = apply_autonomous_adjustments(
+        provider=mock_provider,
         base_routines={"Day 1": [{"name": "Squat", "sets": 4}]},
         hevy_logs=[],
     )
@@ -372,10 +370,10 @@ def test_apply_autonomous_adjustments_strips_markdown() -> None:
 
 def test_apply_autonomous_adjustments_non_dict_falls_back() -> None:
     mock_provider = _make_mock_provider("[1, 2, 3]")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
+        provider=mock_provider,
         base_routines=base,
         hevy_logs=[],
     )
@@ -384,10 +382,10 @@ def test_apply_autonomous_adjustments_non_dict_falls_back() -> None:
 
 def test_apply_autonomous_adjustments_exception_falls_back() -> None:
     mock_provider = _make_mock_provider("", raise_error=True)
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
+        provider=mock_provider,
         base_routines=base,
         hevy_logs=[],
     )
@@ -396,10 +394,10 @@ def test_apply_autonomous_adjustments_exception_falls_back() -> None:
 
 def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
     mock_provider = _make_mock_provider("not valid json {")
-    monkeypatch.setattr("gemini_engine.resolve_provider", lambda *a, **kw: mock_provider)
 
     base = {"Day 1": [{"name": "Squat", "sets": 4}]}
     result = apply_autonomous_adjustments(
+        provider=mock_provider,
         base_routines=base,
         hevy_logs=[],
     )
