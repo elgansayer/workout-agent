@@ -3,6 +3,7 @@
 ## Status: ✅ Clean
 
 ### 1. Commit Message Quality
+<<<<<<< HEAD
 Last commit (`2934ad6`) has a descriptive message:
 "type-check sweep: tests/test_hevy_parser.py (#583)".
 No low-quality messages like "fix" or "wip" found in visible history.
@@ -10,6 +11,12 @@ No low-quality messages like "fix" or "wip" found in visible history.
 Note: The repository is a shallow/grafted clone with only 1 commit visible.
 If additional commits exist upstream, the shallow nature of this clone limits
 the reviewable range. This is a pure audit observation — no action needed.
+=======
+Last commit reviewed (shallow clone, grafted at `2934ad6`):
+- `2934ad6` — "type-check sweep: tests/test_hevy_parser.py (#583)"
+  Descriptive, includes issue reference. No low-quality messages like
+  "fix" or "wip" found.
+>>>>>>> main
 
 ### 2. Sensitive Files
 `git log -p -10 -- .env .env.* data/ '*.db'` returns only `.env.example`
@@ -32,6 +39,7 @@ Confirmed `.gitignore` covers:
 - Binary images: `*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.ico` ✅
 - OS cruft: `.DS_Store`, `Thumbs.db`, `*.swp`, `*.swo` ✅
 
+<<<<<<< HEAD
 All required patterns present. No missing entries.
 
 ### 4. Large Files
@@ -46,3 +54,18 @@ within acceptable limits.
 - commit_hygiene.py: reports CLEAN
 - No binary/log/cache files in tracked tree
 - No sensitive files committed
+=======
+All required patterns present.
+
+### 4. Large Files
+No files larger than 1 MB found outside `data/` and `.git/`. Largest tracked
+files are source code (database.py: 71K, webapp/app.py: 52K) — all well
+within acceptable limits.
+
+## Verification
+- ruff check: clean
+- pytest: 601 passed, 2 warnings
+- mypy (commit_hygiene.py): clean
+- commit_hygiene.py --json: status=clean, 0 findings
+- No binary/log/cache files in tracked tree
+>>>>>>> main
