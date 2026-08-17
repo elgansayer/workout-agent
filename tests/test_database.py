@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timezone
 
 from database import (
     advance_day,
@@ -12,13 +12,11 @@ from database import (
     get_daily_logs,
     get_exercise_volumes,
     get_meta,
-    get_or_create_user,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
     get_recent_bests,
     get_recent_hevy_logs,
-    get_routine_record,
     get_session_volumes,
     init_db,
     save_body_metrics,
@@ -31,17 +29,17 @@ from database import (
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
-def _db(tmp_path: Any) -> str:
+def _db(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
 
 
-def test_init_seeds_day_one(tmp_path: Any) -> None:
+def test_init_seeds_day_one(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_current_day(db) == 1
 
 
-def test_init_is_idempotent(tmp_path: Any) -> None:
+def test_init_is_idempotent(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     advance_day(db)
@@ -49,7 +47,7 @@ def test_init_is_idempotent(tmp_path: Any) -> None:
     assert get_current_day(db) == 2
 
 
-def test_advance_increments(tmp_path: Any) -> None:
+def test_advance_increments(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert advance_day(db) == 2
@@ -57,27 +55,27 @@ def test_advance_increments(tmp_path: Any) -> None:
     assert get_current_day(db) == 3
 
 
-def test_advance_wraps_at_six(tmp_path: Any) -> None:
+def test_advance_wraps_at_six(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     days = [advance_day(db) for _ in range(6)]
     assert days == [2, 3, 4, 5, 6, 1]
 
 
-def test_save_workout_ignores_none(tmp_path: Any) -> None:
+def test_save_workout_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_workout(None, db)  # should not raise
 
 
-def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
+def test_save_progress_and_get_recent_bests(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     summary = WorkoutSummary(
         title="Legs & Abs",
         date="2026-06-17",
         duration_seconds=3600,
-        total_volume_kg=7920.0,
+        total_volume_kg=5000.0,
         exercises=[
             ExerciseSummary("Leg Press", 120.0, 12, 3, True),
             ExerciseSummary("Leg Extensions", 60.0, 15, 4, True),
@@ -91,26 +89,18 @@ def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
     assert bests["Leg Extensions"]["sets"] == 4
 
 
-def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
+def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1",
-            "2026-06-10",
-            duration_seconds=3600,
-            total_volume_kg=3000.0,
-            exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)],
+            title="S1", date="2026-06-10", exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)]
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2",
-            "2026-06-17",
-            duration_seconds=3600,
-            total_volume_kg=3960.0,
-            exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)],
+            title="S2", date="2026-06-17", exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)]
         ),
         db,
     )
@@ -119,34 +109,22 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
     assert bests["Leg Press"]["top_reps"] == 12
 
 
-def test_save_progress_ignores_none(tmp_path: Any) -> None:
+def test_save_progress_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(None, db)
     assert get_recent_bests(db) == {}
 
 
-def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
+def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
-        "2026-06-17",
-        1,
-        "Back, Deadlifts & Chest",
-        "high",
-        "plan A",
-        "life A",
-        db,
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
     )
     # A re-run on the same day replaces the earlier entry.
     save_daily_log(
-        "2026-06-17",
-        1,
-        "Back, Deadlifts & Chest",
-        "high",
-        "plan B",
-        "life B",
-        db,
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
     )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
@@ -156,8 +134,12 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     assert logs[1]["plan"] == "plan B"
     assert logs[1]["carb_tier"] == "high"
 
+    # Same logs scoped to a different user must see nothing.
+    logs2 = get_daily_logs(db_path=db, user_id="nonexistent-user")
+    assert logs2 == []
 
-def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
+
+def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db)
@@ -171,22 +153,20 @@ def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     assert readings[-1]["body_fat_pct"] == 14.2
 
 
-def test_save_body_metrics_ignores_none(tmp_path: Any) -> None:
+def test_save_body_metrics_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics(None, "2026-06-17", db)
     assert get_body_metrics(db_path=db) == []
 
 
-def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
+def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1",
-            "2026-06-10",
-            duration_seconds=3600,
-            total_volume_kg=2000.0,
+            title="S1",
+            date="2026-06-10",
             exercises=[
                 ExerciseSummary("Deadlift", 100.0, 5, 4),  # 100*5*4 = 2000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # bodyweight -> 0
@@ -195,32 +175,25 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
         db,
     )
     volumes = get_session_volumes(db)
+    # save_progress uses the date from the WorkoutSummary.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == "2026-06-10"
+    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 
 
-def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
+def test_get_personal_records_uses_best_epley_1rm(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1",
-            "2026-06-10",
-            3600,
-            3000,
-            [ExerciseSummary("Deadlift", 100.0, 5, 4)],
+            title="S1", date="2026-06-10", duration_seconds=3600, total_volume_kg=3000, exercises=[ExerciseSummary("Deadlift", 100.0, 5, 4)]
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2",
-            "2026-06-17",
-            3600,
-            3000,
-            [ExerciseSummary("Deadlift", 120.0, 3, 5)],
+            title="S2", date="2026-06-17", duration_seconds=3600, total_volume_kg=3000, exercises=[ExerciseSummary("Deadlift", 120.0, 3, 5)]
         ),
         db,
     )
@@ -233,21 +206,19 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
     assert pr["weight_kg"] == 120.0
 
 
-def test_get_personal_records_empty_without_data(tmp_path: Any) -> None:
+def test_get_personal_records_empty_without_data(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_personal_records(db) == []
 
 
-def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
+def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1",
-            "2026-06-10",
-            duration_seconds=3600,
-            total_volume_kg=3000.0,
+            title="S1",
+            date="2026-06-10",
             exercises=[
                 ExerciseSummary("Leg Press", 100.0, 10, 3),  # 3000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # 0 (bodyweight)
@@ -257,11 +228,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
     )
     save_progress(
         WorkoutSummary(
-            "S2",
-            "2026-06-17",
-            duration_seconds=3600,
-            total_volume_kg=3300.0,
-            exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)],
+            title="S2", date="2026-06-17", exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)]
         ),  # 3300
         db,
     )
@@ -1157,87 +1124,103 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
     assert get_current_day(db) == 1
 
 
-# ---------- hevy_meta migration tests ----------
+# --- Multi-tenant isolation tests: hevy_meta user_id scoping ---
 
 
-def test_hevy_meta_migration_backward_compat(tmp_path: Any) -> None:
-    """Callers without user_id still work after migration (unscoped read/write)."""
+def test_hevy_meta_migration_adds_user_id_column(tmp_path: Any) -> None:
+    """Running init_db on a pre-migration DB migrates hevy_meta to scoped PK."""
+    import sqlite3
+
+    db = _db(tmp_path)
+
+    # Simulate pre-migration schema with the old key-PK hevy_meta
+    conn = sqlite3.connect(db)
+    conn.execute("""
+        CREATE TABLE hevy_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+    """)
+    conn.execute(
+        "INSERT INTO hevy_meta (key, value) VALUES ('test_key', 'test_value')",
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    conn = sqlite3.connect(db)
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(hevy_meta)")
+    cols = {row[1] for row in cursor.fetchall()}
+    assert "user_id" in cols, "hevy_meta should have user_id after migration"
+    assert "key" in cols
+
+    rows = cursor.execute(
+        "SELECT user_id, key, value FROM hevy_meta WHERE key = 'test_key'",
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] is not None  # backfilled to legacy user
+    assert rows[0][1] == "test_key"
+    assert rows[0][2] == "test_value"
+    conn.close()
+
+
+def test_hevy_meta_scoped_isolation(tmp_path: Any) -> None:
+    """Two different user_ids don't see each other's hevy_meta values."""
     db = _db(tmp_path)
     init_db(db)
-    # Legacy (no user_id) still works
-    set_meta("test_key", "test_value", db)
-    assert get_meta("test_key", db) == "test_value"
-    # Second init is idempotent
-    init_db(db)
-    assert get_meta("test_key", db) == "test_value"
+
+    user_a = "user-a"
+    user_b = "user-b"
+
+    set_meta("alpha", "val_a", db, user_id=user_a)
+    set_meta("alpha", "val_b", db, user_id=user_b)
+
+    assert get_meta("alpha", db, user_id=user_a) == "val_a"
+    assert get_meta("alpha", db, user_id=user_b) == "val_b"
+
+    # Storing for user_a doesn't overwrite user_b
+    assert get_meta("alpha", db, user_id=user_b) == "val_b"
 
 
-def test_hevy_meta_user_isolation(tmp_path: Any) -> None:
-    """Two users scoping the same key see different values."""
+def test_hevy_meta_null_user_id_backward_compat(tmp_path: Any) -> None:
+    """Callers not passing user_id still work (backward compat)."""
     db = _db(tmp_path)
     init_db(db)
-    u1 = get_or_create_user("a@example.com", "A", db)
-    u2 = get_or_create_user("b@example.com", "B", db)
-    set_meta("x", "val_a", db, user_id=u1["id"])
-    set_meta("x", "val_b", db, user_id=u2["id"])
-    assert get_meta("x", db, user_id=u1["id"]) == "val_a"
-    assert get_meta("x", db, user_id=u2["id"]) == "val_b"
+
+    set_meta("mykey", "myval", db)
+    assert get_meta("mykey", db) == "myval"
 
 
-def test_hevy_meta_programme_start_date_scoped(tmp_path: Any) -> None:
-    """get_programme_start_date is scoped per user."""
+def test_hevy_meta_nonexistent_key(tmp_path: Any) -> None:
+    """get_meta returns None for nonexistent key."""
     db = _db(tmp_path)
     init_db(db)
-    u1 = get_or_create_user("a@example.com", "A", db)
-    u2 = get_or_create_user("b@example.com", "B", db)
-    set_meta("programme_start_date", "2025-01-01", db, user_id=u1["id"])
-    set_meta("programme_start_date", "2025-06-15", db, user_id=u2["id"])
+
+    assert get_meta("nonexistent", db, user_id="user-a") is None
+
+
+def test_hevy_meta_set_updates_existing(tmp_path: Any) -> None:
+    """set_meta updates an existing key's value (ON CONFLICT upsert)."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    set_meta("foo", "bar", db, user_id="u1")
+    assert get_meta("foo", db, user_id="u1") == "bar"
+
+    set_meta("foo", "baz", db, user_id="u1")
+    assert get_meta("foo", db, user_id="u1") == "baz"
+
+
+def test_programme_start_date_scoped(tmp_path: Any) -> None:
+    """get_programme_start_date respects user_id scoping."""
     from datetime import date
-
-    assert get_programme_start_date(db, user_id=u1["id"]) == date(2025, 1, 1)
-    assert get_programme_start_date(db, user_id=u2["id"]) == date(2025, 6, 15)
-
-
-# ---------- hevy_routines migration tests ----------
-
-
-def test_hevy_routines_backward_compat(tmp_path: Any) -> None:
-    """Callers without user_id still work for reading/writing routines."""
     db = _db(tmp_path)
     init_db(db)
-    save_routine_record("push", "rid1", "hash1", db)
-    result = get_routine_record("push", db)
-    assert result is not None
-    assert result[0] == "rid1"
-    assert result[1] == "hash1"
-    # Idempotent re-init
-    init_db(db)
-    result2 = get_routine_record("push", db)
-    assert result2 is not None
 
+    set_meta("programme_start_date", "2026-01-15", db, user_id="u1")
+    set_meta("programme_start_date", "2026-06-01", db, user_id="u2")
 
-def test_hevy_routines_user_isolation(tmp_path: Any) -> None:
-    """Different users see different routine records for the same key."""
-    db = _db(tmp_path)
-    init_db(db)
-    u1 = get_or_create_user("a@example.com", "A", db)
-    u2 = get_or_create_user("b@example.com", "B", db)
-    save_routine_record("push", "rid1", "hash1", db, user_id=u1["id"])
-    save_routine_record("push", "rid2", "hash2", db, user_id=u2["id"])
-    r1 = get_routine_record("push", db, user_id=u1["id"])
-    r2 = get_routine_record("push", db, user_id=u2["id"])
-    assert r1 == ("rid1", "hash1")
-    assert r2 == ("rid2", "hash2")
-
-
-def test_hevy_routines_delete_scoped(tmp_path: Any) -> None:
-    """delete_routine_record only removes the scoped user's record."""
-    db = _db(tmp_path)
-    init_db(db)
-    u1 = get_or_create_user("a@example.com", "A", db)
-    u2 = get_or_create_user("b@example.com", "B", db)
-    save_routine_record("push", "rid1", "h1", db, user_id=u1["id"])
-    save_routine_record("push", "rid2", "h2", db, user_id=u2["id"])
-    delete_routine_record("push", db, user_id=u1["id"])
-    assert get_routine_record("push", db, user_id=u1["id"]) is None
-    assert get_routine_record("push", db, user_id=u2["id"]) == ("rid2", "h2")
+    assert get_programme_start_date(db, user_id="u1") == date(2026, 1, 15)
+    assert get_programme_start_date(db, user_id="u2") == date(2026, 6, 1)

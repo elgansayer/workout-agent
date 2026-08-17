@@ -43,10 +43,7 @@ def _fernet() -> Fernet | None:
     try:
         return Fernet(key.encode())
     except Exception as exc:  # noqa: BLE001
-        logger.error(
-            "ENCRYPTION_KEY is invalid (%s). Keys will be stored in plaintext.",
-            exc,
-        )
+        logger.error("ENCRYPTION_KEY is invalid (%s). Keys will be stored in plaintext.", exc)
         return None
 
 
