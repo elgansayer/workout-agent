@@ -4,9 +4,10 @@ A private, local Python agent that acts as an elite hypertrophy / stage-prep
 bodybuilding coach. Every morning it works out what you should train today from
 the real calendar day, pulls your latest workout from the
 [Hevy API](https://api.hevyapp.com/docs/), reads your recovery metrics from
-Google Health Connect (via an exported JSON file), asks Google Gemini to apply
-progressive overload, then sends today's exact routine plus one daily
-improvement tip to your phone via Telegram. On Sundays it sends a short rest and
+Google Health Connect (via an exported JSON file), asks your configured AI
+provider (Gemini, Claude, OpenAI, or DeepSeek) to apply progressive overload,
+then sends today's exact routine plus one daily improvement tip to your phone
+via Telegram. On Sundays it sends a short rest and
 recovery message instead.
 
 Built as a small, focused script rather than a heavyweight generalist agent
@@ -26,7 +27,8 @@ framework. It does one thing well: read your data, reason about it, message you.
 ## Why a custom agent (not OpenClaw / generalist frameworks)
 
 - **Precision** – one job: parse Hevy JSON against a 6-day split and message you.
-- **Privacy** – your health data stays on your machine and is only sent to Gemini.
+- **Privacy** – your health data stays on your machine and is only sent to your
+  configured AI provider.
 - **Low complexity** – a script on a cron job. Set it and forget it.
 - **Safety** – no broad shell/file access, no sandbox to harden.
 
@@ -34,11 +36,14 @@ framework. It does one thing well: read your data, reason about it, message you.
 
 ## AI-Native "Insight-First" Dashboard & Correlation Engine
 
-The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by **Gemini 1.5 Pro**:
+The dashboard acts as an intelligent, reactive interface that treats your SQLite
+database as a knowledge graph, powered by your configured AI provider (Gemini,
+Claude, OpenAI, or DeepSeek):
+The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by your configured AI provider (defaults to **Gemini 2.5 Flash**):
 
 - **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
 - **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.
-- **Explainable UI (XAI) Overlays**: Trend charts have a "Why did this happen?" toggle. The frontend queries Gemini with the specific exercise history and block goal to give a clear causal explanation, stored in the database.
+- **Explainable UI (XAI) Overlays**: Trend charts have a "Why did this happen?" toggle. The frontend queries your configured AI provider with the specific exercise history and block goal to give a clear causal explanation, stored in the database.
 - **Predictive Progressive Overload Visuals**: Projects your estimated 1RM to the end of the peaking phase and validates whether the forecast is physiologically aggressive or conservative based on recent "bad" sessions.
 - **RAG-Enabled Search (Log Investigator)**: A search bar in the dashboard to ask questions like *"Why did I fail my squats in week 3?"*. The backend vectorizes logs and retrieves relevant session context via streaming LLM generation.
 
@@ -117,7 +122,7 @@ workout_agent/
 ├── health_connect.py    # Reads sleep/weight JSON exported from Health Connect
 ├── google_health_client.py # Auto-syncs weight/body fat from Google Health (Eufy scale)
 ├── google_health_auth.py   # One-time OAuth helper to obtain the first refresh token
-├── gemini_engine.py     # Asks Gemini to apply progressive overload
+├── gemini_engine.py     # Asks the configured AI provider to apply progressive overload
 ├── checkin.py           # Periodic planned-vs-actual check-in engine
 ├── lifestyle.py         # Daily lifestyle pillars (nutrition/cardio/recovery)
 ├── telegram_notifier.py # Sends the message to your phone
@@ -133,7 +138,7 @@ Data flow each morning:
 
 ```
 Hevy API ─┐  parsed by hevy_parser
-          ├─► gemini_engine ─► Telegram (your phone)
+          ├─► gemini_engine (via ai_provider) ─► Telegram (your phone)
 Health ───┤        ▲
 Connect   │        │
 SQLite ───┘   (workout history + per-exercise bests)
@@ -158,7 +163,7 @@ count is available). A check-in:
 - compares **planned vs actual** progression for each main lift,
 - flags lifts that are progressing well and lifts that have **stalled**
   (three or more sessions at the top of the rep range with no load increase),
-- asks Gemini to summarise the findings and **auto-applies** them, then
+- asks your AI provider to summarise the findings and **auto-applies** them, then
 - sends you a Telegram **check-in digest** so you always know what changed.
 
 It is numbered ("Check-in 1", "Check-in 2", ...) and stored in SQLite. Set
@@ -265,7 +270,11 @@ dashboard usable with JavaScript disabled.
 | `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
 | `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
+| `/plan`      | The active programme, split and coaching rules; or the fixed 6-day periodisation when no programme is selected |
+| `/programmes`| Programme builder: choose a template, infer from Hevy history, or build a custom workout plan |
+| `/programmes`| Select a workout programme template, infer from Hevy history, or build a custom split |
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
+| `/programmes`| Select a workout programme template or infer one from Hevy history |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
 | `/chat`      | RAG-enabled AI chat (streaming) for digging into your training history |
@@ -277,9 +286,13 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
+
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
 network. (Both compose files default to port 8770; the Portainer variant
 adds a Portainer agent on port 9001.) To run
+network. (Both compose files default to port 8770.) To run it directly instead:
+network. (Both compose files default to port 8770.) To run
+
 it directly instead:
 
 ```bash
@@ -506,6 +519,7 @@ without it.
    | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
    | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
    | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
+   | `ENCRYPTION_KEY` | optional | Fernet key for encrypting user API keys at rest |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
