@@ -8,6 +8,14 @@ cryptography>=50.0.0  # Bumped for CVE-2026-69247, CVE-2026-39892, CVE-2026-3407
 openai>=1.30.0
 anthropic>=0.42.0
 
+# Web app (webapp/) - needed for the test suite and the agent container
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+authlib>=1.3.0
+httpx>=0.27.0
+itsdangerous>=2.2.0
+
 # Development / testing
 pytest>=8.0.0,<9
 ruff>=0.16.2
