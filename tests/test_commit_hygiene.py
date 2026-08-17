@@ -190,25 +190,48 @@ class TestCheckSensitiveFilesOnDisk:
 
 
 class TestCheckGitignore:
-    def test_all_patterns_present(self, tmp_path: Path) -> None:
-        """Returns empty when all required patterns are in .gitignore."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text(
-            "*.db\n"
-            ".env\n"
-            "__pycache__/\n"
-            ".pytest_cache/\n"
-            ".venv/\n"
-        )
+    _BASE_PATTERNS = (
+        "*.db\n*.db-wal\n*.db-shm\n*.db-journal\n"
+        ".env\n__pycache__/\n.pytest_cache/\n.mypy_cache/\n.ruff_cache/\n"
+        ".venv/\nvenv/\ndata/\n"
+        "*.sqlite\n*.sqlite-wal\n*.sqlite-shm\n*.sqlite-journal\n"
+        "*.sqlite3\n*.sqlite3-wal\n*.sqlite3-shm\n*.sqlite3-journal\n"
+        "*.log\nagent.log\n"
+    )
 
-        with patch.object(commit_hygiene, "ROOT", tmp_path):
-            result = _check_gitignore()
-        assert result == []
+    def test_all_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        gi = tmp_path / ".gitignore"
+        gi.write_text(self._BASE_PATTERNS)
+        monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
+        findings = commit_hygiene.check_gitignore()
+        assert findings == []
 
-    def test_missing_patterns_detected(self, tmp_path: Path) -> None:
-        """Missing patterns are reported."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("*.db\n.env\n")
+    def test_missing_pycache(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        gi = tmp_path / ".gitignore"
+        gi.write_text(self._BASE_PATTERNS.replace("__pycache__/\n", ""))
+        monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
+        findings = commit_hygiene.check_gitignore()
+        assert len(findings) == 1
+        assert findings[0].severity == "error"
+        assert "__pycache__/" in findings[0].message
+
+    def test_missing_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        gi = tmp_path / ".gitignore"
+        gi.write_text(self._BASE_PATTERNS.replace("*.db\n", ""))
+        monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
+        findings = commit_hygiene.check_gitignore()
+        assert len(findings) == 1
+        assert findings[0].message == ".gitignore missing entry: *.db"
+
+    def test_missing_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        gi = tmp_path / ".gitignore"
+        gi.write_text(self._BASE_PATTERNS.replace(".env\n", ""))
+        monkeypatch.setattr(commit_hygiene, "ROOT", tmp_path)
+        findings = commit_hygiene.check_gitignore()
+        assert len(findings) == 1
+        assert ".env" in findings[0].message
 
         with patch.object(commit_hygiene, "ROOT", tmp_path):
             result = _check_gitignore()
