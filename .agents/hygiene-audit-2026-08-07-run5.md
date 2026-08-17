@@ -1,4 +1,45 @@
-<<<<<<< HEAD
+# Hourly Commit Hygiene Audit — 2026-08-07 (Run 5)
+
+**Status: ✅ CLEAN**
+
+## 1. Last 10 Commit Messages
+
+| SHA | Message |
+|-----|---------|
+| d03d050 | Fixes #615: [Hourly] Hourly Type-Check Sweep — tests/test_ai_provider.py |
+
+Only one commit reachable (shallow clone / grafted HEAD). Message is descriptive and follows project conventions.
+
+## 2. Sensitive File Check
+
+`git log -p -10 -- .env .env.* data/ '*.db'` — returned only `.env.example` which is explicitly allowed (`.gitignore` has `!.env.example`). No `.env`, `.db`, or `data/` files committed.
+
+## 3. `.gitignore` Coverage
+
+All required patterns confirmed present:
+- ✅ `*.db`, `*.db-wal`, `*.db-shm`, `*.db-journal`
+- ✅ `*.sqlite`, `*.sqlite3` with all variants
+- ✅ `.env`, `.env.*` (with `!.env.example` exception)
+- ✅ `__pycache__/`
+- ✅ `.pytest_cache/`
+- ✅ `.venv/`
+- ✅ `.mypy_cache/`
+- ✅ `.ruff_cache/`
+- ✅ `data/`
+- ✅ Binary images (`*.png`, `*.jpg`, etc.)
+- ✅ Log files (`*.log`)
+
+No missing entries.
+
+## 4. Large File Check
+
+Checked all tracked files — none larger than 1 MB outside `data/` (which is gitignored). No stray binary/log files.
+
+## Verification Gates
+
+- `ruff check .` — All checks passed ✅
+- `mypy` (core modules) — No issues found ✅
+- `pytest` — 573 passed, 1 skipped ✅
 # Hourly Commit Hygiene Audit — 2026-08-07 run5
 
 ## Status: ✅ Clean
@@ -7,6 +48,9 @@
 Last 10 commits reviewed (shallow clone, grafted at `b293de9`):
 - `b293de9` — "type-check sweep: tests/test_sync_history.py (#601)"
   Descriptive, includes issue reference. No low-quality messages like
+Last commit reviewed (shallow clone, grafted at `9c9a729`):
+- `9c9a729` — "Fixes #629: Hourly test watch - verify zero drift and update audit notes (#632)"
+  Descriptive, includes issue references. No low-quality messages like
   "fix" or "wip" found.
 
 ### 2. Sensitive Files
@@ -34,6 +78,7 @@ All required patterns present.
 
 ### 4. Large Files
 No files larger than 2 MB found outside `data/` and `.git/`. Largest tracked
+No files larger than 1 MB found outside `data/` and `.git/`. Largest tracked
 files are source code (database.py: 71K, webapp/app.py: 52K) — all well
 within acceptable limits.
 
@@ -43,7 +88,10 @@ within acceptable limits.
 - mypy (commit_hygiene.py): clean
 - commit_hygiene.py --json: status=clean, 0 findings
 - No binary/log/cache files in tracked tree
-=======
+- pytest: 609 passed, 2 warnings
+- mypy (commit_hygiene.py): clean
+- commit_hygiene.py --json: status=clean, 0 findings
+- No binary/log/cache files in tracked tree
 # Commit Hygiene Audit — 2026-08-07 (Run 5)
 
 ## Status: ✅ CLEAN
@@ -82,4 +130,3 @@ No tracked files >3 MB outside `data/`. Repository is clean of binary bloat.
 - pytest (full suite) → 573 passed, 1 skipped
 - mypy commit_hygiene.py → Clean
 - commit_hygiene.py --json → `{"status": "clean", "count": 0, "findings": []}`
->>>>>>> main
