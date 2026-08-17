@@ -36,6 +36,15 @@ class UserRow(TypedDict):
 DEFAULT_DB_PATH = "workout_agent.db"
 
 
+class UserRow(TypedDict):
+    id: str
+    email: str
+    display_name: str | None
+    created_at: str
+    timezone: str
+    units: str
+
+
 @contextlib.contextmanager
 def _connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1732,7 +1741,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     ]
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[dict[str, Any]]:
+def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
         rows = conn.execute(
