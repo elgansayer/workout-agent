@@ -167,6 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #630 checked 2026-08-07, hourly test watch #629 checked 2026-08-07, hourly commit hygiene #631 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #642 checked 2026-08-07, hourly test watch #629 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07, hourly lint & format fix #651 checked 2026-08-07)
@@ -282,6 +283,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `commit_hygiene.py` and `connector_health.py` invoked by `scheduler.py`
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
+
+- **Hourly commit hygiene #631 re-verified (2026-08-07).** `commit_hygiene.py` executed
+  clean via `--json` output (status: "clean", zero findings). All 40 hygiene tests
+  passing. Full verification gate passed: ruff (clean), pytest (609/609), mypy (clean).
+  No sensitive files committed (`.env`, `.db`, `.sqlite3`), `.gitignore` covers all
+  required patterns, no large files (>1 MB) tracked outside `data/`. Audit report:
+  `.agents/hygiene-audit-2026-08-07-run5.md`.
 
 
 
