@@ -346,16 +346,28 @@ def find_orphans() -> list[OrphanReport]:
                     wired.add(imp)
                     queue.append(imp)
 
+    # Map module names to their defining file path for transitive lookups.
+    module_file: dict[str, str] = {}
+    for mi in modules:
+        rel = str(mi.path.relative_to(ROOT))
+        module_file[mi.name] = rel
+
     while queue:
         module_name = queue.pop(0)
-        # Find the file that defines this module, then add ITS imports
-        defining_file = mod_to_file.get(module_name)
-        if defining_file is None:
-            continue
-        for transitive in import_graph.get(defining_file, set()):
-            if transitive not in wired:
-                wired.add(transitive)
-                queue.append(transitive)
+        # Look at the module's own file's imports (transitive closure).
+        def_file = module_file.get(module_name)
+        if def_file and def_file in import_graph:
+            for transitive in import_graph[def_file]:
+                if transitive not in wired:
+                    wired.add(transitive)
+                    queue.append(transitive)
+        # Also find files that import this module and add their imports.
+        for file_rel, imports in import_graph.items():
+            if module_name in imports:
+                for transitive in import_graph.get(file_rel, set()):
+                    if transitive not in wired:
+                        wired.add(transitive)
+                        queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -411,7 +423,7 @@ def _grep_import(module_name: str) -> list[str]:
                 "grep",
                 "-rn",
                 "-E",
-                rf"^\s*(import\s+{module_name}\b|from\s+{module_name}(\s|\.))",
+                rf"^(import {module_name}|from {module_name}( |\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
