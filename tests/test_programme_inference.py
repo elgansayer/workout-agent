@@ -25,10 +25,7 @@ from programme_inference import (
 
 
 def _make_template(
-    tid: str,
-    title: str,
-    primary: str,
-    secondaries: list[str] | None = None,
+    tid: str, title: str, primary: str, secondaries: list[str] | None = None
 ) -> ExerciseTemplate:
     return ExerciseTemplate(
         id=tid,
@@ -69,15 +66,13 @@ def _make_training_day(
 # ---------------------------------------------------------------------------
 
 
-def test_classify_routine_muscles_ranks_primary_then_secondary() -> None:
+def test_classify_routine_muscles_ranks_primary_then_secondary():
     templates = {
         "1": _make_template("1", "Bench Press", "chest", ["triceps"]),
         "2": _make_template("2", "Tricep Pushdown", "triceps"),
     }
     routine = _make_routine(
-        "Push Day",
-        "r1",
-        [_make_routine_exercise("1"), _make_routine_exercise("2")],
+        "Push Day", "r1", [_make_routine_exercise("1"), _make_routine_exercise("2")]
     )
     result = _classify_routine_muscles(routine, templates)
     # Chest has count 1.0, triceps has 1.0 + 0.5 = 1.5 -> triceps first.
@@ -90,11 +85,11 @@ def test_classify_routine_muscles_ranks_primary_then_secondary() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_classify_split_empty_unknown() -> None:
+def test_classify_split_empty_unknown():
     assert _classify_split([]) == "unknown"
 
 
-def test_classify_split_full_body() -> None:
+def test_classify_split_full_body():
     days = [
         _make_training_day("Day1", "r1", ["chest", "lats", "quads"]),
         _make_training_day("Day2", "r2", ["shoulders", "upper_back", "hamstrings"]),
@@ -102,7 +97,7 @@ def test_classify_split_full_body() -> None:
     assert _classify_split(days) == "full_body"
 
 
-def test_classify_split_push_pull_legs() -> None:
+def test_classify_split_push_pull_legs():
     days = [
         _make_training_day("Push", "r1", ["chest", "shoulders"]),
         _make_training_day("Pull", "r2", ["lats", "biceps"]),
@@ -111,7 +106,7 @@ def test_classify_split_push_pull_legs() -> None:
     assert _classify_split(days) == "push_pull_legs"
 
 
-def test_classify_split_upper_lower() -> None:
+def test_classify_split_upper_lower():
     days = [
         _make_training_day("Upper A", "r1", ["chest", "lats"]),
         _make_training_day("Lower A", "r2", ["quads", "calves"]),
@@ -121,7 +116,7 @@ def test_classify_split_upper_lower() -> None:
     assert _classify_split(days) == "upper_lower"
 
 
-def test_classify_split_bro_split() -> None:
+def test_classify_split_bro_split():
     days = [
         _make_training_day("Chest", "r1", ["chest"]),
         _make_training_day("Back", "r2", ["lats"]),
@@ -132,18 +127,41 @@ def test_classify_split_bro_split() -> None:
     assert _classify_split(days) == "bro_split"
 
 
+def test_classify_split_ppl_six_days():
+    """A 6-day PPL (two cycles) is classified as PPL, not bro_split."""
+    days = [
+        _make_training_day("Push A", "r1", ["chest", "shoulders"]),
+        _make_training_day("Pull A", "r2", ["lats", "biceps"]),
+        _make_training_day("Legs A", "r3", ["quads", "hamstrings"]),
+        _make_training_day("Push B", "r4", ["chest", "triceps"]),
+        _make_training_day("Pull B", "r5", ["lats", "upper_back"]),
+        _make_training_day("Legs B", "r6", ["quads", "glutes"]),
+    ]
+    assert _classify_split(days) == "push_pull_legs"
+
+
+def test_classify_split_ppl_three_days():
+    """A 3-day PPL is classified as PPL."""
+    days = [
+        _make_training_day("Push", "r1", ["chest", "triceps"]),
+        _make_training_day("Pull", "r2", ["lats", "upper_back"]),
+        _make_training_day("Legs", "r3", ["quads", "hamstrings"]),
+    ]
+    assert _classify_split(days) == "push_pull_legs"
+
+
 # ---------------------------------------------------------------------------
 # _compute_frequency
 # ---------------------------------------------------------------------------
 
 
-def test_compute_frequency_empty() -> None:
+def test_compute_frequency_empty():
     s, mf = _compute_frequency([], {})
     assert s == 0.0
     assert mf == {}
 
 
-def test_compute_frequency_from_workouts() -> None:
+def test_compute_frequency_from_workouts():
     templates = {
         "1": _make_template("1", "Bench", "chest"),
         "2": _make_template("2", "Deadlift", "lats"),
@@ -176,18 +194,18 @@ def test_compute_frequency_from_workouts() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_determine_next_empty() -> None:
+def test_determine_next_empty():
     assert _determine_next_routine([], []) is None
 
 
-def test_determine_next_first_when_no_workouts() -> None:
+def test_determine_next_first_when_no_workouts():
     days = [_make_training_day("Push"), _make_training_day("Pull")]
     nxt = _determine_next_routine(days, [])
     assert nxt is not None
     assert nxt.title == "Push"
 
 
-def test_determine_next_least_recent() -> None:
+def test_determine_next_least_recent():
     push = _make_training_day("Push")
     pull = _make_training_day("Pull")
     legs = _make_training_day("Legs")
@@ -202,7 +220,7 @@ def test_determine_next_least_recent() -> None:
     assert nxt.title == "Legs"
 
 
-def test_determine_next_round_robin() -> None:
+def test_determine_next_round_robin():
     push = _make_training_day("Push")
     pull = _make_training_day("Pull")
     days = [push, pull]
@@ -222,10 +240,7 @@ def test_determine_next_round_robin() -> None:
 
 
 def _make_workout_exercise(
-    tid: str,
-    title: str,
-    weight: float,
-    reps: int,
+    tid: str, title: str, weight: float, reps: int
 ) -> WorkoutExercise:
     return WorkoutExercise(
         template_id=tid,
@@ -237,7 +252,7 @@ def _make_workout_exercise(
     )
 
 
-def test_infer_programme_full_flow() -> None:
+def test_infer_programme_full_flow():
     """End-to-end: build a HevyTrainingData and infer the programme."""
     templates = {
         "1": _make_template("1", "Bench Press", "chest", ["triceps"]),
@@ -299,7 +314,7 @@ def test_infer_programme_full_flow() -> None:
     assert prog.next_routine.title == "Leg Day"
 
 
-def test_infer_programme_empty_data() -> None:
+def test_infer_programme_empty_data():
     data = HevyTrainingData()
     prog = infer_programme(data)
     assert prog.split_type == "unknown"
@@ -311,14 +326,12 @@ def test_infer_programme_empty_data() -> None:
 
 
 def test_training_day_focus_summary():
-    td = TrainingDay(
-        title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"]
-    )
+    td = TrainingDay(title="Push", routine_id="r1", primary_muscles=["chest", "shoulders", "triceps"])
     assert "Chest" in td.focus_summary()
     assert "Shoulders" in td.focus_summary()
     assert "Triceps" in td.focus_summary()
 
 
-def test_training_day_focus_summary_empty() -> None:
+def test_training_day_focus_summary_empty():
     td = TrainingDay(title="Push", routine_id="r1")
     assert td.focus_summary() == "Push"
