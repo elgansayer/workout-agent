@@ -29,24 +29,19 @@ Usage
 -----
 ::
 
-    python dead_code_sweep.py               # report only; exit 1 if orphans found
-    python dead_code_sweep.py --prune       # also remove confirmed-dead modules
-    python dead_code_sweep.py --json        # machine-readable output
-    python dead_code_sweep.py --create-issues  # file GitHub issues for orphans
+    python dead_code_sweep.py           # report only; exit 1 if orphans found
+    python dead_code_sweep.py --prune   # also remove confirmed-dead modules
+    python dead_code_sweep.py --json    # machine-readable output
 """
 
 from __future__ import annotations
 
 import argparse
 import ast
-import json
 import logging
 import os
-import re
 import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import NamedTuple
 
@@ -108,7 +103,7 @@ def _discover_modules() -> list[ModuleInfo]:
                 name=p.stem,
                 path=p,
                 is_entry_point=p.name in ENTRY_POINTS,
-            ),
+            )
         )
 
     # webapp/ sub-package
@@ -122,7 +117,7 @@ def _discover_modules() -> list[ModuleInfo]:
                     name=f"webapp.{p.stem}",
                     path=p,
                     is_entry_point=False,  # webapp modules are never entry points
-                ),
+                )
             )
 
     return modules
@@ -205,12 +200,6 @@ def find_orphans() -> list[OrphanReport]:
     # Also seed wired with webapp.app so it's never flagged as orphan
     wired.add("webapp.app")
 
-    # Build a look-up: module_name -> file_rel that defines it
-    module_to_file: dict[str, str] = {}
-    for file_rel in import_graph:
-        stem = file_rel.replace("/", ".").replace(".py", "")
-        module_to_file[stem] = file_rel
-
     queue: list[str] = []
     for ep in entry_point_files:
         for imp in import_graph.get(ep, set()):
@@ -220,16 +209,13 @@ def find_orphans() -> list[OrphanReport]:
 
     while queue:
         module_name = queue.pop(0)
-        # Find the file that defines this module and add everything IT imports.
-        # (The old approach looked at files that import module_name and added
-        # what those files import — that only discovers transitive
-        # dependencies by coincidence when two modules share a common importer.)
-        defining_file = module_to_file.get(module_name)
-        if defining_file is not None:
-            for transitive in import_graph.get(defining_file, set()):
-                if transitive not in wired:
-                    wired.add(transitive)
-                    queue.append(transitive)
+        # Find the file(s) that define this module
+        for file_rel, imports in import_graph.items():
+            if module_name in imports:
+                for transitive in import_graph.get(file_rel, set()):
+                    if transitive not in wired:
+                        wired.add(transitive)
+                        queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -244,9 +230,7 @@ def find_orphans() -> list[OrphanReport]:
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
-                "%s: AST missed but grep found imports in %s",
-                mi.name,
-                grep_hits,
+                "%s: AST missed but grep found imports in %s", mi.name, grep_hits
             )
             continue
 
@@ -254,7 +238,7 @@ def find_orphans() -> list[OrphanReport]:
             OrphanReport(
                 module=mi,
                 evidence=f"No imports of '{mi.name}' found in any reachable module.",
-            ),
+            )
         )
 
     return orphans
@@ -391,7 +375,7 @@ def find_truly_dead(orphans: list[OrphanReport]) -> list[OrphanReport]:
                         f"git log shows replacement/supersession: {log_lines[0] if log_lines else 'N/A'}. "
                         "No documentation references remain."
                     ),
-                ),
+                )
             )
 
     return truly_dead
@@ -418,125 +402,6 @@ def _task_add_text(report: OrphanReport) -> str:
         f"the module's domain.\n\n"
         f"> Auto-filed by `dead_code_sweep.py` hourly sweep.\n"
     )
-
-
-def _get_github_repo() -> tuple[str, str] | None:
-    """Parse `owner/repo` from the git remote origin URL.
-
-    Returns a ``(owner, repo)`` tuple on success, or ``None`` if the remote
-    cannot be identified (e.g. non-GitHub hosting).
-    """
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(ROOT),
-            check=False,
-        )
-        url = result.stdout.strip()
-        # Handles both https://github.com/owner/repo.git and
-        # https://x-access-token:TOKEN@github.com/owner/repo.git
-        m = re.search(r"github\.com[:/]([^/]+)/([^/\s.]+?)(?:\.git)?$", url)
-        if m:
-            return m.group(1), m.group(2)
-        return None
-    except (subprocess.TimeoutExpired, OSError):
-        return None
-
-
-def _get_github_token() -> str | None:
-    """Return a GitHub token from env or the git remote URL credential."""
-    # Check GITHUB_TOKEN env var first
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if token:
-        return token
-
-    # Fall back to extracting from the remote URL
-    try:
-        result = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            cwd=str(ROOT),
-            check=False,
-        )
-        url = result.stdout.strip()
-        # x-access-token:TOKEN@github.com/...
-        m = re.search(r"://x-access-token:([^@]+)@", url)
-        if m:
-            return m.group(1)
-    except (subprocess.TimeoutExpired, OSError):
-        pass
-    return None
-
-
-def create_github_issues(reports: list[OrphanReport]) -> list[str]:
-    """Create a GitHub issue for each orphaned module.
-
-    Returns a list of created issue URLs (or error strings).
-    """
-    token = _get_github_token()
-    if not token:
-        logger.warning(
-            "No GitHub token found (set GITHUB_TOKEN or configure git remote credentials). "
-            "Skipping issue creation.",
-        )
-        return []
-
-    repo = _get_github_repo()
-    if not repo:
-        logger.warning("Could not determine GitHub owner/repo from git remote.")
-        return []
-
-    owner, repo_name = repo
-    api_url = f"https://api.github.com/repos/{owner}/{repo_name}/issues"
-    created: list[str] = []
-
-    for report in reports:
-        title = f"Orphaned module: `{report.module.name}` needs wiring or removal"
-        body = _task_add_text(report)
-        labels = ["orphaned-module", "dead-code-sweep"]
-
-        payload = json.dumps({"title": title, "body": body, "labels": labels}).encode(
-            "utf-8",
-        )
-
-        req = urllib.request.Request(
-            api_url,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "Content-Type": "application/json",
-                "X-GitHub-Api-Version": "2022-11-28",
-            },
-            method="POST",
-        )
-
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                issue_data = json.loads(resp.read().decode("utf-8"))
-                issue_url = issue_data.get("html_url", "unknown")
-                logger.info(
-                    "Created issue for '%s': %s",
-                    report.module.name,
-                    issue_url,
-                )
-                created.append(issue_url)
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            msg = f"Failed to create issue for '{report.module.name}': HTTP {e.code} — {err_body[:300]}"
-            logger.error(msg)
-            created.append(f"ERROR: {msg}")
-        except (urllib.error.URLError, OSError, ValueError, TypeError) as e:
-            msg = f"Failed to create issue for '{report.module.name}': {e}"
-            logger.error(msg)
-            created.append(f"ERROR: {msg}")
-
-    return created
 
 
 def _rel_path(p: Path) -> str:
@@ -619,16 +484,10 @@ def build_parser() -> argparse.ArgumentParser:
         dest="json_output",
         help="Emit machine-readable JSON to stdout.",
     )
-    parser.add_argument(
-        "--create-issues",
-        action="store_true",
-        dest="create_issues",
-        help="Create GitHub issues for orphaned modules via the GitHub API.",
-    )
     return parser
 
 
-def main() -> int:
+def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
@@ -638,7 +497,7 @@ def main() -> int:
 
     if not orphans:
         report_orphans([], json_output=args.json_output)
-        return 0
+        sys.exit(0)
 
     # Separate truly-dead from merely-orphaned
     truly_dead = find_truly_dead(orphans)
@@ -656,11 +515,6 @@ def main() -> int:
                 )
                 logger.info("  Suggested issue body:\n%s", _task_add_text(r))
 
-        if args.create_issues:
-            created = create_github_issues(merely_orphaned)
-            if created:
-                logger.info("Created %d GitHub issue(s).", len(created))
-
     if truly_dead:
         if args.prune:
             removed = prune_dead_modules(truly_dead)
@@ -674,15 +528,13 @@ def main() -> int:
             for r in truly_dead:
                 if not args.json_output:
                     logger.warning(
-                        "  %s  (%s)",
-                        r.module.name,
-                        r.module.path.relative_to(ROOT),
+                        "  %s  (%s)", r.module.name, r.module.path.relative_to(ROOT)
                     )
                     logger.warning("    %s", r.evidence)
             exit_code = 1
 
-    return exit_code
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

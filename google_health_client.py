@@ -66,6 +66,9 @@ def _refresh_tokens(
         )
         response.raise_for_status()
         payload = response.json()
+        if not isinstance(payload, dict):
+            logger.warning("Google Health returned non-object token JSON.")
+            return None
     except requests.RequestException as exc:
         logger.warning("Google Health token refresh failed: %s", exc)
         return None
@@ -95,7 +98,7 @@ def _latest_value(
     numeric field within it (e.g. "percentage").
     """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=_LOOKBACK_DAYS)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%SZ"
     )
     # Filter fields use the snake_case form of the data type name.
     filter_field = data_type.replace("-", "_")
@@ -112,7 +115,11 @@ def _latest_value(
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        points = response.json().get("dataPoints", [])
+        data = response.json()
+        if not isinstance(data, dict):
+            logger.warning("Google Health returned non-object JSON for %s", data_type)
+            return None
+        points = data.get("dataPoints") or []
     except requests.RequestException as exc:
         logger.warning("Could not fetch Google Health %s: %s", data_type, exc)
         return None
@@ -123,19 +130,21 @@ def _latest_value(
     best_time: str = ""
     best_value: float | None = None
     for point in points:
+        if not isinstance(point, dict):
+            continue
         payload = point.get(point_key)
         if not isinstance(payload, dict):
             continue
         value = payload.get(value_field)
         if value is None:
             continue
-        sample_time_raw = payload.get("sampleTime")
-        if isinstance(sample_time_raw, dict):
-            sample_time = sample_time_raw.get("physicalTime") or ""
-        elif isinstance(sample_time_raw, str):
-            sample_time = sample_time_raw
-        else:
-            sample_time = ""
+        sample_time_obj = payload.get("sampleTime")
+        sample_time_raw: str | None = (
+            sample_time_obj.get("physicalTime")
+            if isinstance(sample_time_obj, dict)
+            else None
+        )
+        sample_time = sample_time_raw or ""
         if best_value is None or sample_time > best_time:
             try:
                 best_value = float(value)
@@ -150,16 +159,10 @@ def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
     weight_grams = _latest_value(access_token, "weight", "weight", "weightGrams")
     fat = _latest_value(access_token, "body-fat", "bodyFat", "percentage")
     resting_hr = _latest_value(
-        access_token,
-        "resting-heart-rate",
-        "restingHeartRate",
-        "beatsPerMinute",
+        access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute"
     )
     hrv = _latest_value(
-        access_token,
-        "heart-rate-variability",
-        "heartRateVariability",
-        "rmssd",
+        access_token, "heart-rate-variability", "heartRateVariability", "rmssd"
     )
     metrics: dict[str, Any] = {}
     if weight_grams is not None:

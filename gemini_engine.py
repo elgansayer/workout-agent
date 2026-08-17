@@ -1,12 +1,14 @@
-"""Uses AI providers to apply progressive overload and write today's plan."""
+"""Uses AI (Gemini/Claude/OpenAI/DeepSeek) to apply progressive overload and
+write today's plan, going through ``AIProvider`` from ``ai_provider.py``."""
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
-from ai_provider import AIProvider, get_provider
+from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -17,15 +19,6 @@ from program import (
     day_focus,
     format_day,
 )
-
-__all__ = [
-    "apply_autonomous_adjustments",
-    "create_provider",
-    "generate_checkin_message",
-    "generate_next_workout",
-    "generate_rest_day_message",
-    "get_provider",
-]
 
 try:
     from weather import WeatherConditions
@@ -141,6 +134,7 @@ def generate_next_workout(
     day: int,
     week: int,
     block: Block,
+    *,
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
@@ -164,12 +158,22 @@ def generate_next_workout(
             insights,
             last_plan,
         )
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty response; using baseline plan.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s generation failed (%s); using baseline plan.", provider.name(), exc
+        )
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI generation returned an empty response; using baseline plan.")
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI generation failed (%s); using baseline plan.", exc)
+        logger.warning("Gemini returned an empty response; using baseline plan.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
 
@@ -221,11 +225,9 @@ def generate_rest_day_message(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning(
-            "AI generation returned an empty rest-day response; using fallback.",
-        )
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
+        logger.warning("Gemini returned an empty rest-day response; using fallback.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
 
@@ -298,12 +300,22 @@ def generate_checkin_message(
             weeks,
             analysis_text,
         )
+        text = provider.generate(prompt)
+        if isinstance(text, str) and text:
+            return str(text)
+        logger.warning(
+            "%s returned an empty check-in; using fallback.", provider.name()
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "%s check-in generation failed (%s); using fallback.", provider.name(), exc
+        )
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("AI generation returned an empty check-in; using fallback.")
-    except Exception as exc:  # noqa: BLE001  # the SDK raises a variety of exception types
-        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
+        logger.warning("Gemini returned an empty check-in; using fallback.")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
 
     return fallback
 
@@ -354,7 +366,7 @@ hevy_logs (recent):
 {logs_json}
 ---
 
-Ensure all output uses British English spelling. 
+Ensure all output uses British English spelling.
 Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
 Do not wrap it in markdown block quotes. Output raw JSON only."""
 
@@ -373,13 +385,13 @@ def apply_autonomous_adjustments(
             :func:`ai_provider.resolve_provider`.
     """
     try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
         prompt = _build_autonomous_prompt(
-            base_routines,
-            hevy_logs,
-            weather,
-            is_catabolic,
+            base_routines, hevy_logs, weather, is_catabolic
         )
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = (response.text or "").strip()
 
         # Remove any markdown wrapping if the LLM hallucinated it
         text = text.strip()
@@ -393,40 +405,9 @@ def apply_autonomous_adjustments(
         updated = json.loads(text)
         if isinstance(updated, dict):
             return updated
-
-        logger.warning("AI autonomous routines did not return a dict; using baseline.")
+            
+        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "AI autonomous adjustment failed (%s); using baseline routines.",
-            exc,
-        )
+        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
 
     return base_routines
-
-
-def create_provider(
-    provider_name: str,
-    api_key: str,
-    model: str | None = None,
-) -> AIProvider:
-    """Create an AI provider instance from raw credentials.
-
-    Thin wrapper around :func:`ai_provider.get_provider` so callers that
-    already have a provider name and key on hand don't need to import
-    ``ai_provider`` separately.
-
-    Args:
-        provider_name: ``"gemini"``, ``"claude"``, ``"openai"``, or
-            ``"deepseek"``.
-        api_key: The API key for the chosen provider.
-        model: Optional model override (e.g. ``"gemini-2.0-flash"``).
-
-    Returns:
-        A configured :class:`AIProvider` instance ready to call
-        :meth:`~AIProvider.generate`.
-
-    Raises:
-        ValueError: Unknown *provider_name*.
-        ImportError: The provider's SDK is not installed.
-    """
-    return get_provider(provider_name, api_key, model)
