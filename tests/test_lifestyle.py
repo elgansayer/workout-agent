@@ -48,9 +48,7 @@ def test_protein_target_absent_without_weight() -> None:
     assert lifestyle.daily_guidance(1, is_rest=False).protein_target is None
     assert (
         lifestyle.daily_guidance(
-            1,
-            is_rest=False,
-            recovery={"sleep_hours": 7},
+            1, is_rest=False, recovery={"sleep_hours": 7}
         ).protein_target
         is None
     )
@@ -58,9 +56,7 @@ def test_protein_target_absent_without_weight() -> None:
 
 def test_as_text_includes_all_pillars() -> None:
     text = lifestyle.daily_guidance(
-        1,
-        is_rest=False,
-        recovery={"weight_kg": 80},
+        1, is_rest=False, recovery={"weight_kg": 80}
     ).as_text()
     assert text.startswith("Today's lifestyle:")
     for marker in ("Nutrition", "Protein", "Cardio and steps", "Recovery"):

@@ -1,235 +1,125 @@
-"""Tests for scheduler.py: unified scheduling, time helpers, and job dispatch."""
+"""Tests for scheduler.py: unified scheduling entry point."""
 
 from __future__ import annotations
 
-import subprocess
-from datetime import datetime, timezone
-from unittest.mock import MagicMock
+from unittest import mock
 
 import pytest
 
-import scheduler
+from scheduler import _now_in_zone, _parse_times, main
+
 
-# ---------------------------------------------------------------------------
-# _parse_run_at
-# ---------------------------------------------------------------------------
-
-
-def test_parse_run_at_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("RUN_AT", raising=False)
-    assert scheduler._parse_run_at() == ["07:00"]
-
-
-def test_parse_run_at_single(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RUN_AT", "05:30")
-    assert scheduler._parse_run_at() == ["05:30"]
-
-
-def test_parse_run_at_comma_separated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RUN_AT", "00:00,05:00")
-    assert scheduler._parse_run_at() == ["00:00", "05:00"]
-
-
-def test_parse_run_at_space_separated(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RUN_AT", "00:00  05:00")
-    assert scheduler._parse_run_at() == ["00:00", "05:00"]
-
-
-def test_parse_run_at_sorts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RUN_AT", "23:00,01:00")
-    assert scheduler._parse_run_at() == ["01:00", "23:00"]
-
-
-# ---------------------------------------------------------------------------
-# _is_due
-# ---------------------------------------------------------------------------
-
-
-def test_is_due_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_now = datetime(2026, 8, 5, 7, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    assert scheduler._is_due("UTC", ["07:00"]) is True
-
-
-def test_is_due_false_wrong_minute(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_now = datetime(2026, 8, 5, 7, 1, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    assert scheduler._is_due("UTC", ["07:00"]) is False
-
-
-def test_is_due_false_wrong_hour(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_now = datetime(2026, 8, 5, 8, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    assert scheduler._is_due("UTC", ["07:00"]) is False
-
-
-def test_is_due_multiple_times(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_now = datetime(2026, 8, 5, 5, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(scheduler, "_now_in_tz", lambda tz: fake_now)
-    assert scheduler._is_due("UTC", ["00:00", "05:00"]) is True
-
-
-# ---------------------------------------------------------------------------
-# Job dispatch helpers
-# ---------------------------------------------------------------------------
-
-
-def test_run_coaching_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_run = MagicMock(return_value=MagicMock(returncode=0))
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    assert scheduler._run_coaching("user-1") is True
-    assert mock_run.call_count == 1
-
-
-def test_run_coaching_failure_is_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_run = MagicMock(side_effect=subprocess.CalledProcessError(1, "cmd"))
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    assert scheduler._run_coaching("user-1") is False
-
-
-def test_run_insight_daily_success(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_run = MagicMock(return_value=MagicMock(returncode=0))
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    assert scheduler._run_insight_job("--daily") is True
-
-
-def test_run_insight_weekly_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    mock_run = MagicMock(side_effect=subprocess.CalledProcessError(1, "cmd"))
-    monkeypatch.setattr(subprocess, "run", mock_run)
-    assert scheduler._run_insight_job("--weekly") is False
-
-
-# ---------------------------------------------------------------------------
-# run_scheduler main loop (smoke test via one iteration)
-# ---------------------------------------------------------------------------
-
-
-def test_run_scheduler_bootstrap_calls_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
-    coaching_calls: list[str] = []
-    insight_calls: list[str] = []
-
-    def _mock_coaching(uid: str) -> bool:
-        coaching_calls.append(uid)
-        return True
-
-    def _mock_insight(flag: str) -> bool:
-        insight_calls.append(flag)
-        return True
-
-    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
-    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
-    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_connector_health", lambda: True)
-
-    iteration = [0]
-
-    def _fake_sleep(secs: float) -> None:
-        iteration[0] += 1
-        if iteration[0] >= 2:
-            raise SystemExit(0)
-
-    monkeypatch.setattr(scheduler.time, "sleep", _fake_sleep)
-    monkeypatch.setattr(scheduler, "get_all_users", lambda db_path=None: [])
-
-    try:
-        scheduler.run_scheduler()
-    except SystemExit:
-        pass
-
-    assert "--daily" in insight_calls
-    assert "--weekly" in insight_calls
-    assert len(coaching_calls) == 0
-
-
-def test_run_scheduler_dispatches_due_users(monkeypatch: pytest.MonkeyPatch) -> None:
-    coaching_calls: list[str] = []
-    insight_calls: list[str] = []
-
-    def _mock_coaching(uid: str) -> bool:
-        coaching_calls.append(uid)
-        return True
-
-    def _mock_insight(flag: str) -> bool:
-        insight_calls.append(flag)
-        return True
-
-    monkeypatch.setattr(scheduler, "_run_coaching", _mock_coaching)
-    monkeypatch.setattr(scheduler, "_run_insight_job", _mock_insight)
-    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
-    monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
-
-    users = [
-        {"id": "user-1", "timezone": "Europe/London"},
-        {"id": "user-2", "timezone": "America/New_York"},
-    ]
-
-    iteration = [0]
-
-    def _fake_sleep(secs: float) -> None:
-        iteration[0] += 1
-        if iteration[0] >= 2:
-            raise SystemExit(0)
-
-    monkeypatch.setattr(scheduler.time, "sleep", _fake_sleep)
-    monkeypatch.setattr(scheduler, "get_all_users", lambda db_path=None: users)
-
-    try:
-        scheduler.run_scheduler()
-    except SystemExit:
-        pass
-
-    assert "user-1" in coaching_calls
-    assert "user-2" in coaching_calls
-    assert coaching_calls.count("user-1") >= 2
-    assert coaching_calls.count("user-2") >= 2
-
-
-def test_run_scheduler_user_failure_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _failing_coaching(uid: str) -> bool:
-        if uid == "user-fail":
-            raise RuntimeError("Simulated user failure")
-        return True
-
-    monkeypatch.setattr(scheduler, "_run_coaching", _failing_coaching)
-    monkeypatch.setattr(scheduler, "_run_insight_job", lambda flag: True)
-    monkeypatch.setattr(scheduler, "_run_dead_code_sweep", lambda: True)
-    monkeypatch.setattr(scheduler, "_run_commit_hygiene", lambda: True)
-    monkeypatch.setattr(scheduler, "_is_due", lambda tz, rt: True)
-
-    users = [
-        {"id": "user-fail", "timezone": "UTC"},
-        {"id": "user-ok", "timezone": "UTC"},
-    ]
-
-    iteration = [0]
-
-    def _fake_sleep(secs: float) -> None:
-        iteration[0] += 1
-        if iteration[0] >= 2:
-            raise SystemExit(0)
-
-    monkeypatch.setattr(scheduler.time, "sleep", _fake_sleep)
-    monkeypatch.setattr(scheduler, "get_all_users", lambda db_path=None: users)
-
-    try:
-        scheduler.run_scheduler()
-    except SystemExit:
-        pass
-
-
-# ---------------------------------------------------------------------------
-# _now_in_tz
-# ---------------------------------------------------------------------------
-
-
-def test_now_in_tz_valid() -> None:
-    dt = scheduler._now_in_tz("UTC")
-    assert dt.tzinfo is not None
-
-
-def test_now_in_tz_invalid_falls_back_to_utc() -> None:
-    dt = scheduler._now_in_tz("Not/A_Valid_Zone")
-    assert dt.tzinfo is not None
-    assert str(dt.tzinfo) == "UTC"
+class TestParseTimes:
+    def test_single_time(self) -> None:
+        assert _parse_times("07:00") == [(7, 0)]
+
+    def test_comma_separated(self) -> None:
+        assert _parse_times("00:00,05:00") == [(0, 0), (5, 0)]
+
+    def test_space_separated(self) -> None:
+        assert _parse_times("00:00 05:00") == [(0, 0), (5, 0)]
+
+    def test_mixed_separators(self) -> None:
+        assert _parse_times("00:00, 05:00") == [(0, 0), (5, 0)]
+
+    def test_empty_returns_default(self) -> None:
+        assert _parse_times("") == [(7, 0)]
+
+    def test_unparseable_returns_default(self) -> None:
+        assert _parse_times("garbage") == [(7, 0)]
+
+    def test_leading_trailing_whitespace(self) -> None:
+        assert _parse_times("  06:30  ") == [(6, 30)]
+
+
+class TestNowInZone:
+    def test_returns_datetime_utc_fallback(self) -> None:
+        dt = _now_in_zone("UTC")
+        assert dt.tzinfo is not None
+
+    def test_returns_datetime_for_common_zone(self) -> None:
+        dt = _now_in_zone("Europe/London")
+        assert dt.tzinfo is not None
+
+
+class TestMain:
+    def test_once_mode(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODE", "once")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+        with mock.patch("scheduler.run_once", return_value=0) as mock_run:
+            rc = main([])
+            assert rc == 0
+            mock_run.assert_called_once()
+
+    def test_preview_mode(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODE", "preview")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+        with mock.patch("main.run", return_value=0) as mock_run:
+            rc = main([])
+            assert rc == 0
+            mock_run.assert_called_once_with(preview=True)
+
+    def test_schedule_mode_enters_loop(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODE", "schedule")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+        with mock.patch("scheduler.run_schedule") as mock_sched:
+            main([])
+            mock_sched.assert_called_once()
+
+    def test_unknown_mode_exits_1(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODE", "bogus")
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+
+        rc = main([])
+        assert rc == 1
+
+    def test_missing_required_env_exits_1(self, monkeypatch) -> None:
+        monkeypatch.setenv("MODE", "once")
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+
+        rc = main([])
+        assert rc == 1
+
+
+class TestRunOnce:
+    def test_run_once_calls_coaching_and_insights(
+        self, monkeypatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("TELEGRAM_CHAT_ID", "test-chat-id")
+        monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
+        monkeypatch.setenv("MODE", "once")
+
+        from config import Config, ConfigError
+        from database import init_db
+        from scheduler import run_once
+
+        try:
+            config = Config.load()
+        except ConfigError:
+            pytest.skip("Config not available")
+        init_db(config.database_path)
+
+        with (
+            mock.patch("scheduler.run_coaching", return_value=0) as mock_coach,
+            mock.patch("scheduler.run_daily_insight") as mock_daily,
+            mock.patch("scheduler.run_weekly_correlations"),
+        ):
+            rc = run_once(config)
+            assert rc == 0
+            mock_coach.assert_called_once_with(config)
+            mock_daily.assert_called_once_with(config)

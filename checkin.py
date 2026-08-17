@@ -11,9 +11,8 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Any
 
-from ai_provider import resolve_provider
+from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
@@ -84,24 +83,11 @@ def _seed_baseline_if_missing(
     user_id: str | None = None,
 ) -> None:
     """Initialise check-in tracking the first time we ever see this account."""
-    if get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) is None:
-        set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
-        set_meta(
-            _KEY_LAST_DATE,
-            datetime.now(tz=timezone.utc).date().isoformat(),
-            config.database_path,
-            user_id=user_id,
-        )
-    if (
-        total_count is not None
-        and get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id) is None
-    ):
-        set_meta(
-            _KEY_LAST_COUNT,
-            str(total_count),
-            config.database_path,
-            user_id=user_id,
-        )
+    if get_meta(_KEY_NUMBER, config.database_path) is None:
+        set_meta(_KEY_NUMBER, "0", config.database_path)
+        set_meta(_KEY_LAST_DATE, datetime.now(tz=timezone.utc).date().isoformat(), config.database_path)
+    if total_count is not None and get_meta(_KEY_LAST_COUNT, config.database_path) is None:
+        set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
 
 
 def due(
@@ -166,7 +152,7 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict[str, Any]],
+    name: str, planned: str, rep_range: str, history: list[dict]
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
@@ -246,9 +232,7 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue,
-    block: Block,
-    reviews: list[LiftReview],
+    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
 ) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
@@ -271,24 +255,16 @@ def _fallback_message(
     return "\n".join(lines)
 
 
-def run_checkin(
-    config: Config,
-    due_info: CheckinDue,
-    week: int,
-    block: Block,
-    *,
-    user_id: str | None = None,
-) -> str:
+def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block) -> str:
     """Build the check-in message from logged data versus the plan."""
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
-        db_path=config.database_path,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
+        fallback_api_key=config.gemini_api_key,
+        fallback_model=config.gemini_model,
     )
     return generate_checkin_message(
-        provider,
+        provider=provider,
         number=due_info.number,
         week=week,
         block=block,
@@ -296,32 +272,20 @@ def run_checkin(
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),
         fallback=fallback,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
+        db_path=config.database_path,
     )
 
 
 def record(
-    config: Config,
-    due_info: CheckinDue,
-    message: str,
-    today: date | None = None,
-    *,
-    user_id: str | None = None,
+    config: Config, due_info: CheckinDue, message: str, today: date | None = None
 ) -> None:
     """Persist the completed check-in and reset the tracking baseline."""
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    set_meta(
-        _KEY_NUMBER,
-        str(due_info.number),
-        config.database_path,
-        user_id=user_id,
-    )
-    set_meta(
-        _KEY_LAST_DATE,
-        today.isoformat(),
-        config.database_path,
-        user_id=user_id,
-    )
+    set_meta(_KEY_NUMBER, str(due_info.number), config.database_path)
+    set_meta(_KEY_LAST_DATE, today.isoformat(), config.database_path)
     if due_info.total_count is not None:
         set_meta(
             _KEY_LAST_COUNT,

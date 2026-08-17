@@ -8,7 +8,6 @@ so training volume can be broken down by body part.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
 
 # DOTS coefficients for men (Open Powerlifting). DOTS expresses strength
 # relative to bodyweight on a single scale, so progress shows even as weight
@@ -18,7 +17,7 @@ _DOTS_MEN = (-307.75076, 24.0900756, -0.1918759221, 0.0007391293, -0.000001093)
 
 def epley_1rm(weight: float | None, reps: int | None) -> float | None:
     """Estimated one-rep max via the Epley formula."""
-    if weight is None or reps is None or reps == 0:
+    if weight is None or reps is None or reps <= 0:
         return None
     return round(weight * (1 + reps / 30), 1)
 
@@ -178,6 +177,11 @@ def muscle_group_for(name: str) -> str:
     # Generator creation has measurable overhead for small collections.
     # Impact: ~60% reduction in execution time for high-frequency categorization.
     for group, keywords in _GROUP_RULES:
+<<<<<<< HEAD
+        # Bolt Optimization: Explode `any()` into a double for-loop to prevent
+        # creating a generator on every lookup, significantly speeding up classification.
+=======
+>>>>>>> main
         for keyword in keywords:
             if keyword in lowered:
                 return group

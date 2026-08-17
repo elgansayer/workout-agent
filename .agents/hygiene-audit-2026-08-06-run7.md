@@ -1,8 +1,5 @@
-<<<<<<< HEAD
 # Commit Hygiene Audit — 2026-08-06 (Issue #492, run 7)
-=======
 # Commit Hygiene Audit — 2026-08-06 (Issue #492)
->>>>>>> main
 
 **Result: CLEAN** — No issues found.
 
@@ -19,7 +16,6 @@
   `.venv/`, `venv/`, `*.sqlite`, `*.sqlite3`, `*.log`) plus comprehensive
   variants for WAL/SHM/journal files, binary images, and OS cruft. No
   missing entries.
-<<<<<<< HEAD
 - **Large files**: No files >3 MB outside `data/` (gitignored). Largest
   tracked source file is `database.py` at ~68 KB — well within limits.
 - **`commit_hygiene.py`**: Runs clean (exit 0).
@@ -31,7 +27,6 @@
 - **mypy commit_hygiene.py**: No issues found
 - **`python commit_hygiene.py`**: CLEAN (exit 0)
 - **`python commit_hygiene.py --json`**: `{"status": "clean", "count": 0, "findings": []}`
-=======
 - **Large files**: No files >2 MB outside `data/` (gitignored). Largest
   tracked source file is `database.py` at ~68 KB — well within limits.
 - **`commit_hygiene.py`**: Runs clean (exit 0, status: clean, zero findings).
@@ -43,7 +38,6 @@
 - **pytest**: 569 passed, 2 warnings (exit 0)
 - **import-sanity**: CLEAN (webapp.app + main)
 - **commit_hygiene.py --json**: CLEAN (status: clean, zero findings)
->>>>>>> main
 
 ## Summary
 

@@ -286,8 +286,15 @@ Run it with Docker alongside the agent (it shares the same SQLite volume):
 docker compose up -d web
 ```
 
+Then open `http://<host-ip>:8088` from any device on your network. To run it
+directly instead:
+Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
 
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
+network. (Both compose files default to port 8770; the Portainer variant
+adds a Portainer agent on port 9001.) To run
 network. (Both compose files default to port 8770.) To run it directly instead:
 network. (Both compose files default to port 8770.) To run
 
@@ -304,6 +311,14 @@ the app shell so it opens instantly and survives brief connection drops.
 
 ### Hosting behind a reverse proxy (e.g. a public domain)
 
+The app includes Google OAuth login (configurable via `WEB_AUTH_SECRET`). You can
+run it with or without authentication behind Apache, nginx, or Caddy. Point the
+proxy at the container's published port. Example Apache virtual host mapping
+`gym.example.com` to the dashboard:
+The app supports Google OAuth login (configure `WEB_GOOGLE_CLIENT_ID`,
+`WEB_GOOGLE_CLIENT_SECRET`, `WEB_AUTH_SECRET`, and `ALLOWED_EMAILS` in `.env`).
+Point your reverse proxy at the container's published port. Example Apache
+virtual host mapping `gym.example.com` to the dashboard:
 The dashboard supports **Google OAuth login** for multi-user access. The
 login page and authentication flow are built into `webapp/app.py`, backed by
 a `users` table in SQLite with Fernet-encrypted API keys. To enable it, set:
@@ -325,11 +340,16 @@ Example Apache virtual host mapping `gym.example.com` to the dashboard:
 <VirtualHost *:443>
     ServerName gym.example.com
     ProxyPreserveHost On
-    ProxyPass        / http://127.0.0.1:8770/
-    ProxyPassReverse / http://127.0.0.1:8770/
+    ProxyPass        / http://127.0.0.1:8088/
+    ProxyPassReverse / http://127.0.0.1:8088/
     # ... your TLS configuration ...
 </VirtualHost>
 ```
+
+If you run without authentication, only expose data you are happy to be public,
+or add HTTP basic auth at the proxy if you want to gate it.
+Without authentication configured, the dashboard is open to anyone on the
+network — only do that on a trusted LAN.
 
 ---
 
@@ -449,6 +469,15 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
+   It listens on `http://<host-ip>:8770`. Host it on a Proxmox LXC and reach it
+   from any device on your LAN. Google OAuth login is available when
+   `WEB_AUTH_SECRET` is configured; keep it on a trusted network otherwise.
+   It listens on `http://<host-ip>:8088` (or the `WEB_PORT` you set in `.env`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. On a
+   trusted network the dashboard is open; to gate access, set the
+   `WEB_GOOGLE_CLIENT_ID` and related env vars for Google OAuth login.
+   It listens on `http://<host-ip>:8088`. Host it on a Proxmox LXC and reach it
+   from any device on your LAN. Configure Google OAuth if hosting on a public network.
    It listens on `http://<host-ip>:8770` (or the port you set with `WEB_PORT`).
    Host it on a Proxmox LXC and reach it from any device on your LAN. Keep it on
    a trusted network, or configure Google OAuth (set `WEB_AUTH_SECRET`,
@@ -468,7 +497,7 @@ Pre-built images are published to the GitHub Container Registry (GHCR) by the
 The [Portainer stack](docker-compose.portainer.yml) runs **both**: the agent
 wakes at `RUN_AT` every day (default midnight and 5am in your `TZ`), builds the plan, syncs
 Hevy routines and Google Health body composition, and messages you on Telegram;
-the dashboard serves a live view of the same data on port `8770`.
+the dashboard serves a live view of the same data on port `8088`.
 
 **Credentials live only in Portainer, never in git** — the compose references
 variable names (`${...}`) and you supply the values in the stack's
@@ -513,13 +542,26 @@ without it.
    | `GOOGLE_HEALTH_CLIENT_SECRET` | optional | smart-scale sync |
    | `GOOGLE_HEALTH_REDIRECT_URI` | optional | dashboard `…/google-health/callback` URL for the Connect button |
    | `GOOGLE_HEALTH_REFRESH_TOKEN` | optional | only if linking via the CLI instead of the button |
+   | `WEB_GOOGLE_CLIENT_ID` | optional | Google OAuth client ID for dashboard login |
+   | `WEB_GOOGLE_CLIENT_SECRET` | optional | Google OAuth client secret for dashboard login |
+   | `WEB_AUTH_SECRET` | optional | long random string to encrypt login session cookies |
+   | `ALLOWED_EMAILS` | optional | comma-separated Google emails allowed to log in |
+   | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8088` |
+
+3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8088` — keep it behind a reverse proxy / firewall and
+   configure Google OAuth for public access.
    | `WEB_AUTH_SECRET` | optional | enable Google OAuth login |
    | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
    | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
    | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
+   | `ENCRYPTION_KEY` | optional | Fernet key for encrypting user API keys at rest |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
+   `http://<vps-ip>:8770`. Google OAuth login is available when
+   `WEB_AUTH_SECRET` is configured; keep the dashboard behind a reverse proxy
+   / firewall either way.
    `http://<vps-ip>:8770` — keep it behind a reverse proxy / firewall, and
    optionally enable Google OAuth by setting `WEB_AUTH_SECRET`,
    `WEB_GOOGLE_CLIENT_ID`, and `WEB_GOOGLE_CLIENT_SECRET`.
@@ -529,8 +571,14 @@ without it.
 
 ---
 
-## Continuous AI development (the swarm)
+## Continuous AI development (OpenHands + GitHub Issues)
 
+This repo uses OpenHands to autonomously build and maintain the project,
+controlled entirely via GitHub Issues. Tasks are scheduled through GitHub
+Actions workflows (`.github/workflows/`) and processed by OpenHands agents
+following the rules in `AGENTS.md`. Every issue labelled `ai-agent-task` is a
+direct instruction to the AI that gets worked on and shipped unattended.
+When you encounter a bug or need a feature, open a GitHub issue.
 This repo also runs an autonomous coding swarm that continuously works
 through a task backlog (bug fixes, the multi-tenant migration, wiring "bring
 your own AI" all the way through, the workout-programme builder UI, and

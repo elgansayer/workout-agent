@@ -132,7 +132,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
     # Leg Press range 10-12; last top set was 12 reps at 100kg -> bump.
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12},
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 12}
     ]
     assert hevy_sync._target_weight(ex, history) == 102.5
 
@@ -140,7 +140,7 @@ def test_target_weight_progresses_when_top_of_range_hit() -> None:
 def test_target_weight_holds_when_below_top() -> None:
     ex = Exercise("Leg Press", 3, "10-12", "", "C7973E0E")
     history = [
-        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10},
+        {"workout_start_time": "2026-02-01T08:00:00Z", "weight_kg": 100, "reps": 10}
     ]
     assert hevy_sync._target_weight(ex, history) == 100.0
 
@@ -184,7 +184,7 @@ def test_target_weight_weight_kg_is_none() -> None:
     assert hevy_sync._target_weight(ex, history) is None
 
 
-def test_find_existing_routine_id_found(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_existing_routine_id_found(monkeypatch):
     monkeypatch.setattr(
         hevy_sync,
         "get_routines",
@@ -194,7 +194,7 @@ def test_find_existing_routine_id_found(monkeypatch: pytest.MonkeyPatch) -> None
     assert result == "r2"
 
 
-def test_find_existing_routine_id_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_existing_routine_id_not_found(monkeypatch):
     monkeypatch.setattr(
         hevy_sync, "get_routines", lambda api_key: [{"id": "r1", "title": "Chest"}]
     )
@@ -202,7 +202,7 @@ def test_find_existing_routine_id_not_found(monkeypatch: pytest.MonkeyPatch) -> 
     assert result is None
 
 
-def test_find_existing_routine_id_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_existing_routine_id_empty(monkeypatch):
     monkeypatch.setattr(hevy_sync, "get_routines", lambda api_key: None)
     result = hevy_sync._find_existing_routine_id("key", "Arms")
     assert result is None
