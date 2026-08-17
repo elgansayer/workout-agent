@@ -265,6 +265,7 @@ dashboard usable with JavaScript disabled.
 | `/`          | Today's block, session, cycle/block rings, streak, body sparklines, consistency calendar, daily quote |
 | `/progress`  | Server-rendered SVG line charts per lift and body composition, with estimated 1RM badges |
 | `/stats`     | Headline totals, training-split and muscle-group donuts, strength projections, DOTS/relative-strength trend, session-load bars, all-time personal records |
+| `/programmes`| Select a workout programme template, infer from Hevy history, or build a custom split |
 | `/plan`      | The full 12-week periodisation, the 6-day split for the current block, and coaching rules |
 | `/history`   | A training-consistency calendar heatmap and the daily plan log |
 | `/checkins`  | The full history of routine check-in digests                   |
@@ -279,8 +280,7 @@ docker compose up -d web
 
 
 Then open `http://<host-ip>:${WEB_PORT:-8770}` from any device on your
-network. (Both compose files default to port 8770; the Portainer variant
-adds a Portainer agent on port 9001.) To run
+network. (Both compose files default to port 8770.) To run
 
 it directly instead:
 
