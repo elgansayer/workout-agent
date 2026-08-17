@@ -237,6 +237,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   per-minute wake loop, with per-user timezone support.~~ ✅ Resolved.
 - ~~**Docs drift from code**: README.md no longer claims the dashboard "has no
   login" — the Google OAuth section is accurate. Web port is now uniformly
+  `8770` across README, both compose files, and `.env.example`. Stale "Portainer
+  agent on port 9001" claim removed from README (2026-08-08); `ENCRYPTION_KEY`
+  added to README env var table (2026-08-08).~~ ✅ Resolved.
   `8770` across README and both compose files (reconciled 2026-08-05).
   README.md AI-provider language updated to reflect multi-provider support
   (no longer Gemini-only). Portainer-agent-on-port-9001 claim removed from

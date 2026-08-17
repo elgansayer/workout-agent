@@ -517,6 +517,7 @@ without it.
    | `WEB_GOOGLE_CLIENT_ID` | optional | OAuth web client ID for login |
    | `WEB_GOOGLE_CLIENT_SECRET` | optional | OAuth web client secret for login |
    | `ALLOWED_EMAILS` | optional | comma-separated list of emails that can log in |
+   | `ENCRYPTION_KEY` | optional | Fernet key for encrypting user API keys at rest |
    | `RUN_AT`, `TZ`, `WEB_PORT` | optional | defaults `00:00,05:00`, `Europe/London`, `8770` |
 
 3. **Deploy the stack.** It now runs every day on its own. The dashboard is at
