@@ -156,10 +156,11 @@ def _discover_modules() -> list[ModuleInfo]:
 def _extract_imports(source: str) -> set[str]:
     """Return the set of module names imported by *source*.
 
-    Handles ``import foo``, ``from foo import bar``, and
-    ``from foo.baz import ...``.  Returns every intermediate dotted path
-    (``foo``, ``foo.baz``) so the BFS traverser can resolve local submodules
-    without relying solely on the grep fallback.
+    Handles ``import foo``, ``from foo import bar``, and ``from foo.baz import ...``.
+
+    Returns only the top-level package name (e.g. ``webapp`` from
+    ``from webapp import charts``).  Use :func:`_extract_full_imports` when
+    you need the fully-qualified module name.
     """
     try:
         tree = ast.parse(source)
@@ -182,11 +183,16 @@ def _extract_imports(source: str) -> set[str]:
     return imports
 
 
-def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str]:
-    """Return dot-separated sub-module names from intra-package imports.
+def _extract_full_imports(source: str) -> set[str]:
+    """Return the set of **fully-qualified** module names imported by *source*.
 
-    Example: ``from webapp import charts`` → ``{"webapp.charts"}`` when
-    ``"webapp"`` is in *local_packages*.
+    Unlike :func:`_extract_imports`, this preserves sub-module resolution
+    from ``from X import Y`` patterns: ``from webapp import charts``
+    yields ``{"webapp", "webapp.charts"}`` (both forms), while
+    ``from webapp.charts import line_chart`` yields ``{"webapp", "webapp.charts"}``.
+
+    This allows transitive-import resolution to find the defining file for
+    ``webapp.charts`` without falling back to grep.
     """
     try:
         tree = ast.parse(source)
@@ -195,134 +201,24 @@ def _extract_submodule_imports(source: str, local_packages: set[str]) -> set[str
 
     imports: set[str] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.level == 0
-            and node.module in local_packages
-        ):
+        if isinstance(node, ast.Import):
             for alias in node.names:
-                imports.add(f"{node.module}.{alias.name}")
+                parts = alias.name.split(".")
+                imports.add(parts[0])
+                # Add full dotted path for sub-module imports
+                if len(parts) > 1:
+                    imports.add(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            parts = node.module.split(".")
+            imports.add(parts[0])
+            # For "from webapp import charts": add "webapp.charts"
+            for alias in node.names:
+                if alias.name != "*":
+                    imports.add(f"{node.module}.{alias.name}")
+            # Also add the module itself for deeper sub-module references
+            if len(parts) > 1:
+                imports.add(node.module)
     return imports
-
-
-def _resolve_call_name(node: ast.expr) -> str | None:
-    """Resolve a callable expression to its dotted name if possible.
-
-    Handles: ``subprocess.run``, ``subprocess.check_output``,
-    ``subprocess.call``, ``subprocess.Popen``, and imported aliases
-    like ``from subprocess import run; run(...)``.
-    """
-    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-        # subprocess.run, subprocess.check_output, etc.
-        return f"{node.value.id}.{node.attr}"
-    if isinstance(node, ast.Name):
-        # imported alias, e.g. ``from subprocess import run; run(...)``
-        return node.id
-    return None
-
-
-def _extract_subprocess_module_refs(source: str) -> set[str]:
-    """Return module names referenced in subprocess-style calls.
-
-    Detects all common subprocess patterns that invoke a local Python
-    module as a standalone script::
-
-        subprocess.run([sys.executable, "module.py"])
-        subprocess.check_output([sys.executable, "module.py"])
-        subprocess.call([sys.executable, "module.py"])
-        subprocess.Popen([sys.executable, "module.py"])
-        run([sys.executable, "module.py"])                # imported alias
-
-    Also detects non-sys.executable patterns like
-    ``subprocess.run(["python3", "module.py"])`` so that shell-script
-    style invocations inside Python are captured.
-    """
-    _SUBPROCESS_FUNCTIONS = {
-        "subprocess.run",
-        "subprocess.check_output",
-        "subprocess.check_call",
-        "subprocess.call",
-        "subprocess.Popen",
-        "run",
-        "check_output",
-        "check_call",
-        "call",
-        "Popen",
-    }
-
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return set()
-
-    modules: set[str] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        call_name = _resolve_call_name(node.func)
-        if call_name and call_name not in _SUBPROCESS_FUNCTIONS:
-            continue
-        if not node.args:
-            continue
-        cmd_list = node.args[0]
-        if not isinstance(cmd_list, (ast.List, ast.Tuple)) or len(cmd_list.elts) < 2:
-            continue
-        first = cmd_list.elts[0]
-        # Accept sys.executable or a literal "python3" / "python" string.
-        is_sys_exe = (
-            isinstance(first, ast.Attribute)
-            and isinstance(first.value, ast.Name)
-            and first.value.id == "sys"
-            and first.attr == "executable"
-        )
-        is_python_string = (
-            isinstance(first, ast.Constant)
-            and isinstance(first.value, str)
-            and first.value in ("python", "python3", "python3.12")
-        )
-        if not (call_name is not None and (is_sys_exe or is_python_string)):
-            continue
-        second = cmd_list.elts[1]
-        if (
-            isinstance(second, ast.Constant)
-            and isinstance(second.value, str)
-            and second.value.endswith(".py")
-        ):
-            modules.add(second.value[:-3])  # strip ".py"
-    return modules
-
-
-# ---------------------------------------------------------------------------
-# Shell / Docker entry-point discovery
-# ---------------------------------------------------------------------------
-
-
-def _discover_shell_module_refs() -> set[str]:
-    """Find modules referenced in shell scripts, Dockerfiles, and compose files.
-
-    Captures patterns like::
-
-        python main.py
-        python insight_cron.py --daily
-        exec python scheduler.py
-
-    Returns the set of module stems (without ``.py``) found.
-    """
-    refs: set[str] = set()
-    _SHELL_PATTERN = re.compile(r"\bpython3?(?:\.\d+)?\s+([a-z_][a-z0-9_]*)\.py\b")
-    _GLOB_PATTERNS = ("*.sh", "Dockerfile*", "docker-entrypoint*", "*.yml", "*.yaml")
-
-    for pattern in _GLOB_PATTERNS:
-        for p in ROOT.glob(pattern):
-            try:
-                text = p.read_text(encoding="utf-8", errors="replace")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for m in _SHELL_PATTERN.finditer(text):
-                refs.add(m.group(1))
-
-    return refs
 
 
 # ---------------------------------------------------------------------------
@@ -330,9 +226,11 @@ def _discover_shell_module_refs() -> set[str]:
 # ---------------------------------------------------------------------------
 
 
-def _build_import_graph() -> dict[str, set[str]]:
-    """Return {importing_file_stem -> {module_names_it_imports}}."""
+def _build_import_graph(
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Return ``({importing_file_rel -> {module_names_it_imports}}, {file_rel -> module_name})``."""
     graph: dict[str, set[str]] = {}
+    file_to_mod: dict[str, str] = {}
 
     # Discover local packages (directories with __init__.py) so we can
     # resolve intra-package imports like ``from webapp import charts`` to the
@@ -363,16 +261,53 @@ def _build_import_graph() -> dict[str, set[str]]:
     return graph
 
 
+def _build_full_import_graph() -> dict[str, set[str]]:
+    """Return {importing_file_rel -> {fully_qualified_module_names_it_imports}}.
+
+    Uses :func:`_extract_full_imports` so that ``from webapp import charts``
+    records both ``webapp`` and ``webapp.charts`` in the graph.  This lets
+    the BFS in :func:`find_orphans` resolve ``webapp.charts`` to its
+    defining file without a grep fallback.
+    """
+    graph: dict[str, set[str]] = {}
+
+    for py_file in sorted(ROOT.rglob("*.py")):
+        parts = py_file.parts
+        if any(
+            p.startswith(".") or p in ("__pycache__", ".venv", "venv") for p in parts
+        ):
+            continue
+
+        rel = str(py_file.relative_to(ROOT))
+        source = py_file.read_text(encoding="utf-8")
+        graph[rel] = _extract_full_imports(source)
+
+        # Build module name from file path
+        if rel.startswith("webapp/"):
+            # webapp/foo.py -> webapp.foo
+            file_to_mod[rel] = "webapp." + rel.rsplit("/", 1)[-1].replace(".py", "")
+        elif rel.startswith("tests/"):
+            # Test modules are never source modules; skip them
+            pass
+        else:
+            if (
+                rel.endswith(".py")
+                and not rel.startswith("test_")
+                and rel != "conftest.py"
+                and rel != "__init__.py"
+            ):
+                file_to_mod[rel] = rel.replace(".py", "")
+
+    return graph, file_to_mod
+
+
 def find_orphans() -> list[OrphanReport]:
     """Return every module that is never imported by any reachable code."""
     modules = _discover_modules()
-    import_graph = _build_import_graph()
+    import_graph, file_to_mod = _build_import_graph()
 
-    # Build a look-up: module_name -> file_rel that defines it
-    module_to_file: dict[str, str] = {}
-    for file_rel in import_graph:
-        stem = file_rel.replace("/", ".").replace(".py", "")
-        module_to_file[stem] = file_rel
+    # Build reverse mapping: module_name -> file_rel that defines it
+    mod_to_file: dict[str, str] = {v: k for k, v in file_to_mod.items()}
 
     # Build the set of *wired* module names — i.e. those that are reachable
     # from an entry point or whose own file is an entry point.
@@ -394,15 +329,15 @@ def find_orphans() -> list[OrphanReport]:
     for ref in shell_refs:
         wired.add(ref)
 
+    # Also seed wired with webapp.app so it's never flagged as orphan
+    wired.add("webapp.app")
+
     # BFS from entry-point files: anything they import is reachable, and
     # anything *those* import is reachable, etc.
     entry_point_files = {
         f for f in import_graph if f in ENTRY_POINTS or f == _WEB_ENTRY
     }
 
-    # Also seed with modules that are imported by test files — tests count as
-    # reachable (they exercise the module at runtime via pytest), and the
-    # transitive closure of test-imported modules is also reachable.
     queue: list[str] = []
     for file_rel, imports in import_graph.items():
         if file_rel.startswith("tests/") or file_rel in entry_point_files:
@@ -411,15 +346,28 @@ def find_orphans() -> list[OrphanReport]:
                     wired.add(imp)
                     queue.append(imp)
 
+    # Map module names to their defining file path for transitive lookups.
+    module_file: dict[str, str] = {}
+    for mi in modules:
+        rel = str(mi.path.relative_to(ROOT))
+        module_file[mi.name] = rel
+
     while queue:
         module_name = queue.pop(0)
-        # Find the file that defines this module and add everything IT imports.
-        defining_file = module_to_file.get(module_name)
-        if defining_file is not None:
-            for transitive in import_graph.get(defining_file, set()):
+        # Look at the module's own file's imports (transitive closure).
+        def_file = module_file.get(module_name)
+        if def_file and def_file in import_graph:
+            for transitive in import_graph[def_file]:
                 if transitive not in wired:
                     wired.add(transitive)
                     queue.append(transitive)
+        # Also find files that import this module and add their imports.
+        for file_rel, imports in import_graph.items():
+            if module_name in imports:
+                for transitive in import_graph.get(file_rel, set()):
+                    if transitive not in wired:
+                        wired.add(transitive)
+                        queue.append(transitive)
 
     # Now check each module
     orphans: list[OrphanReport] = []
@@ -429,13 +377,8 @@ def find_orphans() -> list[OrphanReport]:
         if mi.is_entry_point:
             continue
 
-        # Also check shell-refs for non-entry-points that are reachable
-        # at runtime via shell scripts.
-        if mi.name in shell_refs:
-            continue
-
-        # Double-check with a simple grep: is the module imported via dynamic
-        # patterns that AST can't catch (e.g. __import__ or importlib)?
+        # Double-check with grep: is the module imported via dynamic patterns
+        # that AST can't catch (e.g. __import__ or importlib)?
         grep_hits = _grep_import(mi.name)
         if grep_hits:
             logger.debug(
@@ -465,6 +408,9 @@ def _grep_import(module_name: str) -> list[str]:
     own_file = f"{module_name.replace('.', '/')}.py"
     test_file = f"tests/test_{module_name.replace('webapp.', '')}.py"
 
+    # Build a safe regex: ``import module_name`` or ``from module_name``
+    # followed by a space, dot, or end-of-line.  Word boundaries (\b) guard
+    # against prefix false-positives.
     try:
         # Escape dots so "webapp.charts" matches only the literal dot, not
         # any character (e.g. would otherwise also match "webapp_charts").
@@ -477,7 +423,7 @@ def _grep_import(module_name: str) -> list[str]:
                 "grep",
                 "-rn",
                 "-E",
-                f"^\\s*(import {escaped}\\b|from {escaped}( |\\.))",
+                rf"^(import {module_name}|from {module_name}( |\.))",
                 "--include=*.py",
                 str(ROOT),
             ],
@@ -494,33 +440,32 @@ def _grep_import(module_name: str) -> list[str]:
     except (subprocess.TimeoutExpired, OSError):
         pass
 
-    # Also check for `from <package> import <short_name>` pattern for any
-    # sub-package (e.g. ``from webapp import charts``, or future sub-packages).
+    # For top-level-package sub-modules (e.g. "webapp.charts"), also search
+    # for the ``from <package> import <short>`` pattern.
     if "." in module_name:
-        pkg, short = module_name.rsplit(".", 1)
-        # Escape dots in pkg so "webapp.sub" doesn't match "webappXsub".
-        escaped_pkg = pkg.replace(".", "\\.")
-        try:
-            result = subprocess.run(
-                [
-                    "grep",
-                    "-rn",
-                    f"^\\s*from {escaped_pkg} import .*\\b{short}\\b",
-                    "--include=*.py",
-                    str(ROOT),
-                ],
-                capture_output=True,
-                text=True,
-                timeout=30,
-                check=False,
-            )
-            for line in result.stdout.splitlines():
-                file_part = line.split(":", 1)[0]
-                rel = os.path.relpath(file_part, ROOT)
-                if rel != own_file and rel != test_file:
-                    hits.append(rel)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
+        pkg, short = module_name.split(".", 1)
+        if short:
+            try:
+                result = subprocess.run(
+                    [
+                        "grep",
+                        "-rn",
+                        rf"^\s*from\s+{pkg}\s+import\s+.*\b{short}\b",
+                        "--include=*.py",
+                        str(ROOT),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                for line in result.stdout.splitlines():
+                    file_part = line.split(":", 1)[0]
+                    rel = os.path.relpath(file_part, ROOT)
+                    if rel != own_file and rel != test_file:
+                        hits.append(rel)
+            except (subprocess.TimeoutExpired, OSError):
+                pass
 
     return sorted(set(hits))
 
