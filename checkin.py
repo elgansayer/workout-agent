@@ -166,10 +166,7 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str,
-    planned: str,
-    rep_range: str,
-    history: list[dict[str, Any]],
+    name: str, planned: str, rep_range: str, history: list[dict[str, Any]],
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)

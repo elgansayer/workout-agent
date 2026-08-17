@@ -21,6 +21,15 @@
 **Learning:** Found an accessibility issue pattern in the app's components where icon-only buttons rely on `title` attributes instead of explicit `aria-label`, and placeholder-only inputs lack proper `aria-label` definitions, degrading screen reader experience.
 **Action:** Always add `aria-label` to icon-only buttons (while hiding decorative SVGs with `aria-hidden="true"`) and provide explicit labels or `aria-label` tags to input fields lacking a visible `<label>`.
 
+## 2025-03-04 - Adding ARIA properties to custom JS toggles
+**Learning:** Found custom selection chips for goals and experience level that use JS and a `.selected` class but lack proper semantic attributes for assistive technology. They were not announced as selected or grouped.
+**Action:** When implementing custom toggleable elements (like selection chips) in Jinja templates, group them using `role='group'` and `aria-labelledby`, and dynamically manage the `aria-pressed` attribute in JavaScript alongside the active CSS class.
+## 2025-03-03 - Accessible Selection Chips
+**Learning:** Found that custom toggleable elements (like selection chips) are difficult for screen reader users to understand because they lack grouped context and states are not explicitly announced when toggled via custom JavaScript functions.
+**Action:** Always group custom selection elements using `role="group"` and `aria-labelledby`, and ensure the `aria-pressed` attribute is actively managed via JavaScript to indicate their current toggled/selected state.
+## 2023-11-20 - Custom Chip Selector Accessibility
+**Learning:** Custom interactive elements, like selection chips built with `<button>` elements, rely entirely on CSS classes like `.selected` for visual state. Screen readers cannot detect these visual states, making custom selections inaccessible.
+**Action:** Always wrap custom selections in a `role="group"` container with `aria-labelledby` pointing to their logical group label. Dynamically toggle the `aria-pressed="true"` / `"false"` attribute concurrently with the visual CSS classes (both in the server-rendered template and in the client-side JavaScript toggle logic) to ensure full accessibility for stateful custom components.
 ## 2024-10-24 - Accessible custom toggle chips
 **Learning:** When implementing custom toggleable elements (like selection chips) using unsemantic elements such as `<div>` and `<button>` instead of radio inputs or checkboxes, they lack native accessibility grouping and toggle semantics.
 **Action:** Use `role="group"` on the container with an `aria-labelledby` linking it to a descriptive label. Provide `aria-pressed="true"` or `aria-pressed="false"` dynamically to the inner toggleable `<button>` elements to communicate their selected state to screen readers.
