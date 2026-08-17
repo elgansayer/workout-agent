@@ -1,10 +1,10 @@
 # Commit Hygiene Audit — 2026-08-07
 
-<<<<<<< HEAD
 ## Result: CLEAN
 
 ### 1. Recent Commit Messages
 - HEAD: `Fixes #533: [Daily] Daily Dependency Check - bump ruff>=0.16.0, types-Authlib>=1.7.2` — descriptive, not "fix" or "wip". ✅
+- HEAD commit: `Revert "Fixes #543: Record hourly test watch #543 — no drift detected"` — descriptive, not "fix" or "wip". ✅
 
 ### 2. Sensitive Files
 - `git log -p -10 -- .env .env.* data/ '*.db'` returned only `.env.example` (intentionally tracked, whitelisted in `.gitignore`).
@@ -34,7 +34,20 @@
 - `commit_hygiene.py`: `=== Commit hygiene: CLEAN ===` ✅
 - `mypy commit_hygiene.py`: Success, no issues found ✅
 - `git log -p -10 -- .env .env.* data/ '*.db'`: Clean (only .env.example) ✅
-=======
+- `*.sqlite`, `*.sqlite3` and journal variants ✅
+- `.env`, `.env.*` (with `!.env.example` exception) ✅
+- `__pycache__/` ✅
+- `.pytest_cache/` ✅
+- `.venv/` ✅
+- All required patterns present. ✅
+
+### 4. Large Files
+- No files >3MB outside `data/` (which is gitignored). ✅
+
+### Verification Gates
+- `ruff check .`: All checks passed ✅
+- `pytest tests/test_commit_hygiene.py`: 40 passed ✅
+- `commit_hygiene.py --json`: status "clean", 0 findings ✅
 ## Status: ✅ CLEAN
 
 ### 1. Commit Message Quality (last 10)
@@ -70,4 +83,3 @@ No tracked files >1 MB outside `data/`. Repository is clean of binary bloat.
 - pytest → 573 passed, 1 skipped
 - mypy commit_hygiene.py → Clean
 - commit_hygiene.py --json → `{"status": "clean", "count": 0, "findings": []}`
->>>>>>> main

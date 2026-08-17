@@ -7,7 +7,9 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
-from ai_provider import AIProvider, resolve_provider
+import google.generativeai as genai
+
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -23,47 +25,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger("insight_cron")
 
 
-def _resolve_provider(config: Config) -> AIProvider:
-    return resolve_provider(
-        db_path=config.database_path,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-    )
-
-
-def _resolve_insight_user(db_path: str) -> str:
-    """Return the user_id for running insight jobs.
-
-    Prefers $SCHEDULER_USER_ID (set by scheduler.py). Falls back to the
-    first legacy user for single-tenant backwards compat.
-    """
-    env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
-    if env_id:
-        return env_id
-    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
-
-
-def generate_daily_header(config: Config, *, user_id: str | None = None) -> None:
-    if user_id is None:
-        user_id = _resolve_insight_user(config.database_path)
-    logger.info("Generating daily insight header for user %s...", user_id)
-    provider = _resolve_provider(config)
+def generate_daily_header(config: Config) -> None:
+    logger.info("Generating daily insight header...")
+    provider = _get_provider(config)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
+    
+    metrics = [m for m in get_body_metrics(limit=14, db_path=config.database_path) if m["date"] >= cutoff]
+    logs = [log for log in get_daily_logs(limit=14, db_path=config.database_path) if log["date"] >= cutoff]
 
     metrics = [
         m
-        for m in get_body_metrics(
-            limit=14, db_path=config.database_path, user_id=user_id
-        )
+        for m in get_body_metrics(limit=14, db_path=config.database_path)
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(
-            limit=14, db_path=config.database_path, user_id=user_id
-        )
+        for log in get_daily_logs(limit=14, db_path=config.database_path)
         if log["date"] >= cutoff
     ]
 
@@ -82,7 +61,8 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 {{"fatigue": "string", "wins_stalls": "string", "advice": "string"}}"""
 
     try:
-        text = str(provider.generate(prompt)).strip()
+        response = model.generate_content(prompt)
+        text = (response.text or "").strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
         text = text.strip()
@@ -100,35 +80,19 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         logger.error("Failed to generate daily insight: %s", e)
 
 
-def generate_weekly_correlations(config: Config, *, user_id: str | None = None) -> None:
-    if user_id is None:
-        user_id = _resolve_insight_user(config.database_path)
-    logger.info("Generating weekly deep correlations for user %s...", user_id)
-    provider = _resolve_provider(config)
+def generate_weekly_correlations(config: Config) -> None:
+    logger.info("Generating weekly deep correlations...")
+    provider = _get_provider(config)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
-
-    metrics = [
-        m
-        for m in get_body_metrics(
-            limit=120, db_path=config.database_path, user_id=user_id
-        )
-        if m["date"] >= cutoff
-    ]
-    logs = [
-        log
-        for log in get_daily_logs(
-            limit=120, db_path=config.database_path, user_id=user_id
-        )
-        if log["date"] >= cutoff
-    ]
-
+    
+    metrics = [m for m in get_body_metrics(limit=120, db_path=config.database_path) if m["date"] >= cutoff]
+    logs = [log for log in get_daily_logs(limit=120, db_path=config.database_path) if log["date"] >= cutoff]
+    
     # Also fetch training history for the last 60 days
     all_history = get_progress_history(
-        limit_per_exercise=60,
-        db_path=config.database_path,
-        user_id=user_id,
+        limit_per_exercise=60, db_path=config.database_path
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -158,26 +122,19 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path, user_id=user_id)
-            logger.info(
-                "Weekly deep correlation generated successfully via %s.",
-                provider.name(),
-            )
+            save_deep_correlation(text, db_path=config.database_path)
+            logger.info("Weekly deep correlation generated successfully.")
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate weekly deep correlation: %s", e)
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--daily",
-        action="store_true",
-        help="Generate daily insight header",
+        "--daily", action="store_true", help="Generate daily insight header"
     )
     parser.add_argument(
-        "--weekly",
-        action="store_true",
-        help="Generate weekly deep correlations",
+        "--weekly", action="store_true", help="Generate weekly deep correlations"
     )
     args = parser.parse_args()
 
