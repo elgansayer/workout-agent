@@ -252,10 +252,7 @@ def analyse_lift(
 
 
 def _trend_of(
-    values: Sequence[float | None],
-    rising_is: str,
-    falling_is: str,
-    tol: float,
+    values: Sequence[float | None], rising_is: str, falling_is: str, tol: float
 ) -> str | None:
     """Classify the direction of a short numeric series."""
     clean = [v for v in values if v is not None]

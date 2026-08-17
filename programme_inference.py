@@ -17,7 +17,6 @@ to build plans, show progress, and render the dynamic UI.
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
@@ -242,7 +241,7 @@ def _compute_frequency(
     weeks = window_days / 7
     sessions_per_week = len(recent) / weeks if weeks > 0 else 0
 
-    muscle_hits: Counter[str] = Counter()
+    muscle_hits: dict[str, int] = {}
     for w in recent:
         session_muscles: set[str] = set()
         for ex in w.exercises:
@@ -250,7 +249,7 @@ def _compute_frequency(
             if tmpl:
                 session_muscles.add(tmpl.primary_muscle_group)
         for m in session_muscles:
-            muscle_hits[m] += 1
+            muscle_hits[m] = muscle_hits.get(m, 0) + 1
 
     muscle_freq = {m: round(count / weeks, 1) for m, count in muscle_hits.items()}
     return round(sessions_per_week, 1), muscle_freq

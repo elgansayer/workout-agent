@@ -179,6 +179,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-05)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06)
 <!-- Hourly lint & format pass #465: 2026-08-06 -- ruff check --fix: clean, ruff format: clean, mypy: clean, pytest: 569/569 -->

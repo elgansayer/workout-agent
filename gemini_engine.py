@@ -20,14 +20,10 @@ from program import (
     format_day,
 )
 
-__all__ = [
-    "apply_autonomous_adjustments",
-    "generate_checkin_message",
-    "generate_next_workout",
-    "generate_rest_day_message",
-]
-
-from weather import WeatherConditions
+try:
+    from weather import WeatherConditions
+except ImportError:
+    WeatherConditions = Any  # type: ignore[assignment, misc]
 
 logger = logging.getLogger(__name__)
 

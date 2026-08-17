@@ -128,7 +128,16 @@ def _extract_ip(request: Request) -> str:
 
 
 def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    """Enforce a sliding-window rate limit backed by the SQLite database.
+    now = time.time()
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip()
+    else:
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            ip = real_ip.strip()
+        else:
+            ip = request.client.host if request.client else "unknown"
 
     Replaces the old in-process dict so rate limits are correctly shared
     across multiple web app replicas behind a load balancer.
@@ -537,9 +546,9 @@ def progress(request: Request) -> Any:
             }
             for e in entries
         ]
-        e1rms_raw = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms: list[float] = [v for v in e1rms_raw if v is not None]
-        best_e1rm = max(e1rms) if e1rms else None
+        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
+        e1rms_clean = [v for v in e1rms if v is not None]
+        best_e1rm: float | None = max(e1rms_clean) if e1rms_clean else None
         charts_data.append(
             {
                 "name": name,
