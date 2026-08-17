@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import hevy_sync
 from program import BLOCKS, Exercise, day_exercises
 
@@ -182,25 +184,25 @@ def test_target_weight_weight_kg_is_none() -> None:
     assert hevy_sync._target_weight(ex, history) is None
 
 
-def test_find_existing_routine_id_found(monkeypatch):
+def test_find_existing_routine_id_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        hevy_sync, "get_routines",
-        lambda api_key: [{"id": "r1", "title": "Chest"}, {"id": "r2", "title": "Legs"}]
+        hevy_sync,
+        "get_routines",
+        lambda api_key: [{"id": "r1", "title": "Chest"}, {"id": "r2", "title": "Legs"}],
     )
     result = hevy_sync._find_existing_routine_id("key", "Legs")
     assert result == "r2"
 
 
-def test_find_existing_routine_id_not_found(monkeypatch):
+def test_find_existing_routine_id_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        hevy_sync, "get_routines",
-        lambda api_key: [{"id": "r1", "title": "Chest"}]
+        hevy_sync, "get_routines", lambda api_key: [{"id": "r1", "title": "Chest"}]
     )
     result = hevy_sync._find_existing_routine_id("key", "Arms")
     assert result is None
 
 
-def test_find_existing_routine_id_empty(monkeypatch):
+def test_find_existing_routine_id_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hevy_sync, "get_routines", lambda api_key: None)
     result = hevy_sync._find_existing_routine_id("key", "Arms")
     assert result is None

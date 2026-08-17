@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 from hevy_reader import (
     CompletedWorkout,
+    ExerciseTemplate,
     HevyTrainingData,
     Routine,
     RoutineExercise,
@@ -129,7 +130,7 @@ _MUSCLE_GROUP_CATEGORIES = {
 
 def _classify_routine_muscles(
     routine: Routine,
-    templates: dict,
+    templates: dict[str, ExerciseTemplate],
 ) -> list[str]:
     """Return a ranked list of primary muscle groups hit by this routine."""
     counts: dict[str, float] = {}
@@ -210,7 +211,7 @@ def _classify_split(days: list[TrainingDay]) -> str:
 
 def _compute_frequency(
     workouts: list[CompletedWorkout],
-    templates: dict,
+    templates: dict[str, ExerciseTemplate],
     window_days: int = 28,
 ) -> tuple[float, dict[str, float]]:
     """Compute sessions/week and per-muscle frequency from recent workouts."""
@@ -234,7 +235,7 @@ def _compute_frequency(
     weeks = window_days / 7
     sessions_per_week = len(recent) / weeks if weeks > 0 else 0
 
-    muscle_hits: Counter = Counter()
+    muscle_hits: Counter[str] = Counter()
     for w in recent:
         session_muscles: set[str] = set()
         for ex in w.exercises:

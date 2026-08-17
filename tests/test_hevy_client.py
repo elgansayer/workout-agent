@@ -326,3 +326,129 @@ def test_get_exercise_history_network_error() -> None:
         mock_get.side_effect = hevy_client.requests.RequestException("timeout")
         result = hevy_client.get_exercise_history("fake-key", "001")
         assert result is None
+
+
+def test_get_all_workouts_non_dict_json() -> None:
+    """Regression: non-object JSON (e.g. a list) must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result is None
+
+
+def test_fetch_latest_workout_non_dict_json() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.fetch_latest_workout("fake-key")
+        assert result is None
+
+
+def test_get_workout_count_non_dict_json() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.get_workout_count("fake-key")
+        assert result is None
+
+
+def test_get_user_info_non_dict_json() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = "just a string"
+        result = hevy_client.get_user_info("fake-key")
+        assert result is None
+
+
+def test_get_recent_workouts_non_dict_json() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.get_recent_workouts("fake-key")
+        assert result is None
+
+
+def test_create_routine_non_dict_json() -> None:
+    with patch("hevy_client.requests.post") as mock_post:
+        mock_post.return_value.raise_for_status.return_value = None
+        mock_post.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.create_routine("fake-key", {})
+        assert result is None
+
+
+def test_create_routine_folder_non_dict_json() -> None:
+    with patch("hevy_client.requests.post") as mock_post:
+        mock_post.return_value.raise_for_status.return_value = None
+        mock_post.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.create_routine_folder("fake-key", "Test")
+        assert result is None
+
+
+def test_update_routine_non_dict_json() -> None:
+    with patch("hevy_client.requests.put") as mock_put:
+        mock_put.return_value.raise_for_status.return_value = None
+        mock_put.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.update_routine("fake-key", "R1", {})
+        assert result is None
+
+
+def test_get_exercise_history_non_dict_json() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = [1, 2, 3]
+        result = hevy_client.get_exercise_history("fake-key", "001")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# non-list collection value regression tests
+# ---------------------------------------------------------------------------
+
+
+def test_get_all_workouts_non_list_workouts() -> None:
+    """Regression: non-list 'workouts' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": 42,
+            "page_count": 1,
+        }
+        result = hevy_client.get_all_workouts("fake-key")
+        assert result is None
+
+
+def test_get_recent_workouts_non_list_workouts() -> None:
+    """Regression: non-list 'workouts' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "workouts": "not-a-list",
+            "page_count": 1,
+        }
+        result = hevy_client.get_recent_workouts("fake-key")
+        assert result is None
+
+
+def test_get_routines_non_list_collection() -> None:
+    """Regression: non-list 'routines' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "routines": None,
+            "page_count": 1,
+        }
+        result = hevy_client.get_routines("fake-key")
+        assert result is None
+
+
+def test_get_exercise_templates_non_list_collection() -> None:
+    """Regression: non-list 'exercise_templates' value must return None, not crash."""
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value.raise_for_status.return_value = None
+        mock_get.return_value.json.return_value = {
+            "exercise_templates": {"id": "001"},
+            "page_count": 1,
+        }
+        result = hevy_client.get_exercise_templates("fake-key")
+        assert result is None
