@@ -201,23 +201,18 @@ def _extract_full_imports(source: str) -> set[str]:
 
     imports: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                parts = alias.name.split(".")
-                imports.add(parts[0])
-                # Add full dotted path for sub-module imports
-                if len(parts) > 1:
-                    imports.add(alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            parts = node.module.split(".")
-            imports.add(parts[0])
-            # For "from webapp import charts": add "webapp.charts"
-            for alias in node.names:
-                if alias.name != "*":
+        if isinstance(node, ast.ImportFrom) and node.module is not None and node.level == 0:
+            # Pattern A: ``from webapp import charts`` → ``webapp.charts``
+            if node.module in local_packages:
+                for alias in node.names:
                     imports.add(f"{node.module}.{alias.name}")
-            # Also add the module itself for deeper sub-module references
-            if len(parts) > 1:
-                imports.add(node.module)
+            else:
+                # Pattern B: ``from webapp.charts import line_chart`` → ``webapp.charts``
+                for local_pkg in local_packages:
+                    if node.module.startswith(local_pkg + "."):
+                        # The parent module (e.g. ``webapp.charts``) is being used
+                        imports.add(node.module)
+                        break
     return imports
 
 
