@@ -20,3 +20,7 @@
 ## 2024-10-24 - Add ARIA Labels to Missing Icons and Form Inputs
 **Learning:** Found an accessibility issue pattern in the app's components where icon-only buttons rely on `title` attributes instead of explicit `aria-label`, and placeholder-only inputs lack proper `aria-label` definitions, degrading screen reader experience.
 **Action:** Always add `aria-label` to icon-only buttons (while hiding decorative SVGs with `aria-hidden="true"`) and provide explicit labels or `aria-label` tags to input fields lacking a visible `<label>`.
+
+## 2024-10-24 - Accessible custom toggle chips
+**Learning:** When implementing custom toggleable elements (like selection chips) using unsemantic elements such as `<div>` and `<button>` instead of radio inputs or checkboxes, they lack native accessibility grouping and toggle semantics.
+**Action:** Use `role="group"` on the container with an `aria-labelledby` linking it to a descriptive label. Provide `aria-pressed="true"` or `aria-pressed="false"` dynamically to the inner toggleable `<button>` elements to communicate their selected state to screen readers.
