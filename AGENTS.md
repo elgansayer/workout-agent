@@ -196,6 +196,17 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **No real data isolation between users** (§2). Logging in as a different
   Google account today shares the exact same programme/history/chat as
   everyone else. This is the top-priority backlog item.
+  *Progress:* `workout_history`, `exercise_progress`, `body_metrics`,
+  `chat_messages`, `dashboard_insights`, and `deep_correlations` now have
+  `user_id` scoping (PRs #70, #78, #79 merged). `programme_state` and
+  `daily_log` (PR #77) are still in flight.
+- **`ai_provider.py`'s multi-provider abstraction is built but unwired.**
+  `get_provider()` is never called anywhere outside `ai_provider.py` itself;
+  every actual generation call in `gemini_engine.py`, `insight_cron.py`, and
+  `webapp/app.py` hardcodes the Gemini SDK against one shared server key,
+  regardless of what a user configures in Settings. `anthropic`/`openai`
+  packages are also missing from `requirements*.txt`. No `DeepSeekProvider`
+  exists yet.
 - **`ai_provider.py` multi-provider wiring is in progress.** PR #85
   (`wire-ai-provider`) integrates `resolve_provider()` into `gemini_engine.py`,
   `main.py`, `checkin.py`, and `hevy_sync.py` with full test coverage
@@ -333,6 +344,12 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   Python sleep-loop), each single-timezone/single-recipient by construction.
   Needs consolidating into one scheduler that can support per-user run times
   once multi-tenancy lands.
+- ~~**Docs drift from code**: README.md claims the dashboard "has no login"~~ —
+  *Resolved 2026-08-05: README and `webapp/app.py` docstring now document the
+  real Google OAuth behaviour. Port docs are consistent.*
+  ~~**README referenced non-existent `SWARM.md`/`swarmctl` files**~~ —
+  *Resolved 2026-08-05: removed stale references; replaced with accurate
+  OpenHands + GitHub Issues description.*
 - **Docs drift from code** — ~~README.md claims the dashboard "has no login"~~
   Resolved (issue #91): all files now consistently describe the working Google
   OAuth login and use port 8088 (previously 8770/8088/8000 inconsistently).
@@ -343,6 +360,9 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `hevy_reader.py`, `insight_cron.py`, `insight_scheduler.py`, `main.py`,
   `encryption.py`, `scripts/sync_history.py`, `ai_widgets.py`, `config.py`,
   `weather.py`. Any task that touches these should add tests as part of the
+  same change, not as a follow-up.
+- **Missing `WEB_PORT` in `.env.example`.** Both compose files read
+  `${WEB_PORT:-...}` but `.env.example` doesn't document it.
   same change, not as a follow-up. Note: `ai_provider.py` now has
   `tests/test_ai_provider.py` (7 tests, added in PR #85).
   (`docker-entrypoint.sh`'s bash sleep-loop and the old `insight_scheduler.py`

@@ -463,6 +463,10 @@ volume mount and set `HEALTH_CONNECT_FILE=/health/recovery.json` in `.env`.
    docker compose up -d web
    ```
 
+   It listens on `http://<host-ip>:8088` (or the `WEB_PORT` you set in `.env`).
+   Host it on a Proxmox LXC and reach it from any device on your LAN. On a
+   trusted network the dashboard is open; to gate access, set the
+   `WEB_GOOGLE_CLIENT_ID` and related env vars for Google OAuth login.
    It listens on `http://<host-ip>:8088`. Host it on a Proxmox LXC and reach it
    from any device on your LAN. Configure Google OAuth if hosting on a public network.
    It listens on `http://<host-ip>:8770` (or the port you set with `WEB_PORT`).
@@ -555,8 +559,14 @@ without it.
 
 ---
 
-## Continuous AI development (the swarm)
+## Continuous AI development (OpenHands + GitHub Issues)
 
+This repo uses OpenHands to autonomously build and maintain the project,
+controlled entirely via GitHub Issues. Tasks are scheduled through GitHub
+Actions workflows (`.github/workflows/`) and processed by OpenHands agents
+following the rules in `AGENTS.md`. Every issue labelled `ai-agent-task` is a
+direct instruction to the AI that gets worked on and shipped unattended.
+When you encounter a bug or need a feature, open a GitHub issue.
 This repo also runs an autonomous coding swarm that continuously works
 through a task backlog (bug fixes, the multi-tenant migration, wiring "bring
 your own AI" all the way through, the workout-programme builder UI, and
