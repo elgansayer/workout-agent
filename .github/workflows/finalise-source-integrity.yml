@@ -34,45 +34,25 @@ jobs:
             requirements.txt
             requirements-web.txt
 
-      - name: Align provider contract and strengthen CI
+      - name: Align the provider call with the restored contract
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          app_path = Path("webapp/app.py")
-          app = app_path.read_text(encoding="utf-8")
-          old_call = """        fallback_api_key=config.gemini_api_key,\n        fallback_model=config.gemini_model,\n"""
-          new_call = """        server_gemini_key=config.gemini_api_key,\n        server_gemini_model=config.gemini_model,\n"""
-          if app.count(old_call) != 1:
-              raise SystemExit("expected exactly one legacy provider call")
-          app_path.write_text(app.replace(old_call, new_call), encoding="utf-8")
-
-          workflow_path = Path(".github/workflows/diagnose-python-integrity.yml")
-          workflow = workflow_path.read_text(encoding="utf-8")
-          old_install = "run: python -m pip install -r requirements.txt -r requirements-web.txt"
-          new_install = (
-              'run: python -m pip install -r requirements.txt '
-              '-r requirements-web.txt "pytest>=8,<9"'
+          path = Path("webapp/app.py")
+          source = path.read_text(encoding="utf-8")
+          old = (
+              "        fallback_api_key=config.gemini_api_key,\n"
+              "        fallback_model=config.gemini_model,\n"
           )
-          if workflow.count(old_install) != 1:
-              raise SystemExit("expected exactly one runtime dependency install step")
-          workflow = workflow.replace(old_install, new_install)
-          focused_step = """
-
-      - name: Run focused integrity regressions
-        env:
-          APP_ENV: test
-          ALLOW_ANONYMOUS_WEB: "1"
-        run: >-
-          python -m pytest -q
-          tests/test_webapp.py::test_google_health_disconnect_clears_token
-          tests/test_webapp.py::test_api_programmes_select_requires_auth
-          tests/test_webapp.py::test_rag_search_uses_resolve_provider
-"""
-          if "Run focused integrity regressions" in workflow:
-              raise SystemExit("focused regression step already exists")
-          workflow_path.write_text(workflow.rstrip() + focused_step, encoding="utf-8")
+          new = (
+              "        server_gemini_key=config.gemini_api_key,\n"
+              "        server_gemini_model=config.gemini_model,\n"
+          )
+          if source.count(old) != 1:
+              raise SystemExit("expected exactly one legacy provider call")
+          path.write_text(source.replace(old, new), encoding="utf-8")
           PY
 
       - name: Install dependencies
@@ -102,6 +82,6 @@ jobs:
           git rm .github/workflows/finalise-source-integrity.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add webapp/app.py .github/workflows/diagnose-python-integrity.yml
-          git commit -m "fix: align provider contract and add focused integrity tests"
+          git add webapp/app.py
+          git commit -m "fix: align the web provider call with its restored contract"
           git push origin HEAD:fix/webapp-main-integrity
