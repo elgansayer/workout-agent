@@ -72,7 +72,7 @@ def exchange_code(
     code: str,
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Swap an authorisation code for access and refresh tokens."""
     try:
         response = requests.post(
@@ -88,7 +88,11 @@ def exchange_code(
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        if not isinstance(data, dict):
+            print("Google returned non-object token JSON.", file=sys.stderr)
+            return None
+        return data
     except requests.RequestException as exc:
         print(f"Token exchange failed: {exc}", file=sys.stderr)
         if exc.response is not None:
