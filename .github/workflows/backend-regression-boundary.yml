@@ -20,14 +20,18 @@ jobs:
       fail-fast: false
       matrix:
         candidate:
-          - name: pre-angular-abf1d8
-            sha: abf1d8a01bf1d03ee775fbcd7325ecb3754b0d35
-          - name: angular-2888ece
-            sha: 2888ece956f6d19647397470bfc99432b62d09ff
-          - name: post-auth-ui-29e61
-            sha: 29e61cd9f6b8eddb62599825bfb5624ce32a2c84
-          - name: current-main-0a12
-            sha: 0a12db22d5c37843f232c98bd7ca4c076c7421cb
+          - name: merge-bdfc4ae
+            sha: bdfc4ae7685e4963df0a267f51ae0f0ccaf5799c
+          - name: first-parent-7d23eca
+            sha: 7d23eca77cc8db8c5b9e2d27e0417c27caf4f117
+          - name: pre-merge-98eabd
+            sha: 98eabd31f1407a771b68367d1f83ef0603fb185a
+          - name: side-parent-19098d
+            sha: 19098da5762105dc4b7b99ac99df34f3d98a384b
+          - name: typecheck-side-49b2f1
+            sha: 49b2f112c7ff384815f91d90d6960b28d230f236
+          - name: typecheck-merge-acf75c
+            sha: acf75c8bff5d3fc7c3c0c87814d09276fd3ec47f
     steps:
       - name: Check out immutable candidate
         uses: actions/checkout@v6
