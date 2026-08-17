@@ -182,10 +182,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_workout_history_date_id ON workout_history (date DESC, id DESC)",
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)",
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id ON daily_log (date DESC, id DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date_id ON body_metrics (date DESC, id DESC)"
         )
         # ⚡ Bolt Optimization: Add indexes to eliminate slow TEMP B-TREE sorts on large progress tables.
         # - idx_exercise_progress_name_id optimizes get_progress_history, get_recent_bests, and get_exercise_volumes
@@ -321,6 +318,38 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             VALUES ('programme_start_date', ?)
             """,
             (datetime.now(tz=timezone.utc).date().isoformat(),),
+        )
+
+        # Migration: Add user_id column to workout_history for multi-tenancy
+        cursor.execute("PRAGMA table_info(workout_history)")
+        woh_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in woh_columns:
+            cursor.execute(
+                "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)"
+            )
+            # Backfill existing rows with a synthesised legacy user
+            from uuid import uuid4
+            now = datetime.now(tz=timezone.utc).isoformat()
+            # Check if legacy user exists, create if not
+            legacy_row = cursor.execute(
+                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
+            ).fetchone()
+            if legacy_row:
+                legacy_id = legacy_row[0]
+            else:
+                legacy_id = str(uuid4())
+                cursor.execute(
+                    "INSERT INTO users (id, email, display_name, created_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (legacy_id, "legacy@local", "Legacy Data", now),
+                )
+            cursor.execute(
+                "UPDATE workout_history SET user_id = ? WHERE user_id IS NULL",
+                (legacy_id,),
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
+            "ON workout_history (user_id, date DESC, id DESC)"
         )
 
 
