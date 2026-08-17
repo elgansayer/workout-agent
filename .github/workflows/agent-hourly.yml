@@ -1,36 +1,15 @@
-name: Agent Hourly Tasks
+name: Retired Agent Hourly Tasks
 
+# Recurring issue generation is retired. The OpenHands daemon on the VPS
+# owns scheduling and should work from the curated product backlog instead.
 on:
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  queue-tasks:
+  retired:
     runs-on: ubuntu-latest
-    permissions:
-      issues: write
     steps:
-      - uses: actions/checkout@v4
-      - name: Queue hourly automation tasks as GitHub issues
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          cd .agents/automations
-          tasks=(
-            "task-hourly-lint-fix.md"
-            "task-hourly-type-check.md"
-            "task-hourly-test-watch.md"
-            "task-hourly-dead-code.md"
-            "task-hourly-commit-hygiene.md"
-          )
-          for task in "${tasks[@]}"; do
-            title=$(head -n 1 "$task" | sed 's/^# //')
-            existing=$(gh issue list --state open --search "$title" --json number -q '.[0].number' || true)
-            if [ -z "$existing" ]; then
-              gh issue create --title "[Hourly] $title" --body-file "$task" --label "ai-agent-task,hourly"
-            else
-              echo "Skipping duplicate: $title (issue #$existing already open)"
-            fi
-          done
+      - run: echo "Hourly GitHub issue generation is retired; no issues were created."
