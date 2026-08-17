@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out repair branch
+      - name: Check out the exact triggering commit
         uses: actions/checkout@v6
         with:
-          ref: fix/webapp-main-integrity
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -34,7 +34,7 @@ jobs:
             requirements.txt
             requirements-web.txt
 
-      - name: Align restored provider and persistence contracts
+      - name: Align restored provider and progress-persistence contracts
         shell: bash
         run: |
           python - <<'PY'
@@ -59,7 +59,6 @@ jobs:
 
           database_path = Path("database.py")
           database = database_path.read_text(encoding="utf-8")
-
           old_progress = (
               "def save_progress(\n"
               "    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH\n"
@@ -75,41 +74,8 @@ jobs:
           )
           if database.count(old_progress) != 1:
               raise SystemExit("expected exactly one damaged save_progress signature")
-          database = database.replace(old_progress, new_progress)
-
-          old_chat = (
-              "def save_chat_message(role: str, content: str, "
-              "db_path: str = DEFAULT_DB_PATH) -> None:\n"
-          )
-          new_chat = (
-              "def save_chat_message(\n"
-              "    role: str,\n"
-              "    content: str,\n"
-              "    db_path: str = DEFAULT_DB_PATH,\n"
-              "    *,\n"
-              "    user_id: str | None = None,\n"
-              ") -> None:\n"
-          )
-          if database.count(old_chat) != 1:
-              raise SystemExit("expected exactly one damaged save_chat_message signature")
-          database = database.replace(old_chat, new_chat)
-
-          old_chat_values = (
-              "            (role, content, "
-              "datetime.now(tz=timezone.utc).isoformat()),\n"
-          )
-          new_chat_values = (
-              "            (\n"
-              "                role,\n"
-              "                content,\n"
-              "                datetime.now(tz=timezone.utc).isoformat(),\n"
-              "                user_id,\n"
-              "            ),\n"
-          )
-          if database.count(old_chat_values) != 1:
-              raise SystemExit("expected exactly one damaged chat insert values tuple")
           database_path.write_text(
-              database.replace(old_chat_values, new_chat_values),
+              database.replace(old_progress, new_progress),
               encoding="utf-8",
           )
           PY
@@ -117,7 +83,7 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
 
-      - name: Validate repaired source and web/database contracts
+      - name: Validate repaired source and affected contracts
         env:
           APP_ENV: test
           ALLOW_ANONYMOUS_WEB: "1"
@@ -130,11 +96,23 @@ jobs:
           fi
           mapfile -d '' files < <(git ls-files -z '*.py')
           python -m py_compile "${files[@]}"
-          python -m pytest -q tests/test_webapp.py tests/test_database.py
+          python -m pytest -q \
+            tests/test_webapp.py \
+            tests/test_database.py \
+            tests/test_ai_provider.py \
+            tests/test_insight_cron.py \
+            tests/test_analytics.py
 
-      - name: Commit verified final repair
+      - name: Commit the verified repair without overwriting concurrent work
         shell: bash
+        env:
+          TRIGGER_SHA: ${{ github.sha }}
         run: |
+          remote_sha="$(git ls-remote origin refs/heads/fix/webapp-main-integrity | cut -f1)"
+          if [[ "$remote_sha" != "$TRIGGER_SHA" ]]; then
+            echo "Branch moved from $TRIGGER_SHA to $remote_sha; refusing to overwrite it."
+            exit 1
+          fi
           git rm .github/workflows/finalise-source-integrity.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
