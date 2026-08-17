@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from database import (
     advance_day,
+    delete_routine_record,
     get_body_metrics,
     get_current_day,
     get_daily_logs,
     get_exercise_volumes,
+    get_meta,
+    get_or_create_user,
     get_personal_records,
+    get_programme_start_date,
+    get_progress_history,
     get_recent_bests,
     get_recent_hevy_logs,
     get_session_volumes,
@@ -16,22 +23,24 @@ from database import (
     save_body_metrics,
     save_daily_log,
     save_progress,
+    save_routine_record,
     save_workout,
+    set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
-def _db(tmp_path) -> str:
+def _db(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
 
 
-def test_init_seeds_day_one(tmp_path):
+def test_init_seeds_day_one(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_current_day(db) == 1
 
 
-def test_init_is_idempotent(tmp_path):
+def test_init_is_idempotent(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     advance_day(db)
@@ -39,7 +48,7 @@ def test_init_is_idempotent(tmp_path):
     assert get_current_day(db) == 2
 
 
-def test_advance_increments(tmp_path):
+def test_advance_increments(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert advance_day(db) == 2
@@ -47,20 +56,20 @@ def test_advance_increments(tmp_path):
     assert get_current_day(db) == 3
 
 
-def test_advance_wraps_at_six(tmp_path):
+def test_advance_wraps_at_six(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     days = [advance_day(db) for _ in range(6)]
     assert days == [2, 3, 4, 5, 6, 1]
 
 
-def test_save_workout_ignores_none(tmp_path):
+def test_save_workout_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_workout(None, db)  # should not raise
 
 
-def test_save_progress_and_get_recent_bests(tmp_path):
+def test_save_progress_and_get_recent_bests(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     summary = WorkoutSummary(
@@ -81,19 +90,25 @@ def test_save_progress_and_get_recent_bests(tmp_path):
     assert bests["Leg Extensions"]["sets"] == 4
 
 
-def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
+def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", duration_seconds=3600, total_volume_kg=3000.0,
+            "S1",
+            "2026-06-10",
+            duration_seconds=3600,
+            total_volume_kg=3000.0,
             exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)],
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3960.0,
+            "S2",
+            "2026-06-17",
+            duration_seconds=3600,
+            total_volume_kg=3960.0,
             exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)],
         ),
         db,
@@ -103,19 +118,23 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
     assert bests["Leg Press"]["top_reps"] == 12
 
 
-def test_save_progress_ignores_none(tmp_path):
+def test_save_progress_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(None, db)
     assert get_recent_bests(db) == {}
 
 
-def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
+def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan A", "life A", db
+    )
     # A re-run on the same day replaces the earlier entry.
-    save_daily_log("2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db)
+    save_daily_log(
+        "2026-06-17", 1, "Back, Deadlifts & Chest", "high", "plan B", "life B", db
+    )
     save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
 
     logs = get_daily_logs(db_path=db)
@@ -124,8 +143,12 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
     assert logs[1]["plan"] == "plan B"
     assert logs[1]["carb_tier"] == "high"
 
+    # Same logs scoped to a different user must see nothing.
+    logs2 = get_daily_logs(db_path=db, user_id="nonexistent-user")
+    assert logs2 == []
 
-def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path):
+
+def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db)
@@ -139,14 +162,14 @@ def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path):
     assert readings[-1]["body_fat_pct"] == 14.2
 
 
-def test_save_body_metrics_ignores_none(tmp_path):
+def test_save_body_metrics_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics(None, "2026-06-17", db)
     assert get_body_metrics(db_path=db) == []
 
 
-def test_get_session_volumes_aggregates_by_date(tmp_path):
+def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -169,15 +192,19 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
     assert volumes[0]["exercises"] == 2
 
 
-def test_get_personal_records_uses_best_epley_1rm(tmp_path):
+def test_get_personal_records_uses_best_epley_1rm(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary("S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]),
+        WorkoutSummary(
+            "S1", "2026-06-10", 3600, 3000, [ExerciseSummary("Deadlift", 100.0, 5, 4)]
+        ),
         db,
     )
     save_progress(
-        WorkoutSummary("S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]),
+        WorkoutSummary(
+            "S2", "2026-06-17", 3600, 3000, [ExerciseSummary("Deadlift", 120.0, 3, 5)]
+        ),
         db,
     )
     prs = get_personal_records(db)
@@ -189,13 +216,13 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path):
     assert pr["weight_kg"] == 120.0
 
 
-def test_get_personal_records_empty_without_data(tmp_path):
+def test_get_personal_records_empty_without_data(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_personal_records(db) == []
 
 
-def test_get_exercise_volumes_sums_per_exercise(tmp_path):
+def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -213,7 +240,10 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3300.0,
+            "S2",
+            "2026-06-17",
+            duration_seconds=3600,
+            total_volume_kg=3300.0,
             exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)],
         ),  # 3300
         db,
