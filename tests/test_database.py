@@ -2,37 +2,43 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 from database import (
     advance_day,
+    delete_routine_record,
     get_body_metrics,
     get_current_day,
     get_daily_logs,
     get_exercise_volumes,
+    get_meta,
+    get_or_create_user,
     get_personal_records,
+    get_programme_start_date,
+    get_progress_history,
     get_recent_bests,
+    get_recent_hevy_logs,
     get_session_volumes,
     init_db,
     save_body_metrics,
     save_daily_log,
     save_progress,
+    save_routine_record,
     save_workout,
+    set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
-def _db(tmp_path) -> str:
+def _db(tmp_path: Path) -> str:
     return str(tmp_path / "test.db")
 
 
-def test_init_seeds_day_one(tmp_path):
+def test_init_seeds_day_one(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_current_day(db) == 1
 
 
-def test_init_is_idempotent(tmp_path):
+def test_init_is_idempotent(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     advance_day(db)
@@ -40,7 +46,7 @@ def test_init_is_idempotent(tmp_path):
     assert get_current_day(db) == 2
 
 
-def test_advance_increments(tmp_path):
+def test_advance_increments(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert advance_day(db) == 2
@@ -48,25 +54,27 @@ def test_advance_increments(tmp_path):
     assert get_current_day(db) == 3
 
 
-def test_advance_wraps_at_six(tmp_path):
+def test_advance_wraps_at_six(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     days = [advance_day(db) for _ in range(6)]
     assert days == [2, 3, 4, 5, 6, 1]
 
 
-def test_save_workout_ignores_none(tmp_path):
+def test_save_workout_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_workout(None, db)  # should not raise
 
 
-def test_save_progress_and_get_recent_bests(tmp_path):
+def test_save_progress_and_get_recent_bests(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     summary = WorkoutSummary(
         title="Legs & Abs",
         date="2026-06-17",
+        duration_seconds=3600,
+        total_volume_kg=5400.0,
         exercises=[
             ExerciseSummary("Leg Press", 120.0, 12, 3, True),
             ExerciseSummary("Leg Extensions", 60.0, 15, 4, True),
@@ -80,18 +88,18 @@ def test_save_progress_and_get_recent_bests(tmp_path):
     assert bests["Leg Extensions"]["sets"] == 4
 
 
-def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
+def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
-            "S1", "2026-06-10", [ExerciseSummary("Leg Press", 100.0, 10, 3)]
+            "S1", "2026-06-10", 3600, 3000.0, [ExerciseSummary("Leg Press", 100.0, 10, 3)]
         ),
         db,
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 12, 3)]
+            "S2", "2026-06-17", 3600, 3960.0, [ExerciseSummary("Leg Press", 110.0, 12, 3)]
         ),
         db,
     )
@@ -100,14 +108,14 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path):
     assert bests["Leg Press"]["top_reps"] == 12
 
 
-def test_save_progress_ignores_none(tmp_path):
+def test_save_progress_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(None, db)
     assert get_recent_bests(db) == {}
 
 
-def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
+def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_daily_log(
@@ -125,8 +133,12 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path):
     assert logs[1]["plan"] == "plan B"
     assert logs[1]["carb_tier"] == "high"
 
+    # Same logs scoped to a different user must see nothing.
+    logs2 = get_daily_logs(db_path=db, user_id="nonexistent-user")
+    assert logs2 == []
 
-def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path):
+
+def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db)
@@ -140,20 +152,22 @@ def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path):
     assert readings[-1]["body_fat_pct"] == 14.2
 
 
-def test_save_body_metrics_ignores_none(tmp_path):
+def test_save_body_metrics_ignores_none(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_body_metrics(None, "2026-06-17", db)
     assert get_body_metrics(db_path=db) == []
 
 
-def test_get_session_volumes_aggregates_by_date(tmp_path):
+def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
             "S1",
             "2026-06-10",
+            3600,
+            2000.0,
             [
                 ExerciseSummary("Deadlift", 100.0, 5, 4),  # 100*5*4 = 2000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # bodyweight -> 0
@@ -162,14 +176,14 @@ def test_get_session_volumes_aggregates_by_date(tmp_path):
         db,
     )
     volumes = get_session_volumes(db)
-    # save_progress stamps the row with the run date, so everything lands today.
+    # save_progress uses the workout's actual date when available.
     assert len(volumes) == 1
-    assert volumes[0]["date"] == datetime.now(tz=timezone.utc).date().isoformat()
+    assert volumes[0]["date"] == "2026-06-10"
     assert volumes[0]["volume"] == 2000.0
     assert volumes[0]["exercises"] == 2
 
 
-def test_get_personal_records_uses_best_epley_1rm(tmp_path):
+def test_get_personal_records_uses_best_epley_1rm(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
@@ -193,19 +207,21 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path):
     assert pr["weight_kg"] == 120.0
 
 
-def test_get_personal_records_empty_without_data(tmp_path):
+def test_get_personal_records_empty_without_data(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     assert get_personal_records(db) == []
 
 
-def test_get_exercise_volumes_sums_per_exercise(tmp_path):
+def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
         WorkoutSummary(
             "S1",
             "2026-06-10",
+            3600,
+            3000.0,
             [
                 ExerciseSummary("Leg Press", 100.0, 10, 3),  # 3000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # 0 (bodyweight)
@@ -215,7 +231,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
     )
     save_progress(
         WorkoutSummary(
-            "S2", "2026-06-17", [ExerciseSummary("Leg Press", 110.0, 10, 3)]
+            "S2", "2026-06-17", 3600, 3300.0, [ExerciseSummary("Leg Press", 110.0, 10, 3)]
         ),  # 3300
         db,
     )
@@ -223,3 +239,114 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path):
     assert volumes["Leg Press"]["volume"] == 6300.0
     assert volumes["Leg Press"]["sessions"] == 2
     assert volumes["Pull-Ups"]["volume"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant isolation tests: workout_history user_id scoping
+# ---------------------------------------------------------------------------
+
+
+def test_workout_history_migration_adds_user_id_column(tmp_path):
+    """Running init_db on a pre-migration DB backfills user_id via a legacy user."""
+    db = _db(tmp_path)
+    # Simulate a pre-migration DB by creating workout_history without user_id
+    import sqlite3
+    conn = sqlite3.connect(db, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS workout_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            hevy_payload TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO workout_history (date, hevy_payload) VALUES (?, ?)",
+        ("2026-08-01", '{"test": true}'),
+    )
+    conn.commit()
+    conn.close()
+
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn2:
+        cols = {
+            row[1]
+            for row in conn2.execute("PRAGMA table_info(workout_history)").fetchall()
+        }
+        assert "user_id" in cols
+        rows = conn2.execute(
+            "SELECT user_id FROM workout_history WHERE date = '2026-08-01'"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] is not None  # backfilled to the legacy user
+
+
+def test_workout_history_user_isolation(tmp_path):
+    """Two users writing to workout_history do not see each other's rows."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    save_workout({"user": "a", "exercise": "Squat"}, db, user_id=user_a)
+    save_workout({"user": "b", "exercise": "Bench"}, db, user_id=user_b)
+
+    logs_a = get_recent_hevy_logs(limit=10, db_path=db, user_id=user_a)
+    logs_b = get_recent_hevy_logs(limit=10, db_path=db, user_id=user_b)
+
+    assert len(logs_a) == 1
+    assert logs_a[0]["user"] == "a"
+    assert len(logs_b) == 1
+    assert logs_b[0]["user"] == "b"
+
+
+def test_workout_history_user_isolation_same_payload(tmp_path):
+    """Scoped reads only return the correct user's data."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_a = "user-a-123"
+    user_b = "user-b-456"
+
+    for i in range(3):
+        save_workout({"count": i}, db, user_id=user_a)
+        save_workout({"count": i + 100}, db, user_id=user_b)
+
+    logs_a = get_recent_hevy_logs(limit=20, db_path=db, user_id=user_a)
+    logs_b = get_recent_hevy_logs(limit=20, db_path=db, user_id=user_b)
+
+    assert len(logs_a) == 3
+    assert {w["count"] for w in logs_a} == {0, 1, 2}
+    assert len(logs_b) == 3
+    assert {w["count"] for w in logs_b} == {100, 101, 102}
+
+
+def test_workout_history_null_user_id_backward_compat(tmp_path):
+    """Calling save_workout/get_recent_hevy_logs without user_id still works."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    save_workout({"exercise": "Deadlift"}, db)
+    logs = get_recent_hevy_logs(db_path=db)
+
+    assert len(logs) == 1
+    assert logs[0]["exercise"] == "Deadlift"
+
+
+def test_init_db_migration_idempotent(tmp_path):
+    """Running init_db twice on the same migrated DB does not crash."""
+    db = _db(tmp_path)
+    init_db(db)
+    init_db(db)  # must not raise
+
+    import sqlite3
+    with sqlite3.connect(db, timeout=10) as conn:
+        row = conn.execute("PRAGMA table_info('workout_history')").fetchall()
+        # user_id column still exists
+        col_names = {r[1] for r in row}
+        assert "user_id" in col_names
+
