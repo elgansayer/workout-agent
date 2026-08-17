@@ -1,6 +1,5 @@
 # Dead Code & Orphaned Module Sweep — 2026-08-06 Run 3 (Issue #479)
 
-<<<<<<< HEAD
 **Result: CLEAN** — No orphaned modules found. No truly dead code detected.
 
 ## Checks Performed
@@ -48,7 +47,6 @@
 No action required. All 29 modules are properly wired. The sweep tool
 (PR #423) is scheduled hourly in `scheduler.py` via `_run_dead_code_sweep()`
 and continues to operate correctly.
-=======
 ## Summary
 - **Sweep tool**: `dead_code_sweep.py` (69 tests, all passing)
 - **Result**: CLEAN — 0 orphaned modules detected
@@ -96,4 +94,3 @@ Entry points (invoked directly or via subprocess): `main.py`, `scheduler.py`, `s
 - Updated AGENTS.md §7 audit timestamp to include `hourly dead-code sweep #479 checked 2026-08-06`
 - No orphaned modules detected — no issues filed
 - No truly-dead code detected — nothing to prune
->>>>>>> main

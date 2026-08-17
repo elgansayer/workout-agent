@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Hourly Commit Hygiene Audit — 2026-08-07 run5
 
 ## Status: ✅ Clean
@@ -43,7 +42,6 @@ within acceptable limits.
 - mypy (commit_hygiene.py): clean
 - commit_hygiene.py --json: status=clean, 0 findings
 - No binary/log/cache files in tracked tree
-=======
 # Commit Hygiene Audit — 2026-08-07 (Run 5)
 
 ## Status: ✅ CLEAN
@@ -82,4 +80,3 @@ No tracked files >3 MB outside `data/`. Repository is clean of binary bloat.
 - pytest (full suite) → 573 passed, 1 skipped
 - mypy commit_hygiene.py → Clean
 - commit_hygiene.py --json → `{"status": "clean", "count": 0, "findings": []}`
->>>>>>> main
