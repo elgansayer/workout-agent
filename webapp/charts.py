@@ -14,6 +14,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
+from typing import Any
 
 # House palette (kept in step with style.css custom properties).
 ACCENT = "#4ade80"
@@ -186,7 +187,11 @@ def donut(segments: Sequence[dict[str, Any]], *, size: int = 160) -> str:
 
 
 def bar_chart(
-    bars: Sequence[dict], *, colour: str = ACCENT, unit: str = "", height: int = 200
+    bars: Sequence[dict[str, Any]],
+    *,
+    colour: str = ACCENT,
+    unit: str = "",
+    height: int = 200,
 ) -> str:
     """Vertical bars. ``bars`` = ``[{"label", "value", "caption"?}]``."""
     items = list(bars)
