@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
+from encryption import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
 
