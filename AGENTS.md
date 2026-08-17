@@ -167,6 +167,7 @@ Every feature task should be evaluated against which of these four it moves
 forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly dead-code sweep #552 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly commit hygiene #580 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #630 checked 2026-08-07, hourly test watch #629 checked 2026-08-07, hourly commit hygiene #631 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #642 checked 2026-08-07, hourly test watch #629 checked 2026-08-07)
@@ -285,6 +286,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
+- **Hourly dead-code sweep #552 run 2026-08-07.** `dead_code_sweep.py` confirmed
+  clean via `--json` output (status: "clean", zero orphans). All 27 top-level
+  modules and 3 webapp sub-modules confirmed wired. `programme_inference.py`
+  and `hevy_reader.py` remain properly wired through `webapp/app.py` (PR #142).
+  Full verification gate passed: ruff (clean), pytest (539/539), dead_code_sweep
+  (zero orphans), mypy (clean, 31 source files). Stale pycache cleaned: 0.
+  No newly orphaned or truly-dead modules found.
 - **Hourly commit hygiene #631 re-verified (2026-08-07).** `commit_hygiene.py` executed
   clean via `--json` output (status: "clean", zero findings). All 40 hygiene tests
   passing. Full verification gate passed: ruff (clean), pytest (609/609), mypy (clean).
