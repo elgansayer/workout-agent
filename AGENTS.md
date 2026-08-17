@@ -215,6 +215,25 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - **Scheduling has been consolidated** into a single unified `scheduler.py`
   orphaned; the remaining work is a full programme-selection UI (see next
   item).
+
+- **`sync_history.py` is now wired.** It is imported by `main.py`
+  (`--sync-history` CLI flag) and `webapp/app.py`
+  (`/api/settings/sync-history` endpoint) for one-off historical Hevy
+  backfills scoped to a user's own API key. No longer orphaned.
+
+- **No workout-programme selection UI.** `/plan` only renders the fixed
+  split read-only. No route lets a user choose a template or build a custom
+  one.
+
+- **Scheduling is now unified** into a single `scheduler.py` Python process
+  (invoked by `docker-entrypoint.sh`'s `schedule` mode), replacing the
+  former dual-loop architecture (bash sleep-loop + `insight_scheduler.py`).
+  `scheduler.py` wakes every 60 seconds, checks each user's local time
+  against configured `RUN_AT` times, and dispatches `main.py` and
+  `insight_cron.py --daily`/`--weekly` per user. Still single-timezone per
+  container; per-user timezone scheduling needs the per-user `timezone`
+  preference column before it can be implemented.
+
 - **`sync_history.py` is wired** into `main.py` (`--sync-history` CLI flag)
   and `webapp/app.py` (`/api/settings/sync-history` endpoint). The module
   itself can still be invoked standalone (`python sync_history.py`).
