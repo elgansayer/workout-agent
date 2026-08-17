@@ -1133,13 +1133,125 @@ def test_programme_state_migration_idempotent(tmp_path):
 
     import sqlite3
 
-    with sqlite3.connect(db, timeout=10) as conn:
-        cols = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(programme_state)").fetchall()
-        }
-        assert "user_id" in cols
-        assert "id" not in cols
-        # Only one row for legacy user (not duplicated)
-        rows = conn.execute("SELECT COUNT(*) FROM programme_state").fetchone()
-        assert rows[0] == 1
+    c = sqlite3.connect(db)
+    row = c.execute("SELECT COUNT(*) FROM programmes").fetchone()
+    c.close()
+    assert row[0] == 1
+
+
+def test_save_programme_and_get_programmes(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-a"
+    pid = save_programme(
+        uid, "custom", "My Bro Split", {"days": [1, 2, 3]},
+        active=True, db_path=db,
+    )
+    assert pid is not None
+    pps = get_programmes(uid, db_path=db)
+    assert len(pps) == 1
+    assert pps[0]["name"] == "My Bro Split"
+    assert pps[0]["source"] == "custom"
+    assert pps[0]["active"] is True
+
+
+def test_get_active_programme_returns_only_active(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-b"
+    save_programme(
+        uid, "template", "T1", {"days": []},
+        template_key="t1", db_path=db,
+    )
+    pid2 = save_programme(
+        uid, "inferred", "T2", {"days": []},
+        active=True, db_path=db,
+    )
+
+    active = get_active_programme(uid, db_path=db)
+    assert active is not None
+    assert active["id"] == pid2
+    assert active["name"] == "T2"
+
+
+def test_get_programme_by_id(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-c"
+    pid = save_programme(uid, "custom", "Test", {"foo": "bar"}, db_path=db)
+
+    p = get_programme(uid, pid, db_path=db)
+    assert p is not None
+    assert p["definition"] == {"foo": "bar"}
+
+
+def test_get_programme_wrong_user(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-d"
+    pid = save_programme(uid, "custom", "Test", {}, db_path=db)
+
+    assert get_programme("intruder", pid, db_path=db) is None
+
+
+def test_set_active_programme(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-e"
+    pid1 = save_programme(uid, "custom", "P1", {}, active=True, db_path=db)
+    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
+
+    active = get_active_programme(uid, db_path=db)
+    assert active is not None
+    assert active["id"] == pid1
+
+    ok = set_active_programme(uid, pid2, db_path=db)
+    assert ok is True
+    active2 = get_active_programme(uid, db_path=db)
+    assert active2 is not None
+    assert active2["id"] == pid2
+
+
+def test_set_active_programme_wrong_user(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-f"
+    pid = save_programme(uid, "custom", "P", {}, db_path=db)
+
+    ok = set_active_programme("intruder", pid, db_path=db)
+    assert ok is False
+
+
+def test_delete_programme(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-g"
+    pid1 = save_programme(uid, "custom", "P1", {}, active=True, db_path=db)
+    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
+
+    ok = delete_programme(uid, pid2, db_path=db)
+    assert ok is True
+    assert len(get_programmes(uid, db_path=db)) == 1
+
+    # Cannot delete the last programme.
+    ok = delete_programme(uid, pid1, db_path=db)
+    assert ok is False
+
+
+def test_delete_programme_wrong_user(tmp_path):
+    db = _db(tmp_path)
+    init_db(db)
+
+    uid = "user-h"
+    save_programme(uid, "custom", "P1", {}, db_path=db)
+    pid2 = save_programme(uid, "custom", "P2", {}, db_path=db)
+
+    ok = delete_programme("intruder", pid2, db_path=db)
+    assert ok is False
