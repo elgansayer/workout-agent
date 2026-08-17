@@ -65,9 +65,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(
-                json.dumps(parsed), db_path=config.database_path, user_id=user_id
-            )
+            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path)
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)

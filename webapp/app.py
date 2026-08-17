@@ -423,8 +423,7 @@ def _dashboard_context(today: date | None = None, user_id: str | None = None) ->
         total_days = len(days_data) or 1
         current_day = ((today - start).days % total_days) + 1
         active_day = next(
-            (d for d in days_data if d.get("number") == current_day),
-            None,
+            (d for d in days_data if d.get("number") == current_day), None
         )
         if active_day:
             focus = active_day.get("focus", "Training")
@@ -437,7 +436,7 @@ def _dashboard_context(today: date | None = None, user_id: str | None = None) ->
                         "note": ex.get("note", ""),
                         "last": _format_best(best),
                         "nudge": _overload_nudge(ex.get("rep_range", ""), best),
-                    },
+                    }
                 )
     elif day is not None:
         focus = day_focus(day)
@@ -802,9 +801,8 @@ def plan(request: Request):
     )
 
 
-def _render_active_plan(request: Request, active: dict[str, Any], today: date) -> Any:
+def _render_active_plan(request: Request, active: dict, today: date):
     """Render /plan from a user's active programme definition (DB-stored)."""
-    user_id = request.session.get("user_id")
     defn = active.get("definition", {})
     split_name = defn.get("name", "Active Programme")
     cycle_weeks = defn.get("cycle_weeks", 4)
@@ -813,7 +811,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     rules = defn.get("rules", [])
 
     # Determine today's day in the split (simple round-robin based on start date).
-    start = get_programme_start_date(DB_PATH, user_id=user_id)
+    start = get_programme_start_date(DB_PATH)
     # current_day is the 1-based day index in the split, wrapping
     total_days = len(days_data) or 1
     current_day = ((today - start).days % total_days) + 1
@@ -835,7 +833,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
                 "focus": d.get("focus", f"Day {day_num}"),
                 "is_today": day_num == current_day,
                 "exercises": exercises,
-            },
+            }
         )
 
     blocks = []
@@ -850,7 +848,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
                 "pullups": _block_lift_str(b.get("pullups")),
                 "accessory": b.get("accessory_emphasis", ""),
                 "is_current": True,
-            },
+            }
         )
 
     return templates.TemplateResponse(
@@ -869,7 +867,7 @@ def _render_active_plan(request: Request, active: dict[str, Any], today: date) -
     )
 
 
-def _block_lift_str(lift: dict[str, Any] | None) -> str:
+def _block_lift_str(lift: dict | None) -> str:
     """Format a lift dict as 'sets x rep_range' or empty string."""
     if not lift:
         return ""
@@ -952,13 +950,13 @@ async def select_programme(request: Request) -> dict[str, Any]:
 
 def _build_inferred_definition(
     inferred: InferredProgramme,
-) -> dict[str, Any]:
+) -> dict:
     """Build a programme definition dict from an InferredProgramme.
 
     Produces a structure compatible with the programme templates system
     so the programmes.html preview and /plan page render correctly.
     """
-    days: list[dict[str, Any]] = []
+    days: list[dict] = []
     for i, day in enumerate(inferred.training_days):
         exercises = []
         for ex in day.exercises:
@@ -969,18 +967,18 @@ def _build_inferred_definition(
                     "rep_range": f"{ex.target_reps or 8}-{ex.target_reps or 12}",
                     "note": ex.notes or "",
                     "template_id": ex.template_id,
-                },
+                }
             )
         days.append(
             {
                 "number": i + 1,
                 "focus": day.focus_summary(),
                 "exercises": exercises,
-            },
+            }
         )
 
     # Build a simple block structure from the inferred data.
-    blocks: list[dict[str, Any]] = [
+    blocks: list[dict] = [
         {
             "number": 1,
             "name": "Inferred",
@@ -992,7 +990,7 @@ def _build_inferred_definition(
             "deadlift": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
             "pullups": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
             "accessory_emphasis": "",
-        },
+        }
     ]
 
     return {
@@ -1010,7 +1008,7 @@ def _build_inferred_definition(
     }
 
 
-def _run_hevy_inference(user_id: str) -> dict[str, Any]:
+def _run_hevy_inference(user_id: str) -> dict:
     """Fetch Hevy data and infer the user's training programme.
 
     Raises HTTPException if the user has no Hevy API key configured or if
