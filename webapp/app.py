@@ -28,7 +28,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from programme_inference import InferredProgramme
@@ -314,10 +314,7 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(
-    series: dict[str, Any],
-    *keywords: str,
-) -> tuple[str | None, list[Any]]:
+def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
@@ -552,7 +549,7 @@ def progress(request: Request) -> Any:
     )
 
 
-def _body_charts(*, user_id: str | None = None) -> dict[str, Any]:
+def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
@@ -704,11 +701,7 @@ def stats(request: Request) -> Any:
 
 
 def _project_lift(
-    label: str,
-    entries: list[Any],
-    target_ordinal: int,
-    *,
-    metric: str = "auto",
+    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
@@ -1134,8 +1127,7 @@ def project_peak(request: Request) -> dict[str, Any]:
         text = str(provider.generate(prompt)).strip()
         text = text.removeprefix("```json")
         text = text.removesuffix("```")
-        result: dict[str, Any] = json.loads(text.strip())
-        return result
+        return cast(dict[str, Any], json.loads(text.strip()))
     except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
 
