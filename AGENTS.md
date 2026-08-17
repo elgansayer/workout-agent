@@ -376,6 +376,13 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
 
+- **Test coverage audit** (last updated 2026-08-06, re-verified
+  2026-08-06): all source modules have corresponding test files. The
+  full test suite stands at 569 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #444 confirmed no drift; all gates
+  green with no failures to resolve.
 - **Hourly dead-code sweep #505 re-verified 2026-08-07.** `dead_code_sweep.py`
   executed clean (status: "clean", zero orphans). All 27 top-level modules
   and 3 webapp sub-modules confirmed wired. Known previously-orphaned modules
