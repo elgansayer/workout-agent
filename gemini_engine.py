@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import Any
 
-from ai_provider import AIProvider
+from ai_provider import AIProvider, get_provider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
 from program import (
@@ -28,6 +29,24 @@ __all__ = [
 from weather import WeatherConditions
 
 logger = logging.getLogger(__name__)
+
+
+def _server_gemini_provider() -> AIProvider:
+    """Return a Gemini provider from the server's environment-configured key.
+
+    Reads ``GEMINI_API_KEY`` and ``GEMINI_MODEL`` from the environment.  This
+    is a convenience for single-tenant cron jobs and scripts that don't resolve
+    a per-user provider through ``ai_provider.resolve_provider``.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not api_key:
+        raise ValueError(
+            "GEMINI_API_KEY is not set. Provide it in the environment "
+            "or use ai_provider.resolve_provider(user_id=...) for "
+            "per-user resolution."
+        )
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    return get_provider("gemini", api_key, model)
 
 
 def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
