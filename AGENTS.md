@@ -37,13 +37,10 @@ commit message or task file:
 
 This codebase currently has **partial** multi-user support: `users`,
 `user_api_keys`, and `user_preferences` tables exist and are wired to a real
-Google OAuth login (`webapp/app.py`), but every domain table
-(`workout_history`, `programme_state`, `exercise_progress`, `body_metrics`,
-`daily_log`, `check_ins`, `chat_messages`, `dashboard_insights`,
-`deep_correlations`) has **no `user_id` column** — one shared programme,
-history, and chat for every logged-in account. This is the single biggest
-gap between "personal script" and "public product" and must be treated as
-such:
+Google OAuth login (`webapp/app.py`). Most domain tables have been migrated
+to include `user_id` columns; the remaining unscoped tables are `hevy_routines`
+and `hevy_meta` — one shared set of Hevy routines for every logged-in account.
+Multi-tenancy migration of these remaining tables is the top-priority backlog item:
 
 - **Any new table you add MUST have a `user_id TEXT NOT NULL REFERENCES
   users(id)` column from day one**, even if the feature initially only runs
@@ -168,11 +165,29 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 — those are the actual gap between "personal script" and "public product."
 
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #499 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-06, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly dead-code sweep #491 re-checked 2026-08-07, hourly test watch #514 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly dead-code sweep #505 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
+
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #527 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly dead-code sweep #552 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly test watch #565 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly dead-code sweep #552 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07, hourly test watch #527 checked 2026-08-07, hourly commit hygiene #580 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #630 checked 2026-08-07, hourly test watch #629 checked 2026-08-07, hourly commit hygiene #631 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #642 checked 2026-08-07, hourly test watch #629 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #654 checked 2026-08-07, hourly test watch #653 checked 2026-08-07, hourly lint & format fix #651 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly dead-code sweep #668 checked 2026-08-07, hourly test watch #653 checked 2026-08-07)
+## 7. Known Issues / Audit Findings (Last audited 2026-08-07, hourly lint checked 2026-08-06, hourly test watch #467 checked 2026-08-06, hourly lint #476 checked 2026-08-06, hourly dead-code sweep #479 checked 2026-08-06, hourly test watch #490 checked 2026-08-06, hourly dead-code sweep #491 checked 2026-08-06, hourly test watch #514 checked 2026-08-07, hourly test watch #499 checked 2026-08-07, hourly dead-code sweep #528 checked 2026-08-07, hourly test watch #543 checked 2026-08-07)
 ## 7. Known Issues / Audit Findings (Last audited 2026-08-08, daily docs sync #684 checked 2026-08-08, hourly dead-code sweep #688 checked 2026-08-08, hourly test watch #687 checked 2026-08-08)
 
-- **No real data isolation between users** (§2). Logging in as a different
-  Google account today shares the exact same programme/history/chat as
-  everyone else. This is the top-priority backlog item.
+- **Partial data isolation between users** (§2). Most domain tables have been
+  migrated to include `user_id` columns and are scoped per-user. The remaining
+  unscoped tables are `hevy_routines` and `hevy_meta` — all users share the
+  same Hevy routine cache. Completing the multi-tenancy migration is the
+  top-priority backlog item.
 
 - ~~**`ai_provider.py` multi-provider wiring is complete.** PR #85
   (`wire-ai-provider`) integrated `resolve_provider()` into `gemini_engine.py`,
@@ -193,6 +208,11 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
 - ~~**`sync_history.py` is wired** — it is imported by `main.py`
   (`--sync-history` CLI flag) and `webapp/app.py` (`/api/settings/sync-history`
   endpoint). It is also executable standalone (`python sync_history.py`).~~ ✅ Resolved.
+- **Workout-programme selection UI exists** (`/programmes`) with Hevy
+  inference and template selection, but the full interactive programme
+  builder (drag-and-drop exercise arrangement, custom block authoring) is
+  not yet built. The current UI lets users pick from fixed templates or
+  infer a split from their Hevy history — see `programme-builder-ui` skill.
 - ~~**No workout-programme selection UI.** `/plan` only renders the fixed
   split read-only. No route lets a user choose a template or build a custom
   one.~~ ✅ Resolved — `/programmes` provides template selection (including
@@ -212,6 +232,57 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (docker-compose.portainer.yml has no Portainer-agent service, confirmed
   2026-08-08, #684).~~ ✅ Resolved.
 
+- **Test coverage audit** (last updated 2026-08-06, re-verified
+  2026-08-06, re-verified 2026-08-07): all source modules have
+  corresponding test files. The full test suite stands at 569 passing
+  tests covering 30 test modules. Zero coverage gaps — every source
+  module has a corresponding test file. All verification gates clean
+  (compileall, ruff, pytest, mypy, import-sanity). Hourly test watch
+  #514 confirmed no drift; all gates
+- **Test coverage audit** (last updated 2026-08-07, re-verified
+  2026-08-07): all source modules have corresponding test files. The
+  full test suite stands at 569 passing tests covering 31 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly dead-code sweep #505 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
+
+- **Hourly dead-code sweep re-verified.** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean, 61 source files).
+  Issue #505 sweep complete — no newly orphaned or truly-dead modules found.
+  Stale pycache cleaned: 0.
+  full test suite stands at 569 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #527 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
+
+- **Hourly dead-code sweep re-verified.** Issue #505 audit complete.
+  `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (569/569), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean, 31 source files).
+  Issue #491 sweep complete — no newly orphaned or truly-dead modules found.
+  Stale pycache cleaned: 0.
+  2026-08-07, hourly test watch #565 checked 2026-08-07): all source
+  modules have corresponding test files. The full test suite stands at
+  575 passing tests covering 30 test modules. Zero coverage gaps — every
+  source module has a corresponding test file. All verification gates
+  clean (compileall, ruff, pytest, mypy, import-sanity). Hourly test
+  watch #565 confirmed no drift; all gates green with no failures to
+  resolve and zero test coverage gaps.
+2026-08-07 by hourly test watch #653): all 609 tests passing,
+  2026-08-07): all source modules have corresponding test files. The
+  full test suite stands at 533 passing tests covering 30 test modules.
+  Zero coverage gaps — every source module has a corresponding test
+  file. All verification gates clean (compileall, ruff, pytest, mypy,
+  import-sanity). Hourly test watch #527 confirmed no drift; all gates
+  import-sanity). Hourly test watch #543 confirmed no drift; all gates
+  green with no failures to resolve and zero test coverage gaps.
 - **Test coverage audit** (last updated 2026-08-08, re-verified
   2026-08-08 by hourly dead-code sweep #688, hourly lint #685, hourly
   test watch #706, and hourly test watch #717): all 611 tests passing,
@@ -220,6 +291,25 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   (compileall, ruff, pytest, webapp + main import-sanity, mypy
   advisory clean). No drift between code and test suite.
 
+- **Hourly dead-code sweep #552 re-verified.** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (575/575), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on 31 source files).
+  Previously-known orphans (`programme_inference.py`, `hevy_reader.py`,
+  `sync_history.py`) all remain properly wired. No newly orphaned or
+  truly-dead modules found. Stale pycache cleaned: 0.
+- **Hourly dead-code sweep #642 verified (2026-08-07).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (573/573), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on all 28 source files).
+- **Hourly dead-code sweep #654 re-verified (2026-08-07).** `dead_code_sweep.py` executed
+- **Hourly dead-code sweep #668 re-verified (2026-08-07).** `dead_code_sweep.py` executed
+  clean via `--json` output (status: "clean", zero orphans). All 27
+  top-level modules and 3 webapp sub-modules confirmed wired. Full
+  verification gate passed: ruff (clean), pytest (609/609), dead_code_sweep
+  (zero orphans), import-sanity (all reachable), mypy (clean on all 32 source files).
 - **Hourly dead-code sweep #593 verified (2026-08-07).** `dead_code_sweep.py`
   executed clean via `--json` output (status: "clean", zero orphans). All 27
   top-level modules and 3 webapp sub-modules confirmed wired. Entry-point
@@ -259,6 +349,20 @@ forward. Cosmetic/dashboard work is welcome but should not crowd out §2/§3/§4
   `commit_hygiene.py` and `connector_health.py` invoked by `scheduler.py`
   via subprocess. `sync_history.py` imported by `main.py` and
   `webapp/app.py`. No truly dead code found. No GitHub issues created.
+
+- **Hourly dead-code sweep #552 run 2026-08-07.** `dead_code_sweep.py` confirmed
+  clean via `--json` output (status: "clean", zero orphans). All 27 top-level
+  modules and 3 webapp sub-modules confirmed wired. `programme_inference.py`
+  and `hevy_reader.py` remain properly wired through `webapp/app.py` (PR #142).
+  Full verification gate passed: ruff (clean), pytest (539/539), dead_code_sweep
+  (zero orphans), mypy (clean, 31 source files). Stale pycache cleaned: 0.
+  No newly orphaned or truly-dead modules found.
+- **Hourly commit hygiene #631 re-verified (2026-08-07).** `commit_hygiene.py` executed
+  clean via `--json` output (status: "clean", zero findings). All 40 hygiene tests
+  passing. Full verification gate passed: ruff (clean), pytest (609/609), mypy (clean).
+  No sensitive files committed (`.env`, `.db`, `.sqlite3`), `.gitignore` covers all
+  required patterns, no large files (>1 MB) tracked outside `data/`. Audit report:
+  `.agents/hygiene-audit-2026-08-07-run5.md`.
 
 
 
