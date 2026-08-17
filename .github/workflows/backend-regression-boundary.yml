@@ -1,0 +1,74 @@
+name: Diagnose Current Backend Contracts
+
+on:
+  push:
+    branches:
+      - diagnostics/backend-regression-boundary
+    paths:
+      - .github/workflows/backend-regression-boundary.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-main:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out immutable current main
+        uses: actions/checkout@v6
+        with:
+          ref: 0a12db22d5c37843f232c98bd7ca4c076c7421cb
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-web.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-web.txt "pytest>=8,<9"
+
+      - name: Report immutable source identity
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git hash-object tests/test_webapp.py
+          grep -n '^def test_' tests/test_webapp.py
+
+      - name: Compile every tracked Python file
+        shell: bash
+        run: |
+          mapfile -d '' files < <(git ls-files -z '*.py')
+          python -m py_compile "${files[@]}"
+
+      - name: Collect current affected tests
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+          WEB_ALLOW_ANONYMOUS: "1"
+        run: >-
+          python -m pytest --collect-only -q
+          tests/test_webapp.py
+          tests/test_database.py
+          tests/test_ai_provider.py
+          tests/test_insight_cron.py
+          tests/test_analytics.py
+
+      - name: Run current affected tests
+        env:
+          APP_ENV: test
+          ALLOW_ANONYMOUS_WEB: "1"
+          WEB_ALLOW_ANONYMOUS: "1"
+        run: >-
+          python -m pytest -q
+          tests/test_webapp.py
+          tests/test_database.py
+          tests/test_ai_provider.py
+          tests/test_insight_cron.py
+          tests/test_analytics.py
