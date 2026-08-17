@@ -54,12 +54,16 @@ def generate_daily_header(config: Config, *, user_id: str | None = None) -> None
 
     metrics = [
         m
-        for m in get_body_metrics(limit=14, db_path=config.database_path, user_id=user_id)
+        for m in get_body_metrics(
+            limit=14, db_path=config.database_path, user_id=user_id
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=14, db_path=config.database_path, user_id=user_id)
+        for log in get_daily_logs(
+            limit=14, db_path=config.database_path, user_id=user_id
+        )
         if log["date"] >= cutoff
     ]
 
@@ -86,7 +90,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path, user_id=user_id)
+            save_dashboard_insight(
+                json.dumps(parsed), db_path=config.database_path, user_id=user_id
+            )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
@@ -105,12 +111,16 @@ def generate_weekly_correlations(config: Config, *, user_id: str | None = None) 
 
     metrics = [
         m
-        for m in get_body_metrics(limit=120, db_path=config.database_path, user_id=user_id)
+        for m in get_body_metrics(
+            limit=120, db_path=config.database_path, user_id=user_id
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=120, db_path=config.database_path, user_id=user_id)
+        for log in get_daily_logs(
+            limit=120, db_path=config.database_path, user_id=user_id
+        )
         if log["date"] >= cutoff
     ]
 

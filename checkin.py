@@ -121,7 +121,9 @@ def due(
 
     last_date = _last_checkin_date(config, user_id=user_id)
     weeks = _weeks_between(last_date, today)
-    number = int(get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) or "0") + 1
+    number = (
+        int(get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) or "0") + 1
+    )
 
     last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id)
     if total_count is not None and last_count_raw is not None:
@@ -312,10 +314,16 @@ def record(
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     set_meta(
-        _KEY_NUMBER, str(due_info.number), config.database_path, user_id=user_id,
+        _KEY_NUMBER,
+        str(due_info.number),
+        config.database_path,
+        user_id=user_id,
     )
     set_meta(
-        _KEY_LAST_DATE, today.isoformat(), config.database_path, user_id=user_id,
+        _KEY_LAST_DATE,
+        today.isoformat(),
+        config.database_path,
+        user_id=user_id,
     )
     if due_info.total_count is not None:
         set_meta(
