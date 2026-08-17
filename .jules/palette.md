@@ -24,3 +24,6 @@
 ## 2025-03-03 - Accessible Selection Chips
 **Learning:** Found that custom toggleable elements (like selection chips) are difficult for screen reader users to understand because they lack grouped context and states are not explicitly announced when toggled via custom JavaScript functions.
 **Action:** Always group custom selection elements using `role="group"` and `aria-labelledby`, and ensure the `aria-pressed` attribute is actively managed via JavaScript to indicate their current toggled/selected state.
+## 2024-10-24 - Accessible custom toggle chips
+**Learning:** When implementing custom toggleable elements (like selection chips) using unsemantic elements such as `<div>` and `<button>` instead of radio inputs or checkboxes, they lack native accessibility grouping and toggle semantics.
+**Action:** Use `role="group"` on the container with an `aria-labelledby` linking it to a descriptive label. Provide `aria-pressed="true"` or `aria-pressed="false"` dynamically to the inner toggleable `<button>` elements to communicate their selected state to screen readers.
