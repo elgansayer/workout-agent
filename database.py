@@ -2084,7 +2084,7 @@ def get_active_programme(
         "user_id": row[1],
         "source": row[2],
         "template_key": row[3],
-        "definition": (json.loads(row[4]) if row[4] else {}) or {},
+        "definition": (json.loads(row[4]) or {}) if row[4] else {},
         "active": bool(row[5]),
         "created_at": row[6],
         "updated_at": row[7],
