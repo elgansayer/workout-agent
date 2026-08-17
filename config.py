@@ -107,15 +107,18 @@ class Config:
             "no",
         )
         prefill_weights = os.environ.get(
-            "HEVY_PREFILL_WEIGHTS", "1"
+            "HEVY_PREFILL_WEIGHTS",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         checkin_enabled = os.environ.get(
-            "CHECKIN_ENABLED", "1"
+            "CHECKIN_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         lifestyle_enabled = os.environ.get(
-            "LIFESTYLE_ENABLED", "1"
+            "LIFESTYLE_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
 
         # Google Health is optional: it auto-syncs body weight and fat from a
@@ -131,10 +134,11 @@ class Config:
         )
 
         self_review_enabled = os.environ.get(
-            "SELF_REVIEW_ENABLED", "1"
+            "SELF_REVIEW_ENABLED",
+            "1",
         ).strip().lower() not in ("0", "false", "no")
         self_review_weekday = _parse_weekday(
-            os.environ.get("SELF_REVIEW_WEEKDAY", "Sun")
+            os.environ.get("SELF_REVIEW_WEEKDAY", "Sun"),
         )
 
         return cls(

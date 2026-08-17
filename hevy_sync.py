@@ -79,7 +79,8 @@ def _build_set(rep_range: str, weight_kg: float | None = None) -> dict[str, Any]
 
 
 def _build_exercise(
-    exercise: Exercise, weight_kg: float | None = None
+    exercise: Exercise,
+    weight_kg: float | None = None,
 ) -> dict[str, Any] | None:
     template_id = exercise.template_id
     if template_id is None:
@@ -100,7 +101,8 @@ def _build_exercise(
 
 
 def _build_exercises(
-    exercises: list[Exercise], weights: dict[str, float] | None = None
+    exercises: list[Exercise],
+    weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     weights = weights or {}
     built = [_build_exercise(ex, weights.get(ex.name)) for ex in exercises]
@@ -125,7 +127,7 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
     if best is None:
         return None
     weight = best.get("weight_kg")
-    if weight is None:
+    if not isinstance(weight, (int, float)):
         return None
     reps = best.get("reps")
     start, end = _parse_rep_range(exercise.rep_range)
@@ -260,7 +262,7 @@ def _sync_session(
         if previous_hash == content_hash:
             return f"{title}: up to date"
         update_payload = {
-            "routine": {"title": title, "notes": notes, "exercises": built}
+            "routine": {"title": title, "notes": notes, "exercises": built},
         }
         result = update_routine(api_key, routine_id, update_payload)
         if result is None:
@@ -273,7 +275,7 @@ def _sync_session(
             "title": title,
             "notes": notes,
             "exercises": built,
-        }
+        },
     }
     if folder_id is not None:
         create_payload["routine"]["folder_id"] = folder_id
@@ -329,26 +331,15 @@ def sync_routines(config: Config) -> list[str]:
             recovery_data = read_recovery_metrics(config.health_connect_file)
             recovery_insight = analyse_recovery(body_metrics, recovery_data)
 
-            provider = resolve_provider(
-                db_path=config.database_path,
-                server_gemini_key=config.gemini_api_key,
-                server_gemini_model=config.gemini_model,
-            )
-            logger.info(
-                "Requesting autonomous routine adjustments from %s...", provider.name()
-            )
+            logger.info("Requesting autonomous routine adjustments from Gemini...")
             updated_routines = apply_autonomous_adjustments(
-                provider,
+                provider=ai_provider,
                 base_routines=base_routines,
                 hevy_logs=logs,
                 weather=weather,
                 is_catabolic=getattr(recovery_insight, "is_catabolic", False),
             )
-        except ImportError as exc:
-            logger.warning(
-                "Failed to import a module for autonomous adjustments: %s", exc
-            )
-        except (ValueError, TypeError, RuntimeError, KeyError, AttributeError) as exc:
+        except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to apply autonomous adjustments: %s", exc)
 
     statuses: list[str] = []
@@ -360,6 +351,6 @@ def sync_routines(config: Config) -> list[str]:
                 built,
                 folder_id,
                 notes,
-            )
+            ),
         )
     return statuses
