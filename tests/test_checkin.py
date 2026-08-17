@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
-
-from _pytest.monkeypatch import MonkeyPatch
 
 import checkin
 from config import Config
@@ -102,9 +99,7 @@ def test_due_calendar_fallback_without_hevy(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
     checkin.due(config)  # seeds number=0, last date today
     # Pretend five weeks have passed since the last check-in.
-    five_weeks_ago = (
-        datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)
-    ).isoformat()
+    five_weeks_ago = (datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)).isoformat()
     set_meta("last_checkin_date", five_weeks_ago, config.database_path)
     due_info = checkin.due(config)
     assert due_info is not None

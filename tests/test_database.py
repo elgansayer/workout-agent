@@ -74,7 +74,7 @@ def test_save_progress_and_get_recent_bests(tmp_path: Path) -> None:
         title="Legs & Abs",
         date="2026-06-17",
         duration_seconds=3600,
-        total_volume_kg=7920.0,
+        total_volume_kg=5000.0,
         exercises=[
             ExerciseSummary("Leg Press", 120.0, 12, 3, True),
             ExerciseSummary("Leg Extensions", 60.0, 15, 4, True),
@@ -92,17 +92,11 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Path) -> None:
     db = _db(tmp_path)
     init_db(db)
     save_progress(
-        WorkoutSummary(
-            "S1", "2026-06-10", duration_seconds=3600, total_volume_kg=3000.0,
-            exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)],
-        ),
+        WorkoutSummary("S1", "2026-06-10", 3600, 3000.0, [ExerciseSummary("Leg Press", 100.0, 10, 3)]),
         db,
     )
     save_progress(
-        WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3960.0,
-            exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)],
-        ),
+        WorkoutSummary("S2", "2026-06-17", 3600, 3300.0, [ExerciseSummary("Leg Press", 110.0, 12, 3)]),
         db,
     )
     bests = get_recent_bests(db)
@@ -168,9 +162,9 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Path) -> None:
         WorkoutSummary(
             "S1",
             "2026-06-10",
-            duration_seconds=3600,
-            total_volume_kg=2000.0,
-            exercises=[
+            3600,
+            2000.0,
+            [
                 ExerciseSummary("Deadlift", 100.0, 5, 4),  # 100*5*4 = 2000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # bodyweight -> 0
             ],
@@ -221,9 +215,9 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
         WorkoutSummary(
             "S1",
             "2026-06-10",
-            duration_seconds=3600,
-            total_volume_kg=3000.0,
-            exercises=[
+            3600,
+            3000.0,
+            [
                 ExerciseSummary("Leg Press", 100.0, 10, 3),  # 3000
                 ExerciseSummary("Pull-Ups", None, 8, 4),  # 0 (bodyweight)
             ],
@@ -231,10 +225,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Path) -> None:
         db,
     )
     save_progress(
-        WorkoutSummary(
-            "S2", "2026-06-17", duration_seconds=3600, total_volume_kg=3300.0,
-            exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)],
-        ),  # 3300
+        WorkoutSummary("S2", "2026-06-17", 3600, 3300.0, [ExerciseSummary("Leg Press", 110.0, 10, 3)]),  # 3300
         db,
     )
     volumes = {row["exercise"]: row for row in get_exercise_volumes(db)}
