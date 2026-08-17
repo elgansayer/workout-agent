@@ -23,11 +23,13 @@ import json
 import logging
 import os
 import secrets
+import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import google.generativeai as genai
 from authlib.integrations.starlette_client import OAuth
@@ -35,7 +37,6 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
-    JSONResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -47,7 +48,7 @@ from starlette.middleware.sessions import SessionMiddleware
 import analytics
 import insights
 import lifestyle
-from ai_provider import available_providers
+from ai_provider import AIProvider, available_providers, resolve_provider
 from config import Config
 from database import (
     clear_chat_messages,
@@ -96,7 +97,6 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     user_id = request.session.get("user_id") if hasattr(request, "session") else None
     return resolve_provider(
@@ -258,14 +258,6 @@ async def login_google(request: Request) -> Any:
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
     return RedirectResponse("/login")
-
-
-@app.get("/api/me")
-async def get_current_user_api(request: Request) -> Any:
-    user = request.session.get("user")
-    if not user:
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    return JSONResponse({"user": user})
 
 
 @app.get("/auth")
@@ -1212,11 +1204,11 @@ Respond naturally as Coach. If the question is about their training data, refere
     def generate():
         collected: list[str] = []
         try:
-            response = provider.generate(prompt, stream=True)
+            response = cast(Iterator[str], provider.generate(prompt, stream=True))
             for chunk in response:
-                if chunk.text:
-                    collected.append(chunk.text)
-                    yield chunk.text
+                if chunk:
+                    collected.append(chunk)
+                    yield chunk
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error during Gemini streaming: {e}")
             error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
