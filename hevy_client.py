@@ -79,7 +79,11 @@ def _get_all_pages(
             if not isinstance(data, dict):
                 logger.warning("Hevy returned non-object JSON for %s", collection_key)
                 return None
-            items.extend(data.get(collection_key, []))
+            batch = data.get(collection_key, [])
+            if not isinstance(batch, list):
+                logger.warning("Hevy returned non-list %s", collection_key)
+                return None
+            items.extend(batch)
             if page >= int(data.get("page_count", 1)):
                 break
             page += 1
@@ -89,6 +93,9 @@ def _get_all_pages(
         return None
     except ValueError as exc:  # invalid JSON
         logger.warning("Hevy returned invalid JSON for %s: %s", collection_key, exc)
+        return None
+    except TypeError as exc:
+        logger.warning("Hevy returned unexpected %s type: %s", collection_key, exc)
         return None
 
 
@@ -242,10 +249,7 @@ def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:
     ``primary_muscle_group``, and ``secondary_muscle_groups``.
     """
     return _get_all_pages(
-        api_key,
-        "exercise_templates",
-        "exercise_templates",
-        page_size=100,
+        api_key, "exercise_templates", "exercise_templates", page_size=100
     )
 
 
@@ -288,6 +292,9 @@ def get_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, Any]] |
                 logger.warning("Hevy returned non-object JSON for workouts")
                 return None
             batch = data.get("workouts", [])
+            if not isinstance(batch, list):
+                logger.warning("Hevy returned non-list workouts")
+                return None
             items.extend(batch)
             if page >= int(data.get("page_count", 1)):
                 break
@@ -298,4 +305,7 @@ def get_recent_workouts(api_key: str, limit: int = 10) -> list[dict[str, Any]] |
         return None
     except ValueError as exc:
         logger.warning("Hevy returned invalid JSON for workouts: %s", exc)
+        return None
+    except TypeError as exc:
+        logger.warning("Hevy returned unexpected workouts type: %s", exc)
         return None
