@@ -10,10 +10,10 @@ description: 'Resolve a users chosen AI provider (Gemini/Claude/OpenAI/DeepSeek)
 `ai_provider.py` already defines a clean `AIProvider` ABC + `get_provider()`
 factory supporting Gemini/Claude/OpenAI/DeepSeek, and the Settings UI already
 lets a user save a key per provider plus a `preferred_ai`/`ai_model`
-preference. But per `AGENTS.md` §3/§7, nothing calls `get_provider()` outside
-`ai_provider.py` itself — every real generation call hardcodes
-`google.generativeai` against one shared server key. This skill is the
-standard pattern for closing that gap one call site at a time.
+preference. All call sites now use `resolve_provider()` or `get_provider()`
+(PRs #85, #164) — the last hardcoded `google.generativeai` import was
+removed. This skill is the reference for adding new AI generation call sites
+or providers correctly from the start.
 
 ## When to Use
 
