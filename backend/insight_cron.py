@@ -15,6 +15,7 @@ from database import (
     init_db,
     save_dashboard_insight,
     save_deep_correlation,
+    save_notification,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
@@ -83,6 +84,17 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
             save_dashboard_insight(json.dumps(parsed), db_path=config.database_path, user_id=uid)
+            if uid:
+                fatigue = parsed.get("fatigue", "Normal")
+                advice = parsed.get("advice", "")
+                save_notification(
+                    uid,
+                    title="✨ Coach Status Update",
+                    message=f"Fatigue: {fatigue}. {advice}",
+                    type="coach",
+                    link="/dashboard",
+                    db_path=config.database_path,
+                )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
@@ -144,6 +156,15 @@ Use Markdown format. Output the Markdown report directly.
         text = str(provider.generate(prompt)).strip()
         if text:
             save_deep_correlation(text, db_path=config.database_path, user_id=uid)
+            if uid:
+                save_notification(
+                    uid,
+                    title="✨ Weekly Intelligence Report",
+                    message="New 60-day recovery and workout correlations analysis is ready.",
+                    type="coach",
+                    link="/stats",
+                    db_path=config.database_path,
+                )
             logger.info(
                 "Weekly deep correlation generated successfully via %s.",
                 provider.name(),

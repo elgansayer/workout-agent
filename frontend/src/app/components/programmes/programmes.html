@@ -12,6 +12,26 @@
 <h1>Programme Builder</h1>
 <p class="muted">Choose the workout plan that fits your goals. Switching programmes keeps all your historical data safe — only your active plan changes.</p>
 
+@if (selectingKey() === 'infer_from_hevy') {
+<div class="infer-banner" role="status" aria-live="polite">
+    <div class="infer-spinner-large" aria-hidden="true"></div>
+    <div class="infer-info">
+        <h4 class="infer-title">Inferring Programme from Hevy History...</h4>
+        <p class="infer-desc">
+            Fetching workout routines and recent logs from Hevy to calculate your training frequency, split type, and progression. This may take a few moments.
+        </p>
+    </div>
+</div>
+} @else if (selectingKey()) {
+<div class="infer-banner" role="status" aria-live="polite">
+    <div class="infer-spinner-large" aria-hidden="true"></div>
+    <div class="infer-info">
+        <h4 class="infer-title">Activating Programme...</h4>
+        <p class="infer-desc">Setting active training programme template.</p>
+    </div>
+</div>
+}
+
 @if (data.active_programme) {
 <section class="panel" style="border-color: var(--accent);">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem;">
@@ -32,13 +52,30 @@
     <h2>Available Templates</h2>
     <div class="programme-grid">
         @for (tpl of data.templates; track tpl.key) {
-        <article class="programme-card" [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key">
+        <article class="programme-card"
+            [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key"
+            [class.loading-card]="selectingKey() === tpl.key">
             <h3>{{ tpl.name }}</h3>
             <p class="muted">{{ tpl.description }}</p>
             @if (data.active_programme && data.active_programme.template_key === tpl.key) {
             <span class="badge" style="background:var(--accent);color:#000;">Currently Active</span>
             } @else {
-            <button class="btn btn-sm" (click)="selectProgramme(tpl.key)">Select Programme</button>
+            <button
+                class="btn btn-sm"
+                [class.btn-loading]="selectingKey() === tpl.key"
+                [disabled]="selectingKey() !== null"
+                (click)="selectProgramme(tpl.key)">
+                @if (selectingKey() === tpl.key) {
+                    <span class="btn-spinner" aria-hidden="true"></span>
+                    @if (tpl.key === 'infer_from_hevy') {
+                        <span>Inferring from Hevy...</span>
+                    } @else {
+                        <span>Selecting...</span>
+                    }
+                } @else {
+                    <span>Select Programme</span>
+                }
+            </button>
             }
         </article>
         }

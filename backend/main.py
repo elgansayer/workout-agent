@@ -35,6 +35,7 @@ from database import (
     init_db,
     save_body_metrics,
     save_daily_log,
+    save_notification,
     save_progress,
     save_workout,
 )
@@ -62,6 +63,20 @@ logger = logging.getLogger("workout_agent")
 
 def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
     """Print the message in preview mode, otherwise send it via Web Push."""
+    if user_id:
+        try:
+            first_line = message.strip().split("\n")[0] if message else "Today's workout plan is ready."
+            save_notification(
+                user_id,
+                title="🏋️ Today's Workout Plan Ready",
+                message=first_line,
+                type="coach",
+                link="/plan",
+                db_path=config.database_path,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not save in-app notification: %s", e)
+
     if preview:
         print(message)
         logger.info("Preview only: nothing sent.")

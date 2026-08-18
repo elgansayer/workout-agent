@@ -22,6 +22,7 @@ export class Programmes implements OnInit {
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
+  selectingKey = signal<string | null>(null);
 
   ngOnInit() {
     this.loadProgrammes();
@@ -41,11 +42,16 @@ export class Programmes implements OnInit {
   }
 
   selectProgramme(templateKey: string) {
+    if (this.selectingKey()) return;
+    this.error.set(null);
+    this.selectingKey.set(templateKey);
     this.http.post('/api/programmes/select', { template_key: templateKey }).subscribe({
       next: () => {
+        this.selectingKey.set(null);
         this.loadProgrammes();
       },
       error: (err: any) => {
+        this.selectingKey.set(null);
         this.error.set(err.error?.detail || 'Failed to select programme template');
       }
     });

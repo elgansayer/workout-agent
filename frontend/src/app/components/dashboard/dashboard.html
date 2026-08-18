@@ -10,17 +10,25 @@
 
 @if (data(); as data) {
 <section class="hero">
-    <div class="cycle">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
-    <div class="rings">
-        <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
-        <div [innerHTML]="safeHtml(data.block_ring)"></div>
-    </div>
-    <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
-    <p class="muted">{{ data.block.focus }}</p>
-    <div class="schemes">
-        <span class="chip">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
-        <span class="chip">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
-        <span class="chip ghost">{{ data.block.accessory_emphasis }}</span>
+    <div class="hero-body">
+        <div class="hero-main">
+            <div class="cycle">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
+            <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
+            <p class="muted hero-focus">{{ data.block.focus }}</p>
+            <div class="schemes">
+                <span class="chip">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
+                <span class="chip">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
+                <span class="chip ghost">{{ data.block.accessory_emphasis }}</span>
+            </div>
+        </div>
+        <div class="hero-rings">
+            <div class="ring-wrap" title="Cycle Progress (Week {{ data.week }} of {{ data.cycle_weeks }})">
+                <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
+            </div>
+            <div class="ring-wrap" title="Block Progress">
+                <div [innerHTML]="safeHtml(data.block_ring)"></div>
+            </div>
+        </div>
     </div>
     <p class="quote">&ldquo;{{ data.quote }}&rdquo;</p>
 </section>

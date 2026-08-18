@@ -19,6 +19,7 @@ from database import (
     get_meta,
     get_programme_start_date,
     save_checkin,
+    save_notification,
     set_meta,
 )
 from gemini_engine import generate_checkin_message
@@ -305,3 +306,12 @@ def record(
         config.database_path,
         user_id=user_id,
     )
+    if user_id:
+        save_notification(
+            user_id,
+            title=f"✨ Coach Check-in #{due_info.number} Ready",
+            message=f"Reviewed {due_info.workouts_done} workouts across {due_info.weeks_elapsed} weeks.",
+            type="coach",
+            link="/checkins",
+            db_path=config.database_path,
+        )

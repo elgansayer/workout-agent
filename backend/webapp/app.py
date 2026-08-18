@@ -30,7 +30,48 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+import analytics
+import insights
+import lifestyle
+from ai_provider import AIProvider, resolve_provider
 from authlib.integrations.starlette_client import OAuth
+from config import Config
+from database import (
+    clear_all_notifications,
+    clear_chat_messages,
+    delete_notification,
+    delete_user_api_key,
+    get_active_programme,
+    get_body_metrics,
+    get_chat_messages,
+    get_daily_logs,
+    get_dashboard_insight,
+    get_exercise_volumes,
+    get_meta,
+    get_notifications,
+    get_or_create_user,
+    get_personal_records,
+    get_programme_start_date,
+    get_programme_templates,
+    get_progress_history,
+    get_reasoning_log,
+    get_recent_bests,
+    get_session_volumes,
+    get_unread_notification_count,
+    get_user_api_keys,
+    get_user_preferences,
+    init_db,
+    mark_all_notifications_read,
+    mark_notification_read,
+    save_chat_message,
+    save_notification,
+    save_push_subscription,
+    save_reasoning_log,
+    save_user_api_key,
+    save_user_preferences,
+    set_active_programme,
+    set_meta,
+)
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -41,47 +82,12 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
-import analytics
-import insights
-import lifestyle
-from ai_provider import AIProvider, resolve_provider
-from config import Config
-from database import (
-    clear_chat_messages,
-    delete_user_api_key,
-    get_active_programme,
-    get_body_metrics,
-    get_chat_messages,
-    get_daily_logs,
-    get_dashboard_insight,
-    get_meta,
-    get_or_create_user,
-    get_personal_records,
-    get_programme_start_date,
-    get_programme_templates,
-    get_progress_history,
-    get_reasoning_log,
-    get_recent_bests,
-    get_session_volumes,
-    get_user_api_keys,
-    get_user_preferences,
-    init_db,
-    save_chat_message,
-    save_push_subscription,
-    save_reasoning_log,
-    save_user_api_key,
-    save_user_preferences,
-    set_active_programme,
-    set_meta,
-)
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from program import (
     BLOCK_WEEKS,
     BLOCKS,
+    COACHING_RULES,
     CYCLE_WEEKS,
     SPLIT_NAME,
     block_for_week,
@@ -91,7 +97,10 @@ from program import (
     week_in_cycle,
 )
 from programme_inference import InferredProgramme
-from webapp import charts
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
+from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -1183,16 +1192,15 @@ def api_progress(request: Request):
     }))
 
 @app.get("/api/stats")
-@app.get("/api/stats")
 def api_stats(request: Request):
     user_id = _check_api_auth(request)
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(DB_PATH)
-    get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
-    week_in_cycle(start, today)
+    week = week_in_cycle(start, today)
     
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
@@ -1200,18 +1208,96 @@ def api_stats(request: Request):
     
     focus_counts: dict[str, int] = {}
     for log in logs:
-        f = log.get("focus") if isinstance(log, dict) else getattr(log, "focus", "Unknown")
-        if f:
+        f = log.get("focus") if isinstance(log, dict) else getattr(log, "focus", None)
+        d = log.get("day") if isinstance(log, dict) else getattr(log, "day", None)
+        if d is not None and f:
             focus_counts[f] = focus_counts.get(f, 0) + 1
-    
+    distribution = (
+        charts.donut([{"label": k, "value": v} for k, v in sorted(focus_counts.items())])
+        if focus_counts
+        else None
+    )
+
+    groups = analytics.group_volumes(
+        get_exercise_volumes(db_path=DB_PATH, user_id=user_id),
+    )
+    muscle_donut = (
+        charts.donut(
+            [{"label": g, "value": v} for g, v in sorted(groups.items(), key=lambda kv: -kv[1])]
+        )
+        if groups
+        else None
+    )
+
+    recent = volumes[-14:]
+    volume_bars = (
+        charts.bar_chart(
+            [{"label": v["date"][5:], "value": v["volume"], "caption": v["date"]} for v in recent],
+            unit="kg",
+        )
+        if recent
+        else None
+    )
+
+    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    block_phase_svg = ai_widgets.block_phase_tracker(volumes)
+    recovery_grid_svg = ai_widgets.systemic_recovery_correlation(biometrics, volumes)
+    vol_dist_svg = ai_widgets.volume_distribution(groups)
+
+    weights = [(m["date"], m["weight_kg"]) for m in biometrics if m["weight_kg"]]
+    _, dl_entries = _find_lift_series(series, "deadlift")
+    dots_points, ratio_points = [], []
+    for e in dl_entries:
+        e1rm = analytics.epley_1rm(e["top_weight_kg"], e["top_reps"])
+        bw = _weight_on_or_before(weights, e["date"])
+        if not e1rm or not bw:
+            continue
+        score = analytics.dots_score(bw, e1rm)
+        if score:
+            dots_points.append({"date": e["date"][5:], "value": score, "label": f"{score:g}"})
+        ratio_points.append({
+            "date": e["date"][5:],
+            "value": round(e1rm / bw, 2),
+            "label": f"{e1rm / bw:.2f}x",
+        })
+    dots_chart = charts.line_chart(dots_points, colour=charts.PURPLE) if len(dots_points) > 1 else None
+    ratio_chart = charts.line_chart(ratio_points, unit="x", colour=charts.ACCENT_2) if len(ratio_points) > 1 else None
+
+    target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
+    projections = [
+        _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
+        _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
+    ]
+    projections = [p for p in projections if p]
+
+    pr_rows = [
+        {
+            "exercise": pr["exercise"],
+            "e1rm": f"{pr['estimated_1rm_kg']:g}",
+            "detail": f"{pr['weight_kg']:g} kg x {pr['reps']}",
+            "date": pr["date"],
+        }
+        for pr in prs
+    ]
+
     return JSONResponse(jsonable_encoder({
         "total_sessions": total_sessions,
         "total_volume": total_volume,
         "days_on_programme": days_on_programme,
-        "prs": len(prs),
-        "donut": charts.donut_chart(focus_counts) if focus_counts else None,
-        "heatmap": charts.calendar_heatmap(_training_levels(user_id=user_id)),
-        "volume_chart": charts.bar_chart([{"label": v["date"][5:], "value": v["volume"]} for v in volumes[-30:]]) if volumes else None,
+        "exercises_tracked": len(series),
+        "has_distribution": bool(focus_counts),
+        "distribution": distribution,
+        "has_muscle": bool(groups),
+        "muscle_donut": muscle_donut,
+        "has_volume": bool(recent),
+        "volume_bars": volume_bars,
+        "block_phase_svg": block_phase_svg,
+        "recovery_grid_svg": recovery_grid_svg,
+        "vol_dist_svg": vol_dist_svg,
+        "dots_chart": dots_chart,
+        "ratio_chart": ratio_chart,
+        "projections": projections,
+        "prs": pr_rows,
     }))
 
 @app.get("/api/history")
@@ -1224,6 +1310,7 @@ def api_history(request: Request):
 def api_plan(request: Request):
     user_id = _check_api_auth(request)
     today = datetime.now(tz=timezone.utc).date()
+    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     
     active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
     
@@ -1231,11 +1318,14 @@ def api_plan(request: Request):
         defn = active["definition"]
         return JSONResponse(jsonable_encoder({
             "is_active_programme": True,
-            "split_name": defn.get("split_name", active.get("name")),
-            "days": defn.get("schedule", [])
+            "split_name": defn.get("name") or active.get("name") or "Active Programme",
+            "week": week,
+            "cycle_weeks": defn.get("cycle_weeks", CYCLE_WEEKS),
+            "blocks": defn.get("blocks", []),
+            "days": defn.get("days", []),
+            "rules": defn.get("rules", COACHING_RULES),
         }))
         
-    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
     current_block = block_for_week(week)
     day = today_day(today)
 
@@ -1272,10 +1362,12 @@ def api_plan(request: Request):
     return JSONResponse(jsonable_encoder({
         "is_active_programme": False,
         "split_name": SPLIT_NAME,
-        "current_week": week,
+        "week": week,
+        "cycle_weeks": CYCLE_WEEKS,
         "current_block": current_block.name,
         "days": days,
-        "blocks": blocks
+        "blocks": blocks,
+        "rules": COACHING_RULES,
     }))
 
 
@@ -1350,8 +1442,95 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
 
     result = sync_all(hevy_key, DB_PATH, user_id=user_id)
     if "error" in result:
-        raise HTTPException(status_code=400, detail=str(result["error"]))
+        err_msg = str(result["error"])
+        save_notification(
+            user_id,
+            title="⚠️ Hevy Sync Failed",
+            message=f"Could not sync history: {err_msg}",
+            type="sync",
+            link="/settings",
+            db_path=DB_PATH,
+        )
+        raise HTTPException(status_code=400, detail=err_msg)
+
+    workouts_found = int(result.get("workouts_found", 0))
+    processed = int(result.get("processed", 0))
+    save_notification(
+        user_id,
+        title="✓ Hevy History Synced",
+        message=f"Successfully synced and rebuilt {processed} of {workouts_found} workouts from Hevy.",
+        type="sync",
+        link="/history",
+        db_path=DB_PATH,
+    )
     return {"status": "ok", **result}
+
+
+@app.get("/api/notifications")
+def api_get_notifications(
+    request: Request,
+    limit: int = Query(50, ge=1, le=100),
+    unread_only: bool = Query(False),
+):
+    user_id = _check_api_auth(request)
+    notifs = get_notifications(user_id, limit=limit, unread_only=unread_only, db_path=DB_PATH)
+    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    return JSONResponse(
+        jsonable_encoder({
+            "notifications": notifs,
+            "unread_count": unread_count,
+        })
+    )
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def api_mark_notification_read(notification_id: int, request: Request):
+    user_id = _check_api_auth(request)
+    success = mark_notification_read(notification_id, user_id, db_path=DB_PATH)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    return {"status": "ok", "unread_count": unread_count}
+
+
+@app.post("/api/notifications/read-all")
+def api_mark_all_notifications_read(request: Request):
+    user_id = _check_api_auth(request)
+    updated = mark_all_notifications_read(user_id, db_path=DB_PATH)
+    return {"status": "ok", "updated": updated, "unread_count": 0}
+
+
+@app.delete("/api/notifications/{notification_id}")
+def api_delete_notification(notification_id: int, request: Request):
+    user_id = _check_api_auth(request)
+    success = delete_notification(notification_id, user_id, db_path=DB_PATH)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    return {"status": "ok", "unread_count": unread_count}
+
+
+@app.post("/api/notifications/clear")
+@app.delete("/api/notifications")
+def api_clear_notifications(request: Request):
+    user_id = _check_api_auth(request)
+    cleared = clear_all_notifications(user_id, db_path=DB_PATH)
+    return {"status": "ok", "cleared": cleared, "unread_count": 0}
+
+
+@app.post("/api/notifications/test-coach")
+def api_test_coach_notification(request: Request):
+    user_id = _check_api_auth(request)
+    nid = save_notification(
+        user_id,
+        title="✨ Coach Status Update",
+        message="Coach analysis active: Keep recovery high and log your sets accurately today!",
+        type="coach",
+        link="/dashboard",
+        db_path=DB_PATH,
+    )
+    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    return {"status": "ok", "id": nid, "unread_count": unread_count}
 
 
 @app.get("/api/chat-history")

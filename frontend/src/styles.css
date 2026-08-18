@@ -143,8 +143,8 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
     background: linear-gradient(160deg, var(--panel-2), var(--panel));
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: clamp(1rem, 3vw, 1.4rem);
-    margin-bottom: 1.1rem;
+    padding: clamp(1.1rem, 3vw, 1.5rem);
+    margin-bottom: 1.2rem;
     position: relative;
     overflow: hidden;
     transition: box-shadow var(--transition-smooth);
@@ -164,7 +164,18 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
 .hero:hover {
     box-shadow: 0 8px 40px rgba(0, 0, 0, 0.25), 0 0 60px rgba(74, 222, 128, 0.04);
 }
+.hero-body {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+}
+.hero-main {
+    flex: 1 1 340px;
+}
 .hero h1 { margin: 0.2rem 0 0.3rem; font-size: clamp(1.4rem, 4vw, 1.8rem); }
+.hero-focus { margin: 0.2rem 0 0.8rem; font-size: 0.95rem; }
 .cycle {
     display: inline-block;
     font-size: 0.78rem;
@@ -204,8 +215,34 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
     transform: translateY(-1px);
 }
 .chip.ghost { color: var(--muted); }
+
+/* Progress rings container */
+.hero-rings, .rings {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1.25rem;
+    flex-shrink: 0;
+}
+.ring-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 17, 21, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 16px;
+    padding: 0.65rem 0.8rem;
+    transition: all var(--transition-smooth);
+}
+.ring-wrap:hover {
+    border-color: rgba(74, 222, 128, 0.25);
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
 .quote {
-    margin: 1rem 0 0;
+    margin: 1.2rem 0 0;
     padding-top: 0.9rem;
     border-top: 1px solid var(--border);
     color: var(--accent);
@@ -261,10 +298,10 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
 
 /* ---- SVG charts ---- */
 .svg-chart { width: 100%; height: auto; display: block; }
-.svg-ring { width: 96px; height: 96px; }
+.svg-ring { width: 92px; height: 92px; display: block; }
 .svg-spark { width: 100%; max-width: 130px; height: 30px; }
 .svg-cal { width: 100%; height: auto; min-width: 560px; }
-.svg-donut { width: 150px; height: 150px; flex-shrink: 0; }
+.svg-donut { width: 140px; height: 140px; flex-shrink: 0; }
 .svg-axis { fill: var(--muted); font-size: 11px; }
 .svg-value { font-size: 13px; font-weight: 600; }
 .svg-barval { fill: var(--muted); font-size: 10px; }

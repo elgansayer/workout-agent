@@ -301,6 +301,28 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user "
             "ON push_subscriptions (user_id)"
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                link TEXT,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user_created "
+            "ON notifications (user_id, created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user_unread "
+            "ON notifications (user_id, is_read)"
+        )
 
         cursor.execute(
             """
@@ -2215,3 +2237,149 @@ def set_active_programme(
                 now,
             ),
         )
+
+
+def save_notification(
+    user_id: str,
+    title: str,
+    message: str,
+    type: str = "system",
+    link: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Save an in-app notification for a user.
+
+    Returns the inserted notification id.
+    """
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+            VALUES (?, ?, ?, ?, ?, 0, ?)
+            """,
+            (user_id, type, title, message, link, now),
+        )
+        return int(cursor.lastrowid)
+
+
+def get_notifications(
+    user_id: str,
+    limit: int = 50,
+    unread_only: bool = False,
+    db_path: str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Retrieve notifications for a user, ordered from newest to oldest."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        if unread_only:
+            cursor.execute(
+                """
+                SELECT id, user_id, type, title, message, link, is_read, created_at
+                FROM notifications
+                WHERE user_id = ? AND is_read = 0
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, user_id, type, title, message, link, is_read, created_at
+                FROM notifications
+                WHERE user_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            )
+        rows = cursor.fetchall()
+        return [
+            {
+                "id": row[0],
+                "user_id": row[1],
+                "type": row[2],
+                "title": row[3],
+                "message": row[4],
+                "link": row[5],
+                "is_read": bool(row[6]),
+                "created_at": row[7],
+            }
+            for row in rows
+        ]
+
+
+def mark_notification_read(
+    notification_id: int,
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> bool:
+    """Mark a specific notification as read."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+            (notification_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def mark_all_notifications_read(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Mark all notifications as read for a given user. Returns count updated."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0",
+            (user_id,),
+        )
+        return cursor.rowcount
+
+
+def delete_notification(
+    notification_id: int,
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> bool:
+    """Delete a single notification."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM notifications WHERE id = ? AND user_id = ?",
+            (notification_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def clear_all_notifications(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Delete all notifications for a user. Returns count deleted."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM notifications WHERE user_id = ?",
+            (user_id,),
+        )
+        return cursor.rowcount
+
+
+def get_unread_notification_count(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Count unread notifications for a user."""
+    with _connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+
