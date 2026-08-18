@@ -33,9 +33,9 @@
     <div hlmCardHeader>
         <h2 hlmCardTitle>Available Templates</h2>
     </div>
-    <div hlmCardContent class="programme-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         @for (tpl of data.templates; track tpl.key) {
-            <article class="programme-card border rounded-md p-4 relative" [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key">
+            <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-4 flex flex-col gap-2 transition-all duration-300 hover:border-green-400/20 hover:shadow-[0_6px_24px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 border rounded-md p-4 relative" [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key">
                 <h3 class="text-lg font-semibold mb-1">{{ tpl.name }}</h3>
                 <p class="text-muted-foreground text-sm mb-3">{{ tpl.description }}</p>
                 @if (data.active_programme && data.active_programme.template_key === tpl.key) {
@@ -55,26 +55,26 @@
         <div hlmCardHeader>
             <h2 hlmCardTitle>Active Split Preview</h2>
         </div>
-        <div hlmCardContent class="day-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             @for (day of data.active_programme.definition.days; track day.number) {
-                <article class="day-card border rounded-md p-4">
-                    <div class="day-head pb-2 mb-2 border-b">
-                        <span class="day-num text-sm font-medium text-primary">Day {{ day.number }}</span>
+                <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 transition-all duration-300 hover:border-green-400/20 hover:-translate-y-[1px] border rounded-md p-4">
+                    <div class="flex justify-between items-center pb-2 mb-2 border-b">
+                        <span class="text-[0.75rem] uppercase tracking-wide text-muted-foreground text-sm font-medium text-primary">Day {{ day.number }}</span>
                     </div>
                     <h3 class="text-lg font-semibold mb-3">{{ day.focus }}</h3>
-                    <ul class="day-ex space-y-2">
+                    <ul class="list-none m-0 p-0 flex flex-col gap-1.5 space-y-2">
                         @for (ex of day.exercises; track $index) {
                             <li class="flex justify-between items-center text-sm">
                                 <span class="ex-n">{{ ex.name }}</span>
-                                <span class="ex-s text-muted-foreground">{{ ex.sets }} x {{ ex.rep_range }}</span>
+                                <span class="text-green-400 tabular-nums whitespace-nowrap text-muted-foreground">{{ ex.sets }} x {{ ex.rep_range }}</span>
                             </li>
                         }
                     </ul>
                 </article>
             }
-            <article class="day-card rest border rounded-md p-4 bg-muted/30">
-                <div class="day-head pb-2 mb-2 border-b">
-                    <span class="day-num text-sm font-medium text-primary">Sunday</span>
+            <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 transition-all duration-300 hover:border-green-400/20 hover:-translate-y-[1px] opacity-80 border rounded-md p-4 bg-muted/30">
+                <div class="flex justify-between items-center pb-2 mb-2 border-b">
+                    <span class="text-[0.75rem] uppercase tracking-wide text-muted-foreground text-sm font-medium text-primary">Sunday</span>
                 </div>
                 <h3 class="text-lg font-semibold mb-3">Rest &amp; Recovery</h3>
                 <p class="text-muted-foreground text-sm">Sleep, protein, light movement only.</p>
@@ -88,12 +88,12 @@
         <div hlmCardHeader>
             <h2 hlmCardTitle>Periodisation Blocks</h2>
         </div>
-        <div hlmCardContent class="block-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             @for (b of data.active_programme.definition.blocks; track b.number) {
-                <article class="block-card border rounded-md p-4">
+                <article class="relative bg-[#1e232c] border border-[#262c37] rounded-xl p-4 transition-all duration-300 overflow-hidden hover:border-green-400/20 hover:shadow-[0_6px_24px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 border rounded-md p-4">
                     <h3 class="text-lg font-semibold mb-2">Block {{ b.number }}: {{ b.name }}</h3>
                     <p class="text-muted-foreground text-sm mb-4">Weeks {{ b.weeks }} | {{ b.focus }}</p>
-                    <ul class="block-schemes space-y-2">
+                    <ul class="list-none m-0 mt-3 p-0 flex flex-col gap-1.5 [&>li]:flex [&>li]:justify-between [&>li]:gap-2.5 [&>li]:text-[0.85rem] [&>li]:border-t [&>li]:border-[#262c37] [&>li]:pt-1.5 [&>li>span]:text-muted-foreground space-y-2">
                         <li class="flex justify-between items-center text-sm">
                             <span class="font-medium">Deadlift</span><strong class="text-right">{{ b.deadlift.sets }} x {{ b.deadlift.rep_range }}</strong>
                         </li>
@@ -116,7 +116,7 @@
             <h2 hlmCardTitle>Coaching Rules</h2>
         </div>
         <div hlmCardContent>
-            <ul class="rules list-disc list-inside space-y-2">
+            <ul class="m-0 pl-4 flex flex-col gap-2 marker:text-green-400 list-disc list-inside space-y-2">
                 @for (rule of data.active_programme.definition.rules; track $index) {
                     <li>{{ rule }}</li>
                 }

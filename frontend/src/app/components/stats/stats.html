@@ -12,24 +12,24 @@
 @if (data(); as data) {
 <h1>Stats</h1>
 
-<section class="stat-strip flex flex-wrap gap-4 justify-center">
-    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
-        <span class="num text-4xl font-bold">{{ data.total_sessions }}</span>
-        <span class="stat-cap text-muted-foreground text-sm">Sessions logged</span>
+<section class="grid grid-cols-[repeat(auto-fit,minmax(130px,1fr))] gap-3 mb-5 flex flex-wrap gap-4 justify-center">
+    <div class="bg-[#171a21] border border-[#262c37] rounded-xl p-3.5 flex flex-col items-center gap-1 text-center transition-all duration-500 relative overflow-hidden hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(0,0,0,0.3),0_0_1px_rgba(74,222,128,0.15)] hover:border-green-400/20 big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="text-[1.7rem] font-bold tabular-nums transition-colors duration-300 hover:text-green-400 text-4xl font-bold">{{ data.total_sessions }}</span>
+        <span class="text-[0.72rem] uppercase tracking-wide text-muted-foreground mt-1 text-muted-foreground text-sm">Sessions logged</span>
     </div>
-    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
-        <span class="num text-4xl font-bold">{{ data.exercises_tracked }}</span>
-        <span class="stat-cap text-muted-foreground text-sm">Exercises tracked</span>
+    <div class="bg-[#171a21] border border-[#262c37] rounded-xl p-3.5 flex flex-col items-center gap-1 text-center transition-all duration-500 relative overflow-hidden hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(0,0,0,0.3),0_0_1px_rgba(74,222,128,0.15)] hover:border-green-400/20 big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="text-[1.7rem] font-bold tabular-nums transition-colors duration-300 hover:text-green-400 text-4xl font-bold">{{ data.exercises_tracked }}</span>
+        <span class="text-[0.72rem] uppercase tracking-wide text-muted-foreground mt-1 text-muted-foreground text-sm">Exercises tracked</span>
     </div>
-    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
-        <span class="num text-4xl font-bold">{{ data.total_volume | number:'1.0-0' }}</span>
-        <span class="num-label text-muted-foreground text-sm">kg moved</span>
-        <span class="stat-cap text-muted-foreground text-sm">Est. total load</span>
+    <div class="bg-[#171a21] border border-[#262c37] rounded-xl p-3.5 flex flex-col items-center gap-1 text-center transition-all duration-500 relative overflow-hidden hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(0,0,0,0.3),0_0_1px_rgba(74,222,128,0.15)] hover:border-green-400/20 big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="text-[1.7rem] font-bold tabular-nums transition-colors duration-300 hover:text-green-400 text-4xl font-bold">{{ data.total_volume | number:'1.0-0' }}</span>
+        <span class="text-[0.78rem] text-muted-foreground text-muted-foreground text-sm">kg moved</span>
+        <span class="text-[0.72rem] uppercase tracking-wide text-muted-foreground mt-1 text-muted-foreground text-sm">Est. total load</span>
     </div>
-    <div class="stat-card big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
-        <span class="num text-4xl font-bold">{{ data.days_on_programme }}</span>
-        <span class="num-label text-muted-foreground text-sm">days</span>
-        <span class="stat-cap text-muted-foreground text-sm">On programme</span>
+    <div class="bg-[#171a21] border border-[#262c37] rounded-xl p-3.5 flex flex-col items-center gap-1 text-center transition-all duration-500 relative overflow-hidden hover:-translate-y-1 hover:shadow-[0_8px_32px_rgba(0,0,0,0.3),0_0_1px_rgba(74,222,128,0.15)] hover:border-green-400/20 big-num flex flex-col items-center justify-center p-6 bg-card text-card-foreground rounded-lg shadow-md min-w-[180px]">
+        <span class="text-[1.7rem] font-bold tabular-nums transition-colors duration-300 hover:text-green-400 text-4xl font-bold">{{ data.days_on_programme }}</span>
+        <span class="text-[0.78rem] text-muted-foreground text-muted-foreground text-sm">days</span>
+        <span class="text-[0.72rem] uppercase tracking-wide text-muted-foreground mt-1 text-muted-foreground text-sm">On programme</span>
     </div>
 </section>
 
@@ -79,8 +79,8 @@
                 }
             </div>
 
-            <h2 class="section-head text-2xl font-bold mt-8 mb-4 ai-gradient-text">✨ Advanced Data Visualisations</h2>
-            <div class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" style="margin-bottom: 20px;">
+            <h2 class="section-head text-2xl font-bold mt-8 mb-4 bg-gradient-to-r from-sky-400 via-purple-500 to-green-400 bg-clip-text text-transparent font-bold">✨ Advanced Data Visualisations</h2>
+            <div class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" style="margin-bottom: 20px;">
                 <div [innerHTML]="data.block_phase_svg"></div>
                 <div [innerHTML]="data.recovery_grid_svg"></div>
                 <div [innerHTML]="data.vol_dist_svg"></div>
@@ -89,7 +89,7 @@
             <div id="peak-validation" class="xai-result p-4 border border-dashed border-primary rounded-lg text-sm bg-muted text-muted-foreground" style="display: none;">
                 <p>Loading AI projection validation...</p>
             </div>
-            <p class="chart-foot text-muted-foreground text-sm mt-4">Linear projection from your logged trend to the end of this 12-week cycle.</p>
+            <p class="text-[0.78rem] mt-2 text-muted-foreground text-sm mt-4">Linear projection from your logged trend to the end of this 12-week cycle.</p>
         </div>
     </section>
 }
@@ -100,19 +100,19 @@
             <h2 hlmCardTitle>Relative strength</h2>
         </div>
         <div hlmCardContent>
-            <div class="chart-grid grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                 @if (data.dots_chart) {
-                    <div class="chart-card p-4 border rounded-lg bg-card text-card-foreground">
+                    <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-lg bg-card text-card-foreground">
                         <h3 class="font-semibold text-lg mb-2">DOTS score</h3>
                         <div [innerHTML]="data.dots_chart"></div>
-                        <p class="chart-foot text-muted-foreground text-sm mt-2">Strength relative to bodyweight (deadlift e1RM).</p>
+                        <p class="text-[0.78rem] mt-2 text-muted-foreground text-sm mt-2">Strength relative to bodyweight (deadlift e1RM).</p>
                     </div>
                 }
                 @if (data.ratio_chart) {
-                    <div class="chart-card p-4 border rounded-lg bg-card text-card-foreground">
+                    <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-lg bg-card text-card-foreground">
                         <h3 class="font-semibold text-lg mb-2">Deadlift / bodyweight</h3>
                         <div [innerHTML]="data.ratio_chart"></div>
-                        <p class="chart-foot text-muted-foreground text-sm mt-2">Bodyweight multiples on the deadlift.</p>
+                        <p class="text-[0.78rem] mt-2 text-muted-foreground text-sm mt-2">Bodyweight multiples on the deadlift.</p>
                     </div>
                 }
             </div>
@@ -127,7 +127,7 @@
     <div hlmCardContent>
         @if (data.has_volume) {
             <div [innerHTML]="data.volume_bars"></div>
-            <p class="chart-foot text-muted-foreground text-sm mt-4">Estimated load = top weight x reps x sets per session.</p>
+            <p class="text-[0.78rem] mt-2 text-muted-foreground text-sm mt-4">Estimated load = top weight x reps x sets per session.</p>
         } @else {
             <p class="text-muted-foreground">No sessions logged yet.</p>
         }
@@ -143,7 +143,7 @@
             <p class="text-muted-foreground">Your estimated 1-rep maxes will appear here once lifts are logged.</p>
         } @else {
             <div class="overflow-x-auto">
-                <table class="pr-table w-full text-left border-collapse">
+                <table class="w-full border-collapse text-[0.9rem] w-full text-left border-collapse">
                     <thead>
                         <tr class="border-b">
                             <th class="p-2 font-semibold text-muted-foreground">Exercise</th>
@@ -156,7 +156,7 @@
                         @for (pr of data.prs; track pr.exercise) {
                             <tr class="border-b last:border-b-0 hover:bg-muted/50">
                                 <td class="p-2">{{ pr.exercise }}</td>
-                                <td class="num-cell p-2 text-right font-medium">{{ pr.e1rm }} kg</td>
+                                <td class="text-green-400 tabular-nums whitespace-nowrap p-2 text-right font-medium">{{ pr.e1rm }} kg</td>
                                 <td class="p-2 text-muted-foreground text-sm">{{ pr.detail }}</td>
                                 <td class="p-2 text-muted-foreground text-sm">{{ pr.date }}</td>
                             </tr>

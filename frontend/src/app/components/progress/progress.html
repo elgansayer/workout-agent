@@ -17,27 +17,27 @@
     <div hlmCardHeader>
         <h2 hlmCardTitle>Body composition</h2>
     </div>
-    <div hlmCardContent class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         @if (data.body.weight) {
-        <div class="chart-card p-4 border rounded-md shadow-sm">
+        <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-md shadow-sm">
             <h3>Weight (kg)</h3>
             <div [innerHTML]="data.body.weight"></div>
         </div>
         }
         @if (data.body.body_fat) {
-        <div class="chart-card p-4 border rounded-md shadow-sm">
+        <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-md shadow-sm">
             <h3>Body fat (%)</h3>
             <div [innerHTML]="data.body.body_fat"></div>
         </div>
         }
         @if (data.body.muscle) {
-        <div class="chart-card p-4 border rounded-md shadow-sm">
+        <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-md shadow-sm">
             <h3>Muscle (%)</h3>
             <div [innerHTML]="data.body.muscle"></div>
         </div>
         }
         @if (data.body.resting_hr) {
-        <div class="chart-card p-4 border rounded-md shadow-sm">
+        <div class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-md shadow-sm">
             <h3>Resting HR (bpm)</h3>
             <div [innerHTML]="data.body.resting_hr"></div>
         </div>
@@ -48,13 +48,13 @@
 
 <h2 class="section-head text-2xl font-semibold mt-8 mb-4">Lifts</h2>
 @if (!data.charts?.length) {
-<p class="muted text-gray-500">No logged sets yet. Once the agent records your Hevy sessions,
+<p class="text-muted-foreground text-gray-500">No logged sets yet. Once the agent records your Hevy sessions,
     your progressive overload will show up here.</p>
 }
-<div class="chart-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+<div class="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] gap-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
     @for (chart of data.charts; track $index) {
-    <section class="chart-card p-4 border rounded-md shadow-sm flex flex-col">
-        <div class="chart-card-head flex items-center justify-between mb-2">
+    <section class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 md:p-4 transition-all duration-300 hover:border-sky-400/20 hover:shadow-[0_4px_20px_rgba(0,0,0,0.2)] hover:-translate-y-[1px] p-4 border rounded-md shadow-sm flex flex-col">
+        <div class="flex justify-between items-center gap-2.5 flex items-center justify-between mb-2">
             <h3 class="text-lg font-medium">{{ chart.name }}</h3>
             @if (chart.best_e1rm) {
             <span hlmBadge>e1RM {{ chart.best_e1rm }} kg</span>
@@ -87,7 +87,7 @@
         <div class="flex-grow">
             <div [innerHTML]="chart.svg"></div>
         </div>
-        <p class="chart-foot muted text-sm text-gray-500 mt-2">{{ chart.sessions }} logged session(s)</p>
+        <p class="text-[0.78rem] mt-2 text-muted-foreground text-sm text-gray-500 mt-2">{{ chart.sessions }} logged session(s)</p>
     </section>
     }
 </div>

@@ -13,6 +13,7 @@ export const authGuard: CanActivateFn = async (route, state) => {
     return true;
   }
   
-  window.location.href = '/login/google';
+  const router = inject(Router);
+  router.navigate(['/login']);
   return false;
 };

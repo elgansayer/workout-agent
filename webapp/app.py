@@ -18,7 +18,6 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -42,14 +41,13 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 import analytics
 import insights
 import lifestyle
-from ai_provider import PROVIDERS, AIProvider, available_providers, resolve_provider
+from ai_provider import PROVIDERS, AIProvider, resolve_provider
 from config import Config
 from database import (
     clear_chat_messages,
@@ -57,10 +55,8 @@ from database import (
     get_active_programme,
     get_body_metrics,
     get_chat_messages,
-    get_checkins,
     get_daily_logs,
     get_dashboard_insight,
-    get_exercise_volumes,
     get_meta,
     get_or_create_user,
     get_personal_records,
@@ -85,7 +81,6 @@ from hevy_parser import normalise_name
 from program import (
     BLOCK_WEEKS,
     BLOCKS,
-    COACHING_RULES,
     CYCLE_WEEKS,
     SPLIT_NAME,
     block_for_week,
@@ -95,7 +90,7 @@ from program import (
     week_in_cycle,
 )
 from programme_inference import InferredProgramme
-from webapp import ai_widgets, charts
+from webapp import charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -166,7 +161,6 @@ if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
     )
 
 _BASE_DIR = Path(__file__).resolve().parent
-templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 
 # Cache-busting for static assets. Cloudflare (and browsers) cache /static/*
 # aggressively, so a plain "/static/style.css" can serve a stale copy for hours
@@ -175,19 +169,6 @@ templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
 _ASSET_VERSIONS: dict[str, str] = {}
 
 
-def static_url(filename: str) -> str:
-    version = _ASSET_VERSIONS.get(filename)
-    if version is None:
-        try:
-            data = (_BASE_DIR / "static" / filename).read_bytes()
-            version = hashlib.sha256(data).hexdigest()[:8]
-        except OSError:
-            version = "0"
-        _ASSET_VERSIONS[filename] = version
-    return f"/static/{filename}?v={version}"
-
-
-templates.env.globals["static_url"] = static_url
 
 
 @asynccontextmanager
@@ -242,13 +223,6 @@ app.add_middleware(
 )
 
 
-# @app.get("/login")
-async def login(request: Request) -> Any:
-    if not WEB_GOOGLE_CLIENT_ID:
-        return HTMLResponse("Web auth is not configured.", status_code=500)
-    if request.session.get("user"):
-        return RedirectResponse("/")
-    return templates.TemplateResponse(request, "login.html")
 
 
 @app.get("/login/google")
@@ -539,41 +513,6 @@ def api_dashboard(request: Request) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(ctx))
 
 
-# @app.get("/progress")
-def progress(request: Request) -> Any:
-    user_id = request.session.get("user_id")
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    charts_data = []
-    for name in sorted(series):
-        entries = series[name]
-        points = [
-            {
-                "date": e["date"][5:],
-                "value": e["top_weight_kg"],
-                "label": _format_best(e),
-            }
-            for e in entries
-        ]
-        e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
-        e1rms_filtered = [v for v in e1rms if v is not None]
-        best_e1rm: float | None = max(e1rms_filtered) if e1rms_filtered else None
-        charts_data.append(
-            {
-                "name": name,
-                "svg": charts.line_chart(points, unit="kg"),
-                "best_e1rm": best_e1rm,
-                "sessions": len(entries),
-            },
-        )
-    return templates.TemplateResponse(
-        request,
-        "progress.html",
-        {
-            "active": "progress",
-            "charts": charts_data,
-            "body": _body_charts(user_id=user_id),
-        },
-    )
 
 
 def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
@@ -597,134 +536,6 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
     }
 
 
-# @app.get("/stats")
-def stats(request: Request):
-    user_id = request.session.get("user_id")
-    volumes = get_session_volumes(db_path=DB_PATH)
-    prs = get_personal_records(db_path=DB_PATH)
-    logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH)
-    series = get_progress_history(db_path=DB_PATH)
-    today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(start, today)
-
-    # Headline totals.
-    total_sessions = len(volumes)
-    total_volume = sum(v["volume"] for v in volumes)
-    days_on_programme = (today - start).days
-
-    # Training split distribution (donut) from the daily log.
-    focus_counts: dict[str, int] = {}
-    for log in logs:
-        if log["day"] is not None:
-            focus_counts[log["focus"]] = focus_counts.get(log["focus"], 0) + 1
-    distribution = charts.donut(
-        [{"label": k, "value": v} for k, v in sorted(focus_counts.items())],
-    )
-
-    # Volume broken down by muscle group.
-    groups = analytics.group_volumes(
-        get_exercise_volumes(db_path=DB_PATH, user_id=user_id),
-    )
-    muscle_donut = charts.donut(
-        [
-            {"label": g, "value": v}
-            for g, v in sorted(groups.items(), key=lambda kv: -kv[1])
-        ]
-    )
-
-    # Session-load trend over the most recent sessions.
-    recent = volumes[-14:]
-    volume_bars = charts.bar_chart(
-        [
-            {"label": v["date"][5:], "value": v["volume"], "caption": v["date"]}
-            for v in recent
-        ],
-        unit="kg",
-    )
-
-    # Advanced AI Widgets
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    block_phase_svg = ai_widgets.block_phase_tracker(volumes)
-    recovery_grid_svg = ai_widgets.systemic_recovery_correlation(biometrics, volumes)
-    vol_dist_svg = ai_widgets.volume_distribution(groups)
-
-    # Strength score (DOTS) and strength-to-bodyweight ratio over time, built
-    # from the deadlift e1RM against the bodyweight recorded at the time.
-    body = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    weights = [(m["date"], m["weight_kg"]) for m in body if m["weight_kg"]]
-    _, dl_entries = _find_lift_series(series, "deadlift")
-    dots_points, ratio_points = [], []
-    for e in dl_entries:
-        e1rm = analytics.epley_1rm(e["top_weight_kg"], e["top_reps"])
-        bw = _weight_on_or_before(weights, e["date"])
-        if not e1rm or not bw:
-            continue
-        score = analytics.dots_score(bw, e1rm)
-        if score:
-            dots_points.append(
-                {"date": e["date"][5:], "value": score, "label": f"{score:g}"}
-            )
-        ratio_points.append(
-            {
-                "date": e["date"][5:],
-                "value": round(e1rm / bw, 2),
-                "label": f"{e1rm / bw:.2f}x",
-            }
-        )
-    dots_chart = (
-        charts.line_chart(dots_points, colour=charts.PURPLE)
-        if len(dots_points) > 1
-        else None
-    )
-    ratio_chart = (
-        charts.line_chart(ratio_points, unit="x", colour=charts.ACCENT_2)
-        if len(ratio_points) > 1
-        else None
-    )
-
-    # Project the main lifts to the end of the current 12-week cycle.
-    target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
-    projections = [
-        _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
-        _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
-    ]
-    projections = [p for p in projections if p]
-
-    pr_rows = [
-        {
-            "exercise": pr["exercise"],
-            "e1rm": round(pr["e1rm"], 1),
-            "detail": f"{pr['weight_kg']:g} kg x {pr['reps']}",
-            "date": pr["date"],
-        }
-        for pr in prs
-    ]
-
-    return templates.TemplateResponse(
-        request,
-        "stats.html",
-        {
-            "active": "stats",
-            "total_sessions": total_sessions,
-            "total_volume": round(total_volume),
-            "days_on_programme": days_on_programme,
-            "exercises_tracked": len(prs),
-            "distribution": distribution,
-            "has_distribution": bool(focus_counts),
-            "muscle_donut": muscle_donut,
-            "has_muscle": bool(groups),
-            "volume_bars": volume_bars,
-            "has_volume": bool(recent),
-            "dots_chart": dots_chart,
-            "ratio_chart": ratio_chart,
-            "projections": projections,
-            "prs": pr_rows,
-            "block_phase_svg": block_phase_svg,
-            "recovery_grid_svg": recovery_grid_svg,
-            "vol_dist_svg": vol_dist_svg,
-        },
-    )
 
 
 def _project_lift(
@@ -763,125 +574,8 @@ def _project_lift(
     }
 
 
-# @app.get("/plan")
-def plan(request: Request):
-    today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
-    current_block = block_for_week(week)
-    day = today_day(today)
-
-    days = []
-    for d in range(1, 7):
-        days.append(
-            {
-                "number": d,
-                "focus": day_focus(d),
-                "is_today": d == day,
-                "exercises": [
-                    {
-                        "name": ex.name,
-                        "scheme": f"{ex.sets} x {ex.rep_range}",
-                        "note": ex.note,
-                    }
-                    for ex in day_exercises(d, current_block)
-                ],
-            },
-        )
-
-    blocks = [
-        {
-            "number": b.number,
-            "name": b.name,
-            "weeks": b.weeks,
-            "focus": b.focus,
-            "deadlift": f"{b.deadlift.sets} x {b.deadlift.rep_range}",
-            "pullups": f"{b.pullups.sets} x {b.pullups.rep_range}",
-            "accessory": b.accessory_emphasis,
-            "is_current": b.number == current_block.number,
-        }
-        for b in BLOCKS.values()
-    ]
-
-    return templates.TemplateResponse(
-        request,
-        "plan.html",
-        {
-            "active": "plan",
-            "split_name": SPLIT_NAME,
-            "week": week,
-            "cycle_weeks": CYCLE_WEEKS,
-            "current_block": current_block,
-            "blocks": blocks,
-            "days": days,
-            "rules": COACHING_RULES,
-        },
-    )
 
 
-def _render_active_plan(request: Request, active: dict, today: date):
-    """Render /plan from a user's active programme definition (DB-stored)."""
-    defn = active.get("definition", {})
-    split_name = defn.get("name", "Active Programme")
-    cycle_weeks = defn.get("cycle_weeks", 4)
-    days_data = defn.get("days", [])
-    blocks_data = defn.get("blocks", [])
-    rules = defn.get("rules", [])
-
-    # Determine today's day in the split (simple round-robin based on start date).
-    start = get_programme_start_date(DB_PATH)
-    # current_day is the 1-based day index in the split, wrapping
-    total_days = len(days_data) or 1
-    current_day = ((today - start).days % total_days) + 1
-
-    days = []
-    for d in days_data:
-        day_num = d.get("number", 0)
-        exercises = [
-            {
-                "name": ex.get("name", "?"),
-                "scheme": f"{ex.get('sets', 0)} x {ex.get('rep_range', '?')}",
-                "note": ex.get("note", ""),
-            }
-            for ex in d.get("exercises", [])
-        ]
-        days.append(
-            {
-                "number": day_num,
-                "focus": d.get("focus", f"Day {day_num}"),
-                "is_today": day_num == current_day,
-                "exercises": exercises,
-            }
-        )
-
-    blocks = []
-    for b in blocks_data:
-        blocks.append(
-            {
-                "number": b.get("number", 1),
-                "name": b.get("name", "Block"),
-                "weeks": b.get("weeks", "1-4"),
-                "focus": b.get("focus", ""),
-                "deadlift": _block_lift_str(b.get("deadlift")),
-                "pullups": _block_lift_str(b.get("pullups")),
-                "accessory": b.get("accessory_emphasis", ""),
-                "is_current": True,
-            }
-        )
-
-    return templates.TemplateResponse(
-        request,
-        "plan.html",
-        {
-            "active": "plan",
-            "split_name": split_name,
-            "week": current_day,
-            "cycle_weeks": cycle_weeks,
-            "current_block": None,
-            "blocks": blocks,
-            "days": days,
-            "rules": rules,
-        },
-    )
 
 
 def _block_lift_str(lift: dict | None) -> str:
@@ -895,23 +589,6 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
-# @app.get("/programmes")
-def programmes_page(request: Request) -> Any:
-    """Page where users select or switch their workout programme."""
-    user_id = request.session.get("user_id")
-    templates_list = get_programme_templates()
-    active = None
-    if user_id:
-        active = get_active_programme(user_id, db_path=DB_PATH)
-    return templates.TemplateResponse(
-        request,
-        "programmes.html",
-        {
-            "active": "programmes",
-            "templates": templates_list,
-            "active_programme": active,
-        },
-    )
 
 
 @app.post("/api/programmes/select")
@@ -1053,41 +730,8 @@ def _run_hevy_inference(user_id: str) -> dict:
     return _build_inferred_definition(inferred)
 
 
-# @app.get("/history")
-def history(request: Request):
-    user_id = request.session.get("user_id")
-    logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
-    return templates.TemplateResponse(
-        request,
-        "history.html",
-        {
-            "active": "history",
-            "calendar": charts.calendar_heatmap(_training_levels(user_id=user_id)),
-            "logs": logs,
-        },
-    )
 
 
-# @app.get("/checkins")
-def checkins(request: Request) -> Any:
-    user_id = request.session.get("user_id")
-    checkins_list = get_checkins(db_path=DB_PATH, user_id=user_id)
-    total_sessions = len(get_session_volumes(db_path=DB_PATH, user_id=user_id))
-    sessions_since = total_sessions % 24
-    sessions_left = 24 - sessions_since
-    progress_pct = (sessions_since / 24) * 100
-
-    loading_svg = f'''
-    <svg class="svg-chart" width="100%" height="24" style="background: var(--panel-2); border-radius: 12px; margin-top: 15px;">
-        <rect width="{progress_pct}%" height="100%" fill="var(--accent)" rx="12"></rect>
-        <text x="50%" y="16" fill="#000" font-size="12" font-weight="600" text-anchor="middle">{sessions_left} sessions remaining until next analysis</text>
-    </svg>
-    '''
-    return templates.TemplateResponse(
-        request,
-        "checkins.html",
-        {"active": "checkins", "checkins": checkins_list, "loading_svg": loading_svg},
-    )
 
 
 @app.get("/api/xai_reasoning/{context_id}")
@@ -1144,15 +788,6 @@ def project_peak(request: Request) -> dict[str, Any]:
         return {"error": "Failed to project peak."}
 
 
-# @app.get("/chat")
-def chat_page(request: Request):
-    user_id = request.session.get("user_id")
-    messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
-    return templates.TemplateResponse(
-        request,
-        "chat.html",
-        {"active": "chat", "messages": messages},
-    )
 
 
 @app.get("/api/chat/history")
@@ -1251,42 +886,6 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
-# @app.get("/settings")
-def settings(request: Request) -> Any:
-    user_id = request.session.get("user_id")
-    user_keys: dict[str, Any] = {}
-    user_prefs: dict[str, Any] = {}
-    if user_id:
-        user_keys = get_user_api_keys(user_id, db_path=DB_PATH)
-        user_prefs = get_user_preferences(user_id, db_path=DB_PATH)
-
-    # Mask keys for display (show last 4 chars only).
-    masked_keys: dict[str, Any] = {}
-    for provider, data in user_keys.items():
-        key = data.get("api_key", "")
-        masked_keys[provider] = {
-            "masked": f"{'●' * 12}{key[-4:]}"
-            if len(key) > 4
-            else ("●" * len(key) if key else ""),
-            "has_key": bool(key),
-            "updated_at": data.get("updated_at", ""),
-        }
-
-    return templates.TemplateResponse(
-        request,
-        "settings.html",
-        {
-            "active": "settings",
-            "gh_configured": bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
-            "gh_connected": bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id)),
-            "gh_status": request.query_params.get("gh"),
-            "user_keys": masked_keys,
-            "user_prefs": user_prefs,
-            "ai_providers": available_providers(),
-            "key_status": request.query_params.get("key_status"),
-            "pref_status": request.query_params.get("pref_status"),
-        },
-    )
 
 
 @app.post("/api/settings/key")

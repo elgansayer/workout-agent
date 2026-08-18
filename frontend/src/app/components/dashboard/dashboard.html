@@ -10,66 +10,66 @@
 }
 
 @if (data(); as data) {
-<section class="hero">
-    <div class="cycle">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
-    <div class="rings">
+<section class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-6 mb-4 relative overflow-hidden transition-shadow duration-300 hover:shadow-[0_8px_40px_rgba(0,0,0,0.25)]">
+    <div class="inline-block text-[0.78rem] uppercase tracking-widest text-green-400 relative">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
+    <div class="flex gap-4 items-center justify-center my-4">
         <div [innerHTML]="data.cycle_ring"></div>
         <div [innerHTML]="data.block_ring"></div>
     </div>
     <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
-    <p class="muted">{{ data.block.focus }}</p>
-    <div class="schemes">
+    <p class="text-muted-foreground">{{ data.block.focus }}</p>
+    <div class="mt-3.5 flex flex-wrap gap-2">
         <span hlmBadge variant="secondary">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
         <span hlmBadge variant="secondary">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
         <span hlmBadge variant="ghost">{{ data.block.accessory_emphasis }}</span>
     </div>
-    <p class="quote">&ldquo;{{ data.quote }}&rdquo;</p>
-    <div class="rings">
+    <p class="mt-4 pt-3.5 border-t border-[#262c37] text-green-400 italic transition-colors hover:text-green-300">&ldquo;{{ data.quote }}&rdquo;</p>
+    <div class="flex gap-4 items-center justify-center my-4">
         <div [innerHTML]="data.cycle_ring"></div>
         <div [innerHTML]="data.block_ring"></div>
     </div>
 </section>
 
 @if (data.dashboard_insight) {
-<section hlmCard class="insight-header">
+<section hlmCard class="bg-gradient-to-br from-[#1e232c]/80 to-[#171a21]/80 border border-green-400/15 border-t-2 border-t-green-400 shadow-[0_10px_30px_rgba(0,0,0,0.2)] relative overflow-hidden">
     <div hlmCardHeader>
-        <h2 hlmCardTitle class="ai-gradient-text">✨ Coach's Status</h2>
+        <h2 hlmCardTitle class="bg-gradient-to-r from-sky-400 via-purple-500 to-green-400 bg-clip-text text-transparent font-bold">✨ Coach's Status</h2>
     </div>
-    <div hlmCardContent class="insight-content">
+    <div hlmCardContent class="text-[0.95rem] [&>p]:my-2.5 [&>p>strong]:text-slate-200 [&>p>strong]:mr-1.5">
         <p><strong>Fatigue:</strong> <span hlmBadge [class]="'fatigue-' + data.dashboard_insight.fatigue.toLowerCase()">{{ data.dashboard_insight.fatigue }}</span></p>
         <p><strong>Wins & Stalls:</strong> {{ data.dashboard_insight.wins_stalls }}</p>
         <p><strong>Action for Today:</strong> {{ data.dashboard_insight.advice }}</p>
     </div>
 </section>
 } @else {
-<section hlmCard class="insight-header">
+<section hlmCard class="bg-gradient-to-br from-[#1e232c]/80 to-[#171a21]/80 border border-green-400/15 border-t-2 border-t-green-400 shadow-[0_10px_30px_rgba(0,0,0,0.2)] relative overflow-hidden">
     <div hlmCardHeader>
-        <h2 hlmCardTitle class="ai-gradient-text">✨ Coach's Status</h2>
+        <h2 hlmCardTitle class="bg-gradient-to-r from-sky-400 via-purple-500 to-green-400 bg-clip-text text-transparent font-bold">✨ Coach's Status</h2>
     </div>
     <div hlmCardContent>
-        <p class="muted">Insights are generating. Check back later.</p>
+        <p class="text-muted-foreground">Insights are generating. Check back later.</p>
     </div>
 </section>
 }
 
-<div class="dashboard-grid">
-    <section class="today">
+<div class="grid grid-cols-[repeat(auto-fit,minmax(360px,1fr))] gap-5 items-start">
+    <section class="flex flex-col">
         <h2>{{ data.weekday }}: {{ data.focus }}</h2>
         @if (data.is_rest_day) {
-        <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
+        <p class="text-muted-foreground">Scheduled rest day. Recovery is where the muscle is built: sleep,
             protein, light movement only.</p>
         } @else {
-        <div class="exercise-list">
+        <div class="flex flex-col gap-2.5">
             @for (row of data.rows; track row.name) {
-            <article class="exercise">
-                <div class="ex-head">
-                    <span class="ex-name">{{ row.name }}</span>
-                    <span class="ex-planned">{{ row.planned }}</span>
+            <article class="bg-[#171a21] border border-[#262c37] rounded-xl p-3.5 transition-all duration-300 hover:border-green-400/20 hover:translate-x-0.5 hover:shadow-[0_2px_12px_rgba(0,0,0,0.15)]">
+                <div class="flex justify-between items-baseline gap-4">
+                    <span class="font-semibold">{{ row.name }}</span>
+                    <span class="text-green-400 tabular-nums whitespace-nowrap">{{ row.planned }}</span>
                 </div>
-                @if (row.note) {<p class="ex-note">{{ row.note }}</p>}
-                <div class="ex-meta">
-                    <span class="last">Last: {{ row.last }}</span>
-                    <span class="nudge">{{ row.nudge }}</span>
+                @if (row.note) {<p class="mt-1 text-muted-foreground text-[0.86rem]">{{ row.note }}</p>}
+                <div class="flex justify-between gap-4 mt-2 text-[0.85rem] flex-wrap">
+                    <span class="text-muted-foreground">Last: {{ row.last }}</span>
+                    <span class="text-green-400">{{ row.nudge }}</span>
                 </div>
             </article>
             }
@@ -77,12 +77,12 @@
         }
     </section>
 
-    <section hlmCard class="lifestyle">
+    <section hlmCard class="bg-[#171a21] border border-[#262c37] rounded-xl p-4 md:p-5">
         <div hlmCardHeader>
             <h2 hlmCardTitle>Today's lifestyle</h2>
         </div>
         <div hlmCardContent>
-            <ul class="pillars">
+            <ul class="m-0 pl-4 flex flex-col gap-1.5 marker:text-green-400">
                 @for (line of data.lifestyle; track $index) {
                 <li>{{ line }}</li>
                 }
@@ -95,21 +95,21 @@
             <h2 hlmCardTitle>Coaching self-review</h2>
         </div>
         <div hlmCardContent>
-            <p class="muted">{{ data.review_headline }}</p>
+            <p class="text-muted-foreground">{{ data.review_headline }}</p>
             @if (data.review_lifts) {
-            <div class="review-list">
+            <div class="flex flex-col gap-2 my-2.5">
                 @for (lift of data.review_lifts; track lift.name) {
-                <div class="review-row trend-{{ lift.trend }}">
-                    <span class="review-name">{{ lift.name }}</span>
-                    <span class="review-trend">{{ lift.trend }}</span>
-                    <span class="review-detail">{{ lift.as_line }}</span>
+                <div class="grid grid-cols-[minmax(120px,1fr)_auto] [grid-template-areas:'name_trend'_'detail_detail'] gap-x-2.5 gap-y-1 bg-[#1e232c] border border-[#262c37] border-l-[3px] border-l-muted-foreground rounded-lg p-2.5" [ngClass]="{'border-l-green-400 [&>.review-trend]:text-green-400': lift.trend === 'progressing', 'border-l-amber-500 [&>.review-trend]:text-amber-500': lift.trend === 'stalling', 'border-l-red-400 [&>.review-trend]:text-red-400': lift.trend === 'regressing', 'border-l-muted-foreground [&>.review-trend]:text-muted-foreground': lift.trend === 'new'}">
+                    <span class="[grid-area:name] font-semibold">{{ lift.name }}</span>
+                    <span class="[grid-area:trend] text-[0.72rem] font-semibold uppercase tracking-wide self-center">{{ lift.trend }}</span>
+                    <span class="[grid-area:detail] text-[0.82rem] text-muted-foreground tabular-nums">{{ lift.as_line }}</span>
                 </div>
                 }
             </div>
             } @else {
-            <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
+            <p class="text-muted-foreground">Not enough logged history yet to spot trends. Keep logging.</p>
             }
-            <p class="muted review-recovery">{{ data.review_recovery }}</p>
+            <p class="text-muted-foreground mt-2.5 text-sm text-muted-foreground">{{ data.review_recovery }}</p>
         </div>
     </section>
 
@@ -118,8 +118,8 @@
             <h2 hlmCardTitle>Consistency</h2>
         </div>
         <div hlmCardContent>
-            <p class="streak">{{ data.streak }} day streak</p>
-            <div class="cal-scroll" [innerHTML]="data.calendar"></div>
+            <p class="text-lg font-bold text-green-400 mb-2">{{ data.streak }} day streak</p>
+            <div class="overflow-x-auto" [innerHTML]="data.calendar"></div>
         </div>
     </section>
 </div>

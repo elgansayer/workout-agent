@@ -17,7 +17,7 @@
         <h2 hlmCardTitle>Training calendar</h2>
     </div>
     <div hlmCardContent>
-        <div class="cal-scroll" [innerHTML]="data.calendar"></div>
+        <div class="overflow-x-auto" [innerHTML]="data.calendar"></div>
     </div>
 </section>
 
@@ -27,18 +27,18 @@
     </div>
     <div hlmCardContent>
         @if (data.logs.length === 0) {
-        <p class="muted">No daily plans logged yet. Each morning run records the day's
+        <p class="text-muted-foreground">No daily plans logged yet. Each morning run records the day's
             plan and lifestyle guidance here.</p>
         }
-        <div class="log-list">
+        <div class="flex flex-col gap-3">
             @for (log of data.logs; track $index) {
-            <article class="log-row" [class.rest]="log.day === null">
-                <div class="log-head">
-                    <span class="log-date">{{ log.date }}</span>
-                    <span class="log-focus">{{ log.focus }}</span>
+            <article class="bg-[#1e232c] border border-[#262c37] border-l-[3px] border-l-green-400 rounded-lg p-3 md:p-4 transition-all duration-300 hover:border-green-400/20 hover:shadow-[0_3px_16px_rgba(0,0,0,0.18)] hover:translate-x-0.5" [class.rest]="log.day === null">
+                <div class="flex items-center gap-2.5 flex-wrap mb-1.5">
+                    <span class="tabular-nums text-muted-foreground text-[0.85rem]">{{ log.date }}</span>
+                    <span class="font-semibold">{{ log.focus }}</span>
                     @if (log.carb_tier) {<span hlmBadge variant="secondary">{{ log.carb_tier }} carb</span>}
                 </div>
-                @if (log.plan) {<pre class="log-body">{{ log.plan }}</pre>}
+                @if (log.plan) {<pre class="m-0 whitespace-pre-wrap font-inherit text-[0.84rem] text-muted-foreground">{{ log.plan }}</pre>}
             </article>
             }
         </div>

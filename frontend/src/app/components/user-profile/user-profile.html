@@ -1,14 +1,14 @@
 <div class="profile-container" *ngIf="authService.currentUser() as user">
   <h2>User Profile</h2>
   
-  <div class="card">
+  <div class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4">
     <div class="user-info">
       <h3>{{ user.name || user.email }}</h3>
       <p class="email">{{ user.email }}</p>
     </div>
     
     <div class="actions">
-      <button (click)="logout()" class="btn btn-danger">Log Out</button>
+      <button (click)="logout()" class="inline-block bg-gradient-to-br from-green-400 to-[#36c06a] text-[#07210f] font-bold text-[0.9rem] no-underline border border-transparent rounded-lg px-4 py-2 cursor-pointer transition-all duration-300 shadow-[0_2px_8px_rgba(0,0,0,0.15)] hover:brightness-110 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_rgba(74,222,128,0.2)] btn-danger">Log Out</button>
     </div>
   </div>
 </div>
