@@ -1,257 +1,218 @@
 @if (loading()) {
-  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
+  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
 }
 
 @if (error()) {
-  <div hlmAlert variant="destructive" class="mb-4">
-    <h4 hlmAlertTitle>Error</h4>
-    <p hlmAlertDesc>{{ error() }}</p>
+  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+    <strong>Error:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
-<h1 class="text-3xl font-bold mb-6">Settings</h1>
-
-@if (data.key_status) {
-    <p class="mb-4 {{ data.key_status === 'saved' ? 'text-emerald-500' : (data.key_status === 'error' ? 'text-destructive' : 'text-foreground') }}">
-        @if (data.key_status === 'saved') { API key saved successfully. }
-        @else if (data.key_status === 'deleted') { API key removed. }
-        @else if (data.key_status === 'error') { Could not save key. Please try again. }
-    </p>
-}
-
-@if (data.pref_status === 'saved') {
-    <p class="mb-4 text-emerald-500">Preferences updated.</p>
-}
-
-@if (data.gh_status) {
-    <p class="mb-4 {{ data.gh_status === 'connected' ? 'text-emerald-500' : (data.gh_status === 'denied' || data.gh_status === 'error' || data.gh_status === 'unconfigured' ? 'text-destructive' : 'text-foreground') }}">
-        @if (data.gh_status === 'connected') { Google Health connected. The agent will sync your weight and body fat on its next run. }
-        @else if (data.gh_status === 'disconnected') { Google Health disconnected. The agent will stop syncing body composition. }
-        @else if (data.gh_status === 'denied') { Authorisation was cancelled. Nothing was changed. }
-        @else if (data.gh_status === 'error') { Could not complete linking. Check the OAuth client and redirect URI, then try again. }
-        @else if (data.gh_status === 'unconfigured') { Google Health is not configured on the server yet. }
-    </p>
-}
+<h1>Settings</h1>
 
 <!-- ──────────── Hevy Integration ──────────── -->
-<section hlmCard id="settings-hevy" class="mb-6">
-    <div hlmCardHeader class="flex items-center justify-between">
-        <h2 hlmCardTitle>🏋️ Hevy Integration</h2>
+<section class="card" id="settings-hevy">
+    <div class="card-head">
+        <h2>🏋️ Hevy Integration</h2>
         @if (data.user_keys?.hevy?.has_key) {
-            <span hlmBadge class="bg-emerald-500 text-emerald-500-foreground">Connected</span>
+        <span class="status on">Connected</span>
         } @else {
-            <span hlmBadge variant="destructive">Not connected</span>
+        <span class="status off">Not connected</span>
         }
     </div>
-    <div hlmCardContent>
-        <p class="text-muted-foreground text-sm mb-4">
-            Connect your Hevy account so workouts are synced automatically.
-            You need a <strong>Hevy Pro</strong> subscription. Generate an API key at
-            <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener" class="text-primary hover:underline">hevy.com/settings</a>.
-        </p>
+    <p class="muted">
+        Connect your Hevy account so workouts are synced automatically.
+        You need a <strong>Hevy Pro</strong> subscription. Generate an API key at
+        <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener" style="color:var(--accent-2)">hevy.com/settings</a>.
+    </p>
 
-        <div id="hevy-form">
-            <div class="flex flex-col sm:flex-row gap-2 items-center">
-                <input
-                    hlmInput
-                    type="password"
-                    id="hevy-key-input"
-                    class="flex-grow"
-                    [placeholder]="data.user_keys?.hevy?.masked ?? 'Paste your Hevy API key'"
-                    autocomplete="off"
-                    aria-label="Hevy API key"
-                    [(ngModel)]="data.hevyKeyInput"
-                >
-                <button
-                    hlmBtn
-                    variant="default"
-                    (click)="saveKey('hevy')"
-                    id="hevy-save-btn"
-                >
-                    {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
-                </button>
-                @if (data.user_keys?.hevy?.has_key) {
-                    <button hlmBtn variant="ghost" (click)="verifyHevy()">Verify</button>
-                    <button hlmBtn variant="ghost" (click)="syncHistory()">Sync History</button>
-                    <button hlmBtn variant="destructive" (click)="deleteKey('hevy')">Remove</button>
-                }
-            </div>
-            <div id="hevy-status" class="key-status text-sm mt-2"></div>
+    <div class="key-form" id="hevy-form">
+        <div class="input-row">
+            <input
+                type="password"
+                id="hevy-key-input"
+                class="key-input"
+                [placeholder]="data.user_keys?.hevy?.masked || 'Paste your Hevy API key'"
+                autocomplete="off"
+                aria-label="Hevy API key"
+                [(ngModel)]="hevyKeyInput"
+            >
+            <button class="btn btn-sm" (click)="saveKey('hevy')" id="hevy-save-btn">
+                {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
+            </button>
+            @if (data.user_keys?.hevy?.has_key) {
+            <button class="btn btn-ghost btn-sm" (click)="verifyHevy()">Verify</button>
+            <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
+            <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">Remove</button>
+            }
         </div>
+        <div id="hevy-status" class="key-status">{{ hevyStatus() }}</div>
     </div>
 </section>
 
 <!-- ──────────── AI Provider ──────────── -->
-<section hlmCard id="settings-ai" class="mb-6">
-    <div hlmCardHeader class="flex items-center justify-between">
-        <h2 hlmCardTitle>🤖 AI Provider</h2>
-        @if (data.user_keys?.[data.user_prefs?.preferred_ai ?? 'gemini']?.has_key) {
-            <span hlmBadge class="bg-emerald-500 text-emerald-500-foreground">{{ (data.user_prefs?.preferred_ai ?? 'gemini') | titlecase }}</span>
+<section class="card" id="settings-ai">
+    <div class="card-head">
+        <h2>🤖 AI Provider</h2>
+        @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
+        <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
         } @else {
-            <span hlmBadge variant="destructive">No key</span>
+        <span class="status off">No key</span>
         }
     </div>
-    <div hlmCardContent>
-        <p class="text-muted-foreground text-sm mb-4">
-            Choose which AI powers your coaching. You bring your own API key.
-        </p>
+    <p class="muted">
+        Choose which AI powers your coaching. You bring your own API key.
+    </p>
 
-        <div class="ai-provider-select">
-            <div class="flex gap-2 mb-4" id="provider-tabs">
-                @for (p of data.ai_providers; track p.id) {
-                    <button
-                        hlmBtn
-                        variant="ghost"
-                        [class.active]="p.id === (data.user_prefs?.preferred_ai ?? 'gemini')"
-                        (click)="selectProvider(p.id)"
-                    >
-                        @if (p.id === 'gemini') { ✦ }
-                        @else if (p.id === 'claude') { ⬡ }
-                        @else { ◉ }
-                        {{ p.name }}
-                    </button>
+    <div class="ai-provider-select">
+        <div class="provider-tabs" id="provider-tabs">
+            @for (p of data.ai_providers; track p.id) {
+            <button
+                class="provider-tab"
+                [class.active]="p.id === selectedAiProvider()"
+                (click)="selectProvider(p.id)"
+            >
+                {{ p.id === 'gemini' ? '✦' : (p.id === 'claude' ? '⬡' : '◉') }}
+                {{ p.name }}
+            </button>
+            }
+        </div>
+
+        @for (p of data.ai_providers; track p.id) {
+        <div class="provider-config" [class.hidden]="p.id !== selectedAiProvider()" id="config-{{ p.id }}">
+            <div class="input-row">
+                <input
+                    type="password"
+                    id="{{ p.id }}-key-input"
+                    class="key-input"
+                    [placeholder]="data.user_keys?.[p.id]?.masked || 'Paste your ' + p.name + ' API key'"
+                    autocomplete="off"
+                    aria-label="{{ p.name }} API key"
+                    [(ngModel)]="aiKeyInputs[p.id]"
+                >
+                <button class="btn btn-sm" (click)="saveKey(p.id)">
+                    {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
+                </button>
+                @if (data.user_keys?.[p.id]?.has_key) {
+                <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey(p.id)">Remove</button>
                 }
             </div>
-
-            @for (p of data.ai_providers; track p.id) {
-                <div class="provider-config" [hidden]="p.id !== (data.user_prefs?.preferred_ai ?? 'gemini')" [id]="'config-' + p.id">
-                    <div class="flex flex-col sm:flex-row gap-2 items-center mb-2">
-                        <input
-                            hlmInput
-                            type="password"
-                            [id]="p.id + '-key-input'"
-                            class="flex-grow"
-                            [placeholder]="(data.user_keys?.[p.id]?.masked ?? ('Paste your ' + p.name + ' API key'))"
-                            autocomplete="off"
-                            [attr.aria-label]="p.name + ' API key'"
-                            [(ngModel)]="data.aiKeyInputs[p.id]"
-                        >
-                        <button hlmBtn variant="default" (click)="saveKey(p.id)">
-                            {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
-                        </button>
-                        @if (data.user_keys?.[p.id]?.has_key) {
-                            <button hlmBtn variant="destructive" (click)="deleteKey(p.id)">Remove</button>
-                        }
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <label hlmLabel class="text-muted-foreground" [for]="p.id + '-model'">Model:</label>
-                        <input
-                            hlmInput
-                            type="text"
-                            [id]="p.id + '-model'"
-                            class="flex-grow"
-                            [value]="data.user_prefs?.ai_model || p.default_model"
-                            [placeholder]="p.default_model"
-                            [(ngModel)]="data.aiModelInputs[p.id]"
-                        >
-                    </div>
-                </div>
-            }
-            <div id="ai-status" class="key-status text-sm mt-2"></div>
+            <div class="model-row">
+                <label class="muted" for="{{ p.id }}-model">Model:</label>
+                <input
+                    type="text"
+                    id="{{ p.id }}-model"
+                    class="model-input"
+                    [(ngModel)]="aiModelInputs[p.id]"
+                    [placeholder]="p.default_model"
+                >
+            </div>
         </div>
+        }
+        <div id="ai-status" class="key-status">{{ aiStatus() }}</div>
     </div>
 </section>
 
 <!-- ──────────── Google Health ──────────── -->
-<section hlmCard id="settings-google-health" class="mb-6">
-    <div hlmCardHeader class="flex items-center justify-between">
-        <h2 hlmCardTitle>📊 Google Health</h2>
+<section class="card" id="settings-gh">
+    <div class="card-head">
+        <h2>📊 Google Health / Fitbit</h2>
         @if (data.gh_connected) {
-            <span hlmBadge class="bg-emerald-500 text-emerald-500-foreground">Connected</span>
+        <span class="status on">Connected</span>
         } @else {
-            <span hlmBadge variant="destructive">Not connected</span>
+        <span class="status off">Not connected</span>
         }
     </div>
-    <div hlmCardContent>
-        <p class="text-muted-foreground text-sm mb-4">
-            Link your Google Health account so the agent automatically reads your
-            latest weight and body fat (e.g. from a Eufy Life smart scale) on every
-            run. This uses OAuth 2.0 — no API key needed.
-        </p>
+    <p class="muted">
+        Sync scale weight, body fat %, and resting heart rate automatically from Google Health / Fitbit.
+    </p>
 
-        @if (!data.gh_configured) {
-            <p class="text-muted-foreground text-sm">
-                To enable linking, set <code>GOOGLE_HEALTH_CLIENT_ID</code> and
-                <code>GOOGLE_HEALTH_CLIENT_SECRET</code> (and ideally
-                <code>GOOGLE_HEALTH_REDIRECT_URI</code>) in the web service's
-                environment, then reload this page.
-            </p>
-        } @else if (data.gh_connected) {
-            <div class="flex gap-2 mt-4">
-                <a hlmBtn variant="default" href="/google-health/connect">Re-link account</a>
-                <form method="post" action="/google-health/disconnect">
-                    <button hlmBtn variant="ghost" type="submit">Disconnect</button>
-                </form>
-            </div>
+    @if (data.gh_configured) {
+        @if (data.gh_connected) {
+        <form method="post" action="/api/settings/google-health/disconnect">
+            <button class="btn btn-ghost btn-danger btn-sm" type="submit">Disconnect Google Health</button>
+        </form>
         } @else {
-            <div class="flex gap-2 mt-4">
-                <a hlmBtn variant="default" href="/google-health/connect">Connect Google Health</a>
-            </div>
+        <a href="/login/google-health" class="btn btn-sm">Connect Google Health</a>
         }
-    </div>
+    } @else {
+        <p class="muted" style="font-size:0.85rem;">Google Health OAuth credentials are not set on the server.</p>
+    }
 </section>
 
-<!-- ──────────── Training Profile ──────────── -->
-<section hlmCard id="settings-profile" class="mb-6">
-    <div hlmCardHeader>
-        <h2 hlmCardTitle>👤 Training Profile</h2>
+<!-- ──────────── Push Notifications ──────────── -->
+@if (data.vapid_public_key) {
+<section class="card" id="settings-push">
+    <div class="card-head">
+        <h2>🔔 Web Push Notifications</h2>
+        @if (pushSubscribed()) {
+        <span class="status on">Subscribed</span>
+        } @else {
+        <span class="status off">Not Subscribed</span>
+        }
     </div>
-    <div hlmCardContent>
-        <p class="text-muted-foreground text-sm mb-4">
-            Tell the AI about your goals and constraints. This replaces the hardcoded
-            coaching rules.
-        </p>
+    <p class="muted">
+        Get today's workout plan and recovery tips delivered directly to your device.
+    </p>
+    @if (!pushSubscribed()) {
+    <button class="btn btn-sm" (click)="subscribeToPush()">Enable Push Notifications</button>
+    } @else {
+    <button class="btn btn-ghost btn-sm" (click)="unsubscribeFromPush()">Disable Push Notifications</button>
+    }
+</section>
+}
 
-        <div>
-            <div class="mb-4">
-                <label hlmLabel id="goals-label">Goals</label>
-                <div id="goals-select" role="group" aria-labelledby="goals-label" class="flex flex-wrap gap-2 mt-2">
-                    @for (goal of ['strength', 'hypertrophy', 'fat_loss', 'endurance', 'general_fitness', 'powerlifting', 'bodybuilding']; track goal) {
-                        <button
-                            hlmBtn
-                            size="sm"
-                            [variant]="(data.user_prefs?.goals ?? []).includes(goal) ? 'default' : 'secondary'"
-                            [attr.aria-pressed]="(data.user_prefs?.goals ?? []).includes(goal)"
-                            [attr.data-value]="goal"
-                            (click)="toggleChip(goal)"
-                        >{{ (goal.replace('_', ' ')) | titlecase }}</button>
-                    }
-                </div>
-            </div>
+<!-- ──────────── Profile & Goals ──────────── -->
+<section class="card" id="settings-profile">
+    <div class="card-head">
+        <h2>👤 Coaching Profile</h2>
+    </div>
+    <p class="muted">
+        Tell Coach about your goals and constraints so it can personalise daily advice.
+    </p>
 
-            <div class="mb-4">
-                <label hlmLabel id="experience-label">Experience Level</label>
-                <div id="experience-select" role="group" aria-labelledby="experience-label" class="flex flex-wrap gap-2 mt-2">
-                    @for (level of ['beginner', 'intermediate', 'advanced']; track level) {
-                        <button
-                            hlmBtn
-                            size="sm"
-                            [variant]="level === (data.user_prefs?.experience_level ?? 'intermediate') ? 'default' : 'secondary'"
-                            [attr.aria-pressed]="level === (data.user_prefs?.experience_level ?? 'intermediate')"
-                            [attr.data-value]="level"
-                            (click)="selectSingle(level, 'experience-select')"
-                        >{{ level | titlecase }}</button>
-                    }
-                </div>
+    <div class="pref-form">
+        <div class="pref-group">
+            <label class="pref-label">Primary Goals</label>
+            <div class="chip-select">
+                @for (goal of availableGoals; track goal) {
+                <button
+                    class="chip-option"
+                    [class.selected]="selectedGoals().includes(goal)"
+                    (click)="toggleGoal(goal)"
+                >{{ goal | titlecase }}</button>
+                }
             </div>
-
-            <div class="mb-4">
-                <label hlmLabel>Constraints <span class="text-muted-foreground">(optional)</span></label>
-                <textarea
-                    [id]="'constraints-input'"
-                    class="flex h-auto w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    [placeholder]="'e.g. Bad knees — no jumping. Shoulder rehab — no overhead pressing.'"
-                    rows="2"
-                    [(ngModel)]="data.constraintsInput"
-                >{{ (data.user_prefs?.constraints ?? []).join('. ') }}</textarea>
-            </div>
-
-            <div class="flex gap-2 mt-4">
-                <button hlmBtn variant="default" (click)="savePreferences()">Save Profile</button>
-            </div>
-            <div id="pref-status" class="key-status text-sm mt-2"></div>
         </div>
+
+        <div class="pref-group">
+            <label class="pref-label">Experience Level</label>
+            <div class="chip-select">
+                @for (level of ['beginner', 'intermediate', 'advanced']; track level) {
+                <button
+                    class="chip-option"
+                    [class.selected]="selectedExperience() === level"
+                    (click)="selectedExperience.set(level)"
+                >{{ level | titlecase }}</button>
+                }
+            </div>
+        </div>
+
+        <div class="pref-group">
+            <label class="pref-label">Constraints <span class="muted">(optional)</span></label>
+            <textarea
+                class="pref-textarea"
+                [(ngModel)]="constraintsInput"
+                placeholder="e.g. Bad knees — no jumping. Shoulder rehab — no overhead pressing."
+                rows="2"
+            ></textarea>
+        </div>
+
+        <div class="btn-row">
+            <button class="btn" (click)="savePreferences()">Save Profile</button>
+        </div>
+        <div id="pref-status" class="key-status">{{ prefStatus() }}</div>
     </div>
 </section>
 }

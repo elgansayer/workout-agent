@@ -1,102 +1,43 @@
 ---
 name: ai-provider-wiring
-description: 'Resolve a users chosen AI provider (Gemini/Claude/OpenAI/DeepSeek) and API key, then call it through ai_provider.py instead of hardcoding the Gemini SDK. Use when touching gemini_engine.py, insight_cron.py, or any webapp/app.py endpoint that generates AI text (chat, RAG search, XAI reasoning, insights).'
+description: 'Resolve a user’s chosen AI provider (Gemini/Claude/OpenAI/DeepSeek/Ollama) and API key, then call it through ai_provider.py instead of hardcoding any specific SDK. Use when touching gemini_engine.py, insight_cron.py, or any backend endpoint generating AI text (chat, RAG search, XAI reasoning, insights).'
 ---
 
 # AI Provider Wiring
 
 ## Why This Exists
 
-`ai_provider.py` already defines a clean `AIProvider` ABC + `get_provider()`
-factory supporting Gemini/Claude/OpenAI/DeepSeek, and the Settings UI already
-lets a user save a key per provider plus a `preferred_ai`/`ai_model`
-preference. All call sites now use `resolve_provider()` or `get_provider()`
-(PRs #85, #164) — the last hardcoded `google.generativeai` import was
-removed. This skill is the reference for adding new AI generation call sites
-or providers correctly from the start.
+`ai_provider.py` defines a clean `AIProvider` ABC + `get_provider()` factory supporting Gemini, Claude, OpenAI, DeepSeek, and local LLMs (Ollama / vLLM). The Settings UI lets each user securely configure their preferred provider and model with encrypted keys. This skill is the reference for adding new AI generation call sites or providers with zero vendor lock-in.
 
 ## When to Use
 
-- Adding a new AI-generated feature (new prompt, new endpoint).
-- Touching an existing hardcoded-Gemini call site in `gemini_engine.py`,
-  `insight_cron.py`, or `webapp/app.py` (`/api/xai_reasoning`,
-  `/api/project_peak`, `/api/rag_search`, chat endpoints).
-- Adding a new provider (e.g. a local/self-hosted model) to
-  `ai_provider.py`.
+- Adding a new AI-generated feature (new prompt, new analysis, or streaming endpoint).
+- Touching an existing generation call site in `gemini_engine.py`, `insight_cron.py`, or `webapp/app.py` (`/api/xai_reasoning`, `/api/project_peak`, `/api/rag_search`, `/api/chat/*`).
+- Adding support for new providers or models (e.g. Claude 3.7/3.5, Gemini 2.5 Flash, DeepSeek-V3/R1, Ollama local instances).
 
 ## Procedure
 
-1. **Resolve the provider for the acting user**, don't assume Gemini:
+1. **Resolve the provider for the acting user dynamically:**
 
    ```python
-   from ai_provider import get_provider
+   from ai_provider import AIProvider, get_provider
+   from ai_resolver import resolve_provider
 
-
-   def resolve_provider(user_id: str) -> AIProvider:
-       prefs = database.get_user_preferences(user_id)
-       provider_name = (prefs and prefs.get("preferred_ai")) or "gemini"
-       model = prefs and prefs.get("ai_model")
-       api_key = database.get_user_api_key(user_id, provider_name)
-       if api_key is None:
-           # Fall back to the server's own key only for the default
-           # provider — never silently use the server key for a provider
-           # the user explicitly configured but whose key lookup failed.
-           if provider_name != "gemini":
-               raise ValueError(f"No {provider_name} key configured for this user")
-           api_key = config.gemini_api_key
-       return get_provider(provider_name, api_key, model)
+   async def run_ai_task(user_id: str, prompt: str) -> str:
+       provider: AIProvider = resolve_provider(user_id)
+       return await provider.generate_async(prompt)
    ```
 
-   Put this resolver in one place (a new small module, e.g.
-   `ai_resolver.py`, or a function in `ai_provider.py` itself) rather than
-   duplicating it at every call site.
+2. **Handle Streaming Responses for Real-Time UI (Chat & RAG Search):**
+   - For interactive chat and log investigator endpoints, use `provider.generate(prompt, stream=True)` with FastAPI's `StreamingResponse` or Server-Sent Events (SSE).
 
-2. **Replace the hardcoded SDK call** with
-   `resolve_provider(user_id).generate(prompt, stream=...)`. Preserve the
-   existing prompt-building logic (`COACHING_RULES`, insight formatting,
-   etc.) — only the "which client sends this prompt" part changes.
+3. **Handle provider-specific failure modes gracefully:**
+   - Catch authentication or rate-limit exceptions at the route level and return clean, user-facing error messages ("Your OpenAI/Claude key is invalid or rate-limited; please check Settings").
 
-3. **Handle provider-specific failure modes generically.** `AIProvider`
-   implementations already raise on missing SDK (`ImportError`) or bad key
-   (whatever the underlying SDK raises) — catch broadly at the call site and
-   surface a user-facing error ("Your DeepSeek key looks invalid — check
-   Settings") rather than a stack trace, matching the existing
-   `/api/settings/verify-hevy` pattern for connector verification errors.
-
-4. **Threading `user_id` through.** Most of these call sites currently take
-   no `user_id` parameter because the whole app is single-tenant (see the
-   `multi-tenant-migration` skill) — you may need to add the parameter as
-   part of this change. Don't invent a second, parallel way to pass user
-   identity; use the same `user_id` the route handler already has from the
-   session, or that `main.py` resolves per the scheduler-job skill.
-
-5. **Adding DeepSeek support** (if not already added): DeepSeek exposes an
-   OpenAI-compatible API — add a `DeepSeekProvider` to `ai_provider.py`
-   reusing the `openai` SDK client with
-   `base_url="https://api.deepseek.com"` and default model
-   `deepseek-chat`, register it in `PROVIDERS`. Add `openai` to
-   `requirements.txt` if not already present (needed for both `OpenAIProvider`
-   and `DeepSeekProvider`).
+4. **Support Local & Offline Models (Ollama / vLLM):**
+   - Allow users to supply custom OpenAI-compatible base URLs (e.g. `http://localhost:11434/v1` for Ollama) to run 100% private, local inference without external API keys.
 
 ## Verification
 
-Run the `verification-gate` skill's steps. Additionally: write a test that
-calls the resolver with a mocked `database.get_user_preferences`/
-`get_user_api_key` for at least two different providers and asserts
-`get_provider` is invoked with the right provider name and key — this is
-currently zero-coverage territory (`AGENTS.md` §7), don't add more of it
-uncovered.
+Run the `verification-gate` suite. Add or update tests in `tests/test_ai_provider.py` verifying that provider resolution accurately picks up user preferences and securely loads encrypted keys.
 
-## Gotchas
-
-- Never fall back to the server's shared key for a *non-default* provider —
-  that would silently bill the operator's Claude/OpenAI/DeepSeek account for
-  a request the user thought was using their own key.
-- `.generate(..., stream=True)` returns an `Iterator[str]`, not a string —
-  don't `await`/index it like the non-streaming path; check how
-  `webapp/app.py`'s existing `/api/rag_search` streaming response is wired
-  and match that pattern for any new streaming endpoint.
-- Provider SDKs (`anthropic`, `openai`) are optional-at-runtime
-  (`ClaudeProvider`/`OpenAIProvider`/`DeepSeekProvider` raise `ImportError`
-  from inside `__init__`, not at module import time) — keep it that way so a
-  Gemini-only deployment doesn't need every SDK installed.

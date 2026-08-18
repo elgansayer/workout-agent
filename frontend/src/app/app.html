@@ -1,27 +1,22 @@
-<div class="app-layout">
-  @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
-  <nav class="navbar">
-    <div class="navbar-brand">Workout Agent</div>
-    <ul class="navbar-nav">
-      <li><a routerLink="/dashboard" routerLinkActive="active">Dashboard</a></li>
-      <li><a routerLink="/plan" routerLinkActive="active">Plan</a></li>
-      <li><a routerLink="/history" routerLinkActive="active">History</a></li>
-      <li><a routerLink="/progress" routerLinkActive="active">Progress</a></li>
-      <li><a routerLink="/stats" routerLinkActive="active">Stats</a></li>
-      <li><a routerLink="/chat" routerLinkActive="active">Chat</a></li>
-      <li><a routerLink="/settings" routerLinkActive="active">Settings</a></li>
-    </ul>
-    <div class="navbar-user">
-      @if (auth.currentUser()?.picture) {
-        <img [src]="auth.currentUser()?.picture" alt="User Avatar" class="avatar">
-      }
-      <span class="user-name">{{ auth.currentUser()?.name || auth.currentUser()?.email }}</span>
-      <button class="logout-btn" (click)="auth.logout()">Logout</button>
-    </div>
-  </nav>
-  }
-  
-  <main class="main-content">
+<a href="#main-content" class="skip-to-content">Skip to content</a>
+<header class="topbar">
+    <a class="brand" routerLink="/dashboard">Workout&nbsp;Agent</a>
+    <nav>
+        <a routerLink="/dashboard" routerLinkActive="on">Today</a>
+        <a routerLink="/progress" routerLinkActive="on">Progress</a>
+        <a routerLink="/stats" routerLinkActive="on">Stats</a>
+        <a routerLink="/plan" routerLinkActive="on">Plan</a>
+        <a routerLink="/programmes" routerLinkActive="on">Programmes</a>
+        <a routerLink="/history" routerLinkActive="on">History</a>
+        <a routerLink="/checkins" routerLinkActive="on">Check-ins</a>
+        <a routerLink="/chat" class="nav-coach" routerLinkActive="on">✨ Coach</a>
+        <a routerLink="/settings" routerLinkActive="on">Settings</a>
+        @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
+        <a href="javascript:void(0)" (click)="auth.logout()" style="color: var(--muted); cursor: pointer;">Logout</a>
+        }
+    </nav>
+</header>
+<main id="main-content">
     <router-outlet></router-outlet>
-  </main>
-</div>
+</main>
+<footer class="foot">Hybrid Powerbuilding, 12-week periodised cycle.</footer>

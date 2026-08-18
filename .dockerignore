@@ -16,6 +16,11 @@ tests/
 *.md
 !README.md
 
+# Node / Frontend build artifacts
+frontend/node_modules/
+frontend/.angular/
+node_modules/
+
 # Binary images -- never bake stray image files into images
 *.png
 *.jpg

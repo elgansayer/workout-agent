@@ -1,32 +1,15 @@
-@if (loading()) {
-  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
-}
-
-@if (error()) {
-  <div hlmAlert variant="destructive" class="mb-4">
-    <h4 hlmAlertTitle>Error</h4>
-    <p hlmAlertDesc>{{ error() }}</p>
-  </div>
-}
-
-@if (data(); as data) {
-<div class="flex items-center justify-center min-h-screen p-4">
-    <section hlmCard class="w-full max-w-[400px]">
-        <div hlmCardHeader>
-            <h2 hlmCardTitle class="text-center mb-4 text-2xl">Workout Agent</h2>
-            <p hlmCardDescription class="text-center mb-8 text-sm text-muted-foreground">This dashboard is private. Please sign in with your Google account to access your stats.</p>
-        </div>
-        <div hlmCardContent>
-            <a hlmBtn variant="outline" class="w-full gap-2 px-4 py-3 text-base" href="/login/google">
-                <svg class="h-4 w-4" viewBox="0 0 18 18">
-                    <path fill="currentColor" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
-                    <path fill="currentColor" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z"/>
-                    <path fill="currentColor" d="M3.964 10.707a5.416 5.416 0 010-3.414V4.961H.957a8.997 8.997 0 000 8.078l3.007-2.332z"/>
-                    <path fill="currentColor" d="M9 3.58c1.32 0 2.507.454 3.44 1.354l2.58-2.58C13.463.896 11.427 0 9 0A8.997 8.997 0 00.957 4.961L3.964 7.29c.708-2.127 2.692-3.71 5.036-3.71z"/>
-                </svg>
-                Sign in with Google
-            </a>
-        </div>
-    </section>
+<div class="login-container">
+    <div class="card login-card">
+        <h1>Workout Agent</h1>
+        <p class="muted">This dashboard is private. Please sign in with your Google account to access your stats.</p>
+        <a href="/login/google" class="btn google-btn">
+            <svg class="google-icon" width="18" height="18" viewBox="0 0 18 18">
+                <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/>
+                <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 009 18z"/>
+                <path d="M3.964 10.707a5.416 5.416 0 010-3.414V4.961H.957a8.997 8.997 0 000 8.078l3.007-2.332z"/>
+                <path d="M9 3.58c1.32 0 2.507.454 3.44 1.354l2.58-2.58C13.463.896 11.427 0 9 0A8.997 8.997 0 00.957 4.961L3.964 7.29c.708-2.127 2.692-3.71 5.036-3.71z"/>
+            </svg>
+            Sign in with Google
+        </a>
+    </div>
 </div>
-}

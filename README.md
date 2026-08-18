@@ -1,45 +1,25 @@
-# Autonomous Workout Agent
+# Workout Agent — Autonomous Multi-User Fitness Intelligence Platform
 
-A private, local Python agent that acts as an elite hypertrophy / stage-prep
-bodybuilding coach. Every morning it works out what you should train today from
-the real calendar day, pulls your latest workout from the
-[Hevy API](https://api.hevyapp.com/docs/), reads your recovery metrics from
-Google Health Connect (via an exported JSON file), asks your configured AI
-provider (Gemini, Claude, OpenAI, or DeepSeek) to apply progressive overload,
-then sends today's exact routine plus one daily improvement tip to your phone
-via Telegram. On Sundays it sends a short rest and
-recovery message instead.
+A high-performance, multi-tenant AI coaching and training intelligence platform. It features an **Angular 22+ (Spartan UX & Tailwind CSS)** frontend paired with a high-throughput **FastAPI (Python 3.12+)** asynchronous backend, backed by **PostgreSQL** with `pgvector` and `JSONB` for deep biometric analytics and AI-powered progressive overload.
 
-Built as a small, focused script rather than a heavyweight generalist agent
-framework. It does one thing well: read your data, reason about it, message you.
-
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/de803041-7959-4230-93b3-bda786d1a406" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/cf1e2e9b-37ac-4b9e-81eb-c0ee4ee00d4b" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/75bff5d6-26f0-4278-8ea0-bd88b9d2a7c6" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/6beffcbb-aa10-4dc7-b561-486b5a43dc76" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/c345415d-a7bc-4031-a420-22c1a3bf219e" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/0d3a355a-2cc2-4c5b-85aa-7e34cf985503" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/217e8556-21df-471e-93a6-bb82e31d316a" />
-<img width="795" height="1770" alt="image" src="https://github.com/user-attachments/assets/e68f0f1a-a508-4ca7-a980-8fc652ffd3f9" />
+Every morning, the agent analyzes your training volume and recovery metrics from connected wearables (Hevy, Google Health, Apple HealthKit, Garmin), queries your chosen AI provider (Gemini, Claude, OpenAI, DeepSeek, or local LLMs) to compute personalized overload targets, and delivers tailored workouts and daily briefings via Web Push or Telegram.
 
 ---
 
-## Why a custom agent (not OpenClaw / generalist frameworks)
+## Modern Technology Architecture
 
-- **Precision** – one job: parse Hevy JSON against a 6-day split and message you.
-- **Privacy** – your health data stays on your machine and is only sent to your
-  configured AI provider.
-- **Low complexity** – a script on a cron job. Set it and forget it.
-- **Safety** – no broad shell/file access, no sandbox to harden.
+- **Frontend:** Angular 22+ Standalone Components, Reactive Signals (`signal`, `computed`), Spartan UI (`@spartan-ng/brain` + `@spartan-ng/ui`), Tailwind CSS, Lucide Icons, and responsive PWA support.
+- **Backend API:** FastAPI (AsyncIO), Pydantic v2 validation, OAuth2 / Multi-Provider Auth (Google, GitHub, Apple, Passkeys), and Fernet-encrypted credential storage.
+- **Database & Storage:** **PostgreSQL 16+** with `pgvector` for AI embeddings, `JSONB` for flexible exercise telemetry, and SQLAlchemy 2.0 Async / SQLModel.
+- **AI Gateway ("Any AI"):** Unified provider abstraction (`ai_provider.py`) supporting Gemini 2.5 Flash, Claude 3.7 / 3.5 Sonnet, GPT-4o, DeepSeek-V3/R1, and local Ollama/vLLM endpoints.
+- **Connectors & Ingestion:** Hevy API v1, Google Health Connect, Apple HealthKit, Garmin Health, and real-time webhook ingestion.
+- **Task Orchestration:** Asynchronous background sync workers (APScheduler / AsyncIO) for automated multi-user telemetry ingestion and coaching cron jobs.
 
 ---
 
 ## AI-Native "Insight-First" Dashboard & Correlation Engine
 
-The dashboard acts as an intelligent, reactive interface that treats your SQLite
-database as a knowledge graph, powered by your configured AI provider (Gemini,
-Claude, OpenAI, or DeepSeek):
-The dashboard acts as an intelligent, reactive interface that treats your SQLite database as a knowledge graph, powered by your configured AI provider (defaults to **Gemini 2.5 Flash**):
+The dashboard acts as an intelligent, reactive interface that treats your health and workout data as a knowledge graph:
 
 - **Coach's Status Header**: The top-level dashboard metrics are replaced with a natural language executive summary generated every morning. It checks your fatigue state (volume vs. sleep), highlights block wins/stalls, and gives an actionable adjustment for today.
 - **Deep Correlation Engine**: A weekly background job that hunts for invisible bottlenecks across a 60-day trailing window of your training volume, sleep metrics, and lifestyle. It flags burnout indicators or stalling patterns.

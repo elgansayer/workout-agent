@@ -1,127 +1,87 @@
 @if (loading()) {
-  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
+  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
 }
 
 @if (error()) {
-  <div hlmAlert variant="destructive" class="mb-4">
-    <h4 hlmAlertTitle>Error</h4>
-    <p hlmAlertDesc>{{ error() }}</p>
+  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+    <strong>Error:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
-<h1 class="text-3xl font-bold tracking-tight">Programme Builder</h1>
-<p class="text-muted-foreground mt-2 mb-6">Choose the workout plan that fits your goals. Switching programmes keeps all your historical data safe — only your active plan changes.</p>
+<h1>Programme Builder</h1>
+<p class="muted">Choose the workout plan that fits your goals. Switching programmes keeps all your historical data safe — only your active plan changes.</p>
 
 @if (data.active_programme) {
-    <section hlmCard [style.borderColor]="'var(--accent)'" class="border-2 shadow-sm mb-6">
-        <div hlmCardHeader class="flex justify-between items-center flex-wrap gap-2.5">
-            <div class="space-y-1">
-                <h2 hlmCardTitle>📋 Active Programme</h2>
-                <p hlmCardDescription class="text-sm">
-                    <strong>{{ data.active_programme.definition?.name ?? (data.active_programme.template_key | titlecase) }}</strong>
-                    &middot; {{ data.active_programme.source | titlecase }}
-                    @if (data.active_programme.definition?.cycle_weeks) { &middot; {{ data.active_programme.definition.cycle_weeks }}-week cycle }
-                    @if (data.active_programme.definition?.total_days) { &middot; {{ data.active_programme.definition.total_days }}-day split }
-                </p>
-            </div>
+<section class="panel" style="border-color: var(--accent);">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem;">
+        <div>
+            <h2 style="margin:0;">📋 Active Programme</h2>
+            <p class="muted" style="margin:0.3rem 0 0;">
+                <strong>{{ data.active_programme.definition?.name || (data.active_programme.template_key | titlecase) }}</strong>
+                &middot; {{ data.active_programme.source | titlecase }}
+                @if (data.active_programme.definition?.cycle_weeks) { &middot; {{ data.active_programme.definition.cycle_weeks }}-week cycle }
+                @if (data.active_programme.definition?.total_days) { &middot; {{ data.active_programme.definition.total_days }}-day split }
+            </p>
         </div>
-    </section>
+    </div>
+</section>
 }
 
-<section hlmCard class="mb-6">
-    <div hlmCardHeader>
-        <h2 hlmCardTitle>Available Templates</h2>
-    </div>
-    <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+<section class="panel">
+    <h2>Available Templates</h2>
+    <div class="programme-grid">
         @for (tpl of data.templates; track tpl.key) {
-            <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-4 flex flex-col gap-2 transition-all duration-300 hover:border-green-400/20 hover:shadow-[0_6px_24px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 border rounded-md p-4 relative" [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key">
-                <h3 class="text-lg font-semibold mb-1">{{ tpl.name }}</h3>
-                <p class="text-muted-foreground text-sm mb-3">{{ tpl.description }}</p>
-                @if (data.active_programme && data.active_programme.template_key === tpl.key) {
-                    <span hlmBadge class="bg-[var(--accent)] text-black font-semibold absolute top-4 right-4">Currently Active</span>
-                } @else {
-                    <form (ngSubmit)="selectProgramme(tpl.key)" class="select-form mt-4">
-                        <button hlmBtn size="sm" type="submit">Select Programme</button>
-                    </form>
-                }
-            </article>
+        <article class="programme-card" [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key">
+            <h3>{{ tpl.name }}</h3>
+            <p class="muted">{{ tpl.description }}</p>
+            @if (data.active_programme && data.active_programme.template_key === tpl.key) {
+            <span class="badge" style="background:var(--accent);color:#000;">Currently Active</span>
+            } @else {
+            <button class="btn btn-sm" (click)="selectProgramme(tpl.key)">Select Programme</button>
+            }
+        </article>
         }
     </div>
 </section>
 
-@if (data.active_programme?.definition?.days) {
-    <section hlmCard class="mb-6">
-        <div hlmCardHeader>
-            <h2 hlmCardTitle>Active Split Preview</h2>
-        </div>
-        <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            @for (day of data.active_programme.definition.days; track day.number) {
-                <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 transition-all duration-300 hover:border-green-400/20 hover:-translate-y-[1px] border rounded-md p-4">
-                    <div class="flex justify-between items-center pb-2 mb-2 border-b">
-                        <span class="text-[0.75rem] uppercase tracking-wide text-muted-foreground text-sm font-medium text-primary">Day {{ day.number }}</span>
-                    </div>
-                    <h3 class="text-lg font-semibold mb-3">{{ day.focus }}</h3>
-                    <ul class="list-none m-0 p-0 flex flex-col gap-1.5 space-y-2">
-                        @for (ex of day.exercises; track $index) {
-                            <li class="flex justify-between items-center text-sm">
-                                <span class="ex-n">{{ ex.name }}</span>
-                                <span class="text-green-400 tabular-nums whitespace-nowrap text-muted-foreground">{{ ex.sets }} x {{ ex.rep_range }}</span>
-                            </li>
-                        }
-                    </ul>
-                </article>
-            }
-            <article class="bg-[#1e232c] border border-[#262c37] rounded-xl p-3.5 transition-all duration-300 hover:border-green-400/20 hover:-translate-y-[1px] opacity-80 border rounded-md p-4 bg-muted/30">
-                <div class="flex justify-between items-center pb-2 mb-2 border-b">
-                    <span class="text-[0.75rem] uppercase tracking-wide text-muted-foreground text-sm font-medium text-primary">Sunday</span>
-                </div>
-                <h3 class="text-lg font-semibold mb-3">Rest &amp; Recovery</h3>
-                <p class="text-muted-foreground text-sm">Sleep, protein, light movement only.</p>
-            </article>
-        </div>
-    </section>
-}
-
-@if (data.active_programme?.definition?.blocks) {
-    <section hlmCard class="mb-6">
-        <div hlmCardHeader>
-            <h2 hlmCardTitle>Periodisation Blocks</h2>
-        </div>
-        <div hlmCardContent class="grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-3.5 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            @for (b of data.active_programme.definition.blocks; track b.number) {
-                <article class="relative bg-[#1e232c] border border-[#262c37] rounded-xl p-4 transition-all duration-300 overflow-hidden hover:border-green-400/20 hover:shadow-[0_6px_24px_rgba(0,0,0,0.2)] hover:-translate-y-0.5 border rounded-md p-4">
-                    <h3 class="text-lg font-semibold mb-2">Block {{ b.number }}: {{ b.name }}</h3>
-                    <p class="text-muted-foreground text-sm mb-4">Weeks {{ b.weeks }} | {{ b.focus }}</p>
-                    <ul class="list-none m-0 mt-3 p-0 flex flex-col gap-1.5 [&>li]:flex [&>li]:justify-between [&>li]:gap-2.5 [&>li]:text-[0.85rem] [&>li]:border-t [&>li]:border-[#262c37] [&>li]:pt-1.5 [&>li>span]:text-muted-foreground space-y-2">
-                        <li class="flex justify-between items-center text-sm">
-                            <span class="font-medium">Deadlift</span><strong class="text-right">{{ b.deadlift.sets }} x {{ b.deadlift.rep_range }}</strong>
-                        </li>
-                        <li class="flex justify-between items-center text-sm">
-                            <span class="font-medium">Pull-ups</span><strong class="text-right">{{ b.pullups.sets }} x {{ b.pullups.rep_range }}</strong>
-                        </li>
-                        <li class="flex justify-between items-center text-sm">
-                            <span class="font-medium">Accessories</span><strong class="text-right">{{ b.accessory_emphasis }}</strong>
-                        </li>
-                    </ul>
-                </article>
-            }
-        </div>
-    </section>
-}
-
-@if (data.active_programme?.definition?.rules) {
-    <section hlmCard class="mb-6">
-        <div hlmCardHeader>
-            <h2 hlmCardTitle>Coaching Rules</h2>
-        </div>
-        <div hlmCardContent>
-            <ul class="m-0 pl-4 flex flex-col gap-2 marker:text-green-400 list-disc list-inside space-y-2">
-                @for (rule of data.active_programme.definition.rules; track $index) {
-                    <li>{{ rule }}</li>
+@if (data.active_programme && data.active_programme.definition && data.active_programme.definition.days) {
+<section class="panel">
+    <h2>Active Split Preview</h2>
+    <div class="day-grid">
+        @for (day of data.active_programme.definition.days; track day.number) {
+        <article class="day-card">
+            <div class="day-head">
+                <span class="day-num">Day {{ day.number }}</span>
+            </div>
+            <h3>{{ day.focus }}</h3>
+            <ul class="day-ex">
+                @for (ex of day.exercises; track ex.name) {
+                <li>
+                    <span class="ex-n">{{ ex.name }}</span>
+                    <span class="ex-s">{{ ex.sets }} x {{ ex.rep_range }}</span>
+                </li>
                 }
             </ul>
-        </div>
-    </section>
+        </article>
+        }
+        <article class="day-card rest">
+            <div class="day-head"><span class="day-num">Sunday</span></div>
+            <h3>Rest &amp; Recovery</h3>
+            <p class="muted">Sleep, protein, light movement only.</p>
+        </article>
+    </div>
+</section>
+}
+
+@if (data.active_programme && data.active_programme.definition && data.active_programme.definition.rules) {
+<section class="panel">
+    <h2>Coaching Rules</h2>
+    <ul class="rules">
+        @for (rule of data.active_programme.definition.rules; track $index) {
+        <li>{{ rule }}</li>
+        }
+    </ul>
+</section>
 }
 }

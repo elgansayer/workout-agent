@@ -1,118 +1,65 @@
-# Continuation Prompt: Autonomous Workout Agent
+# Technology Evaluation & Master Roadmap: Workout Agent
 
-> Paste this whole file to a coding agent (GitHub Copilot, etc.) opened in this
-> project to continue the build. It contains the full context, current state,
-> and the next tasks.
+> **Mission:** A modern, unconstrained, multi-user fitness intelligence platform combining an **Angular (Spartan UX & Tailwind CSS)** frontend with a high-performance **FastAPI (Python 3.12+)** backend, supporting any AI provider, wearable connector, and database engine.
 
 ---
 
-## Role
+## 1. Tool, Package & Technology Evaluation (Recommendations & Swaps)
 
-You are an expert Python engineer continuing work on an existing local project.
-Read the codebase first, keep changes small and focused, and do not rewrite
-working code without reason. Match the existing style (type hints, module-level
-logging, British English, never use the em dash).
+| Layer | Current Tooling | Recommended Upgrades & Swaps | Benefits & Rationale |
+| :--- | :--- | :--- | :--- |
+| **Frontend Framework** | Angular 22 standalone components & signals | Continue Angular 22+ with `httpResource` & zoneless change detection | Blazing fast rendering, clean reactive signals, full SSR/SSG & PWA readiness. |
+| **UI Primitives & Styling** | Spartan UX (`@spartan-ng/brain` + `@spartan-ng/ui`) + Tailwind CSS v3.4 | Upgrade to **Tailwind CSS v4** + Spartan UI | Zero-config CSS build, instant Vite compilation, unified design tokens for Claude Code Design. |
+| **Visualizations & Charts** | Server-rendered SVG strings via `[innerHTML]` | **ApexCharts / ECharts / Chart.js** (`ng-apexcharts` or `ngx-echarts`) + SVG fallback | Adds fluid zoom, touch-friendly hover tooltips, smooth time-series animations, and client-side theme switching. |
+| **Icons & Assets** | `@ng-icons/lucide` | Retain `@ng-icons/lucide` | Tree-shakeable, modern, consistent icons matching Spartan / shadcn design language. |
+| **Backend Framework** | FastAPI + Pydantic v2 | Keep **FastAPI** + **Pydantic v2** | High-throughput asynchronous endpoints with auto-generated OpenAPI documentation. |
+| **Database & ORM** | Raw `sqlite3` queries with manual schema migrations | **SQLAlchemy 2.0 (async)** or **SQLModel** + **Alembic** | Type-safe query building, automated migrations, zero friction to toggle between **SQLite (WAL)** and **PostgreSQL (asyncpg)**. |
+| **Async HTTP Client** | Mixed `requests` and `httpx` | Standardize 100% on **HTTPX (async)** | Non-blocking network I/O for all external calls (Hevy, Google Health, Telegram, AI APIs). |
+| **AI Provider SDKs** | `google-generativeai`, `openai`, `anthropic` | Upgrade to modern **`google-genai` SDK**, plus `openai` & `anthropic` + **Ollama / LiteLLM** | Universal provider gateway: Gemini 2.5 Flash, Claude 3.7 / 3.5 Sonnet, GPT-4o, DeepSeek-V3/R1, and local offline models. |
+| **Authentication & Auth** | Google OAuth via Authlib + Session cookies | **FastAPI-Users / Authlib** with Multi-Provider OAuth + JWT/Passkeys | Adds GitHub, Apple, Google, and passwordless magic links with granular user session management. |
+| **Task Scheduling** | `scheduler.py` loop | **APScheduler 4 (AsyncIO)** or **ARQ / Redis Queue** | Robust per-user cron jobs, retry logic, rate-limiting, and webhook-driven ingestion. |
+| **Testing & Quality** | `pytest`, `ruff`, `mypy`, `vitest` | `pytest-asyncio` + `vitest` + **Playwright E2E** | Hermetic API unit tests, reactive component tests, and browser user-flow verification. |
 
-## What this project is
+---
 
-A private, local Python agent that acts as an elite hypertrophy / stage-prep
-bodybuilding coach. Each morning it:
+## 2. Architectural Blueprint & Unconstrained Roadmap
 
-1. Pulls the latest workout from the **Hevy API**.
-2. Reads recovery metrics (sleep, weight, resting HR) from a JSON file exported
-   from **Google Health Connect**.
-3. Asks **Google Gemini** to apply progressive overload and pick a daily tip.
-4. Sends tomorrow's exact routine to the user's phone via a **Telegram** bot.
-5. Advances the position in a 6-day training cycle stored in **SQLite**.
+```mermaid
+graph TD
+    Client["Angular 22+ SPA (Spartan UX & Tailwind)"]
+    API["FastAPI Async REST API"]
+    Auth["OAuth2 / OIDC / Passkey Auth"]
+    DB[("Database: SQLite (Local) / PostgreSQL (Cloud)")]
+    AI["AI Provider Gateway (Gemini, Claude, OpenAI, DeepSeek, Local)"]
+    Connectors["Wearable & Workout Ingestion (Hevy, Google Health, HealthKit, Garmin)"]
 
-It is deliberately a small focused script, not a generalist agent framework.
-
-## The trainee & non-negotiable coaching rules
-
-The athlete (Elgan) wants a Greek-god physique (broad shoulders, wide lats,
-V-taper, narrow waist) and fat loss. The coach persona must always honour:
-
-- Hypertrophy, not maximal strength. No heavy barbell maxes.
-- Strict 3-second negative (eccentric) on every rep. No momentum.
-- Rep ranges 10 to 20, sets close to failure.
-- Pre-exhaust with an isolation movement before any compound.
-- No Bulgarian split squats (bad toes). Use the flat-foot leg press.
-- No stomach vacuums. Train abs for mass with progressive overload.
-- Favour lateral and rear-delt isolation over heavy overhead pressing (he also
-  does Thai boxing and bouldering, so shoulders and elbows need protecting).
-- Protein around 2 g per kg of bodyweight to preserve muscle in a deficit.
-- British English spelling. Never use the em dash.
-
-These rules live in `program.py` as `COACHING_RULES` alongside the structured
-6-day split. Keep them in sync if you change the programme.
-
-## Current file structure
-
-```
-workout-agent/
-├── main.py              # Orchestrates the daily run
-├── config.py            # Loads secrets from .env via environment variables
-├── database.py          # SQLite: programme_state + workout_history
-├── program.py           # The perfected 6-day split as structured data + rules
-├── hevy_client.py       # Pulls latest workout from the Hevy API (timeouts, errors)
-├── health_connect.py    # Reads sleep/weight JSON exported from Health Connect
-├── gemini_engine.py     # Builds the prompt, calls Gemini, falls back to baseline
-├── telegram_notifier.py # Sends the message (handles the 4096-char limit)
-├── requirements.txt
-├── .env.example         # Template; copy to .env (git-ignored)
-└── .gitignore
+    Client <-->|REST API & SSE / WebSockets| API
+    API --> Auth
+    API <-->|SQLAlchemy 2.0 Async| DB
+    API <-->|Unified Provider Interface| AI
+    API <-->|Async HTTPX Workers| Connectors
 ```
 
-## Current state (working and verified)
+---
 
-- Modules compile cleanly; the SQLite cycle seeds at day 1 and advances 1..6..1.
-- Secrets are loaded from a git-ignored `.env` (never committed).
-- All outbound HTTP calls use explicit timeouts and degrade gracefully.
-- If Hevy, Health Connect, or Gemini are unavailable, the agent still sends the
-  baseline plan rather than crashing.
-- Gemini model is configurable via `GEMINI_MODEL` (default `gemini-2.0-flash`).
+## 3. Unconstrained Action Plan
 
-## How to run
+### Phase 1: Full Multi-Tenancy & Modern ORM
+- [ ] Complete multi-tenancy migrations for all database tables (`hevy_routines`, `hevy_meta`, `programme_state`, `user_preferences`).
+- [ ] Implement SQLAlchemy 2.0 / SQLModel layer with dual SQLite and PostgreSQL support.
+- [ ] Ensure all API endpoints return clean, typed Pydantic models.
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env   # fill in HEVY_API_KEY, GEMINI_API_KEY, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
-python main.py
-```
+### Phase 2: Spartan UX & Client-Side Interactivity
+- [ ] Apply Spartan UI primitives across all views (`/dashboard`, `/plan`, `/history`, `/progress`, `/stats`, `/chat`, `/settings`, `/checkins`).
+- [ ] Integrate modern interactive charts (ApexCharts / ECharts) with dark-mode theme synchronization.
+- [ ] Implement responsive bottom navigation for mobile PWA experience.
 
-Scheduled via cron at 07:00 daily (see README).
+### Phase 3: Multi-Provider AI & Wearable Connectors
+- [ ] Upgrade AI engine to support streaming completions, custom prompt profiles, and multi-model reasoning.
+- [ ] Expand wearable integration: Hevy API v1, Google Health Connect, Apple HealthKit export parser, and Garmin.
+- [ ] Implement per-user encrypted API key manager with live connection testing.
 
-## Next tasks (prioritised)
+### Phase 4: Async Job Orchestration & Production Deployment
+- [ ] Migrate scheduler to native async scheduling for per-user daily briefings and background sync.
+- [ ] Provide unified Docker Compose orchestration with automated frontend compilation and reverse-proxy deployment.
 
-Work through these one at a time. After each, run a quick check and keep the
-commit small.
-
-1. **`--preview` / dry-run flag** in `main.py`: print the generated plan to
-   stdout without sending Telegram or advancing the day. Add `argparse`.
-2. **Tests**: add `pytest`. Cover `database.py` (seed, get, advance/wrap at 6),
-   `program.py` (day_focus/format_day for all 6 days), and
-   `health_connect.read_recovery_metrics` (missing file, bad JSON, valid file).
-   Use a temp DB path and temp files; do not hit any network.
-3. **Parse the Hevy payload** into a compact summary (exercise name, top set
-   weight x reps, and whether the top of the rep range was reached) before
-   sending to Gemini, instead of dumping raw JSON. Put this in a new
-   `hevy_parser.py` with its own unit tests.
-4. **Progress logging**: store the parsed per-exercise bests in a new SQLite
-   table so overload decisions can reference history, not just the last session.
-5. **Telegram formatting**: optionally split long plans into multiple messages
-   and add basic MarkdownV2 escaping if `parse_mode` is enabled.
-6. **Config validation**: friendly startup check that reports all missing
-   `.env` keys at once, with a one-line hint for each.
-7. **README**: keep it current as features land. Do not create extra docs.
-
-## Constraints for you, the agent
-
-- Do not commit secrets or a real `.env`.
-- Keep dependencies minimal; justify any new one.
-- Prefer editing existing files over adding new modules unless a task calls for
-  a new file (e.g. `hevy_parser.py`, tests).
-- Validate each change (compile or run tests) before moving on.
-- Ask before any destructive or irreversible action.
-
-Start with task 1, then pause and show me the diff before continuing.

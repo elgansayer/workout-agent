@@ -1,31 +1,30 @@
 @if (loading()) {
-  <div class="flex items-center justify-center p-8 text-muted-foreground">Loading...</div>
+  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
 }
 
 @if (error()) {
-  <div hlmAlert variant="destructive" class="mb-4">
-    <h4 hlmAlertTitle>Error</h4>
-    <p hlmAlertDesc>{{ error() }}</p>
+  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+    <strong>Error:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
-<h1 class="text-3xl font-bold mb-6">Check-ins</h1>
+<h1>Check-ins</h1>
 @if (!data.checkins || data.checkins.length === 0) {
-<section hlmCard>
-    <div hlmCardContent class="pt-6">
-        <p class="text-muted-foreground mt-0">No check-ins yet. The agent reviews your logged data against the plan every four to six weeks and the summary will appear here.</p>
-        <div [innerHTML]="data.loading_svg"></div>
-    </div>
+<section class="panel">
+    <p class="muted" style="margin-top: 0;">No check-ins yet. The agent reviews your logged data against the plan every four to six weeks and the summary will appear here.</p>
+    @if (data.loading_svg) {
+        <div [innerHTML]="safeHtml(data.loading_svg)"></div>
+    }
 </section>
 }
-@for (item of data.checkins; track $index) {
-<section class="mb-6 border rounded-lg p-4 bg-card text-card-foreground shadow-sm">
-    <div class="flex flex-col sm:flex-row sm:items-baseline sm:justify-between mb-2">
-        <span class="font-semibold text-lg mr-2">Check-in {{ item.number }}</span>
-        <span class="text-sm text-muted-foreground">{{ item.date }} | {{ item.workouts_done }} sessions | {{ item.weeks }} weeks</span>
+@for (item of data.checkins; track item.number) {
+<section class="checkin">
+    <div class="checkin-head">
+        <span class="checkin-num">Check-in {{ item.number }}</span>
+        <span class="muted">{{ item.date }} | {{ item.workouts_done }} sessions | {{ item.weeks }} weeks</span>
     </div>
-    <pre class="whitespace-pre-wrap font-mono text-sm bg-muted p-3 rounded-md">{{ item.message }}</pre>
+    <pre class="checkin-body">{{ item.message }}</pre>
 </section>
 }
 }

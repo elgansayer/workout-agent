@@ -18,23 +18,20 @@ export class Dashboard implements OnInit {
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
-  cycleRing = signal<SafeHtml | null>(null);
-  blockRing = signal<SafeHtml | null>(null);
-  calendar = signal<SafeHtml | null>(null);
-
   ngOnInit() {
     this.http.get('/api/dashboard').subscribe({
       next: (data: any) => {
         this.data.set(data);
-        if (data.cycle_ring) this.cycleRing.set(this.sanitizer.bypassSecurityTrustHtml(data.cycle_ring));
-        if (data.block_ring) this.blockRing.set(this.sanitizer.bypassSecurityTrustHtml(data.block_ring));
-        if (data.calendar) this.calendar.set(this.sanitizer.bypassSecurityTrustHtml(data.calendar));
         this.loading.set(false);
       },
-      error: (err) => {
+      error: () => {
         this.error.set('Failed to load dashboard data');
         this.loading.set(false);
       }
     });
+  }
+
+  safeHtml(html: string): SafeHtml {
+    return this.sanitizer.bypassSecurityTrustHtml(html || '');
   }
 }

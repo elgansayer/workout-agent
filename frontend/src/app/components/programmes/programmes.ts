@@ -16,16 +16,18 @@ import { FormsModule } from '@angular/forms';
   styleUrl: './programmes.css'
 })
 export class Programmes implements OnInit {
-  selectProgramme(k: string) {}
-
   private http = inject(HttpClient);
   protected sanitizer = inject(DomSanitizer);
-  
+
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
   ngOnInit() {
+    this.loadProgrammes();
+  }
+
+  loadProgrammes() {
     this.http.get('/api/programmes').subscribe({
       next: (data: any) => {
         this.data.set(data);
@@ -37,7 +39,18 @@ export class Programmes implements OnInit {
       }
     });
   }
-  
+
+  selectProgramme(templateKey: string) {
+    this.http.post('/api/programmes/select', { template_key: templateKey }).subscribe({
+      next: () => {
+        this.loadProgrammes();
+      },
+      error: (err: any) => {
+        this.error.set(err.error?.detail || 'Failed to select programme template');
+      }
+    });
+  }
+
   safeHtml(html: string): SafeHtml {
     if (!html) return '';
     return this.sanitizer.bypassSecurityTrustHtml(html);
