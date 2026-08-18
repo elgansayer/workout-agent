@@ -43,11 +43,6 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from programme_state import (
-    get_active_programme,
-    get_programme_templates,
-    set_active_programme,
-)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -204,6 +199,7 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+app.mount("/assets", StaticFiles(directory=str(_BASE_DIR.parent / "frontend/dist/frontend/browser")), name="angular_assets")
 
 if WEB_AUTH_SECRET:
 
@@ -246,7 +242,7 @@ app.add_middleware(
 )
 
 
-@app.get("/login")
+# @app.get("/login")
 async def login(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
@@ -525,12 +521,11 @@ def _dashboard_context(today: date | None = None, user_id: str | None = None) ->
     }
 
 
+FRONTEND_DIST = _BASE_DIR.parent / "frontend/dist/frontend/browser"
+
 @app.get("/")
 def dashboard(request: Request):
-    user_id = request.session.get("user_id")
-    return templates.TemplateResponse(
-        request, "dashboard.html", _dashboard_context(user_id=user_id)
-    )
+    return FileResponse(FRONTEND_DIST / "index.html")
 
 @app.get("/api/dashboard")
 def api_dashboard(request: Request) -> JSONResponse:
@@ -544,7 +539,7 @@ def api_dashboard(request: Request) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(ctx))
 
 
-@app.get("/progress")
+# @app.get("/progress")
 def progress(request: Request) -> Any:
     user_id = request.session.get("user_id")
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
@@ -602,7 +597,7 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
     }
 
 
-@app.get("/stats")
+# @app.get("/stats")
 def stats(request: Request):
     user_id = request.session.get("user_id")
     volumes = get_session_volumes(db_path=DB_PATH)
@@ -768,7 +763,7 @@ def _project_lift(
     }
 
 
-@app.get("/plan")
+# @app.get("/plan")
 def plan(request: Request):
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(get_programme_start_date(DB_PATH), today)
@@ -900,7 +895,7 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
-@app.get("/programmes")
+# @app.get("/programmes")
 def programmes_page(request: Request) -> Any:
     """Page where users select or switch their workout programme."""
     user_id = request.session.get("user_id")
@@ -1058,7 +1053,7 @@ def _run_hevy_inference(user_id: str) -> dict:
     return _build_inferred_definition(inferred)
 
 
-@app.get("/history")
+# @app.get("/history")
 def history(request: Request):
     user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=60, db_path=DB_PATH, user_id=user_id)
@@ -1073,7 +1068,7 @@ def history(request: Request):
     )
 
 
-@app.get("/checkins")
+# @app.get("/checkins")
 def checkins(request: Request) -> Any:
     user_id = request.session.get("user_id")
     checkins_list = get_checkins(db_path=DB_PATH, user_id=user_id)
@@ -1129,7 +1124,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    request.session.get("user_id")
     config = get_config()
     genai.configure(api_key=config.gemini_api_key)
     model = genai.GenerativeModel(config.gemini_model)
@@ -1149,7 +1144,7 @@ def project_peak(request: Request) -> dict[str, Any]:
         return {"error": "Failed to project peak."}
 
 
-@app.get("/chat")
+# @app.get("/chat")
 def chat_page(request: Request):
     user_id = request.session.get("user_id")
     messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
@@ -1256,7 +1251,7 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
-@app.get("/settings")
+# @app.get("/settings")
 def settings(request: Request) -> Any:
     user_id = request.session.get("user_id")
     user_keys: dict[str, Any] = {}
@@ -1501,9 +1496,9 @@ def api_stats(request: Request):
     prs = get_personal_records(db_path=DB_PATH)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(DB_PATH)
-    series = get_progress_history(db_path=DB_PATH)
+    get_progress_history(db_path=DB_PATH)
     today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(start, today)
+    week_in_cycle(start, today)
     
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
@@ -1617,3 +1612,15 @@ def api_chat_history(request: Request):
     return JSONResponse(jsonable_encoder({
         "messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)
     }))
+
+@app.get("/{full_path:path}")
+async def catch_all(full_path: str, request: Request):
+    if full_path.startswith(("api/", "static/", "login/google", "auth", "google-health/")):
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    if full_path:
+        file_path = FRONTEND_DIST / full_path
+        if file_path.is_file():
+            return FileResponse(file_path)
+            
+    return FileResponse(FRONTEND_DIST / "index.html")
