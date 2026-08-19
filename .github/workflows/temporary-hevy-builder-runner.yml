@@ -2,7 +2,7 @@ name: Temporary Hevy-first builder runner
 
 on:
   pull_request:
-    types: [opened]
+    types: [synchronize]
 
 permissions:
   contents: write
@@ -23,7 +23,18 @@ jobs:
           fetch-depth: 0
           ref: feat/967-hevy-first-builder-v1
 
+      - name: Decide whether bootstrap is still required
+        id: guard
+        shell: bash
+        run: |
+          if [[ -f scripts/run_hevy_builder_bootstrap.py ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
@@ -31,6 +42,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Set up Node
+        if: steps.guard.outputs.should_run == 'true'
         uses: actions/setup-node@v5
         with:
           node-version: "22"
@@ -38,6 +50,7 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Apply and verify implementation
+        if: steps.guard.outputs.should_run == 'true'
         id: verify
         shell: bash
         env:
@@ -48,7 +61,7 @@ jobs:
           set -o pipefail
           {
             set -eux
-            python scripts/apply_hevy_first_builder.py
+            python scripts/run_hevy_builder_bootstrap.py
             python -m pip install -r backend/requirements.txt
             python -m ruff check --fix \
               backend/dynamic_programme.py \
@@ -95,7 +108,7 @@ jobs:
           } 2>&1 | tee hevy-builder-run.log
 
       - name: Publish verified implementation
-        if: success()
+        if: success() && steps.guard.outputs.should_run == 'true'
         shell: bash
         run: |
           rm -f hevy-builder-run.log
@@ -106,7 +119,7 @@ jobs:
           git push origin HEAD:feat/967-hevy-first-builder-v1
 
       - name: Record verification failure on feature branch
-        if: failure()
+        if: failure() && steps.guard.outputs.should_run == 'true'
         shell: bash
         run: |
           cp hevy-builder-run.log /tmp/hevy-builder-run.log || true
