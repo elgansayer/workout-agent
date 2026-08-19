@@ -1,0 +1,58 @@
+name: Canonical Health Platform
+
+on:
+  push:
+    branches:
+      - feat/canonical-health-platform
+    paths:
+      - 'backend/connectors/**'
+      - 'backend/health_*.py'
+      - 'backend/recovery.py'
+      - 'backend/adaptive_*.py'
+      - 'backend/training_export.py'
+      - 'backend/tests/test_*health*.py'
+      - 'backend/tests/test_connector_*.py'
+      - 'backend/tests/test_provider_scaffolds.py'
+      - 'backend/tests/test_recovery_adaptive.py'
+      - 'backend/tests/test_training_export.py'
+      - '.github/workflows/health-platform-ci.yml'
+  pull_request:
+    paths:
+      - 'backend/connectors/**'
+      - 'backend/health_*.py'
+      - 'backend/recovery.py'
+      - 'backend/adaptive_*.py'
+      - 'backend/training_export.py'
+      - 'backend/tests/**'
+      - '.github/workflows/health-platform-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  health-platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install 'pytest>=8,<9'
+      - name: Compile health platform
+        working-directory: backend
+        run: |
+          python -m compileall -q connectors health_*.py recovery.py adaptive_*.py training_export.py
+      - name: Run health platform tests
+        working-directory: backend
+        shell: bash
+        run: |
+          mapfile -t tests < <(
+            find tests -maxdepth 1 -type f \
+              \( -name 'test_health_*.py' -o -name 'test_connector_*.py' -o -name 'test_provider_scaffolds.py' -o -name 'test_recovery_adaptive.py' -o -name 'test_training_export.py' -o -name 'test_adaptive_audit.py' \) \
+              ! -name 'test_google_health_*.py' \
+              | sort
+          )
+          printf 'Running %s focused health tests\n' "${#tests[@]}"
+          python -m pytest -q "${tests[@]}"
