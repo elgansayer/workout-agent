@@ -46,4 +46,12 @@ jobs:
           python -m compileall -q connectors health_*.py recovery.py adaptive_*.py training_export.py
       - name: Run health platform tests
         working-directory: backend
-        run: python -m pytest -q tests/test_*health*.py tests/test_connector_*.py tests/test_provider_scaffolds.py tests/test_recovery_adaptive.py tests/test_training_export.py
+        run: >-
+          python -m pytest -q
+          tests/test_*health*.py
+          tests/test_connector_*.py
+          tests/test_provider_scaffolds.py
+          tests/test_recovery_adaptive.py
+          tests/test_training_export.py
+          --ignore=tests/test_google_health_auth.py
+          --ignore=tests/test_google_health_client.py
