@@ -118,16 +118,11 @@ jobs:
           git commit -m "feat: add Hevy-first dynamic programme builder (#967)"
           git push origin HEAD:feat/967-hevy-first-builder-v1
 
-      - name: Record verification failure on feature branch
+      - name: Upload verification failure log
         if: failure() && steps.guard.outputs.should_run == 'true'
-        shell: bash
-        run: |
-          cp hevy-builder-run.log /tmp/hevy-builder-run.log || true
-          git reset --hard HEAD
-          git clean -fd
-          cp /tmp/hevy-builder-run.log hevy-builder-run.log || printf 'Verification failed before a log was created.\n' > hevy-builder-run.log
-          git config user.name "OpenAI ChatGPT"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add hevy-builder-run.log
-          git commit -m "ci: record Hevy-first builder verification failure" || true
-          git push origin HEAD:feat/967-hevy-first-builder-v1
+        uses: actions/upload-artifact@v4
+        with:
+          name: hevy-first-builder-verification-log
+          path: hevy-builder-run.log
+          if-no-files-found: warn
+          retention-days: 7
