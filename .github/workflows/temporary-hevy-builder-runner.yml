@@ -86,8 +86,7 @@ jobs:
               backend/tests/test_dynamic_programme.py \
               backend/tests/test_webapp_programmes.py
             cd frontend
-            npm install --global npm@11.12.1
-            npm ci
+            npm ci --legacy-peer-deps
             npm run build
             cd ../backend
             python -m pytest -q \
