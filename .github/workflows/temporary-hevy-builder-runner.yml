@@ -62,6 +62,7 @@ jobs:
           {
             set -eux
             python scripts/run_hevy_builder_bootstrap.py
+            python scripts/postprocess_hevy_builder.py
             python -m pip install -r backend/requirements.txt
             python -m ruff check --fix \
               backend/dynamic_programme.py \
