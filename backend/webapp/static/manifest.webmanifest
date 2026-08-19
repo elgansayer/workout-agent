@@ -1,7 +1,7 @@
 {
   "name": "Workout Agent",
   "short_name": "Workout",
-  "description": "Self-hosted dashboard for the Hybrid Powerbuilding training agent.",
+  "description": "Adaptive training dashboard built from your connected workout routines and history.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
