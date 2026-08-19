@@ -1,0 +1,49 @@
+name: Canonical Health Platform
+
+on:
+  push:
+    branches:
+      - feat/canonical-health-platform
+    paths:
+      - 'backend/connectors/**'
+      - 'backend/health_*.py'
+      - 'backend/recovery.py'
+      - 'backend/adaptive_*.py'
+      - 'backend/training_export.py'
+      - 'backend/tests/test_*health*.py'
+      - 'backend/tests/test_connector_*.py'
+      - 'backend/tests/test_provider_scaffolds.py'
+      - 'backend/tests/test_recovery_adaptive.py'
+      - 'backend/tests/test_training_export.py'
+      - '.github/workflows/health-platform-ci.yml'
+  pull_request:
+    paths:
+      - 'backend/connectors/**'
+      - 'backend/health_*.py'
+      - 'backend/recovery.py'
+      - 'backend/adaptive_*.py'
+      - 'backend/training_export.py'
+      - 'backend/tests/**'
+      - '.github/workflows/health-platform-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  health-platform:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install 'pytest>=8,<9'
+      - name: Compile health platform
+        working-directory: backend
+        run: |
+          python -m compileall -q connectors health_*.py recovery.py adaptive_*.py training_export.py
+      - name: Run health platform tests
+        working-directory: backend
+        run: python -m pytest -q tests/test_*health*.py tests/test_connector_*.py tests/test_provider_scaffolds.py tests/test_recovery_adaptive.py tests/test_training_export.py
