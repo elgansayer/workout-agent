@@ -118,11 +118,13 @@ jobs:
           git commit -m "feat: add Hevy-first dynamic programme builder (#967)"
           git push origin HEAD:feat/967-hevy-first-builder-v1
 
-      - name: Upload verification failure log
+      - name: Upload verification failure diagnostics
         if: failure() && steps.guard.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: hevy-first-builder-verification-log
-          path: hevy-builder-run.log
+          path: |
+            hevy-builder-run.log
+            backend/tests/test_webapp_programmes.py
           if-no-files-found: warn
           retention-days: 7
