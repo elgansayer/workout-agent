@@ -77,6 +77,10 @@ jobs:
           APP_ENV: test
           ALLOW_ANONYMOUS_WEB: "1"
         run: |
+          # webapp.app validates its Angular asset directory at import time.
+          # The import smoke test does not build the frontend, so provide the
+          # empty directory that production images populate during their build.
+          mkdir -p ../frontend/dist/frontend/browser
           python - <<'PY'
           import ai_provider
           import analytics
