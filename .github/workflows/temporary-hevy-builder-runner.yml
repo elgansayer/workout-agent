@@ -85,7 +85,11 @@ jobs:
               backend/webapp/app.py \
               backend/tests/test_dynamic_programme.py \
               backend/tests/test_webapp_programmes.py
-            cd backend
+            cd frontend
+            npm install --global npm@11.12.1
+            npm ci
+            npm run build
+            cd ../backend
             python -m pytest -q \
               tests/test_dynamic_programme.py \
               tests/test_webapp_programmes.py \
@@ -96,10 +100,6 @@ jobs:
             python -m mypy dynamic_programme.py hevy_reader.py webapp/app.py
             python -m compileall -q .
             python -c "import dynamic_programme; import webapp.app; import main"
-            cd ../frontend
-            npm install --global npm@11.12.1
-            npm ci
-            npm run build
             cd ..
             if grep -R -n -E 'Available Templates|Active Split Preview|Hybrid Powerbuilding' frontend/src; then
               echo "Legacy static programme copy remains in the frontend."
