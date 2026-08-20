@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from release_gate import validate_release_evidence
+
+_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _valid_payload() -> dict[str, object]:
@@ -144,3 +148,44 @@ def test_unmerged_or_non_main_commit_is_rejected() -> None:
     findings = validate_release_evidence(payload)
 
     assert {finding.field for finding in findings} >= {"head_on_main", "pr_merged"}
+
+
+def test_build_workflow_cannot_trigger_production_deploy() -> None:
+    workflow = (_ROOT / ".github/workflows/build-images.yml").read_text(encoding="utf-8")
+
+    assert "PORTAINER_WEBHOOK" not in workflow
+    assert "Trigger Portainer" not in workflow
+
+
+def test_production_workflow_has_independent_fail_closed_controls() -> None:
+    workflow = (_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    required_fragments = (
+        "environment: production",
+        'test "$(git rev-parse origin/main)" = "$HEAD_SHA"',
+        'review.get("commit_id") == reviewed_head_sha',
+        'author.casefold() == operator.casefold()',
+        'run.get("conclusion") != "success"',
+        'latest_digest" = "$sha_digest',
+        "python backend/release_gate.py release-evidence.json",
+        "PORTAINER_WEBHOOK",
+    )
+    for fragment in required_fragments:
+        assert fragment in workflow
+
+    assert "continue-on-error" not in workflow
+
+
+def test_release_workflow_uses_pinned_repository_actions() -> None:
+    workflow = (_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8"
+    )
+
+    uses_lines = [line.strip() for line in workflow.splitlines() if line.strip().startswith("uses:")]
+    assert uses_lines
+    for line in uses_lines:
+        ref = line.split("@", 1)[1].split()[0]
+        assert len(ref) == 40
+        assert all(character in "0123456789abcdef" for character in ref)
