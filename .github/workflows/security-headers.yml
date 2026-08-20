@@ -34,6 +34,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install package import dependency
+        run: python3 -m pip install 'fastapi>=0.110'
+
       - name: Compile security boundary
         run: >-
           python3 -m py_compile
