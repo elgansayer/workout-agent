@@ -1,69 +1,124 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="muted" style="text-align: center; padding: 2rem;">Loading…</div>
 }
 
 @if (error()) {
   <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
-    <strong>Error:</strong> {{ error() }}
+    <strong>Plan:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
-<h1>The plan</h1>
-<p class="muted">{{ data.split_name }} | currently week {{ data.week }} of {{ data.cycle_weeks }}.</p>
-
-<section class="panel">
-    <h2>Periodisation</h2>
-    <div class="block-grid">
-        @for (b of data.blocks; track b.number) {
-        <article class="block-card" [class.current]="b.is_current">
-            @if (b.is_current) {<span class="badge">Current</span>}
-            <h3>Block {{ b.number }}: {{ b.name }}</h3>
-            <p class="muted">Weeks {{ b.weeks }} | {{ b.focus }}</p>
-            <ul class="block-schemes">
-                <li><span>Deadlift</span><strong>{{ b.deadlift }}</strong></li>
-                <li><span>Pull-ups</span><strong>{{ b.pullups }}</strong></li>
-                <li><span>Accessories</span><strong>{{ b.accessory }}</strong></li>
-            </ul>
-        </article>
+  @if (data.setup_required) {
+    <section class="panel" style="text-align: center; padding: 2rem;">
+      <p class="muted">No active programme</p>
+      <h1>Build your plan from Hevy</h1>
+      <p class="muted">
+        Select your Hevy routines, programme duration and goal. A built-in
+        fallback is not substituted.
+      </p>
+      <a class="btn" href="/programmes">Open programme builder</a>
+    </section>
+  } @else {
+    <header>
+      <p class="muted">Active Hevy programme</p>
+      <h1>{{ data.split_name }}</h1>
+      <p class="muted">
+        Week {{ data.week }} of {{ data.cycle_weeks }}
+        @if (data.current_block) { · {{ data.current_block }} }
+        @if (data.analysis?.confidence) {
+          ¡' inference confidence {{ data.analysis.confidence }}
         }
-    </div>
-</section>
+      </p>
+    </header>
 
-<section class="panel">
-    <h2>The 6-day split <span class="muted">(current block)</span></h2>
-    <div class="day-grid">
-        @for (day of data.days; track day.number) {
-        <article class="day-card" [class.today]="day.is_today">
+    @if (data.warnings?.length) {
+      <section class="panel" style="border-color: #f59e0b;">
+        <h2>Review notes</h2>
+        <ul class="rules">
+          @for (warning of data.warnings; track warning) {
+            <li>{{ warning }}</li>
+          }
+        </ul>
+      </section>
+    }
+
+    <section class="panel">
+      <h2>Block timeline</h2>
+      <div class="block-grid">
+        @for (block of data.blocks; track block.number) {
+          <article class="block-card" [class.current]="block.is_current">
+            @if (block.is_current) {
+              <span class="badge">Current</span>
+            }
+            <h3>Block {{ block.number }}: {{ block.name }}</h3>
+            <p class="muted">
+              Weeks {{ block.weeks }} · {{ block.start_date }} to {{ block.end_date }}
+            </p>
+            <p>{{ block.focus }}</p>
+            <ul class="block-schemes">
+              <li>
+                <span>Volume</span>
+                <strong>{{ block.volume_multiplier }}Õ imported source</strong>
+              </li>
+              <li>
+                <span>Effort</span>
+                <strong>RIR {{ block.target_rir }}</strong>
+              </li>
+              <li>
+                <span>Rep emphasis</span>
+                <strong>{{ block.rep_emphasis }}</strong>
+              </li>
+              <li>
+                <span>Specificity</span>
+                <strong>{{ block.specificity }}</strong>
+              </li>
+            </ul>
+          </article>
+        }
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Selected Hevy routine rotation</h2>
+      <div class="day-grid">
+        @for (day of data.days; track day.routine_id) {
+          <article class="day-card">
             <div class="day-head">
-                <span class="day-num">Day {{ day.number }}</span>
-                @if (day.is_today) {<span class="badge">Today</span>}
+              <span class="day-num">Rotation {{ day.number }}</span>
             </div>
             <h3>{{ day.focus }}</h3>
+            <p class="muted">
+              {{ day.estimated_duration_minutes }} min
+              @if (day.muscles?.length) {
+                · {{ day.muscles.join(', ') }}
+              }
+            </p>
             <ul class="day-ex">
-                @for (ex of day.exercises; track ex.name) {
+              @for (exercise of day.exercises; track exercise.template_id) {
                 <li>
-                    <span class="ex-n">{{ ex.name }}</span>
-                    <span class="ex-s">{{ ex.scheme }}</span>
+                  <span class="ex-n">
+                    {{ exercise.name }}
+                    <small style="display:block; text-transform:capitalize;">
+                      {{ exercise.role }}
+                    </small>
+                  </span>
+                  <span class="ex-s">{{ exercise.scheme }}</span>
                 </li>
-                }
+              }
             </ul>
-        </article>
+          </article>
         }
-        <article class="day-card rest">
-            <div class="day-head"><span class="day-num">Sunday</span></div>
-            <h3>Rest &amp; Recovery</h3>
-            <p class="muted">Sleep, protein, light movement only.</p>
-        </article>
-    </div>
-</section>
+      </div>
+    </section>
 
-<section class="panel">
-    <h2>Coaching rules</h2>
-    <ul class="rules">
-        @for (rule of data.rules; track $index) {
-        <li>{{ rule }}</li>
+    <section class="panel">
+      <h2>Programme rules</h2>
+      <ul class="rules">
+        @for (rule of data.rules; track rule) {
+          <li>{{ rule }}</li>
         }
-    </ul>
-</section>
+      </ul>
+    </section>
+  }
 }

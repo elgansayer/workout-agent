@@ -24,7 +24,14 @@ class GarminHealthConnector(HealthProviderConnector):
     )
 
     def status(self, context: ConnectorContext) -> ConnectorStatus:
-        return ConnectorStatus(self.provider, ConnectorState.PENDING, message="Garmin production access requires approved credentials")
+        return ConnectorStatus(
+            self.provider,
+            ConnectorState.PENDING,
+            message=(
+                "Garmin production access requires Developer Program approval "
+                "and approved credentials"
+            ),
+        )
 
     def test(self, context: ConnectorContext) -> ConnectorStatus:
         return self.status(context)

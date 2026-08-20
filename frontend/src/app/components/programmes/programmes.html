@@ -1,124 +1,411 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="muted loading-state" role="status">Loading your Hevy routines…</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
-    <strong>Error:</strong> {{ error() }}
+  <div class="panel error-panel" role="alert">
+    <strong>Programme builder:</strong> {{ error() }}
+  </div>
+}
+
+@if (status()) {
+  <div class="panel success-panel" role="status" aria-live="polite">
+    {{ status() }}
   </div>
 }
 
 @if (data(); as data) {
-<h1>Programme Builder</h1>
-<p class="muted">Choose the workout plan that fits your goals. Switching programmes keeps all your historical data safe — only your active plan changes.</p>
+  <header class="builder-header">
+    <div>
+      <p class="eyebrow">Hevy-native programming</p>
+      <h1>Build a programme from your Hevy routines</h1>
+      <p class="muted">
+        Select the routines you already use, choose the goal and duration, then
+        review the exact source routines and generated blocks before activation.
+        Your original Hevy routines remain read-only.
+      </p>
+    </div>
+    <button
+      type="button"
+      class="btn btn-secondary"
+      [disabled]="refreshing()"
+      (click)="loadProgrammes(true)"
+    >
+      {{ refreshing() ? 'Refreshing…' : 'Refresh from Hevy' }}
+    </button>
+  </header>
 
-@if (selectingKey() === 'infer_from_hevy') {
-<div class="infer-banner" role="status" aria-live="polite">
-    <div class="infer-spinner-large" aria-hidden="true"></div>
-    <div class="infer-info">
-        <h4 class="infer-title">Inferring Programme from Hevy History...</h4>
-        <p class="infer-desc">
-            Fetching workout routines and recent logs from Hevy to calculate your training frequency, split type, and progression. This may take a few moments.
+  @if (data.active_programme) {
+    <section class="panel active-summary" aria-labelledby="active-programme-heading">
+      <div>
+        <p class="eyebrow">Currently active</p>
+        <h2 id="active-programme-heading">
+          {{ data.active_programme.definition?.name || 'Hevy programme' }}
+        </h2>
+        <p class="muted">
+          {{ data.active_programme.definition?.cycle_weeks }} weeks ·
+          {{ data.active_programme.definition?.total_days }} routines ·
+          {{ data.active_programme.definition?.programme_spec?.goal_label }}
         </p>
-    </div>
-</div>
-} @else if (selectingKey()) {
-<div class="infer-banner" role="status" aria-live="polite">
-    <div class="infer-spinner-large" aria-hidden="true"></div>
-    <div class="infer-info">
-        <h4 class="infer-title">Activating Programme...</h4>
-        <p class="infer-desc">Setting active training programme template.</p>
-    </div>
-</div>
-}
+      </div>
+      <a class="btn btn-secondary" href="/plan">View active plan</a>
+    </section>
+  }
 
-@if (data.active_programme) {
-<section class="panel" style="border-color: var(--accent);">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:0.6rem;">
-        <div>
-            <h2 style="margin:0;">📋 Active Programme</h2>
-            <p class="muted" style="margin:0.3rem 0 0;">
-                <strong>{{ data.active_programme.definition?.name || (data.active_programme.template_key | titlecase) }}</strong>
-                &middot; {{ data.active_programme.source | titlecase }}
-                @if (data.active_programme.definition?.cycle_weeks) { &middot; {{ data.active_programme.definition.cycle_weeks }}-week cycle }
-                @if (data.active_programme.definition?.total_days) { &middot; {{ data.active_programme.definition.total_days }}-day split }
+  @if (data.connection.state === 'disconnected') {
+    <section class="panel empty-state">
+      <h2>Connect Hevy first</h2>
+      <p class="muted">
+        Add your Hevy API key in Settings. No built-in workout plan will be
+        substituted while Hevy is disconnected.
+      </p>
+      <a class="btn" href="/settings">Open Settings</a>
+    </section>
+  } @else if (data.connection.state === 'error') {
+    <section class="panel error-panel" role="alert">
+      <h2>Hevy source unavailable</h2>
+      <p>{{ data.connection.detail }}</p>
+      <button type="button" class="btn" (click)="loadProgrammes(true)">
+        Try again
+      </button>
+    </section>
+  } @else if (!data.source.routines.length) {
+    <section class="panel empty-state">
+      <h2>No Hevy routines found</h2>
+      <p class="muted">
+        Create at least one routine in Hevy, then refresh this page. Workout
+        history alone is not used as an invisible static template.
+      </p>
+    </section>
+  } @else {
+    <div class="builder-layout">
+      <section class="panel source-panel" aria-labelledby="routine-library-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 1</p>
+            <h2 id="routine-library-heading">Select routines from Hevy</h2>
+            <p class="muted">
+              {{ data.source.routine_count }} routines ·
+              {{ data.source.recent_workout_count }} recent workouts
+              @if (data.connection.username) {
+                · {{ data.connection.username }}
+              }
             </p>
+          </div>
         </div>
-    </div>
-</section>
-}
 
-<section class="panel">
-    <h2>Available Templates</h2>
-    <div class="programme-grid">
-        @for (tpl of data.templates; track tpl.key) {
-        <article class="programme-card"
-            [class.active-card]="data.active_programme && data.active_programme.template_key === tpl.key"
-            [class.loading-card]="selectingKey() === tpl.key">
-            <h3>{{ tpl.name }}</h3>
-            <p class="muted">{{ tpl.description }}</p>
-            @if (data.active_programme && data.active_programme.template_key === tpl.key) {
-            <span class="badge" style="background:var(--accent);color:#000;">Currently Active</span>
-            } @else {
-            <button
-                class="btn btn-sm"
-                [class.btn-loading]="selectingKey() === tpl.key"
-                [disabled]="selectingKey() !== null"
-                (click)="selectProgramme(tpl.key)">
-                @if (selectingKey() === tpl.key) {
-                    <span class="btn-spinner" aria-hidden="true"></span>
-                    @if (tpl.key === 'infer_from_hevy') {
-                        <span>Inferring from Hevy...</span>
-                    } @else {
-                        <span>Selecting...</span>
-                    }
-                } @else {
-                    <span>Select Programme</span>
-                }
-            </button>
-            }
-        </article>
-        }
-    </div>
-</section>
+        <div class="filters">
+          <label>
+            <span>Search routines or exercises</span>
+            <input
+              type="search"
+              [(ngModel)]="routineSearch"
+              placeholder="Search Hevy routines"
+            />
+          </label>
+          <label>
+            <span>Folder</span>
+            <select [(ngModel)]="folderFilter">
+              <option value="">All folders</option>
+              @for (folder of data.source.folders; track folder.id) {
+                <option [value]="folder.id">{{ folder.title }}</option>
+              }
+            </select>
+          </label>
+        </div>
 
-@if (data.active_programme && data.active_programme.definition && data.active_programme.definition.days) {
-<section class="panel">
-    <h2>Active Split Preview</h2>
-    <div class="day-grid">
-        @for (day of data.active_programme.definition.days; track day.number) {
-        <article class="day-card">
-            <div class="day-head">
-                <span class="day-num">Day {{ day.number }}</span>
-            </div>
-            <h3>{{ day.focus }}</h3>
-            <ul class="day-ex">
-                @for (ex of day.exercises; track ex.name) {
+        <div class="routine-library">
+          @for (routine of visibleRoutines(); track routine.id) {
+            <article class="routine-card" [class.selected]="isSelected(routine.id)">
+              <label class="routine-select">
+                <input
+                  type="checkbox"
+                  [checked]="isSelected(routine.id)"
+                  (change)="toggleRoutine(routine.id)"
+                />
+                <span>
+                  <strong>{{ routine.title }}</strong>
+                  <small>
+                    {{ routine.exercise_count }} exercises ·
+                    {{ routine.work_set_count }} sets ·
+                    approximately {{ routine.estimated_duration_minutes }} min
+                  </small>
+                </span>
+              </label>
+
+              @if (routine.folder_name || routine.muscle_summary.length) {
+                <div class="tag-row">
+                  @if (routine.folder_name) {
+                    <span class="badge">{{ routine.folder_name }}</span>
+                  }
+                  @for (muscle of routine.muscle_summary; track muscle) {
+                    <span class="badge subtle">{{ muscle }}</span>
+                  }
+                </div>
+              }
+
+              <details>
+                <summary>Hevy routine preview</summary>
+                <ol class="source-exercises">
+                  @for (exercise of routine.exercises; track exercise.template_id) {
+                    <li>
+                      <div class="exercise-source-head">
+                        <strong>{{ exercise.title }}</strong>
+                        <span>
+                          {{ exercise.sets }} sets · {{ exercise.exercise_type }}
+                        </span>
+                      </div>
+                      @if (exercise.notes) {
+                        <p class="muted">{{ exercise.notes }}</p>
+                      }
+                      <div class="set-targets">
+                        @for (target of exercise.set_targets; track $index) {
+                          <code>Set {{ $index + 1 }}: {{ target | json }}</code>
+                        } @empty {
+                          <code>No explicit Hevy set target</code>
+                        }
+                      </div>
+                      <small>
+                        Rest {{ exercise.rest_seconds }} sec
+                        @if (exercise.superset_id !== null) {
+                          · superset {{ exercise.superset_id }}
+                        }
+                      </small>
+                    </li>
+                  }
+                </ol>
+                <p class="source-revision">
+                  Source ID <code>{{ routine.id }}</code> · revision
+                  <code>{{ routine.source_hash.slice(0, 12) }}</code>
+                </p>
+              </details>
+            </article>
+          } @empty {
+            <p class="muted">No routines match the current filters.</p>
+          }
+        </div>
+      </section>
+
+      <aside class="builder-sidebar">
+        <section class="panel" aria-labelledby="rotation-heading">
+          <p class="eyebrow">Step 2</p>
+          <h2 id="rotation-heading">Routine order</h2>
+          <p class="muted">
+            This ordered rotation is preserved in the generated programme.
+          </p>
+          <ol class="selected-routines">
+            @for (routineId of selectedRoutineIds(); track routineId; let index = $index) {
+              @if (routineById(routineId); as routine) {
                 <li>
-                    <span class="ex-n">{{ ex.name }}</span>
-                    <span class="ex-s">{{ ex.sets }} x {{ ex.rep_range }}</span>
+                  <span>
+                    <strong>{{ index + 1 }}. {{ routine.title }}</strong>
+                    <small>{{ routine.exercise_count }} exercises</small>
+                  </span>
+                  <div class="order-buttons">
+                    <button
+                      type="button"
+                      [disabled]="index === 0"
+                      [attr.aria-label]="'Move ' + routine.title + ' earlier'"
+                      (click)="moveRoutine(index, -1)"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      [disabled]="index === selectedRoutineIds().length - 1"
+                      [attr.aria-label]="'Move ' + routine.title + ' later'"
+                      (click)="moveRoutine(index, 1)"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      [attr.aria-label]="'Remove ' + routine.title"
+                      (click)="removeRoutine(routine.id)"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </li>
-                }
-            </ul>
-        </article>
-        }
-        <article class="day-card rest">
-            <div class="day-head"><span class="day-num">Sunday</span></div>
-            <h3>Rest &amp; Recovery</h3>
-            <p class="muted">Sleep, protein, light movement only.</p>
-        </article>
-    </div>
-</section>
-}
+              }
+            } @empty {
+              <li class="muted">Select at least one Hevy routine.</li>
+            }
+          </ol>
+        </section>
 
-@if (data.active_programme && data.active_programme.definition && data.active_programme.definition.rules) {
-<section class="panel">
-    <h2>Coaching Rules</h2>
-    <ul class="rules">
-        @for (rule of data.active_programme.definition.rules; track $index) {
-        <li>{{ rule }}</li>
+        <section class="panel settings-panel" aria-labelledby="settings-heading">
+          <p class="eyebrow">Step 3</p>
+          <h2 id="settings-heading">Programme settings</h2>
+
+          <label>
+            <span>Programme duration</span>
+            <input
+              type="number"
+              [(ngModel)]="durationWeeks"
+              [min]="data.duration.minimum_weeks"
+              [max]="data.duration.maximum_weeks"
+            />
+            <small>{{ durationWeeks }} weeks</small>
+          </label>
+
+          <label>
+            <span>Primary goal</span>
+            <select [(ngModel)]="goal">
+              @for (option of data.goals; track option.key) {
+                <option [value]="option.key">{{ option.label }}</option>
+              }
+            </select>
+          </label>
+
+          <label>
+            <span>Start date</span>
+            <input type="date" [(ngModel)]="startDate" />
+          </label>
+
+          <label>
+            <span>Sessions per week</span>
+            <input
+              type="number"
+              min="1"
+              max="14"
+              [(ngModel)]="sessionsPerWeek"
+              placeholder="Infer from history"
+            />
+          </label>
+
+          <label>
+            <span>Experience</span>
+            <select [(ngModel)]="experience">
+              <option value="beginner">Beginner</option>
+              <option value="intermediate">Intermediate</option>
+              <option value="advanced">Advanced</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Maximum session length</span>
+            <input
+              type="number"
+              min="20"
+              max="240"
+              [(ngModel)]="maxSessionMinutes"
+              placeholder="No limit"
+            />
+            <small>Minutes, optional</small>
+          </label>
+
+          <label>
+            <span>Adaptation aggressiveness</span>
+            <select [(ngModel)]="adaptationAggressiveness">
+              <option value="conservative">Conservative</option>
+              <option value="balanced">Balanced</option>
+              <option value="aggressive">Aggressive</option>
+            </select>
+          </label>
+
+          <button
+            type="button"
+            class="btn full-width"
+            [disabled]="
+              !selectedRoutineIds().length ||
+              previewing() ||
+              activating()
+            "
+            (click)="generatePreview()"
+          >
+            {{ previewing() ? 'Generating…' : 'Generate programme preview' }}
+          </button>
+        </section>
+      </aside>
+    </div>
+
+    @if (preview(); as preview) {
+      <section class="panel generated-preview" aria-labelledby="generated-preview-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 4</p>
+            <h2 id="generated-preview-heading">Generated programme preview</h2>
+            <p class="muted">
+              {{ preview.name }} · {{ preview.cycle_weeks }} weeks ·
+              confidence {{ preview.analysis.confidence }}
+            </p>
+          </div>
+          <code>{{ preview.engine_version }}</code>
+        </div>
+
+        @if (preview.warnings.length) {
+          <div class="warning-list" role="status">
+            @for (warning of preview.warnings; track warning) {
+              <p>{{ warning }}</p>
+            }
+          </div>
         }
-    </ul>
-</section>
-}
+
+        <div class="block-timeline">
+          @for (block of preview.blocks; track block.number) {
+            <article class="block-preview">
+              <span class="badge">Weeks {{ block.weeks }}</span>
+              <h3>{{ block.name }}</h3>
+              <p>{{ block.focus }}</p>
+              <dl>
+                <div><dt>Volume</dt><dd>{{ block.volume_multiplier }}× source</dd></div>
+                <div><dt>Effort</dt><dd>RIR {{ block.target_rir }}</dd></div>
+                <div><dt>Emphasis</dt><dd>{{ block.rep_emphasis }}</dd></div>
+              </dl>
+            </article>
+          }
+        </div>
+
+        <h3>Selected Hevy routine preview</h3>
+        <div class="routine-preview-grid">
+          @for (day of preview.days; track day.routine_id) {
+            <article class="day-card">
+              <p class="eyebrow">Rotation {{ day.number }}</p>
+              <h3>{{ day.focus }}</h3>
+              <p class="muted">
+                {{ day.estimated_duration_minutes }} min ·
+                {{ day.muscles.join(', ') }}
+              </p>
+              <ul class="day-ex">
+                @for (exercise of day.exercises; track exercise.template_id) {
+                  <li>
+                    <span>
+                      <strong>{{ exercise.name }}</strong>
+                      <small>{{ exercise.role }}</small>
+                    </span>
+                    <span>{{ exercise.scheme }}</span>
+                  </li>
+                }
+              </ul>
+            </article>
+          }
+        </div>
+
+        <details>
+          <summary>Assumptions and safety bounds</summary>
+          <ul>
+            @for (assumption of preview.assumptions; track assumption) {
+              <li>{{ assumption }}</li>
+            }
+          </ul>
+        </details>
+
+        <div class="activation-row">
+          <p class="muted">
+            Activation reconfirms every Hevy source hash. A changed routine
+            requires a fresh preview.
+          </p>
+          <button
+            type="button"
+            class="btn"
+            [disabled]="activating()"
+            (click)="activatePreview()"
+          >
+            {{ activating() ? 'Activating…' : 'Activate this programme' }}
+          </button>
+        </div>
+      </section>
+    }
+  }
 }

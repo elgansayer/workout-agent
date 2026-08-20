@@ -58,6 +58,8 @@ class RoutineExercise:
     target_weight_kg: float | None = None
     target_reps: int | None = None
     target_rep_range: tuple[int, int] | None = None
+    # Exact provider set payloads are retained for source preview and hashing.
+    set_targets: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -204,6 +206,10 @@ def _parse_routine(
                 target_weight_kg=target_weight,
                 target_reps=target_reps,
                 target_rep_range=target_range,
+                set_targets=[
+                    dict(item) if isinstance(item, dict) else {"value": item}
+                    for item in sets_raw
+                ],
             ),
         )
 
