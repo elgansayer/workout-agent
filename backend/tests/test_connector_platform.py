@@ -33,10 +33,10 @@ class FakeConnector(Connector):
         return None
 
 
-def test_context_requires_explicit_positive_user():
-    with pytest.raises(ValueError):
-        ConnectorContext(user_id=0)
-    assert ConnectorContext(user_id=42).user_id == 42
+def test_connector_context_validation():
+    with pytest.raises(ValueError, match="non-empty user_id"):
+        ConnectorContext(user_id="")
+    assert ConnectorContext(user_id="42").user_id == "42"
 
 
 def test_registry_is_case_insensitive_and_deterministic():

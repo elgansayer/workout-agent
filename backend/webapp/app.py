@@ -49,6 +49,8 @@ import insights
 import lifestyle
 from ai_provider import AIProvider, resolve_provider
 from config import Config
+from connectors.base import ConnectorContext
+from connectors.builtin import build_builtin_registry
 from database import (
     clear_all_notifications,
     clear_chat_messages,
@@ -1607,6 +1609,22 @@ def api_settings(request: Request):
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
+    registry = build_builtin_registry()
+    ctx = ConnectorContext(user_id=user_id)
+    connectors_info = []
+    for connector in registry.all():
+        try:
+            status = connector.status(ctx)
+            connectors_info.append({
+                "provider": connector.provider,
+                "name": connector.provider.title().replace("_", " "),
+                "state": status.state,
+                "message": status.message,
+                "authorize_supported": connector.capabilities.authorize,
+            })
+        except Exception:
+            pass
+
     return JSONResponse(
         jsonable_encoder(
             {
@@ -1616,6 +1634,7 @@ def api_settings(request: Request):
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
                 "gh_status": gh_status,
+                "connectors_info": connectors_info,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
