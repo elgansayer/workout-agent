@@ -57,7 +57,7 @@ _PUBLIC_DATA_EXTENSIONS = {".md", ".json", ".jsonl", ".csv", ".yaml", ".yml", ".
 _EMAIL_RE = re.compile(r"(?<![\w.+-])([\w.+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w.-])")
 _EXAMPLE_EMAIL_DOMAINS = {"example.com", "example.org", "example.net", "example.invalid", "test.invalid"}
 _NAMED_SUBJECT_RE = re.compile(
-    r"\b(?:athlete|trainee|client|member|user)\s*(?:named\s+|[:(]\s*)([A-Z][A-Za-z'’-]{2,})"
+    r"\b(?:athlete|trainee|client|member)\s*(?:named\s+|[:(]\s*)([A-Z][A-Za-z'’-]{2,})"
 )
 _FIRST_PERSON_RE = re.compile(r"\b(?:i\s+have|i\s+am|i'm|my|mine)\b", re.IGNORECASE)
 _SENSITIVE_PROFILE_RE = re.compile(
@@ -66,6 +66,7 @@ _SENSITIVE_PROFILE_RE = re.compile(
     r"medical|medication|caloric deficit|protein target|training constraint)\b",
     re.IGNORECASE,
 )
+_PERSONAL_CONTEXT_RADIUS = 180
 
 
 @dataclass(frozen=True)
@@ -156,22 +157,37 @@ def _has_synthetic_marker(source: str) -> bool:
     return any(marker in lowered for marker in _SYNTHETIC_MARKERS)
 
 
+def _first_person_sensitive_offset(source: str) -> int | None:
+    """Return a sensitive-term offset when first-person language is nearby."""
+    for sensitive in _SENSITIVE_PROFILE_RE.finditer(source):
+        start = max(0, sensitive.start() - _PERSONAL_CONTEXT_RADIUS)
+        end = min(len(source), sensitive.end() + _PERSONAL_CONTEXT_RADIUS)
+        if _FIRST_PERSON_RE.search(source[start:end]):
+            return sensitive.start()
+    return None
+
+
 def find_public_data_violations(path: Path, *, require_synthetic_marker: bool = False) -> list[Finding]:
     """Detect high-confidence real-user data leaks in public docs/fixtures."""
     source = path.read_text(encoding="utf-8")
     synthetic = _has_synthetic_marker(source)
+    sensitive = _SENSITIVE_PROFILE_RE.search(source)
     findings: list[Finding] = []
 
-    for match in _EMAIL_RE.finditer(source):
-        domain = match.group(2).lower()
-        if domain not in _EXAMPLE_EMAIL_DOMAINS:
-            findings.append(
-                Finding(
-                    str(path),
-                    _line_for(source, match.start()),
-                    "non-example email address in public documentation/fixture; replace with synthetic data",
+    # Real-looking emails are forbidden in fixtures and in documents that also
+    # contain health/profile material. Ordinary project/support addresses in a
+    # non-sensitive document are not treated as user-data incidents.
+    if require_synthetic_marker or sensitive is not None:
+        for match in _EMAIL_RE.finditer(source):
+            domain = match.group(2).lower()
+            if domain not in _EXAMPLE_EMAIL_DOMAINS:
+                findings.append(
+                    Finding(
+                        str(path),
+                        _line_for(source, match.start()),
+                        "non-example email address in sensitive public documentation/fixture; replace with synthetic data",
+                    )
                 )
-            )
 
     if not synthetic:
         named = _NAMED_SUBJECT_RE.search(source)
@@ -184,18 +200,17 @@ def find_public_data_violations(path: Path, *, require_synthetic_marker: bool = 
                 )
             )
 
-        first_person = _FIRST_PERSON_RE.search(source)
-        sensitive = _SENSITIVE_PROFILE_RE.search(source)
-        if first_person and sensitive:
+        personal_offset = _first_person_sensitive_offset(source)
+        if personal_offset is not None:
             findings.append(
                 Finding(
                     str(path),
-                    min(_line_for(source, first_person.start()), _line_for(source, sensitive.start())),
+                    _line_for(source, personal_offset),
                     "first-person health/training constraint in public source; use synthetic data",
                 )
             )
 
-        if require_synthetic_marker and sensitive:
+        if require_synthetic_marker and sensitive is not None:
             findings.append(
                 Finding(
                     str(path),
@@ -224,7 +239,14 @@ def _iter_public_data_files(repo_root: Path) -> list[tuple[Path, bool]]:
         if not path.is_file() or path.suffix.lower() not in _PUBLIC_DATA_EXTENSIONS:
             continue
         lowered_parts = {part.lower() for part in path.parts}
-        if "fixtures" in lowered_parts or "samples" in lowered_parts:
+        stem = path.stem.lower()
+        is_example_data = (
+            "fixtures" in lowered_parts
+            or "samples" in lowered_parts
+            or "fixture" in stem
+            or "sample" in stem
+        )
+        if is_example_data:
             candidates[path] = True
 
     return sorted(candidates.items(), key=lambda item: str(item[0]))
