@@ -1,0 +1,48 @@
+name: Repository inventory
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/**'
+      - '.env.example'
+      - 'docker-compose*.yml'
+      - 'Dockerfile*'
+      - 'docs/REPOSITORY_INVENTORIES.md'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - '.github/workflows/**'
+      - '.env.example'
+      - 'docker-compose*.yml'
+      - 'Dockerfile*'
+      - 'docs/REPOSITORY_INVENTORIES.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run inventory unit tests
+        run: python -m unittest discover -s backend/tests -p 'test_repository_inventory.py' -v
+      - name: Validate canonical inventory
+        run: python backend/scripts/repository_inventory.py --check
+      - name: Render machine-readable and readable inventories
+        run: |
+          mkdir -p /tmp/workout-agent-inventory
+          python backend/scripts/repository_inventory.py --format json --output /tmp/workout-agent-inventory/inventory.json
+          python backend/scripts/repository_inventory.py --format markdown --output /tmp/workout-agent-inventory/inventory.md
+          test -s /tmp/workout-agent-inventory/inventory.json
+          test -s /tmp/workout-agent-inventory/inventory.md
