@@ -125,6 +125,11 @@ jobs:
           name: hevy-first-builder-verification-log
           path: |
             hevy-builder-run.log
+            backend/database.py
+            backend/dynamic_programme.py
+            backend/hevy_reader.py
+            backend/webapp/app.py
+            backend/tests/test_dynamic_programme.py
             backend/tests/test_webapp_programmes.py
           if-no-files-found: warn
           retention-days: 7
