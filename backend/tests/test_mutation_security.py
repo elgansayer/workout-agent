@@ -97,7 +97,7 @@ def test_all_state_changing_http_methods_fail_closed(
     client: TestClient,
     method: str,
 ) -> None:
-    response = getattr(client, method)("/api/action", json={})
+    response = client.request(method.upper(), "/api/action", json={})
     assert response.status_code == 401
 
 
