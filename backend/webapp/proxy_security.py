@@ -22,6 +22,7 @@ ASGIApp = Callable[
 IPAddress = IPv4Address | IPv6Address
 IPNetwork = IPv4Network | IPv6Network
 
+_PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
 _FORWARDING_HEADERS = frozenset(
     {
         b"forwarded",
@@ -131,7 +132,7 @@ def load_proxy_security_config(
     app_env = environment.get("APP_ENV", "development").strip().lower()
     scheme, canonical_host = _parse_public_url(
         environment.get("WEB_PUBLIC_URL", ""),
-        production=app_env == "production",
+        production=app_env in _PRODUCTION_ENVIRONMENTS,
     )
 
     allowed_hosts = {canonical_host}
