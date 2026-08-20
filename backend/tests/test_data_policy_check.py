@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scripts.check_data_policy import find_logging_violations, find_schema_violations
+from scripts.check_data_policy import (
+    find_logging_violations,
+    find_public_data_violations,
+    find_schema_violations,
+)
 
 
 def test_logging_checker_rejects_direct_secret_values(tmp_path: Path) -> None:
@@ -61,3 +65,52 @@ def test_schema_checker_accepts_current_sensitive_field_patterns(tmp_path: Path)
     )
 
     assert find_schema_violations(database) == []
+
+
+def test_public_checker_rejects_named_real_user_profile(tmp_path: Path) -> None:
+    source = tmp_path / "README.md"
+    source.write_text(
+        "The coach must respect these facts about the athlete (Alice): joint pain and a caloric deficit.\n",
+        encoding="utf-8",
+    )
+
+    findings = find_public_data_violations(source)
+
+    assert any("anonymous synthetic profile" in finding.message for finding in findings)
+
+
+def test_public_checker_rejects_real_email_address(tmp_path: Path) -> None:
+    source = tmp_path / "fixture.json"
+    source.write_text('{"email": "person@company.co.uk"}\n', encoding="utf-8")
+
+    findings = find_public_data_violations(source)
+
+    assert len(findings) == 1
+    assert "non-example email" in findings[0].message
+
+
+def test_public_checker_accepts_reserved_example_email(tmp_path: Path) -> None:
+    source = tmp_path / "fixture.json"
+    source.write_text('{"email": "athlete@example.com"}\n', encoding="utf-8")
+
+    assert find_public_data_violations(source) == []
+
+
+def test_sensitive_fixture_requires_explicit_synthetic_marker(tmp_path: Path) -> None:
+    source = tmp_path / "health-fixture.json"
+    source.write_text('{"weight_kg": 75.0, "resting_hr": 60}\n', encoding="utf-8")
+
+    findings = find_public_data_violations(source, require_synthetic_marker=True)
+
+    assert len(findings) == 1
+    assert "synthetic-profile marker" in findings[0].message
+
+
+def test_sensitive_fixture_accepts_explicit_synthetic_marker(tmp_path: Path) -> None:
+    source = tmp_path / "health-fixture.json"
+    source.write_text(
+        '{"synthetic_profile": true, "weight_kg": 75.0, "resting_hr": 60}\n',
+        encoding="utf-8",
+    )
+
+    assert find_public_data_violations(source, require_synthetic_marker=True) == []
