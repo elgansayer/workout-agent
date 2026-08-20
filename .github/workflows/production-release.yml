@@ -4,15 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       head_sha:
-        description: Exact reviewed commit SHA already merged to main
-        required: true
-        type: string
-      web_image_digest:
-        description: Immutable workout-agent-web digest (sha256:...)
-        required: true
-        type: string
-      agent_image_digest:
-        description: Immutable workout-agent digest (sha256:...)
+        description: Exact current main commit SHA to promote
         required: true
         type: string
       config_version:
@@ -38,8 +30,23 @@ on:
         description: Security review result (no secrets)
         required: true
         type: string
+      smoke_test_status:
+        description: Candidate smoke-test result
+        required: true
+        type: choice
+        options:
+          - passed
+          - not-passed
+      smoke_test_evidence:
+        description: Reference to candidate smoke-test evidence
+        required: true
+        type: string
       smoke_test_plan:
-        description: Post-deploy smoke-test plan
+        description: Post-deploy production smoke-test plan
+        required: true
+        type: string
+      verification_results:
+        description: Concise pre-release verification summary/reference
         required: true
         type: string
       rollback_command:
@@ -52,21 +59,23 @@ permissions:
   pull-requests: read
   checks: read
   actions: read
+  packages: read
 
 jobs:
   promote:
     name: Evidence gate and production promotion
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     environment: production
     steps:
       - name: Checkout exact release SHA
-        uses: actions/checkout@v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.head_sha }}
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Verify SHA is the checked-out commit on main
+      - name: Verify SHA is exactly current main
         env:
           HEAD_SHA: ${{ inputs.head_sha }}
         run: |
@@ -76,10 +85,13 @@ jobs:
           esac
           test "${#HEAD_SHA}" -eq 40
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          git fetch origin main
-          git merge-base --is-ancestor "$HEAD_SHA" origin/main
+          git fetch --no-tags origin main
+          test "$(git rev-parse origin/main)" = "$HEAD_SHA" || {
+            echo "release gate: head_sha must be the current origin/main commit" >&2
+            exit 1
+          }
 
-      - name: Resolve merged PR and independent approval
+      - name: Resolve merged PR and exact-head independent approval
         id: review
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,61 +102,82 @@ jobs:
           set -euo pipefail
           gh api -H 'Accept: application/vnd.github+json' \
             "repos/$REPOSITORY/commits/$HEAD_SHA/pulls?per_page=100" > release-prs.json
+
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
+          head_sha = os.environ["HEAD_SHA"]
           prs = json.loads(Path("release-prs.json").read_text(encoding="utf-8"))
           candidates = [
               pr for pr in prs
-              if pr.get("merged_at") and pr.get("base", {}).get("ref") == "main"
+              if pr.get("merged_at")
+              and pr.get("base", {}).get("ref") == "main"
+              and pr.get("merge_commit_sha") == head_sha
           ]
           if not candidates:
-              raise SystemExit("release gate: no merged pull request to main is associated with head_sha")
+              raise SystemExit(
+                  "release gate: current main SHA is not the merge commit of a merged PR"
+              )
 
           pr = max(candidates, key=lambda item: item.get("merged_at") or "")
           author = pr.get("user", {}).get("login", "")
+          reviewed_head_sha = pr.get("head", {}).get("sha", "")
           operator = os.environ["OPERATOR"]
-          if not author:
-              raise SystemExit("release gate: merged PR author is unavailable")
+          if not author or not reviewed_head_sha:
+              raise SystemExit("release gate: PR author or reviewed head SHA is unavailable")
           if author.casefold() == operator.casefold():
-              raise SystemExit("release gate: change author cannot operate their own production promotion")
+              raise SystemExit(
+                  "release gate: change author cannot operate their own production promotion"
+              )
 
-          number = int(pr["number"])
-          output = Path(os.environ["GITHUB_OUTPUT"])
-          with output.open("a", encoding="utf-8") as handle:
-              handle.write(f"pr_number={number}\n")
+          metadata = {
+              "pr_number": int(pr["number"]),
+              "change_author": author,
+              "reviewed_head_sha": reviewed_head_sha,
+          }
+          Path("release-pr-metadata.json").write_text(
+              json.dumps(metadata, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"pr_number={metadata['pr_number']}\n")
               handle.write(f"change_author={author}\n")
+              handle.write(f"reviewed_head_sha={reviewed_head_sha}\n")
           PY
 
-          PR_NUMBER="$(python -c 'import json; print(max([p for p in json.load(open("release-prs.json")) if p.get("merged_at") and p.get("base", {}).get("ref") == "main"], key=lambda p: p.get("merged_at") or "")["number"])')"
+          PR_NUMBER="$(python -c 'import json; print(json.load(open("release-pr-metadata.json"))["pr_number"])')"
           gh api -H 'Accept: application/vnd.github+json' \
             "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > release-reviews.json
+
           python - <<'PY'
           import json
           import os
           from pathlib import Path
 
+          metadata = json.loads(Path("release-pr-metadata.json").read_text(encoding="utf-8"))
           reviews = json.loads(Path("release-reviews.json").read_text(encoding="utf-8"))
-          author = os.environ.get("CHANGE_AUTHOR", "")
+          author = metadata["change_author"]
+          reviewed_head_sha = metadata["reviewed_head_sha"]
           approvals = [
               review for review in reviews
               if review.get("state") == "APPROVED"
+              and review.get("commit_id") == reviewed_head_sha
               and review.get("user", {}).get("login", "").casefold() != author.casefold()
           ]
           if not approvals:
-              raise SystemExit("release gate: merged PR has no independent APPROVED review")
+              raise SystemExit(
+                  "release gate: exact reviewed PR head has no independent APPROVED review"
+              )
           reviewer = approvals[-1].get("user", {}).get("login", "")
           if not reviewer:
               raise SystemExit("release gate: approving reviewer is unavailable")
           with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
               handle.write(f"approved_by={reviewer}\n")
           PY
-        env:
-          CHANGE_AUTHOR: ${{ steps.review.outputs.change_author }}
 
-      - name: Verify deterministic checks are complete and green
+      - name: Verify deterministic checks are complete and successful
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ inputs.head_sha }}
@@ -168,45 +201,88 @@ jobs:
           if not runs:
               raise SystemExit("release gate: no deterministic check runs found for head_sha")
 
-          allowed = {"success", "neutral", "skipped"}
           blocked = [
               run for run in runs
-              if run.get("status") != "completed" or run.get("conclusion") not in allowed
+              if run.get("status") != "completed" or run.get("conclusion") != "success"
           ]
           if blocked:
               summary = ", ".join(
                   f"{run.get('name')}={run.get('status')}/{run.get('conclusion')}"
                   for run in blocked
               )
-              raise SystemExit(f"release gate: non-green check runs: {summary}")
+              raise SystemExit(f"release gate: non-successful check runs: {summary}")
 
           evidence = [
-              {"name": run.get("name") or "unnamed", "conclusion": run.get("conclusion")}
+              {"name": run.get("name") or "unnamed", "conclusion": "success"}
               for run in runs
           ]
+          names = [item["name"].casefold() for item in evidence]
+          if len(names) != len(set(names)):
+              raise SystemExit("release gate: duplicate latest check-run names are ambiguous")
           Path("release-checks.json").write_text(
               json.dumps(evidence, indent=2, sort_keys=True) + "\n",
               encoding="utf-8",
           )
           PY
 
+      - name: Resolve immutable GHCR digests for current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          SHORT_SHA="${HEAD_SHA:0:7}"
+          : > image-digests.env
+
+          resolve_digest() {
+            docker buildx imagetools inspect "$1" | awk '$1 == "Digest:" { print $2; exit }'
+          }
+
+          for image in workout-agent-web workout-agent; do
+            sha_ref="ghcr.io/$OWNER/$image:sha-$SHORT_SHA"
+            latest_ref="ghcr.io/$OWNER/$image:latest"
+            sha_digest="$(resolve_digest "$sha_ref")"
+            latest_digest="$(resolve_digest "$latest_ref")"
+            case "$sha_digest" in
+              (sha256:????????????????????????????????????????????????????????????????) ;;
+              (*) echo "release gate: could not resolve immutable digest for $sha_ref" >&2; exit 1 ;;
+            esac
+            test "$latest_digest" = "$sha_digest" || {
+              echo "release gate: $latest_ref does not point at the reviewed current-main image" >&2
+              exit 1
+            }
+            if [ "$image" = "workout-agent-web" ]; then
+              printf 'WEB_IMAGE_DIGEST=%s\n' "$sha_digest" >> image-digests.env
+            else
+              printf 'AGENT_IMAGE_DIGEST=%s\n' "$sha_digest" >> image-digests.env
+            fi
+          done
+
       - name: Build and validate release evidence
         env:
           HEAD_SHA: ${{ inputs.head_sha }}
+          REVIEWED_HEAD_SHA: ${{ steps.review.outputs.reviewed_head_sha }}
           CHANGE_AUTHOR: ${{ steps.review.outputs.change_author }}
           APPROVED_BY: ${{ steps.review.outputs.approved_by }}
           OPERATOR: ${{ github.actor }}
-          WEB_IMAGE_DIGEST: ${{ inputs.web_image_digest }}
-          AGENT_IMAGE_DIGEST: ${{ inputs.agent_image_digest }}
           CONFIG_VERSION: ${{ inputs.config_version }}
           MIGRATION_PLAN: ${{ inputs.migration_plan }}
           DATABASE_MIGRATION: ${{ inputs.database_migration }}
           BACKUP_STATUS: ${{ inputs.backup_status }}
           SECURITY_REVIEW: ${{ inputs.security_review }}
+          SMOKE_TEST_STATUS: ${{ inputs.smoke_test_status }}
+          SMOKE_TEST_EVIDENCE: ${{ inputs.smoke_test_evidence }}
           SMOKE_TEST_PLAN: ${{ inputs.smoke_test_plan }}
+          VERIFICATION_RESULTS: ${{ inputs.verification_results }}
           ROLLBACK_COMMAND: ${{ inputs.rollback_command }}
         run: |
           set -euo pipefail
+          set -a
+          . ./image-digests.env
+          set +a
+          export WEB_IMAGE_DIGEST AGENT_IMAGE_DIGEST
           python - <<'PY'
           import json
           import os
@@ -215,7 +291,7 @@ jobs:
           evidence = {
               "schema_version": 1,
               "head_sha": os.environ["HEAD_SHA"],
-              "reviewed_head_sha": os.environ["HEAD_SHA"],
+              "reviewed_head_sha": os.environ["REVIEWED_HEAD_SHA"],
               "head_on_main": True,
               "pr_merged": True,
               "change_author": os.environ["CHANGE_AUTHOR"],
@@ -226,7 +302,10 @@ jobs:
               "database_migration": os.environ["DATABASE_MIGRATION"],
               "backup_status": os.environ["BACKUP_STATUS"],
               "security_review": os.environ["SECURITY_REVIEW"],
+              "smoke_test_status": os.environ["SMOKE_TEST_STATUS"],
+              "smoke_test_evidence": os.environ["SMOKE_TEST_EVIDENCE"],
               "smoke_test_plan": os.environ["SMOKE_TEST_PLAN"],
+              "verification_results": os.environ["VERIFICATION_RESULTS"],
               "rollback_command": os.environ["ROLLBACK_COMMAND"],
               "image_digests": {
                   "web": os.environ["WEB_IMAGE_DIGEST"],
@@ -255,7 +334,6 @@ jobs:
       - name: Write immutable release record
         env:
           PR_NUMBER: ${{ steps.review.outputs.pr_number }}
-          RELEASED_AT: ${{ github.event.repository.updated_at }}
           SERVER_URL: ${{ github.server_url }}
           REPOSITORY: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
@@ -272,6 +350,7 @@ jobs:
               {
                   "pull_request": int(os.environ["PR_NUMBER"]),
                   "released_at": datetime.now(timezone.utc).isoformat(),
+                  "deployment_trigger": "portainer-webhook-accepted",
                   "workflow_run": (
                       f"{os.environ['SERVER_URL']}/{os.environ['REPOSITORY']}"
                       f"/actions/runs/{os.environ['RUN_ID']}"
@@ -285,9 +364,9 @@ jobs:
           PY
 
       - name: Upload release record
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: production-release-record
+          name: production-release-record-${{ inputs.head_sha }}
           path: release-record.json
           if-no-files-found: error
           retention-days: 90
