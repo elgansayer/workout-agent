@@ -1,0 +1,188 @@
+name: Supply chain security
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supply-chain-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_VERSION: v0.70.0
+
+jobs:
+  source:
+    name: Source, dependency, license and secret evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate time-bounded exceptions
+        run: python tools/supply_chain.py validate-exceptions --file .trivyignore
+
+      - name: Run deterministic policy tests
+        run: python -m unittest tools.test_supply_chain
+
+      - name: Prepare evidence directory
+        run: mkdir -p artifacts
+
+      - name: Record source and dependency provenance
+        run: >-
+          python tools/supply_chain.py provenance
+          --root .
+          --output artifacts/provenance.json
+          --commit-sha "${GITHUB_SHA}"
+          --repository "${GITHUB_REPOSITORY}"
+          --source-ref "${GITHUB_REF}"
+
+      - name: Generate repository CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: cyclonedx
+          output: artifacts/repository.cdx.json
+          trivyignores: .trivyignore
+          exit-code: '0'
+
+      - name: Scan Python, JavaScript, licenses, IaC and workflows
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,license
+          format: json
+          output: artifacts/trivy-source.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          trivyignores: .trivyignore
+          exit-code: '0'
+
+      - name: Upload source evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-source-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Block actionable critical source findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,license
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
+
+      - name: Scan committed Git history for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  image:
+    name: Container evidence (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: agent
+            dockerfile: Dockerfile
+          - name: web
+            dockerfile: Dockerfile.web
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare evidence directory
+        run: mkdir -p artifacts
+
+      - name: Build image from reviewed source
+        run: >-
+          docker build
+          --file "${{ matrix.dockerfile }}"
+          --tag "workout-agent-security-${{ matrix.name }}:${GITHUB_SHA}"
+          .
+
+      - name: Generate image CycloneDX SBOM
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          scan-type: image
+          image-ref: workout-agent-security-${{ matrix.name }}:${{ github.sha }}
+          scanners: vuln
+          format: cyclonedx
+          output: artifacts/image-${{ matrix.name }}.cdx.json
+          trivyignores: .trivyignore
+          exit-code: '0'
+
+      - name: Scan image packages, base image, licenses and embedded secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: workout-agent-security-${{ matrix.name }}:${{ github.sha }}
+          scanners: vuln,secret,license
+          format: json
+          output: artifacts/trivy-image-${{ matrix.name }}.json
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          trivyignores: .trivyignore
+          exit-code: '0'
+
+      - name: Record image digest
+        run: >-
+          docker image inspect
+          --format='{{json .Id}}'
+          "workout-agent-security-${{ matrix.name }}:${GITHUB_SHA}"
+          > "artifacts/image-${{ matrix.name }}-digest.json"
+
+      - name: Upload image evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: supply-chain-image-${{ matrix.name }}-${{ github.sha }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Block actionable critical image findings
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: ${{ env.TRIVY_VERSION }}
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: workout-agent-security-${{ matrix.name }}:${{ github.sha }}
+          scanners: vuln,secret,license
+          format: table
+          severity: CRITICAL
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: '1'
