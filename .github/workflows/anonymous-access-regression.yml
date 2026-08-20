@@ -1,0 +1,92 @@
+name: Anonymous access regression
+
+on:
+  pull_request:
+    paths:
+      - 'backend/webapp/**'
+      - 'backend/tests/test_anonymous_access_routes.py'
+      - 'backend/tools/anonymous_access_smoke.py'
+      - '.github/workflows/anonymous-access-regression.yml'
+  workflow_run:
+    workflows: ['Build and push images']
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: Deployed Workout Agent URL to probe
+        required: false
+        default: https://workout.elgansayer.com
+
+permissions:
+  contents: read
+
+jobs:
+  route-inventory:
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-web.txt
+
+      - name: Install backend test dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-web.txt
+
+      - name: Run complete logged-out route inventory
+        working-directory: backend
+        env:
+          APP_ENV: production
+          ALLOW_ANONYMOUS_WEB: '0'
+          WEB_AUTH_SECRET: test-secret-that-is-long-enough-for-session-signing
+          WEB_GOOGLE_CLIENT_ID: anonymous-route-test-client
+          WEB_GOOGLE_CLIENT_SECRET: anonymous-route-test-secret
+        run: python -m pytest -q tests/test_anonymous_access_routes.py
+
+  deployed-smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out deployed revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-web.txt
+
+      - name: Install route discovery dependencies
+        run: python -m pip install -r backend/requirements.txt -r backend/requirements-web.txt
+
+      - name: Probe deployed hostname while logged out
+        working-directory: backend
+        env:
+          BASE_URL: ${{ github.event.inputs.base_url || 'https://workout.elgansayer.com' }}
+        shell: bash
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if python tools/anonymous_access_smoke.py --base-url "$BASE_URL"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              sleep 15
+            fi
+          done
+          exit 1
