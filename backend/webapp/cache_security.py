@@ -13,7 +13,6 @@ from accidentally becoming cacheable.
 from __future__ import annotations
 
 import re
-from collections.abc import Awaitable, Callable
 from urllib.parse import parse_qs
 
 from fastapi import FastAPI
@@ -48,10 +47,6 @@ _HASHED_FILENAME_RE = re.compile(
     r"(?:^|[._-])[A-Za-z0-9_-]{8,64}(?=\.(?:css|js|mjs|map|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)$)",
     re.IGNORECASE,
 )
-
-_ORIGINAL_FASTAPI_CALL: Callable[
-    [FastAPI, Scope, Receive, Send], Awaitable[None]
-] | None = None
 
 
 def _path(scope: Scope) -> str:
@@ -139,7 +134,7 @@ async def _guarded_fastapi_call(
     receive: Receive,
     send: Send,
 ) -> None:
-    original = _ORIGINAL_FASTAPI_CALL
+    original = getattr(FastAPI, "_workout_cache_guard_original_call", None)
     if original is None:  # pragma: no cover - defensive import-order guard
         raise RuntimeError("Response cache guard was not initialised")
     if scope.get("type") != "http":
@@ -156,10 +151,9 @@ async def _guarded_fastapi_call(
 def install_response_cache_guard() -> None:
     """Install the process-wide cache guard once for FastAPI web responses."""
 
-    global _ORIGINAL_FASTAPI_CALL
     if getattr(FastAPI, "_workout_cache_guard_installed", False):
         return
-    _ORIGINAL_FASTAPI_CALL = FastAPI.__call__
+    FastAPI._workout_cache_guard_original_call = FastAPI.__call__  # type: ignore[attr-defined]
     FastAPI.__call__ = _guarded_fastapi_call  # type: ignore[method-assign]
     FastAPI._workout_cache_guard_installed = True  # type: ignore[attr-defined]
 
