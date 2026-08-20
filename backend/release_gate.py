@@ -9,7 +9,7 @@ from typing import Any
 
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-_ALLOWED_CHECK_CONCLUSIONS = {"success", "neutral", "skipped"}
+_ALLOWED_CHECK_CONCLUSIONS = {"success"}
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ def _required_text(payload: dict[str, Any], key: str, findings: list[GateFinding
 
 
 def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
-    """Validate the immutable evidence required before production promotion."""
+    """Validate immutable evidence required before production promotion."""
     findings: list[GateFinding] = []
 
     if payload.get("schema_version") != 1:
@@ -58,9 +58,14 @@ def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
     _required_text(payload, "rollback_command", findings)
     _required_text(payload, "security_review", findings)
     _required_text(payload, "smoke_test_plan", findings)
+    _required_text(payload, "smoke_test_evidence", findings)
+    _required_text(payload, "verification_results", findings)
 
     if payload.get("backup_status") != "verified":
         findings.append(GateFinding("backup_status", "must equal 'verified'"))
+
+    if payload.get("smoke_test_status") != "passed":
+        findings.append(GateFinding("smoke_test_status", "must equal 'passed'"))
 
     image_digests = payload.get("image_digests")
     if not isinstance(image_digests, dict) or not image_digests:
@@ -80,6 +85,7 @@ def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
     if not isinstance(checks, list) or not checks:
         findings.append(GateFinding("checks", "must contain at least one deterministic check"))
     else:
+        seen_names: set[str] = set()
         for index, check in enumerate(checks):
             if not isinstance(check, dict):
                 findings.append(GateFinding(f"checks[{index}]", "must be an object"))
@@ -88,11 +94,16 @@ def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
             conclusion = check.get("conclusion")
             if not isinstance(name, str) or not name.strip():
                 findings.append(GateFinding(f"checks[{index}].name", "must be non-empty"))
+            else:
+                normalized_name = name.strip().casefold()
+                if normalized_name in seen_names:
+                    findings.append(GateFinding(f"checks[{index}].name", "must be unique"))
+                seen_names.add(normalized_name)
             if conclusion not in _ALLOWED_CHECK_CONCLUSIONS:
                 findings.append(
                     GateFinding(
                         f"checks[{index}].conclusion",
-                        "must be success, neutral, or skipped",
+                        "must be success; neutral, skipped, pending and failed checks do not pass a production gate",
                     )
                 )
 
