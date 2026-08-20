@@ -79,11 +79,11 @@ def test_public_checker_rejects_named_real_user_profile(tmp_path: Path) -> None:
     assert any("anonymous synthetic profile" in finding.message for finding in findings)
 
 
-def test_public_checker_rejects_real_email_address(tmp_path: Path) -> None:
+def test_public_checker_rejects_real_email_address_in_sensitive_fixture(tmp_path: Path) -> None:
     source = tmp_path / "fixture.json"
     source.write_text('{"email": "person@company.co.uk"}\n', encoding="utf-8")
 
-    findings = find_public_data_violations(source)
+    findings = find_public_data_violations(source, require_synthetic_marker=True)
 
     assert len(findings) == 1
     assert "non-example email" in findings[0].message
@@ -92,6 +92,25 @@ def test_public_checker_rejects_real_email_address(tmp_path: Path) -> None:
 def test_public_checker_accepts_reserved_example_email(tmp_path: Path) -> None:
     source = tmp_path / "fixture.json"
     source.write_text('{"email": "athlete@example.com"}\n', encoding="utf-8")
+
+    assert find_public_data_violations(source, require_synthetic_marker=True) == []
+
+
+def test_public_checker_allows_project_email_in_non_sensitive_docs(tmp_path: Path) -> None:
+    source = tmp_path / "SUPPORT.md"
+    source.write_text("Contact support@workout-agent.dev for deployment help.\n", encoding="utf-8")
+
+    assert find_public_data_violations(source) == []
+
+
+def test_public_checker_requires_first_person_and_sensitive_term_to_be_nearby(tmp_path: Path) -> None:
+    source = tmp_path / "GUIDE.md"
+    source.write_text(
+        "My preferred deployment uses Docker.\n"
+        + ("Architecture detail. " * 30)
+        + "Medical data is classified as sensitive and must be redacted.\n",
+        encoding="utf-8",
+    )
 
     assert find_public_data_violations(source) == []
 
