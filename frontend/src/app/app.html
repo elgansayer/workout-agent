@@ -1,16 +1,16 @@
 <a href="#main-content" class="skip-to-content">Skip to content</a>
 <header class="topbar">
     <a class="brand" routerLink="/dashboard">Workout&nbsp;Agent</a>
-    <nav>
-        <a routerLink="/dashboard" routerLinkActive="on">Today</a>
-        <a routerLink="/progress" routerLinkActive="on">Progress</a>
-        <a routerLink="/stats" routerLinkActive="on">Stats</a>
-        <a routerLink="/plan" routerLinkActive="on">Plan</a>
-        <a routerLink="/programmes" routerLinkActive="on">Programmes</a>
-        <a routerLink="/history" routerLinkActive="on">History</a>
-        <a routerLink="/checkins" routerLinkActive="on">Check-ins</a>
-        <a routerLink="/chat" class="nav-coach" routerLinkActive="on">✨ Coach</a>
-        <a routerLink="/settings" routerLinkActive="on">Settings</a>
+    <nav aria-label="Primary navigation">
+        <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Today</a>
+        <a routerLink="/progress" routerLinkActive="on" ariaCurrentWhenActive="page">Progress</a>
+        <a routerLink="/stats" routerLinkActive="on" ariaCurrentWhenActive="page">Stats</a>
+        <a routerLink="/plan" routerLinkActive="on" ariaCurrentWhenActive="page">Plan</a>
+        <a routerLink="/programmes" routerLinkActive="on" ariaCurrentWhenActive="page">Programmes</a>
+        <a routerLink="/history" routerLinkActive="on" ariaCurrentWhenActive="page">History</a>
+        <a routerLink="/checkins" routerLinkActive="on" ariaCurrentWhenActive="page">Check-ins</a>
+        <a routerLink="/chat" class="nav-coach" routerLinkActive="on" ariaCurrentWhenActive="page">✨ Coach</a>
+        <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
         @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
         <a href="javascript:void(0)" (click)="auth.logout()" style="color: var(--muted); cursor: pointer;">Logout</a>
         }
