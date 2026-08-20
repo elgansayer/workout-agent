@@ -30,11 +30,24 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 import analytics
 import insights
 import lifestyle
 from ai_provider import AIProvider, resolve_provider
-from authlib.integrations.starlette_client import OAuth
 from config import Config
 from database import (
     clear_all_notifications,
@@ -80,16 +93,6 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
@@ -97,9 +100,6 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
 from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
@@ -1277,7 +1277,7 @@ def api_stats(request: Request):
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(DB_PATH)
+    start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
@@ -1373,7 +1373,7 @@ def api_stats(request: Request):
     pr_rows = [
         {
             "exercise": pr["exercise"],
-            "e1rm": f"{pr['estimated_1rm_kg']:g}",
+            "e1rm": f"{pr['e1rm']:g}",
             "detail": f"{pr['weight_kg']:g} kg x {pr['reps']}",
             "date": pr["date"],
         }
