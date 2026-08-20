@@ -153,8 +153,6 @@
             <h3>{{ connector.name }}</h3>
             @if (connector.state === 'connected') {
             <span class="status on">Connected</span>
-            } @else if (connector.state === 'pending') {
-            <span class="status warning">Pending</span>
             } @else {
             <span class="status off">Not connected</span>
             }
@@ -163,10 +161,6 @@
         <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem;">
             {{ connector.message || 'Status: ' + connector.state }}
         </p>
-
-        @if (connector.authorize_supported && connector.state !== 'connected') {
-            <button class="btn btn-sm" disabled>Connect (Coming Soon)</button>
-        }
     </div>
     }
 </section>

@@ -1615,6 +1615,8 @@ def api_settings(request: Request):
     for connector in registry.all():
         try:
             status = connector.status(ctx)
+            if status.state == "pending":
+                continue
             connectors_info.append({
                 "provider": connector.provider,
                 "name": connector.provider.title().replace("_", " "),
