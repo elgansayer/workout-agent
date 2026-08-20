@@ -121,11 +121,23 @@ def test_only_explicitly_versioned_static_assets_are_immutable() -> None:
         == "public, max-age=31536000, immutable"
     )
     assert (
+        _headers_for("/assets/logo-deadbeef.svg")["cache-control"]
+        == "public, max-age=31536000, immutable"
+    )
+    assert (
         _headers_for("/static/style.css")["cache-control"]
         == "public, no-cache, max-age=0, must-revalidate"
     )
     assert (
         _headers_for("/sw.js")["cache-control"]
+        == "public, no-cache, max-age=0, must-revalidate"
+    )
+    assert (
+        _headers_for("/service-worker.js")["cache-control"]
+        == "public, no-cache, max-age=0, must-revalidate"
+    )
+    assert (
+        _headers_for("/workout-dashboard.js")["cache-control"]
         == "public, no-cache, max-age=0, must-revalidate"
     )
 
