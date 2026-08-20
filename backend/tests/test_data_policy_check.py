@@ -38,20 +38,14 @@ def test_logging_checker_accepts_central_redaction(tmp_path: Path) -> None:
 def test_schema_checker_rejects_unclassified_sensitive_column(tmp_path: Path) -> None:
     database = tmp_path / "database.py"
     database.write_text(
-        "SQL = '''\nCREATE TABLE sample (\n    mystery_secret_material TEXT NOT NULL\n)\n'''\n",
+        "SQL = '''\nCREATE TABLE sample (\n    raw_payload TEXT NOT NULL\n)\n'''\n",
         encoding="utf-8",
     )
 
-    # secret-pattern classification is intentionally fail-safe, so this is known.
-    assert find_schema_violations(database) == []
+    findings = find_schema_violations(database)
 
-    database.write_text(
-        "SQL = '''\nCREATE TABLE sample (\n    biometric_measurement TEXT NOT NULL\n)\n'''\n",
-        encoding="utf-8",
-    )
-    # A name without a policy hint is not guessed by the scanner; review remains
-    # responsible for adding a registry entry when a new data concept appears.
-    assert find_schema_violations(database) == []
+    assert len(findings) == 1
+    assert "raw_payload" in findings[0].message
 
 
 def test_schema_checker_accepts_current_sensitive_field_patterns(tmp_path: Path) -> None:
