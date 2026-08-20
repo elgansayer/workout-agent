@@ -1,0 +1,69 @@
+name: HTTP security headers
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'backend/webapp/security_headers.py'
+      - 'backend/webapp/secure_app.py'
+      - 'backend/scripts/check_security_headers.py'
+      - 'backend/tests/test_security_headers.py'
+      - 'Dockerfile.web'
+      - '.github/workflows/security-headers.yml'
+  workflow_run:
+    workflows: ['Build and push images']
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-headers-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Deterministic header policy
+    if: github.event_name != 'workflow_run'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Compile security boundary
+        run: >-
+          python3 -m py_compile
+          backend/webapp/security_headers.py
+          backend/webapp/secure_app.py
+          backend/scripts/check_security_headers.py
+          backend/tests/test_security_headers.py
+
+      - name: Run deterministic security-header tests
+        working-directory: backend
+        run: python3 -m unittest discover -s tests -p 'test_security_headers.py' -v
+
+  production:
+    name: Production header smoke check
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout deployed policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Validate production response headers
+        run: >-
+          python3 backend/scripts/check_security_headers.py
+          https://workout.elgansayer.com/
+          --attempts 18
+          --delay 10
+          --timeout 10
