@@ -36,6 +36,9 @@ services:
       # Deliberately defaults off. Set ALLOW_ANONYMOUS_WEB=1 only for a trusted
       # local network, or configure the three WEB_* Google auth variables.
       ALLOW_ANONYMOUS_WEB: ${ALLOW_ANONYMOUS_WEB:-0}
+      # Canonical request origin. The local default matches the default WEB_PORT;
+      # set WEB_PUBLIC_URL explicitly whenever the host or port differs.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:8770}
     ports:
       - "${WEB_PORT:-8770}:8000"
     volumes:
