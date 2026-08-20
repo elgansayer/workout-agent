@@ -20,8 +20,11 @@ def _valid_payload() -> dict[str, object]:
         "database_migration": "none",
         "backup_status": "verified",
         "rollback_command": "docker compose up -d --no-deps web agent",
-        "security_review": "No new unresolved security findings.",
+        "security_review": "No unresolved release-blocking security findings.",
         "smoke_test_plan": "Run authenticated health, readiness, login and dashboard smoke tests.",
+        "smoke_test_status": "passed",
+        "smoke_test_evidence": "staging-smoke-run-1842",
+        "verification_results": "All required deterministic checks passed for the reviewed head.",
         "image_digests": {"web": digest, "agent": digest},
         "checks": [
             {"name": "Python Source Integrity", "conclusion": "success"},
@@ -53,16 +56,29 @@ def test_author_cannot_self_approve_or_self_promote() -> None:
     assert {finding.field for finding in findings} >= {"approved_by", "operator"}
 
 
-def test_failed_or_pending_checks_block_release() -> None:
+def test_non_success_checks_block_release() -> None:
     payload = _valid_payload()
     payload["checks"] = [
         {"name": "tests", "conclusion": "failure"},
-        {"name": "lint", "conclusion": None},
+        {"name": "lint", "conclusion": "skipped"},
+        {"name": "security", "conclusion": "neutral"},
     ]
 
     findings = validate_release_evidence(payload)
 
-    assert sum(finding.field.endswith(".conclusion") for finding in findings) == 2
+    assert sum(finding.field.endswith(".conclusion") for finding in findings) == 3
+
+
+def test_duplicate_check_names_are_rejected() -> None:
+    payload = _valid_payload()
+    payload["checks"] = [
+        {"name": "tests", "conclusion": "success"},
+        {"name": "TESTS", "conclusion": "success"},
+    ]
+
+    findings = validate_release_evidence(payload)
+
+    assert any(finding.field == "checks[1].name" for finding in findings)
 
 
 def test_backup_and_rollback_are_mandatory() -> None:
@@ -73,6 +89,28 @@ def test_backup_and_rollback_are_mandatory() -> None:
     findings = validate_release_evidence(payload)
 
     assert {finding.field for finding in findings} >= {"backup_status", "rollback_command"}
+
+
+def test_smoke_test_must_have_passed_with_evidence() -> None:
+    payload = _valid_payload()
+    payload["smoke_test_status"] = "pending"
+    payload["smoke_test_evidence"] = ""
+
+    findings = validate_release_evidence(payload)
+
+    assert {finding.field for finding in findings} >= {
+        "smoke_test_status",
+        "smoke_test_evidence",
+    }
+
+
+def test_verification_results_are_mandatory() -> None:
+    payload = _valid_payload()
+    payload["verification_results"] = ""
+
+    findings = validate_release_evidence(payload)
+
+    assert any(finding.field == "verification_results" for finding in findings)
 
 
 def test_image_references_must_be_immutable_digests() -> None:
