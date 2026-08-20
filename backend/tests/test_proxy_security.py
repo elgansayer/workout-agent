@@ -72,12 +72,13 @@ def _headers(scope: dict[str, Any]) -> dict[bytes, bytes]:
     return dict(scope["headers"])
 
 
-def test_production_requires_canonical_https_origin() -> None:
+@pytest.mark.parametrize("app_env", ["production", "prod"])
+def test_production_requires_canonical_https_origin(app_env: str) -> None:
     with pytest.raises(
         ProxySecurityConfigurationError,
         match="WEB_PUBLIC_URL is required",
     ):
-        load_proxy_security_config({"APP_ENV": "production"})
+        load_proxy_security_config({"APP_ENV": app_env})
 
     with pytest.raises(
         ProxySecurityConfigurationError,
@@ -85,7 +86,7 @@ def test_production_requires_canonical_https_origin() -> None:
     ):
         load_proxy_security_config(
             {
-                "APP_ENV": "production",
+                "APP_ENV": app_env,
                 "WEB_PUBLIC_URL": "http://workout.example.com",
             }
         )
