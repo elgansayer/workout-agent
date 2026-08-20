@@ -1,0 +1,51 @@
+{
+  "parser_payloads": [
+    {
+      "title": "Malformed set entry",
+      "exercises": [
+        null,
+        {
+          "title": "Bodyweight",
+          "sets": [
+            {"reps": 10},
+            "broken"
+          ]
+        }
+      ]
+    }
+  ],
+  "invalid_programme_requests": [
+    {
+      "selected_routine_ids": ["routine-1"],
+      "duration_weeks": 3,
+      "goal": "general_fitness"
+    },
+    {
+      "selected_routine_ids": ["routine-1"],
+      "duration_weeks": 53,
+      "goal": "hypertrophy"
+    }
+  ],
+  "timezone_workouts": [
+    {
+      "payload": {
+        "id": "tz-east",
+        "title": "Offset east",
+        "start_time": "2026-08-20T23:30:00+14:00",
+        "end_time": "2026-08-21T00:30:00+14:00",
+        "exercises": []
+      },
+      "expected_duration_seconds": 3600
+    },
+    {
+      "payload": {
+        "id": "tz-west",
+        "title": "Offset west",
+        "start_time": "2026-08-20T23:30:00-12:00",
+        "end_time": "2026-08-21T00:30:00-12:00",
+        "exercises": []
+      },
+      "expected_duration_seconds": 3600
+    }
+  ]
+}
