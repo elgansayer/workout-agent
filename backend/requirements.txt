@@ -18,6 +18,7 @@ itsdangerous>=2.2.0
 
 # Development / testing
 pytest>=8.0.0,<9
+hypothesis>=6.112,<7
 ruff>=0.16.2
 mypy>=1.10.0
 types-requests>=2.31.0

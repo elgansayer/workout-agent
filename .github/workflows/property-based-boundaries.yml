@@ -1,0 +1,49 @@
+name: Property based boundaries
+
+on:
+  pull_request:
+    paths:
+      - 'backend/database.py'
+      - 'backend/dynamic_programme.py'
+      - 'backend/hevy_parser.py'
+      - 'backend/hevy_reader.py'
+      - 'backend/requirements.txt'
+      - 'backend/tests/test_property_based_boundaries.py'
+      - 'backend/tests/fixtures/property_regressions.json'
+      - 'docs/PROPERTY_TESTING.md'
+      - '.github/workflows/property-based-boundaries.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: property-boundaries-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  property-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend test dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Compile property suite
+        run: python -m py_compile backend/tests/test_property_based_boundaries.py
+
+      - name: Run property-based boundary tests
+        working-directory: backend
+        env:
+          HYPOTHESIS_STORAGE_DIRECTORY: /tmp/workout-agent-hypothesis
+        run: python -m pytest -q tests/test_property_based_boundaries.py
