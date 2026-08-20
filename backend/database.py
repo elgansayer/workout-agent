@@ -32,16 +32,8 @@ class UserRow(TypedDict):
     timezone: str
     units: str
 
+
 DEFAULT_DB_PATH = "workout_agent.db"
-
-
-class UserRow(TypedDict):  # noqa: F811
-    id: str
-    email: str
-    display_name: str | None
-    created_at: str
-    timezone: str
-    units: str
 
 
 @contextlib.contextmanager
@@ -229,11 +221,21 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         )
 
         # Performance optimizations
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_name ON exercise_progress(exercise_name)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress(date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_workout_history_date ON workout_history(date)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log(date)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_name ON exercise_progress(exercise_name)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_progress_date ON exercise_progress(date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_body_metrics_date ON body_metrics(date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_workout_history_date ON workout_history(date)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log(date)"
+        )
 
         # Migration: Add hrv column to body_metrics if it doesn't exist
         cursor.execute("PRAGMA table_info(body_metrics)")
@@ -398,6 +400,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             # Backfill existing rows with a synthesised legacy user
             from uuid import uuid4
+
             now = datetime.now(tz=timezone.utc).isoformat()
             # Check if legacy user exists, create if not
             legacy_row = cursor.execute(
@@ -478,6 +481,20 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
             "ON programmes (user_id, active)",
+        )
+
+        # Archive any previously active static template. Existing history stays
+        # intact, but the user must explicitly activate a Hevy-native programme.
+        cursor.execute(
+            """
+            UPDATE programmes
+            SET active = 0,
+                source = 'legacy_static',
+                updated_at = ?
+            WHERE active = 1
+              AND (source = 'template' OR template_key = 'hybrid_powerbuilding')
+            """,
+            (datetime.now(tz=timezone.utc).isoformat(),),
         )
 
         # ---- Multi-tenant migration helper ----
@@ -755,7 +772,9 @@ def get_legacy_user_id(db_path: str = DEFAULT_DB_PATH) -> str:
     return row[0]
 
 
-def get_current_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
+def get_current_day(
+    db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
+) -> int:
     """Return the current day in the cycle (1-6)."""
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
@@ -781,7 +800,11 @@ def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -
 
 
 def save_workout(
-    payload: Any, db_path: str = DEFAULT_DB_PATH, when: str | None = None, *, user_id: str | None = None
+    payload: Any,
+    db_path: str = DEFAULT_DB_PATH,
+    when: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
@@ -804,7 +827,10 @@ def get_recent_hevy_logs(
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT hevy_payload FROM workout_history WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT ?",
-            (uid, limit,),
+            (
+                uid,
+                limit,
+            ),
         ).fetchall()
     logs = []
     for row in rows:
@@ -823,7 +849,10 @@ def get_recent_hevy_logs(
 
 
 def save_progress(
-    summary: WorkoutSummary | None, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
+    summary: WorkoutSummary | None,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary.
 
@@ -831,7 +860,11 @@ def save_progress(
     """
     if summary is None:
         return
-    today = summary.date[:10] if summary.date else datetime.now(tz=timezone.utc).date().isoformat()
+    today = (
+        summary.date[:10]
+        if summary.date
+        else datetime.now(tz=timezone.utc).date().isoformat()
+    )
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
@@ -1202,18 +1235,24 @@ def set_meta(
         uid = user_id
         if uid is None:
             row = conn.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",),
+                "SELECT id FROM users WHERE email = ?",
+                ("legacy@local",),
             ).fetchone()
             if row:
                 uid = row[0]
             else:
                 from uuid import uuid4
+
                 uid = str(uuid4())
                 conn.execute(
                     "INSERT INTO users (id, email, display_name, created_at) "
                     "VALUES (?, ?, ?, ?)",
-                    (uid, "legacy@local", "Legacy Data",
-                     datetime.now(tz=timezone.utc).isoformat()),
+                    (
+                        uid,
+                        "legacy@local",
+                        "Legacy Data",
+                        datetime.now(tz=timezone.utc).isoformat(),
+                    ),
                 )
         conn.execute(
             """
@@ -1574,7 +1613,12 @@ def save_reasoning_log(
             ON CONFLICT(user_id, context_id) DO UPDATE SET
                 reasoning = excluded.reasoning
             """,
-            (context_id, datetime.now(tz=timezone.utc).date().isoformat(), exercise_name, reasoning),
+            (
+                context_id,
+                datetime.now(tz=timezone.utc).date().isoformat(),
+                exercise_name,
+                reasoning,
+            ),
         )
 
 
@@ -1651,7 +1695,13 @@ def get_deep_correlation(
     return row[0] if row else None
 
 
-def save_chat_message(role: str, content: str, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> None:
+def save_chat_message(
+    role: str,
+    content: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
     from datetime import datetime, timezone
 
@@ -1770,9 +1820,7 @@ def get_or_create_user(
         )
 
 
-def get_user_by_id(
-    user_id: str, db_path: str = DEFAULT_DB_PATH
-) -> dict[str, Any] | None:
+def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | None:
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -1809,7 +1857,6 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
         )
         for row in rows
     ]
-
 
 
 # ---- API key management ----
@@ -2023,12 +2070,9 @@ def get_user_preferences(
         "custom_rules": json.loads(row[6]) if row[6] else [],
     }
 
+
 def save_push_subscription(
-    user_id: str,
-    endpoint: str,
-    p256dh: str,
-    auth: str,
-    db_path: str = DEFAULT_DB_PATH
+    user_id: str, endpoint: str, p256dh: str, auth: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Save a push subscription for a user."""
     now = datetime.now(tz=timezone.utc).isoformat()
@@ -2039,19 +2083,19 @@ def save_push_subscription(
             DELETE FROM push_subscriptions
             WHERE user_id = ? AND endpoint = ?
             """,
-            (user_id, endpoint)
+            (user_id, endpoint),
         )
         conn.execute(
             """
             INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, endpoint, p256dh, auth, now)
+            (user_id, endpoint, p256dh, auth, now),
         )
 
+
 def get_push_subscriptions(
-    user_id: str,
-    db_path: str = DEFAULT_DB_PATH
+    user_id: str, db_path: str = DEFAULT_DB_PATH
 ) -> list[dict[str, Any]]:
     """Get all push subscriptions for a user."""
     with _connect(db_path) as conn:
@@ -2061,29 +2105,21 @@ def get_push_subscriptions(
             FROM push_subscriptions
             WHERE user_id = ?
             """,
-            (user_id,)
+            (user_id,),
         ).fetchall()
     return [
-        {
-            "endpoint": row[0],
-            "keys": {
-                "p256dh": row[1],
-                "auth": row[2]
-            }
-        }
-        for row in rows
+        {"endpoint": row[0], "keys": {"p256dh": row[1], "auth": row[2]}} for row in rows
     ]
 
+
 def delete_push_subscription(
-    user_id: str,
-    endpoint: str,
-    db_path: str = DEFAULT_DB_PATH
+    user_id: str, endpoint: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Delete a specific push subscription."""
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-            (user_id, endpoint)
+            (user_id, endpoint),
         )
 
 
@@ -2092,82 +2128,15 @@ def delete_push_subscription(
 # ---------------------------------------------------------------------------
 
 
-def _build_template_definition() -> dict[str, Any]:
-    """Build the full dictionary definition for the Hybrid Powerbuilding template."""
-    from program import BLOCKS, COACHING_RULES, SPLIT_NAME, day_exercises, day_focus
-
-    blocks = {}
-    for block_num, block in BLOCKS.items():
-        blocks[block_num] = {
-            "name": block.name,
-            "deadlift": {
-                "sets": block.deadlift.sets,
-                "rep_range": block.deadlift.rep_range,
-                "note": block.deadlift.note,
-                "template_id": block.deadlift.template_id,
-            },
-            "pullups": {
-                "sets": block.pullups.sets,
-                "rep_range": block.pullups.rep_range,
-                "note": block.pullups.note,
-                "template_id": block.pullups.template_id,
-            },
-            "accessory_emphasis": block.accessory_emphasis,
-        }
-
-    days: list[dict[str, Any]] = []
-    block1 = BLOCKS[1]
-    for day_num in range(1, 7):
-        exercises = []
-        for ex in day_exercises(day_num, block1):
-            exercises.append(
-                {
-                    "name": ex.name,
-                    "sets": ex.sets,
-                    "rep_range": ex.rep_range,
-                    "note": ex.note,
-                    "template_id": ex.template_id,
-                }
-            )
-        days.append({"number": day_num, "focus": day_focus(day_num), "exercises": exercises})
-
-    return {
-        "name": SPLIT_NAME,
-        "cycle_weeks": 12,
-        "total_days": 6,
-        "blocks": blocks,
-        "days": days,
-        "rules": COACHING_RULES,
-    }
-
-
-AVAILABLE_TEMPLATES: list[dict[str, Any]] = [
-    {
-        "key": "hybrid_powerbuilding",
-        "name": "Hybrid Powerbuilding",
-        "description": (
-            "A 12-week block-periodised 6-day split focused on deadlift and pull-up "
-            "strength with bodybuilding accessories. Accumulation, Intensification, "
-            "Peaking blocks with periodised main-lift intensity."
-        ),
-        "source": "template",
-    },
-    {
-        "key": "infer_from_hevy",
-        "name": "Infer from my Hevy history",
-        "description": (
-            "Analyse your existing Hevy routines and workout history to detect "
-            "your real split (PPL, upper/lower, bro split, full body, custom), "
-            "frequency, and muscle-group emphasis."
-        ),
-        "source": "inferred",
-    },
-]
-
-
 def get_programme_templates() -> list[dict[str, Any]]:
-    """Return the list of available programme templates."""
-    return list(AVAILABLE_TEMPLATES)
+    """Deprecated compatibility shim.
+
+    Programme creation is exclusively Hevy-native.  Returning an empty list
+    prevents older clients from rendering or activating built-in templates
+    while they migrate to the preview/activate contract.
+    """
+
+    return []
 
 
 def get_active_programme(
@@ -2208,8 +2177,12 @@ def set_active_programme(
 ) -> None:
     """Activate a programme for a user, deactivating any previous active one."""
     now = datetime.now(tz=timezone.utc).isoformat()
-    if definition is None and source == "template":
-        definition = _build_template_definition()
+    if source == "template":
+        raise ValueError(
+            "Static programme templates have been removed; activate a Hevy-derived definition."
+        )
+    if not isinstance(definition, dict) or not definition:
+        raise ValueError("A non-empty Hevy-derived programme definition is required.")
 
     with _connect(db_path) as conn:
         conn.execute(
@@ -2261,7 +2234,10 @@ def save_notification(
             """,
             (user_id, type, title, message, link, now),
         )
-        return int(cursor.lastrowid)
+        notification_id = cursor.lastrowid
+        if notification_id is None:
+            raise RuntimeError("Failed to create notification")
+        return notification_id
 
 
 def get_notifications(
@@ -2382,4 +2358,3 @@ def get_unread_notification_count(
         )
         row = cursor.fetchone()
         return int(row[0]) if row else 0
-

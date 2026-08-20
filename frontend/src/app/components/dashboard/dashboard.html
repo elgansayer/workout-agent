@@ -1,111 +1,144 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="muted" style="text-align: center; padding: 2rem;">Loading…</div>
 }
 
 @if (error()) {
   <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
-    <strong>Error:</strong> {{ error() }}
+    <strong>Dashboard:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
-<section class="hero">
+  <section class="hero">
     <div class="hero-body">
-        <div class="hero-main">
-            <div class="cycle">Week {{ data.week }} of {{ data.cycle_weeks }} | {{ data.weekday }}</div>
-            <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
-            <p class="muted hero-focus">{{ data.block.focus }}</p>
-            <div class="schemes">
-                <span class="chip">Deadlift {{ data.block.deadlift.sets }} x {{ data.block.deadlift.rep_range }}</span>
-                <span class="chip">Pull-ups {{ data.block.pullups.sets }} x {{ data.block.pullups.rep_range }}</span>
-                <span class="chip ghost">{{ data.block.accessory_emphasis }}</span>
-            </div>
+      <div class="hero-main">
+        @if (data.setup_required) {
+          <div class="cycle">Hevy programme setup required</div>
+          <h1>Select your routines and generate a plan</h1>
+          <p class="muted hero-focus">
+            No built-in programme is being used. Connect Hevy, choose your
+            routine rotation, duration and goal.
+          </p>
+          <a class="btn" href="/programmes">Open programme builder</a>
+        } @else {
+          <div class="cycle">
+            Week {{ data.week }} of {{ data.cycle_weeks }} · {{ data.weekday }}
+          </div>
+          <h1>Block {{ data.block.number }}: {{ data.block.name }}</h1>
+          <p class="muted hero-focus">{{ data.block.focus }}</p>
+          <div class="schemes">
+            <span class="chip">{{ data.block.rep_emphasis }}</span>
+            <span class="chip">RIR {{ data.block.target_rir }}</span>
+            <span class="chip ghost">
+              {{ data.block.volume_multiplier }}Õ source volume
+            </span>
+          </div>
+        }
+      </div>
+      <div class="hero-rings">
+        <div class="ring-wrap" title="Programme progress">
+          <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
         </div>
-        <div class="hero-rings">
-            <div class="ring-wrap" title="Cycle Progress (Week {{ data.week }} of {{ data.cycle_weeks }})">
-                <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
-            </div>
-            <div class="ring-wrap" title="Block Progress">
-                <div [innerHTML]="safeHtml(data.block_ring)"></div>
-            </div>
+        <div class="ring-wrap" title="Block progress">
+          <div [innerHTML]="safeHtml(data.block_ring)"></div>
         </div>
+      </div>
     </div>
     <p class="quote">&ldquo;{{ data.quote }}&rdquo;</p>
-</section>
+  </section>
 
-@if (data.dashboard_insight) {
-<section class="panel insight-header">
-    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
-    <div class="insight-content">
-        <p><strong>Fatigue:</strong> <span class="badge" [class]="'fatigue-' + data.dashboard_insight.fatigue.toLowerCase()">{{ data.dashboard_insight.fatigue }}</span></p>
-        <p><strong>Wins & Stalls:</strong> {{ data.dashboard_insight.wins_stalls }}</p>
-        <p><strong>Action for Today:</strong> {{ data.dashboard_insight.advice }}</p>
-    </div>
-</section>
-} @else {
-<section class="panel insight-header">
-    <h2 class="ai-gradient-text">✨ Coach's Status</h2>
-    <p class="muted">Insights are generating. Check back later.</p>
-</section>
-}
+  @if (data.dashboard_insight) {
+    <section class="panel insight-header">
+      <h2 class="ai-gradient-text">Coach status</h2>
+      <div class="insight-content">
+        <p>
+          <strong>Fatigue:</strong>
+          <span
+            class="badge"
+            [class]="'fatigue-' + data.dashboard_insight.fatigue.toLowerCase()"
+          >
+            {{ data.dashboard_insight.fatigue }}
+          </span>
+        </p>
+        <p><strong>Wins and stalls:</strong> {{ data.dashboard_insight.wins_stalls }}</p>
+        <p><strong>Action for today:</strong> {{ data.dashboard_insight.advice }}</p>
+      </div>
+    </section>
+  } @else {
+    <section class="panel insight-header">
+      <h2 class="ai-gradient-text">Coach status</h2>
+      <p class="muted">Insights are generating. Check back later.</p>
+    </section>
+  }
 
-<div class="dashboard-grid">
+  <div class="dashboard-grid">
     <section class="today">
-        <h2>{{ data.weekday }}: {{ data.focus }}</h2>
-        @if (data.is_rest_day) {
-        <p class="muted">Scheduled rest day. Recovery is where the muscle is built: sleep,
-            protein, light movement only.</p>
-        } @else {
+      <h2>{{ data.weekday }}: {{ data.focus }}</h2>
+      @if (data.setup_required) {
+        <p class="muted">
+          Programme prescriptions appear here after a Hevy-derived programme
+          has been previewed and activated.
+        </p>
+      } @else if (data.rows.length) {
         <div class="exercise-list">
-            @for (row of data.rows; track row.name) {
+          @for (row of data.rows; track row.name) {
             <article class="exercise">
-                <div class="ex-head">
-                    <span class="ex-name">{{ row.name }}</span>
-                    <span class="ex-planned">{{ row.planned }}</span>
-                </div>
-                @if (row.note) {<p class="ex-note">{{ row.note }}</p>}
-                <div class="ex-meta">
-                    <span class="last">Last: {{ row.last }}</span>
-                    <span class="nudge">{{ row.nudge }}</span>
-                </div>
+              <div class="ex-head">
+                <span class="ex-name">{{ row.name }}</span>
+                <span class="ex-planned">{{ row.planned }}</span>
+              </div>
+              @if (row.role) {
+                <p class="ex-note" style="text-transform: capitalize;">{{ row.role }}</p>
+              }
+              @if (row.note) {
+                <p class="ex-note">{{ row.note }}</p>
+              }
+              <div class="ex-meta">
+                <span class="last">Last: {{ row.last }}</span>
+                <span class="nudge">{{ row.nudge }}</span>
+              </div>
             </article>
-            }
+          }
         </div>
-        }
+      } @else {
+        <p class="muted">
+          No routine prescription is available for this rotation position.
+        </p>
+      }
     </section>
 
     <section class="lifestyle panel">
-        <h2>Today's lifestyle</h2>
-        <ul class="pillars">
-            @for (line of data.lifestyle; track $index) {
-            <li>{{ line }}</li>
-            }
-        </ul>
+      <h2>Today's lifestyle</h2>
+      <ul class="pillars">
+        @for (line of data.lifestyle; track $index) {
+          <li>{{ line }}</li>
+        }
+      </ul>
     </section>
 
     <section class="panel">
-        <h2>Coaching self-review</h2>
-        <p class="muted">{{ data.review_headline }}</p>
-        @if (data.review_lifts) {
+      <h2>Coaching self-review</h2>
+      <p class="muted">{{ data.review_headline }}</p>
+      @if (data.review_lifts) {
         <div class="review-list">
-            @for (lift of data.review_lifts; track lift.name) {
+          @for (lift of data.review_lifts; track lift.name) {
             <div class="review-row" [class]="'trend-' + lift.trend">
-                <span class="review-name">{{ lift.name }}</span>
-                <span class="review-trend">{{ lift.trend }}</span>
-                <span class="review-detail">{{ lift.as_line }}</span>
+              <span class="review-name">{{ lift.name }}</span>
+              <span class="review-trend">{{ lift.trend }}</span>
+              <span class="review-detail">{{ lift.as_line }}</span>
             </div>
-            }
+          }
         </div>
-        } @else {
+      } @else {
         <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
-        }
-        <p class="muted review-recovery">{{ data.review_recovery }}</p>
+      }
+      <p class="muted review-recovery">{{ data.review_recovery }}</p>
     </section>
 
     <section class="panel" style="grid-column: 1 / -1;">
-        <h2>Consistency</h2>
-        <p class="streak">{{ data.streak }} day streak</p>
-        <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>
+      <h2>Consistency</h2>
+      <p class="streak">{{ data.streak }} day streak</p>
+      <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>
     </section>
-</div>
+  </div>
 }

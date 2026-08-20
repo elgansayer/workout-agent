@@ -52,7 +52,6 @@ from database import (
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
-    get_programme_templates,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -72,6 +71,15 @@ from database import (
     set_active_programme,
     set_meta,
 )
+from dynamic_programme import (
+    MAX_DURATION_WEEKS,
+    MIN_DURATION_WEEKS,
+    ProgrammeActivationRequest,
+    ProgrammePreviewRequest,
+    build_programme_preview,
+    goal_options,
+    serialise_hevy_source,
+)
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -84,19 +92,11 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
+from hevy_reader import HevyTrainingData
 from program import (
-    BLOCK_WEEKS,
-    BLOCKS,
-    COACHING_RULES,
     CYCLE_WEEKS,
-    SPLIT_NAME,
-    block_for_week,
-    day_exercises,
-    day_focus,
-    today_day,
     week_in_cycle,
 )
-from programme_inference import InferredProgramme
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -107,7 +107,6 @@ logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
-
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     user_id = request.session.get("user_id") if hasattr(request, "session") else None
     return resolve_provider(
@@ -159,9 +158,9 @@ def _check_api_auth(request: Request) -> str:
         return user["id"]
     if ALLOW_ANONYMOUS_WEB:
         from database import get_legacy_user_id
+
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
-
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -194,8 +193,6 @@ _BASE_DIR = Path(__file__).resolve().parent
 _ASSET_VERSIONS: dict[str, str] = {}
 
 
-
-
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
@@ -207,24 +204,30 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 # Locally: root/frontend/dist/...
 # Docker: /app/frontend/dist/...
 if (_BASE_DIR.parent / "frontend/dist/frontend/browser").exists():
-    FRONTEND_DIST = _BASE_DIR.parent / "frontend/dist/frontend/browser" # Docker
+    FRONTEND_DIST = _BASE_DIR.parent / "frontend/dist/frontend/browser"  # Docker
 else:
-    FRONTEND_DIST = _BASE_DIR.parent.parent / "frontend/dist/frontend/browser" # Local dev
+    FRONTEND_DIST = (
+        _BASE_DIR.parent.parent / "frontend/dist/frontend/browser"
+    )  # Local dev
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST)), name="angular_assets")
 
 # Enable CORS for external/remote frontend hosting
 _cors_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
-_cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()] if _cors_origins_raw else [
-    "http://localhost:4200",
-    "http://127.0.0.1:4200",
-    "http://localhost:8770",
-    "http://127.0.0.1:8770",
-    "http://localhost:8080",
-    "http://127.0.0.1:8080",
-    "http://localhost:3000",
-]
+_cors_origins = (
+    [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+    if _cors_origins_raw
+    else [
+        "http://localhost:4200",
+        "http://127.0.0.1:4200",
+        "http://localhost:8770",
+        "http://127.0.0.1:8770",
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:3000",
+    ]
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -242,12 +245,25 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
             # Allow static files, assets, JS/CSS/image/font assets, and auth endpoints
             if (
                 path.startswith(("/static", "/assets"))
-                or path.endswith((
-                    ".js", ".css", ".png", ".jpg", ".jpeg",
-                    ".svg", ".ico", ".woff", ".woff2", ".ttf",
-                    ".map", ".json", ".webmanifest"
-                ))
-                or path in [
+                or path.endswith(
+                    (
+                        ".js",
+                        ".css",
+                        ".png",
+                        ".jpg",
+                        ".jpeg",
+                        ".svg",
+                        ".ico",
+                        ".woff",
+                        ".woff2",
+                        ".ttf",
+                        ".map",
+                        ".json",
+                        ".webmanifest",
+                    )
+                )
+                or path
+                in [
                     "/login",
                     "/login/google",
                     "/logout",
@@ -281,8 +297,6 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
 )
-
-
 
 
 @app.get("/login/google")
@@ -372,7 +386,9 @@ def _weight_on_or_before(weights: list[tuple[str, float]], when: str) -> float |
     return result
 
 
-def _find_lift_series(series: dict[str, Any], *keywords: str) -> tuple[str | None, list[Any]]:
+def _find_lift_series(
+    series: dict[str, Any], *keywords: str
+) -> tuple[str | None, list[Any]]:
     """Find an exercise whose name contains all (then any) of the keywords."""
     for name, entries in series.items():
         low = name.lower()
@@ -442,104 +458,148 @@ def _current_streak(levels: dict[str, int]) -> int:
     return streak
 
 
-def _dashboard_context(today: date | None = None, user_id: str | None = None) -> dict:
-    if today is None:
-        today = datetime.now(tz=timezone.utc).date()
-    start = get_programme_start_date(DB_PATH)
-    week = week_in_cycle(start, today)
-    block = block_for_week(week)
+def _dashboard_context(
+    today: date | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a dashboard from the active Hevy programme, or a setup state."""
+
+    today = today or datetime.now(tz=timezone.utc).date()
+    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
+    definition = active.get("definition") if active else None
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
-    # Check for a user-selected active programme.
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    active_defn = active.get("definition") if active else None
-
-    day = today_day(today)
+    setup_required = not bool(definition)
     rows: list[dict[str, Any]] = []
-    focus = "Rest & Recovery"
+    focus = "Select routines from Hevy"
+    current_day_number: int | None = None
+    is_rest_day = True
+    cycle_weeks = 0
+    week = 0
+    block_weeks = 1
+    week_in_block = 0
+    block: dict[str, Any] = {
+        "number": 0,
+        "name": "No active programme",
+        "focus": "Connect Hevy, select routines and generate your programme.",
+        "rep_emphasis": "No prescription yet",
+        "target_rir": "",
+        "progression": "",
+    }
 
-    if active_defn:
-        days_data = active_defn.get("days", [])
-        total_days = len(days_data) or 1
-        current_day = ((today - start).days % total_days) + 1
-        active_day = next(
-            (d for d in days_data if d.get("number") == current_day), None
+    if definition:
+        spec = definition.get("programme_spec") or {}
+        cycle_weeks = int(
+            spec.get("duration_weeks") or definition.get("cycle_weeks") or 1
         )
-        if active_day:
-            focus = active_day.get("focus", "Training")
-            for ex in active_day.get("exercises", []):
-                best = bests_norm.get(normalise_name(ex.get("name", "")))
+        try:
+            start = date.fromisoformat(
+                str(
+                    spec.get("start_date")
+                    or get_programme_start_date(DB_PATH, user_id=user_id)
+                )
+            )
+        except ValueError:
+            start = get_programme_start_date(DB_PATH, user_id=user_id)
+        elapsed_days = max(0, (today - start).days)
+        week = min(cycle_weeks, elapsed_days // 7 + 1)
+
+        for candidate in definition.get("blocks", []):
+            start_week = int(candidate.get("start_week") or 1)
+            end_week = int(candidate.get("end_week") or start_week)
+            if start_week <= week <= end_week:
+                block = dict(candidate)
+                block_weeks = max(1, end_week - start_week + 1)
+                week_in_block = week - start_week + 1
+                break
+
+        days = definition.get("days") or []
+        if days:
+            current_day_number = elapsed_days % len(days) + 1
+            active_day = days[current_day_number - 1]
+            focus = str(active_day.get("focus") or "Training")
+            is_rest_day = False
+            for exercise in active_day.get("exercises", []):
+                name = str(exercise.get("name") or "?")
+                rep_range = str(exercise.get("rep_range") or "?")
+                best = bests_norm.get(normalise_name(name))
                 rows.append(
                     {
-                        "name": ex.get("name", "?"),
-                        "planned": f"{ex.get('sets', 0)} x {ex.get('rep_range', '?')}",
-                        "note": ex.get("note", ""),
+                        "name": name,
+                        "planned": (
+                            exercise.get("scheme")
+                            or f"{exercise.get('sets', 0)} × {rep_range}"
+                        ),
+                        "note": exercise.get("note", ""),
                         "last": _format_best(best),
-                        "nudge": _overload_nudge(ex.get("rep_range", ""), best),
+                        "nudge": _overload_nudge(rep_range, best),
+                        "role": exercise.get("role"),
                     }
                 )
-    elif day is not None:
-        focus = day_focus(day)
-        for ex in day_exercises(day, block):
-            best = bests_norm.get(normalise_name(ex.name))
-            rows.append(
-                {
-                    "name": ex.name,
-                    "planned": f"{ex.sets} x {ex.rep_range}",
-                    "note": ex.note,
-                    "last": _format_best(best),
-                    "nudge": _overload_nudge(ex.rep_range, best),
-                },
-            )
 
     metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
-    guidance = lifestyle.daily_guidance(day, day is None, recovery_like)
+    guidance = lifestyle.daily_guidance(
+        current_day_number,
+        is_rest_day,
+        recovery_like,
+    )
 
     levels = _training_levels(user_id=user_id)
     streak = _current_streak(levels)
-    week_in_block = ((week - 1) % BLOCK_WEEKS) + 1
-
-    weight_spark = charts.sparkline([m["weight_kg"] for m in metrics if m["weight_kg"]])
+    weight_spark = charts.sparkline(
+        [metric["weight_kg"] for metric in metrics if metric["weight_kg"]]
+    )
     fat_spark = charts.sparkline(
-        [m["body_fat_pct"] for m in metrics if m["body_fat_pct"]],
+        [metric["body_fat_pct"] for metric in metrics if metric["body_fat_pct"]],
         colour=charts.WARN,
     )
     latest_fat = next(
-        (m["body_fat_pct"] for m in reversed(metrics) if m["body_fat_pct"]),
+        (
+            metric["body_fat_pct"]
+            for metric in reversed(metrics)
+            if metric["body_fat_pct"]
+        ),
         None,
     )
-
     review = insights.build_insights(
         get_progress_history(db_path=DB_PATH, user_id=user_id),
         metrics,
         None,
     )
 
+    cycle_progress = week / cycle_weeks * 100 if cycle_weeks else 0
+    block_progress = week_in_block / block_weeks * 100 if week_in_block else 0
+    block_label = str(block.get("name") or "Setup").split(" ")[0]
+
     return {
         "active": "today",
+        "setup_required": setup_required,
+        "active_programme_name": (definition.get("name") if definition else None),
         "quote": _daily_quote(today),
         "week": week,
-        "cycle_weeks": CYCLE_WEEKS,
+        "cycle_weeks": cycle_weeks,
         "block": block,
         "week_in_block": week_in_block,
-        "block_weeks": BLOCK_WEEKS,
+        "block_weeks": block_weeks,
         "focus": focus,
-        "is_rest_day": day is None,
+        "is_rest_day": is_rest_day,
         "weekday": today.strftime("%A"),
         "rows": rows,
         "lifestyle": guidance.as_lines(),
         "cycle_ring": charts.progress_ring(
-            week / CYCLE_WEEKS * 100,
-            label=f"Wk {week}",
-            sub=f"of {CYCLE_WEEKS}",
+            cycle_progress,
+            label=f"Wk {week}" if week else "Setup",
+            sub=f"of {cycle_weeks}" if cycle_weeks else "Hevy",
         ),
         "block_ring": charts.progress_ring(
-            week_in_block / BLOCK_WEEKS * 100,
-            label=block.name.split(" ")[0],
-            sub=f"wk {week_in_block}/{BLOCK_WEEKS}",
+            block_progress,
+            label=block_label,
+            sub=(
+                f"wk {week_in_block}/{block_weeks}" if week_in_block else "not active"
+            ),
             colour=charts.ACCENT_2,
         ),
         "streak": streak,
@@ -559,18 +619,15 @@ def _dashboard_context(today: date | None = None, user_id: str | None = None) ->
 def dashboard(request: Request):
     return FileResponse(FRONTEND_DIST / "index.html")
 
+
 @app.get("/api/dashboard")
 def api_dashboard(request: Request) -> JSONResponse:
-    user_id = request.session.get("user_id")
-    if not user_id:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=401, detail="Unauthorized")
-        
+    user_id = _check_api_auth(request)
+
     from fastapi.encoders import jsonable_encoder
+
     ctx = _dashboard_context(user_id=user_id)
     return JSONResponse(content=jsonable_encoder(ctx))
-
-
 
 
 def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
@@ -592,8 +649,6 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
         "muscle": _series("muscle_pct", "%", charts.ACCENT_2),
         "resting_hr": _series("resting_hr", "bpm", charts.PINK),
     }
-
-
 
 
 def _project_lift(
@@ -632,10 +687,6 @@ def _project_lift(
     }
 
 
-
-
-
-
 def _block_lift_str(lift: dict | None) -> str:
     """Format a lift dict as 'sets x rep_range' or empty string."""
     if not lift:
@@ -647,151 +698,173 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
-
-
-@app.post("/api/programmes/select")
-async def select_programme(request: Request) -> dict[str, Any]:
-    """Activate a programme template for the current user."""
+@app.post("/api/programmes/preview")
+def preview_programme(
+    payload: ProgrammePreviewRequest,
+    request: Request,
+) -> JSONResponse:
+    """Generate a deterministic preview from selected Hevy routines."""
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    try:
+        preview = build_programme_preview(training_data, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    body: dict[str, Any] = {}
-    content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            body = {}
-    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
-        try:
-            form = await request.form()
-            body = dict(form)
-        except Exception:  # noqa: BLE001
-            body = {}
-    else:
-        try:
-            body = await request.json()
-        except Exception:  # noqa: BLE001
-            try:
-                form = await request.form()
-                body = dict(form)
-            except Exception:  # noqa: BLE001
-                body = {}
+    return JSONResponse(jsonable_encoder({"preview": preview}))
 
-    template_key = str(
-        body.get("template_key")
-        or request.query_params.get("template_key")
-        or ""
-    ).strip()
 
-    if not template_key:
-        raise HTTPException(status_code=400, detail="template_key is required")
+@app.post("/api/programmes/activate")
+def activate_programme(
+    payload: ProgrammeActivationRequest,
+    request: Request,
+) -> JSONResponse:
+    """Reconfirm Hevy source data and activate the generated programme."""
 
-    # Validate against known templates.
-    known_keys = {t["key"] for t in get_programme_templates()}
-    if template_key not in known_keys and template_key != "custom":
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    preview_request = ProgrammePreviewRequest.model_validate(
+        payload.model_dump(exclude={"preview_token"})
+    )
+    try:
+        preview = build_programme_preview(training_data, preview_request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if preview["preview_token"] != payload.preview_token:
         raise HTTPException(
-            status_code=400,
-            detail=f"Unknown template '{template_key}'. Available: {', '.join(sorted(known_keys))}",
+            status_code=409,
+            detail=(
+                "The Hevy routines or programme settings changed after preview. "
+                "Generate a fresh preview before activation."
+            ),
         )
-
-    source = "template"
-    definition = body.get("definition")
-
-    if template_key == "infer_from_hevy":
-        source = "inferred"
-        try:
-            definition = _run_hevy_inference(user_id)
-        except HTTPException:
-            raise
-        except Exception as exc:
-            logger.exception("Hevy inference failed for user %s.", user_id)
-            raise HTTPException(
-                status_code=500,
-                detail="Could not infer programme from Hevy. Check your API key in Settings.",
-            ) from exc
-    elif template_key == "custom":
-        source = "custom"
 
     set_active_programme(
         user_id,
-        source=source,
-        template_key=template_key,
-        definition=definition,
+        source="hevy",
+        template_key=f"hevy:{preview['preview_token'][:20]}",
+        definition=preview,
         db_path=DB_PATH,
     )
-    return {"status": "ok", "template_key": template_key}
+    set_meta(
+        "programme_start_date",
+        str(preview["programme_spec"]["start_date"]),
+        DB_PATH,
+        user_id=user_id,
+    )
+    save_notification(
+        user_id,
+        title="Hevy programme activated",
+        message=(
+            f"{preview['name']} is active for "
+            f"{preview['cycle_weeks']} weeks using "
+            f"{preview['total_days']} selected routines."
+        ),
+        type="programme",
+        link="/plan",
+        db_path=DB_PATH,
+    )
 
-
-def _build_inferred_definition(
-    inferred: InferredProgramme,
-) -> dict:
-    """Build a programme definition dict from an InferredProgramme.
-
-    Produces a structure compatible with the programme templates system
-    so the programmes.html preview and /plan page render correctly.
-    """
-    days: list[dict] = []
-    for i, day in enumerate(inferred.training_days):
-        exercises = []
-        for ex in day.exercises:
-            exercises.append(
-                {
-                    "name": ex.title,
-                    "sets": ex.sets,
-                    "rep_range": f"{ex.target_reps or 8}-{ex.target_reps or 12}",
-                    "note": ex.notes or "",
-                    "template_id": ex.template_id,
-                }
-            )
-        days.append(
+    return JSONResponse(
+        jsonable_encoder(
             {
-                "number": i + 1,
-                "focus": day.focus_summary(),
-                "exercises": exercises,
+                "status": "ok",
+                "active_programme": get_active_programme(
+                    user_id,
+                    db_path=DB_PATH,
+                ),
             }
         )
+    )
 
-    # Build a simple block structure from the inferred data.
-    blocks: list[dict] = [
-        {
-            "number": 1,
-            "name": "Inferred",
-            "weeks": f"1-{len(inferred.training_days) or 6}",
-            "focus": (
-                f"Data-driven {inferred.split_type.replace('_', ' ').title()} split "
-                f"at {inferred.sessions_per_week} sessions/week."
+
+@app.post("/api/programmes/select")
+async def select_programme(request: Request) -> JSONResponse:
+    """Compatibility adapter for clients using the retired template endpoint."""
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+
+    template_key = str(body.get("template_key") or "").strip()
+    if template_key == "hybrid_powerbuilding":
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Hybrid Powerbuilding has been removed. "
+                "Select routines from Hevy and generate a programme preview."
             ),
-            "deadlift": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
-            "pullups": {"sets": 0, "rep_range": "", "note": "", "template_id": ""},
-            "accessory_emphasis": "",
-        }
-    ]
+        )
+    if template_key != "infer_from_hevy":
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "Static programme selection has been removed. "
+                "Use /api/programmes/preview and /api/programmes/activate."
+            ),
+        )
 
-    return {
-        "name": f"Inferred: {inferred.split_type.replace('_', ' ').title()}",
-        "cycle_weeks": 4,
-        "total_days": len(inferred.training_days),
-        "blocks": blocks,
-        "days": days,
-        "rules": [
-            f"Inferred split type: {inferred.split_type.replace('_', ' ').title()}.",
-            f"Training {inferred.sessions_per_week} sessions per week.",
-            f"Next suggested routine: {inferred.next_routine.title if inferred.next_routine else 'none'}.",
-            "Derived from your Hevy routine templates and workout history.",
-        ],
-    }
+    training_data = _load_hevy_training_for_user(user_id)
+    if not training_data.routines:
+        raise HTTPException(
+            status_code=422,
+            detail="No Hevy routines are available for programme generation.",
+        )
+
+    try:
+        preview_request = ProgrammePreviewRequest(
+            selected_routine_ids=[routine.id for routine in training_data.routines],
+            duration_weeks=int(body.get("duration_weeks") or 12),
+            goal=body.get("goal") or "general_fitness",
+            start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
+            sessions_per_week=body.get("sessions_per_week"),
+            experience=body.get("experience") or "intermediate",
+            max_session_minutes=body.get("max_session_minutes"),
+            adaptation_aggressiveness=(
+                body.get("adaptation_aggressiveness") or "balanced"
+            ),
+        )
+        preview = build_programme_preview(training_data, preview_request)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    set_active_programme(
+        user_id,
+        source="hevy",
+        template_key=f"hevy:{preview['preview_token'][:20]}",
+        definition=preview,
+        db_path=DB_PATH,
+    )
+    set_meta(
+        "programme_start_date",
+        str(preview["programme_spec"]["start_date"]),
+        DB_PATH,
+        user_id=user_id,
+    )
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "source": "hevy",
+                "preview_token": preview["preview_token"],
+            }
+        )
+    )
 
 
-def _run_hevy_inference(user_id: str) -> dict:
-    """Fetch Hevy data and infer the user's training programme.
-
-    Raises HTTPException if the user has no Hevy API key configured or if
-    the inference fails.
-    """
-    from hevy_reader import fetch_user_training
-    from programme_inference import infer_programme
+def _load_hevy_training_for_user(
+    user_id: str,
+    *,
+    workout_limit: int = 56,
+) -> HevyTrainingData:
+    """Fetch the current user's Hevy source data or raise a useful API error."""
 
     keys = get_user_api_keys(user_id, db_path=DB_PATH)
     hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
@@ -801,19 +874,22 @@ def _run_hevy_inference(user_id: str) -> dict:
             detail="No Hevy API key configured. Add your key in Settings first.",
         )
 
-    training_data = fetch_user_training(hevy_key)
-    if not training_data.routines and not training_data.recent_workouts:
-        raise HTTPException(
-            status_code=400,
-            detail="No routines or workouts found in your Hevy account. Create some routines first.",
+    from hevy_reader import fetch_user_training
+
+    try:
+        return fetch_user_training(
+            hevy_key,
+            workout_limit=workout_limit,
         )
-
-    inferred = infer_programme(training_data)
-    return _build_inferred_definition(inferred)
-
-
-
-
+    except Exception as exc:
+        logger.exception(
+            "Could not fetch Hevy source data for user %s.",
+            user_id,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=("Hevy could not be reached. Check the connection and try again."),
+        ) from exc
 
 
 @app.get("/api/xai_reasoning/{context_id}")
@@ -839,7 +915,8 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
     try:
         response = provider.generate(prompt)
-        reasoning = (response.text or "Could not determine reasoning.").strip()
+        response_text = response if isinstance(response, str) else "".join(response)
+        reasoning = (response_text or "Could not determine reasoning.").strip()
     except Exception as exc:  # noqa: BLE001
         logger.error(f"Error in xai_reasoning: {exc}")
         reasoning = "Could not determine reasoning."
@@ -862,14 +939,12 @@ def project_peak(request: Request) -> dict[str, Any]:
     prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
     try:
         response = provider.generate(prompt)
-        text = (response.text or "").strip()
+        text = (response if isinstance(response, str) else "".join(response)).strip()
         text = text.removeprefix("```json").removeprefix("```")
         text = text.removesuffix("```")
         return json.loads(text.strip())
     except Exception:  # noqa: BLE001
         return {"error": "Failed to project peak."}
-
-
 
 
 @app.get("/api/chat/history")
@@ -958,7 +1033,9 @@ Respond naturally as Coach. If the question is about their training data, refere
             # Save the full assistant response
             full_response = "".join(collected)
             if full_response:
-                save_chat_message("assistant", full_response, db_path=DB_PATH, user_id=user_id)
+                save_chat_message(
+                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
+                )
 
     return StreamingResponse(generate(), media_type="text/plain")
 
@@ -966,8 +1043,6 @@ Respond naturally as Coach. If the question is about their training data, refere
 def _gh_redirect_uri(request: Request) -> str:
     """The OAuth redirect URI, explicit env override or derived from the request."""
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
-
-
 
 
 @app.post("/api/settings/key")
@@ -1090,11 +1165,7 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Invalid push subscription data")
 
     save_push_subscription(
-        user_id,
-        endpoint=endpoint,
-        p256dh=p256dh,
-        auth=auth,
-        db_path=DB_PATH
+        user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
     return {"status": "ok"}
 
@@ -1176,20 +1247,29 @@ def api_progress(request: Request):
     charts_data = []
     for name in sorted(series):
         entries = series[name]
-        points = [{"date": e["date"][5:], "value": e["top_weight_kg"], "label": _format_best(e)} for e in entries]
+        points = [
+            {
+                "date": e["date"][5:],
+                "value": e["top_weight_kg"],
+                "label": _format_best(e),
+            }
+            for e in entries
+        ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
         e1rms_filtered = [v for v in e1rms if v is not None]
         best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
-        charts_data.append({
-            "name": name,
-            "svg": charts.line_chart(points, unit="kg"),
-            "best_e1rm": best_e1rm,
-            "sessions": len(entries),
-        })
-    return JSONResponse(jsonable_encoder({
-        "charts": charts_data,
-        "body": _body_charts(user_id=user_id)
-    }))
+        charts_data.append(
+            {
+                "name": name,
+                "svg": charts.line_chart(points, unit="kg"),
+                "best_e1rm": best_e1rm,
+                "sessions": len(entries),
+            }
+        )
+    return JSONResponse(
+        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+    )
+
 
 @app.get("/api/stats")
 def api_stats(request: Request):
@@ -1201,11 +1281,11 @@ def api_stats(request: Request):
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
-    
+
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
     days_on_programme = (today - start).days
-    
+
     focus_counts: dict[str, int] = {}
     for log in logs:
         f = log.get("focus") if isinstance(log, dict) else getattr(log, "focus", None)
@@ -1213,7 +1293,9 @@ def api_stats(request: Request):
         if d is not None and f:
             focus_counts[f] = focus_counts.get(f, 0) + 1
     distribution = (
-        charts.donut([{"label": k, "value": v} for k, v in sorted(focus_counts.items())])
+        charts.donut(
+            [{"label": k, "value": v} for k, v in sorted(focus_counts.items())]
+        )
         if focus_counts
         else None
     )
@@ -1223,7 +1305,10 @@ def api_stats(request: Request):
     )
     muscle_donut = (
         charts.donut(
-            [{"label": g, "value": v} for g, v in sorted(groups.items(), key=lambda kv: -kv[1])]
+            [
+                {"label": g, "value": v}
+                for g, v in sorted(groups.items(), key=lambda kv: -kv[1])
+            ]
         )
         if groups
         else None
@@ -1232,7 +1317,10 @@ def api_stats(request: Request):
     recent = volumes[-14:]
     volume_bars = (
         charts.bar_chart(
-            [{"label": v["date"][5:], "value": v["volume"], "caption": v["date"]} for v in recent],
+            [
+                {"label": v["date"][5:], "value": v["volume"], "caption": v["date"]}
+                for v in recent
+            ],
             unit="kg",
         )
         if recent
@@ -1254,14 +1342,26 @@ def api_stats(request: Request):
             continue
         score = analytics.dots_score(bw, e1rm)
         if score:
-            dots_points.append({"date": e["date"][5:], "value": score, "label": f"{score:g}"})
-        ratio_points.append({
-            "date": e["date"][5:],
-            "value": round(e1rm / bw, 2),
-            "label": f"{e1rm / bw:.2f}x",
-        })
-    dots_chart = charts.line_chart(dots_points, colour=charts.PURPLE) if len(dots_points) > 1 else None
-    ratio_chart = charts.line_chart(ratio_points, unit="x", colour=charts.ACCENT_2) if len(ratio_points) > 1 else None
+            dots_points.append(
+                {"date": e["date"][5:], "value": score, "label": f"{score:g}"}
+            )
+        ratio_points.append(
+            {
+                "date": e["date"][5:],
+                "value": round(e1rm / bw, 2),
+                "label": f"{e1rm / bw:.2f}x",
+            }
+        )
+    dots_chart = (
+        charts.line_chart(dots_points, colour=charts.PURPLE)
+        if len(dots_points) > 1
+        else None
+    )
+    ratio_chart = (
+        charts.line_chart(ratio_points, unit="x", colour=charts.ACCENT_2)
+        if len(ratio_points) > 1
+        else None
+    )
 
     target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
     projections = [
@@ -1280,25 +1380,30 @@ def api_stats(request: Request):
         for pr in prs
     ]
 
-    return JSONResponse(jsonable_encoder({
-        "total_sessions": total_sessions,
-        "total_volume": total_volume,
-        "days_on_programme": days_on_programme,
-        "exercises_tracked": len(series),
-        "has_distribution": bool(focus_counts),
-        "distribution": distribution,
-        "has_muscle": bool(groups),
-        "muscle_donut": muscle_donut,
-        "has_volume": bool(recent),
-        "volume_bars": volume_bars,
-        "block_phase_svg": block_phase_svg,
-        "recovery_grid_svg": recovery_grid_svg,
-        "vol_dist_svg": vol_dist_svg,
-        "dots_chart": dots_chart,
-        "ratio_chart": ratio_chart,
-        "projections": projections,
-        "prs": pr_rows,
-    }))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "total_sessions": total_sessions,
+                "total_volume": total_volume,
+                "days_on_programme": days_on_programme,
+                "exercises_tracked": len(series),
+                "has_distribution": bool(focus_counts),
+                "distribution": distribution,
+                "has_muscle": bool(groups),
+                "muscle_donut": muscle_donut,
+                "has_volume": bool(recent),
+                "volume_bars": volume_bars,
+                "block_phase_svg": block_phase_svg,
+                "recovery_grid_svg": recovery_grid_svg,
+                "vol_dist_svg": vol_dist_svg,
+                "dots_chart": dots_chart,
+                "ratio_chart": ratio_chart,
+                "projections": projections,
+                "prs": pr_rows,
+            }
+        )
+    )
+
 
 @app.get("/api/history")
 def api_history(request: Request):
@@ -1306,89 +1411,162 @@ def api_history(request: Request):
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     return JSONResponse(jsonable_encoder({"logs": logs}))
 
+
 @app.get("/api/plan")
-def api_plan(request: Request):
+def api_plan(request: Request) -> JSONResponse:
+    """Render only an activated Hevy-native programme; never a static fallback."""
+
     user_id = _check_api_auth(request)
-    today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(get_programme_start_date(DB_PATH), today)
-    
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    
-    if active and active.get("definition"):
-        defn = active["definition"]
-        return JSONResponse(jsonable_encoder({
-            "is_active_programme": True,
-            "split_name": defn.get("name") or active.get("name") or "Active Programme",
-            "week": week,
-            "cycle_weeks": defn.get("cycle_weeks", CYCLE_WEEKS),
-            "blocks": defn.get("blocks", []),
-            "days": defn.get("days", []),
-            "rules": defn.get("rules", COACHING_RULES),
-        }))
-        
-    current_block = block_for_week(week)
-    day = today_day(today)
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    raw_definition = active.get("definition") if active else None
+    definition: dict[str, Any] = (
+        raw_definition if isinstance(raw_definition, dict) else {}
+    )
+    source = active.get("source") if active else None
 
-    days = []
-    for d in range(1, 7):
-        days.append({
-            "number": d,
-            "focus": day_focus(d),
-            "is_today": d == day,
-            "exercises": [
+    if source != "hevy" or not definition:
+        return JSONResponse(
+            jsonable_encoder(
                 {
-                    "name": ex.name,
-                    "scheme": f"{ex.sets} x {ex.rep_range}",
-                    "note": ex.note,
+                    "setup_required": True,
+                    "is_active_programme": False,
+                    "source": None,
+                    "active_programme": None,
+                    "split_name": "No active programme",
+                    "week": 0,
+                    "cycle_weeks": 0,
+                    "current_block": None,
+                    "blocks": [],
+                    "days": [],
+                    "rules": [],
+                    "analysis": {},
+                    "warnings": [],
+                    "programme_spec": {},
                 }
-                for ex in day_exercises(d, current_block)
-            ],
-        })
+            )
+        )
 
-    blocks = [
-        {
-            "number": b.number,
-            "name": b.name,
-            "weeks": b.weeks,
-            "focus": b.focus,
-            "deadlift": f"{b.deadlift.sets} x {b.deadlift.rep_range}",
-            "pullups": f"{b.pullups.sets} x {b.pullups.rep_range}",
-            "accessory": b.accessory_emphasis,
-            "is_current": b.number == current_block.number,
-        }
-        for b in BLOCKS.values()
-    ]
-    
-    return JSONResponse(jsonable_encoder({
-        "is_active_programme": False,
-        "split_name": SPLIT_NAME,
-        "week": week,
-        "cycle_weeks": CYCLE_WEEKS,
-        "current_block": current_block.name,
-        "days": days,
-        "blocks": blocks,
-        "rules": COACHING_RULES,
-    }))
+    spec = definition.get("programme_spec") or {}
+    cycle_weeks = max(
+        1,
+        int(spec.get("duration_weeks") or definition.get("cycle_weeks") or 1),
+    )
+    try:
+        start_date = date.fromisoformat(str(spec.get("start_date")))
+    except (TypeError, ValueError):
+        start_date = get_programme_start_date(DB_PATH, user_id=user_id)
+
+    today = datetime.now(tz=timezone.utc).date()
+    elapsed_days = max(0, (today - start_date).days)
+    week = min(cycle_weeks, elapsed_days // 7 + 1)
+
+    blocks: list[dict[str, Any]] = []
+    current_block: dict[str, Any] | None = None
+    for raw_block in definition.get("blocks") or []:
+        block = dict(raw_block)
+        start_week = int(block.get("start_week") or 1)
+        end_week = int(block.get("end_week") or start_week)
+        block["is_current"] = start_week <= week <= end_week
+        if block["is_current"]:
+            current_block = block
+        blocks.append(block)
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "setup_required": False,
+                "is_active_programme": True,
+                "source": "hevy",
+                "active_programme": active,
+                "split_name": (
+                    definition.get("name")
+                    or (active or {}).get("name")
+                    or "Hevy programme"
+                ),
+                "week": week,
+                "cycle_weeks": cycle_weeks,
+                "current_block": (current_block.get("name") if current_block else None),
+                "blocks": blocks,
+                "days": definition.get("days") or [],
+                "rules": definition.get("rules") or [],
+                "analysis": definition.get("analysis") or {},
+                "warnings": definition.get("warnings") or [],
+                "programme_spec": spec,
+            }
+        )
+    )
 
 
 @app.get("/api/programmes")
-def api_programmes(request: Request):
+def api_programmes(request: Request) -> JSONResponse:
+    """Return the user's live Hevy routine library and active programme."""
+
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
-    templates = get_programme_templates()
-    return JSONResponse(jsonable_encoder({
-        "active_programme": active,
-        "current_state": active,
-        "templates": templates,
-    }))
+    keys = get_user_api_keys(user_id, db_path=DB_PATH)
+    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+
+    empty_source: dict[str, Any] = {
+        "username": None,
+        "workout_count": 0,
+        "routine_count": 0,
+        "recent_workout_count": 0,
+        "folders": [],
+        "routines": [],
+    }
+    connection: dict[str, Any]
+    source = empty_source
+
+    if not hevy_key:
+        connection = {
+            "state": "disconnected",
+            "detail": "Add your Hevy API key in Settings to import routines.",
+            "username": None,
+        }
+    else:
+        try:
+            training_data = _load_hevy_training_for_user(user_id)
+            source = serialise_hevy_source(training_data)
+            connection = {
+                "state": "connected",
+                "detail": None,
+                "username": training_data.username,
+            }
+        except HTTPException as exc:
+            connection = {
+                "state": "error",
+                "detail": str(exc.detail),
+                "username": None,
+            }
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "active_programme": active,
+                "current_state": active,
+                "templates": [],
+                "connection": connection,
+                "source": source,
+                "duration": {
+                    "minimum_weeks": MIN_DURATION_WEEKS,
+                    "maximum_weeks": MAX_DURATION_WEEKS,
+                    "default_weeks": 12,
+                },
+                "goals": goal_options(),
+            }
+        )
+    )
+
 
 @app.get("/api/settings")
 def api_settings(request: Request):
     user_id = _check_api_auth(request)
-    
+
     prefs = get_user_preferences(user_id, DB_PATH)
-    keys = get_user_api_keys(user_id, DB_PATH)  # dict mapping provider_name -> record dict
-    
+    keys = get_user_api_keys(
+        user_id, DB_PATH
+    )  # dict mapping provider_name -> record dict
+
     user_keys = {}
     known_providers = ["hevy", "gemini", "claude", "openai", "deepseek"]
     for p in known_providers:
@@ -1402,7 +1580,11 @@ def api_settings(request: Request):
 
     ai_providers = [
         {"id": "gemini", "name": "Google Gemini", "default_model": "gemini-2.5-flash"},
-        {"id": "claude", "name": "Anthropic Claude", "default_model": "claude-3-5-sonnet-20241022"},
+        {
+            "id": "claude",
+            "name": "Anthropic Claude",
+            "default_model": "claude-3-5-sonnet-20241022",
+        },
         {"id": "openai", "name": "OpenAI", "default_model": "gpt-4o"},
         {"id": "deepseek", "name": "DeepSeek", "default_model": "deepseek-chat"},
     ]
@@ -1411,17 +1593,21 @@ def api_settings(request: Request):
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
-    return JSONResponse(jsonable_encoder({
-        "user_prefs": prefs,
-        "user_keys": user_keys,
-        "ai_providers": ai_providers,
-        "gh_connected": gh_connected,
-        "gh_configured": gh_configured,
-        "gh_status": gh_status,
-        "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
-        "key_status": request.query_params.get("key_status"),
-        "pref_status": request.query_params.get("pref_status"),
-    }))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "user_prefs": prefs,
+                "user_keys": user_keys,
+                "ai_providers": ai_providers,
+                "gh_connected": gh_connected,
+                "gh_configured": gh_configured,
+                "gh_status": gh_status,
+                "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
+                "key_status": request.query_params.get("key_status"),
+                "pref_status": request.query_params.get("pref_status"),
+            }
+        )
+    )
 
 
 @app.post("/api/settings/sync-history")
@@ -1473,13 +1659,17 @@ def api_get_notifications(
     unread_only: bool = Query(False),
 ):
     user_id = _check_api_auth(request)
-    notifs = get_notifications(user_id, limit=limit, unread_only=unread_only, db_path=DB_PATH)
+    notifs = get_notifications(
+        user_id, limit=limit, unread_only=unread_only, db_path=DB_PATH
+    )
     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
     return JSONResponse(
-        jsonable_encoder({
-            "notifications": notifs,
-            "unread_count": unread_count,
-        })
+        jsonable_encoder(
+            {
+                "notifications": notifs,
+                "unread_count": unread_count,
+            }
+        )
     )
 
 
@@ -1536,18 +1726,23 @@ def api_test_coach_notification(request: Request):
 @app.get("/api/chat-history")
 def api_chat_history(request: Request):
     user_id = _check_api_auth(request)
-    return JSONResponse(jsonable_encoder({
-        "messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)
-    }))
+    return JSONResponse(
+        jsonable_encoder(
+            {"messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)}
+        )
+    )
+
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
 async def catch_all(full_path: str, request: Request):
-    if full_path.startswith(("api/", "static/", "login/google", "auth", "google-health/")):
+    if full_path.startswith(
+        ("api/", "static/", "login/google", "auth", "google-health/")
+    ):
         raise HTTPException(status_code=404, detail="Not found")
-    
+
     if full_path:
         file_path = FRONTEND_DIST / full_path
         if file_path.is_file():
             return FileResponse(file_path)
-            
+
     return FileResponse(FRONTEND_DIST / "index.html")
