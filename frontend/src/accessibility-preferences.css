@@ -1,0 +1,311 @@
+/*
+ * Display-preference accessibility contract.
+ *
+ * This file is loaded after styles.css so OS/browser accessibility preferences
+ * can override decorative motion and colour-only state without changing normal
+ * presentation. Keep selectors here semantic and shared across routes.
+ */
+
+/* Preserve a strong keyboard indicator independently of theme colours. */
+:focus-visible,
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/*
+ * Motion is never required to understand a state change. Existing transitions
+ * are collapsed, ambient/looping animation is removed, and loading remains
+ * visible as a static skeleton instead of shimmer.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html:focus-within {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-delay: 0s !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  body::before,
+  .cycle::after,
+  .welcome-icon-wrap,
+  .streaming-cursor,
+  .typing-dots span,
+  .insight-header {
+    animation: none !important;
+  }
+
+  .skeleton {
+    animation: none !important;
+    background: var(--panel-2);
+  }
+
+  .hero,
+  .panel,
+  .stat-card,
+  .chart-card,
+  .checkin,
+  .log-row,
+  .exercise,
+  .block-card,
+  .programme-card,
+  .day-card,
+  .card,
+  .chat-bubble {
+    animation: none !important;
+  }
+
+  .brand:hover::after,
+  .block-card:hover::before {
+    transition: none !important;
+  }
+}
+
+/*
+ * Windows forced-colours/high-contrast mode. System colours deliberately replace
+ * decorative palette values. State is reinforced with borders/outlines so it is
+ * not conveyed by colour alone.
+ */
+@media (forced-colors: active) {
+  :root {
+    --bg: Canvas;
+    --panel: Canvas;
+    --panel-2: Canvas;
+    --text: CanvasText;
+    --muted: GrayText;
+    --accent: Highlight;
+    --accent-2: LinkText;
+    --accent-dim: Canvas;
+    --accent-glow: transparent;
+    --warn: CanvasText;
+    --chip: Canvas;
+    --border: CanvasText;
+  }
+
+  body,
+  .topbar,
+  .hero,
+  .panel,
+  .stat-card,
+  .chart-card,
+  .exercise,
+  .block-card,
+  .programme-card,
+  .day-card,
+  .card,
+  .chat-input-wrap,
+  .chat-bubble .bubble-content,
+  .routine-card,
+  .warning-list {
+    background: Canvas !important;
+    color: CanvasText !important;
+    box-shadow: none !important;
+  }
+
+  body::before,
+  .hero::before,
+  .stat-card::after,
+  .welcome-glow,
+  .brand::after,
+  .block-card::before {
+    display: none !important;
+  }
+
+  :focus-visible,
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 3px solid Highlight !important;
+    outline-offset: 3px !important;
+  }
+
+  /* Current/selected state: persistent geometry plus the system highlight. */
+  nav a.on,
+  [aria-current="page"],
+  [aria-selected="true"],
+  [aria-pressed="true"],
+  .provider-tab.active,
+  .routine-card.selected,
+  .block-card.current,
+  .programme-card.active-card,
+  .day-card.today,
+  .active-summary {
+    border: 2px solid Highlight !important;
+    outline: 1px solid Highlight !important;
+    outline-offset: 2px;
+  }
+
+  /* Errors/warnings/success remain distinguishable without relying on hue. */
+  .error-panel,
+  .key-status.error,
+  .review-row.trend-regressing {
+    border: 3px double CanvasText !important;
+  }
+
+  .warning-list,
+  .review-row.trend-stalling {
+    border: 2px dashed CanvasText !important;
+  }
+
+  .success-panel,
+  .key-status.success,
+  .review-row.trend-progressing {
+    border: 3px solid CanvasText !important;
+  }
+
+  button,
+  .btn,
+  input,
+  select,
+  textarea,
+  .chip,
+  .badge {
+    border: 1px solid ButtonText !important;
+  }
+
+  button:disabled,
+  .btn:disabled,
+  input:disabled,
+  select:disabled,
+  textarea:disabled {
+    color: GrayText !important;
+    border-color: GrayText !important;
+    opacity: 1 !important;
+  }
+
+  /* Chart labels and lines inherit system foreground rather than disappearing. */
+  .svg-axis,
+  .svg-barval,
+  .svg-ring-value,
+  .svg-ring-sub,
+  .svg-value {
+    fill: CanvasText !important;
+  }
+
+  .svg-chart,
+  .svg-ring,
+  .svg-spark,
+  .svg-cal,
+  .svg-donut {
+    color: CanvasText !important;
+    forced-color-adjust: auto;
+  }
+
+  .legend-dot {
+    border: 1px solid CanvasText;
+  }
+
+  a {
+    color: LinkText;
+  }
+}
+
+/*
+ * Browsers exposing prefers-contrast get a stronger non-forced palette while
+ * retaining the product theme. The extra borders also keep status meaning when
+ * colour perception is limited.
+ */
+@media (prefers-contrast: more) {
+  :root {
+    --bg: #050608;
+    --panel: #0b0d10;
+    --panel-2: #11151b;
+    --text: #ffffff;
+    --muted: #d6dbe3;
+    --accent: #86efac;
+    --accent-2: #7dd3fc;
+    --accent-dim: #102817;
+    --warn: #fcd34d;
+    --border: #aeb7c4;
+  }
+
+  :focus-visible,
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [tabindex]:focus-visible {
+    outline-width: 4px;
+  }
+
+  .hero,
+  .panel,
+  .stat-card,
+  .chart-card,
+  .exercise,
+  .block-card,
+  .programme-card,
+  .day-card,
+  .card,
+  .routine-card,
+  .chat-input-wrap,
+  input,
+  select,
+  textarea,
+  button,
+  .btn {
+    border-width: 2px;
+  }
+
+  nav a.on,
+  [aria-current="page"],
+  [aria-selected="true"],
+  [aria-pressed="true"],
+  .provider-tab.active,
+  .routine-card.selected,
+  .block-card.current,
+  .programme-card.active-card,
+  .day-card.today,
+  .active-summary {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .error-panel,
+  .key-status.error,
+  .review-row.trend-regressing {
+    border-left: 5px double currentColor;
+    font-weight: 700;
+  }
+
+  .warning-list,
+  .review-row.trend-stalling {
+    border-left: 5px dashed currentColor;
+  }
+
+  .success-panel,
+  .key-status.success,
+  .review-row.trend-progressing {
+    border-left: 5px solid currentColor;
+  }
+
+  .svg-axis,
+  .svg-barval,
+  .svg-ring-sub,
+  .muted,
+  .chart-foot,
+  .ex-note {
+    color: var(--muted);
+    opacity: 1;
+  }
+}
