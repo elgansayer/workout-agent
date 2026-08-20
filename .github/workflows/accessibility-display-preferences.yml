@@ -1,0 +1,62 @@
+name: Accessibility display preferences
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "frontend/src/**"
+      - "frontend/scripts/check-accessibility-preferences.mjs"
+      - "frontend/accessibility-preferences.matrix.json"
+      - "frontend/angular.json"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "docs/ACCESSIBILITY_DISPLAY_PREFERENCES.md"
+      - ".github/workflows/accessibility-display-preferences.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend/src/**"
+      - "frontend/scripts/check-accessibility-preferences.mjs"
+      - "frontend/accessibility-preferences.matrix.json"
+      - "frontend/angular.json"
+      - "frontend/package.json"
+      - "frontend/package-lock.json"
+      - "docs/ACCESSIBILITY_DISPLAY_PREFERENCES.md"
+      - ".github/workflows/accessibility-display-preferences.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  display-preferences:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Check display preference contract
+        working-directory: frontend
+        run: npm run test:a11y-preferences
+
+      - name: Run Angular unit tests
+        working-directory: frontend
+        run: npm test -- --watch=false
+
+      - name: Build production frontend
+        working-directory: frontend
+        run: npm run build
