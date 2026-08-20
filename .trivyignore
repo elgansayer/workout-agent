@@ -1,0 +1,9 @@
+# Supply-chain scan exceptions live here.
+#
+# Permanent suppressions are forbidden. Every active entry must be preceded by
+# exactly one metadata line in this form:
+#   # owner=@github-handle; tracking=#123; reason=Why this risk is temporarily accepted
+#   FINDING-ID exp:YYYY-MM-DD
+#
+# tools/supply_chain.py enforces expiry, ownership, tracking, and a maximum
+# exception lifetime of 90 days. There are intentionally no exceptions today.
