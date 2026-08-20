@@ -23,10 +23,13 @@ When `prefers-contrast: more` is active, foreground/background separation increa
 Run from `frontend/`:
 
 ```bash
+npm ci --legacy-peer-deps
 npm run test:a11y-preferences
 npm test -- --watch=false
 npm run build
 ```
+
+The legacy peer-resolution flag matches the existing frontend Docker build contract while the repository still combines Spartan 1.x with Tailwind 3.x. It does not change the dependency graph recorded in `package-lock.json`.
 
 `test:a11y-preferences` is dependency-free and deterministic. It verifies that:
 
