@@ -10,27 +10,39 @@ This document defines the target health-data integration architecture for Workou
 4. Prefer incremental synchronization, idempotent upserts, backfill windows, bounded retries, and provider-aware rate limiting.
 5. Never make medical diagnoses. Health signals can inform training recommendations, confidence, and recovery guidance only.
 6. Health Connect is device-centric. A server cannot query a user's Health Connect store directly; an Android client or companion app must read authorized records on-device and securely sync them to Workout Agent.
+7. Google Health API v4 is the long-term cloud API for Fitbit/Pixel health data. The legacy Fitbit Web API is migration-only and must not be used for new connections.
 
 ## Current repository state
 
 The repository already contains three health-related paths:
 
-- `backend/google_health_auth.py`: OAuth helper for the existing cloud integration.
-- `backend/google_health_client.py`: cloud health-data client used by the existing application.
+- `backend/google_health_auth.py`: OAuth helper for the existing Google Health cloud integration.
+- `backend/google_health_client.py`: Google Health API v4 cloud client used by the existing application.
 - `backend/health_connect.py`: local JSON-file import path rather than a native Android Health Connect integration.
 
-These are useful migration inputs, but they must not define the long-term provider abstraction. In particular, documentation must not describe Android Health Connect as a server-side Google account API.
+The provider-neutral connector layer is the long-term abstraction. In particular, Android Health Connect must not be described as a server-side Google account API, and the legacy Fitbit connector must not become a new production authorization path.
+
+The accepted legacy-Fitbit cutover decision, identity mapping, consent flow, duplicate prevention and rollback policy are documented in [`FITBIT_GOOGLE_HEALTH_MIGRATION.md`](FITBIT_GOOGLE_HEALTH_MIGRATION.md).
 
 ## Provider strategy
 
 | Provider | Integration model | Primary value | Target priority |
 | --- | --- | --- | --- |
+| Google Health | Google Health API v4 + Google OAuth 2.0 | Fitbit/Pixel cloud health, activity, sleep and measurements | P0 |
 | Garmin | Garmin Connect cloud APIs | Sleep, HR, stress, Body Battery, activities, workout delivery | P0 |
 | Health Connect | Android on-device SDK + companion sync | Aggregator for Android health/fitness apps and devices | P0 |
-| Fitbit | OAuth2 Web API | Activity, sleep, HR, workouts and Fitbit-specific data | P1 |
+| Fitbit (legacy) | Retiring Fitbit Web API | Migration bridge for already-linked users only | Migration only |
 | Oura | OAuth2 Cloud API v2 | Sleep, readiness, HR/HRV, workouts, SpO2 | P1 |
 | Polar | OAuth2 AccessLink Dynamic API v4 | Training and daily activity data | P2 |
 | Withings | Cloud API | Weight, body composition and health measurements | P2 |
+
+### Google Health API
+
+Google Health API is the target cloud integration for Fitbit and Pixel health data. Google describes it as the successor to the Fitbit Web API, using Google OAuth 2.0 and a v4 data-type model. Existing Fitbit OAuth tokens cannot be transferred, so users migrating from the legacy API must re-consent.
+
+The current repository client already targets `https://health.googleapis.com/v4/users/me` and uses the read-only health metrics and measurements scope. Additional read scopes must be requested only when their corresponding product features ship. Write scopes remain disabled unless a concrete user-visible write feature requires them.
+
+For migrated users, `users.getIdentity` is the authoritative bridge between the legacy Fitbit user ID and the Google Health `healthUserId`. Tenant records must never be joined by email or display name.
 
 ### Garmin
 
@@ -67,9 +79,16 @@ Canonical health model
 
 The existing JSON import can remain as a fallback/manual bridge, but it is not the intended multi-user product integration.
 
-### Fitbit
+### Fitbit Web API (legacy)
 
-The Fitbit Web API remains a documented OAuth-based API for accessing Fitbit tracker, scale, and user-entered data. Do not assume it is unavailable or automatically replaced by Health Connect. Any migration decision must be based on current official platform terms and supported endpoints at implementation time.
+Google states that the legacy Fitbit Web API will be turned down in September 2026. Workout Agent therefore treats this connector as a temporary migration sentinel only:
+
+- no new Fitbit Web API authorization;
+- existing users retain their working legacy connection until Google Health OAuth, identity mapping and a representative read have succeeded;
+- after successful cutover, legacy credentials are revoked/deleted where possible;
+- after shutdown, unmigrated users enter a reconnect-required state rather than silently failing or receiving fabricated data.
+
+The exact step-up and rollback flow is defined in [`FITBIT_GOOGLE_HEALTH_MIGRATION.md`](FITBIT_GOOGLE_HEALTH_MIGRATION.md).
 
 ### Oura
 
@@ -86,23 +105,24 @@ Withings is primarily valuable for body weight, body composition and other healt
 ## Target system architecture
 
 ```text
-Garmin -----------\
-Fitbit ------------\
-Oura ---------------+--> Provider adapters --> Normalization --> Canonical store
-Polar --------------/                              |                 |
-Withings ----------/                               |                 +--> analytics
-Health Connect companion --------------------------/                 +--> readiness
-                                                                    +--> AI context
-                                                                    +--> adaptive training
+Google Health ------\
+Garmin --------------\
+Oura -----------------+--> Provider adapters --> Normalization --> Canonical store
+Polar ----------------/                              |                 |
+Withings ------------/                               |                 +--> analytics
+Health Connect companion ----------------------------/                 +--> readiness
+                                                                      +--> AI context
+                                                                      +--> adaptive training
 
-Workout plan ------------------------------------------------------------> Garmin Training API
+Legacy Fitbit --> migration/identity bridge --> Google Health
+Workout plan --------------------------------------------------------------> Garmin Training API
 ```
 
 Provider adapters should implement the provider-neutral connector contract tracked in issue #820. The contract needs authorization, capability discovery, connection testing, synchronization, refresh, status, disconnect, purge and normalized error handling.
 
 ## Synchronization lifecycle
 
-Each provider sync follows the same lifecycle:
+Each supported provider sync follows the same lifecycle:
 
 1. User initiates connection.
 2. Workout Agent explains requested permissions and purpose.
@@ -115,6 +135,8 @@ Each provider sync follows the same lifecycle:
 9. Derived daily summaries and readiness inputs are recomputed only for affected dates.
 10. Disconnect revokes upstream access where supported and stops future sync jobs.
 11. Purge and account deletion follow the product data-retention policy.
+
+Legacy Fitbit differs only during migration: the old connection remains intact until the replacement Google Health connection has been verified and switched atomically.
 
 ## Capability model
 
@@ -137,6 +159,8 @@ Example capability families:
 - structured workout export
 
 A provider-specific score such as Garmin Body Battery or Oura Readiness remains a sourced metric. It must not be silently mapped to a universal readiness score without preserving its original source and semantics.
+
+For Fitbit-to-Google-Health migration, each required legacy feature must be checked against Google's official parity tool before activation. Missing parity degrades only the affected capability; it is not a reason to reopen new legacy Fitbit onboarding.
 
 ## Adaptive training boundary
 
@@ -166,29 +190,35 @@ Minimum requirements include:
 - revocation and deletion workflows
 - retention rules for raw payloads versus normalized metrics
 - source and consent provenance for every imported record
+- stable external identity mapping during provider migrations
 
 ## Rollout order
 
 1. Finish provider-neutral connector contract and canonical health data model.
-2. Correct the existing Google/Health Connect assumptions and retain legacy import only as a migration path.
-3. Build the Android Health Connect companion and ingestion API.
-4. Apply for Garmin access while implementing provider-independent storage and sync infrastructure.
-5. Implement Garmin Health + Activity ingestion, then Garmin Training export.
-6. Add Fitbit and Oura cloud connectors.
-7. Add Polar and Withings.
-8. Build readiness feature extraction, baseline calculations and explainable adaptive-training rules.
-9. Add provider status, freshness, reconnect and permission controls to Settings.
-10. Add production observability, contract tests, sandbox fixtures and deletion/export verification.
+2. Complete the Fitbit-to-Google-Health migration policy and prevent new legacy Fitbit authorization.
+3. Validate the existing Google Health OAuth/API v4 implementation against official contracts (#821), including identity mapping and required parity fixtures.
+4. Migrate already-linked Fitbit users through step-up Google consent before the September 2026 legacy shutdown.
+5. Build the Android Health Connect companion and ingestion API.
+6. Apply for Garmin access while implementing provider-independent storage and sync infrastructure.
+7. Implement Garmin Health + Activity ingestion, then Garmin Training export.
+8. Add Oura, then Polar and Withings cloud connectors.
+9. Build readiness feature extraction, baseline calculations and explainable adaptive-training rules.
+10. Add provider status, freshness, reconnect and permission controls to Settings plus production observability, contract tests and deletion/export verification.
 
 ## Official references
 
+- Google Health API: https://developers.google.com/health
+- Google Health migration overview: https://developers.google.com/health/migration
+- Google Health migration API specifications: https://developers.google.com/health/migration/api-specifications
+- Google Health Fitbit parity tool: https://developers.google.com/health/migration/parity-tool
+- Google Health `users.getIdentity`: https://developers.google.com/health/reference/rest/v4/users/getIdentity
+- Google Health legacy shutdown background: https://developers.google.com/health/about
 - Android Health Connect: https://developer.android.com/health-and-fitness/health-connect
 - Android Health Connect availability: https://developer.android.com/health-and-fitness/health-connect/availability
 - Garmin Connect Developer Program: https://developer.garmin.com/gc-developer-program/overview/
 - Garmin Health API: https://developer.garmin.com/gc-developer-program/health-api/
 - Garmin Activity API: https://developer.garmin.com/gc-developer-program/activity-api/
 - Garmin Training API: https://developer.garmin.com/gc-developer-program/training-api/
-- Fitbit Web API: https://dev.fitbit.com/build/reference/web-api/explore/
 - Oura API v2: https://cloud.ouraring.com/v2/docs
 - Polar AccessLink Dynamic API v4: https://www.polar.com/polar-api-v4/
 - Withings developer platform: https://developer.withings.com/
