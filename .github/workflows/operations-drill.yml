@@ -1,0 +1,112 @@
+name: Operations runbook drill
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/OPERATIONS_RUNBOOKS.md'
+      - 'tools/ops_drill.py'
+      - 'tools/test_ops_drill.py'
+      - '.github/workflows/operations-drill.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/OPERATIONS_RUNBOOKS.md'
+      - 'tools/ops_drill.py'
+      - 'tools/test_ops_drill.py'
+      - '.github/workflows/operations-drill.yml'
+  schedule:
+    - cron: '23 4 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: operations-drill-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drill:
+    name: Validate and exercise runbooks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run deterministic unit tests
+        run: python -m unittest tools.test_ops_drill
+
+      - name: Validate runbook contract
+        run: python tools/ops_drill.py validate --runbook docs/OPERATIONS_RUNBOOKS.md
+
+      - name: Run non-destructive operational drill
+        run: >-
+          python tools/ops_drill.py drill
+          --runbook docs/OPERATIONS_RUNBOOKS.md
+          --output artifacts/operations-drill.json
+          --follow-ups artifacts/operations-drill-followups.md
+          --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Upload dated drill evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: operations-drill-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce drill findings
+        run: python tools/ops_drill.py verify --evidence artifacts/operations-drill.json
+
+  follow-up:
+    name: Track scheduled drill findings
+    if: >-
+      always() &&
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') &&
+      needs.drill.result == 'failure'
+    needs: drill
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Reproduce redacted follow-up evidence
+        run: >-
+          python tools/ops_drill.py drill
+          --runbook docs/OPERATIONS_RUNBOOKS.md
+          --output /tmp/operations-drill.json
+          --follow-ups /tmp/operations-drill-followups.md
+          --at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Create or update canonical follow-up issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          fingerprint='<!-- operations-drill-follow-up -->'
+          body_file=/tmp/operations-follow-up-issue.md
+          {
+            printf '%s\n\n' "$fingerprint"
+            printf 'Automated operational runbook drill failed. Run: %s\n\n' "$RUN_URL"
+            cat /tmp/operations-drill-followups.md
+          } > "$body_file"
+
+          existing="$(gh issue list --repo "$REPO" --state open --search 'operations drill follow-up in:title' --json number,body --jq ".[] | select(.body | contains(\"$fingerprint\")) | .number" | head -n1)"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body-file "$body_file"
+          else
+            gh issue create --repo "$REPO" --title 'Operations drill follow-up' --body-file "$body_file" --label 'enhancement'
+          fi
