@@ -82,7 +82,8 @@ def discover_integrations(root: Path = ROOT) -> set[str]:
         integrations.add("google_health")
 
     for notifier in (root / "backend").glob("*_notifier.py"):
-        integrations.add(notifier.stem.removesuffix("_notifier"))
+        notifier_key = notifier.stem.removesuffix("_notifier")
+        integrations.add("web_push" if notifier_key == "push" else notifier_key)
 
     database = (root / "backend" / "database.py").read_text(encoding="utf-8")
     webapp = (root / "backend" / "webapp" / "app.py").read_text(encoding="utf-8")
@@ -137,14 +138,26 @@ def validate_inventory(
             errors.append("every system entry must be an object")
             continue
         sid = system.get("id", "<unknown>")
-        for field in ("name", "category", "processor", "data_classes", "purposes", "retention", "code_refs"):
+        for field in (
+            "name",
+            "category",
+            "processor",
+            "data_classes",
+            "purposes",
+            "retention",
+            "code_refs",
+        ):
             if not system.get(field):
                 errors.append(f"system {sid} missing {field}")
         if system.get("processor") not in processor_ids:
-            errors.append(f"system {sid} references unknown processor {system.get('processor')}")
+            errors.append(
+                f"system {sid} references unknown processor {system.get('processor')}"
+            )
         unknown_classes = set(system.get("data_classes") or []) - data_classes
         if unknown_classes:
-            errors.append(f"system {sid} uses unknown data classes: {sorted(unknown_classes)}")
+            errors.append(
+                f"system {sid} uses unknown data classes: {sorted(unknown_classes)}"
+            )
         if system.get("integration_key"):
             declared_integrations.add(str(system["integration_key"]))
 
@@ -152,7 +165,8 @@ def validate_inventory(
     missing = discovered - declared_integrations
     if missing:
         errors.append(
-            "code integrations missing from data-flow inventory: " + ", ".join(sorted(missing))
+            "code integrations missing from data-flow inventory: "
+            + ", ".join(sorted(missing))
         )
 
     flows = inventory.get("data_flows") or []
@@ -166,10 +180,14 @@ def validate_inventory(
         if flow.get("source") not in system_id_set:
             errors.append(f"flow {fid} has unknown source {flow.get('source')}")
         if flow.get("destination") not in system_id_set:
-            errors.append(f"flow {fid} has unknown destination {flow.get('destination')}")
+            errors.append(
+                f"flow {fid} has unknown destination {flow.get('destination')}"
+            )
         unknown_classes = set(flow.get("data_classes") or []) - data_classes
         if unknown_classes:
-            errors.append(f"flow {fid} uses unknown data classes: {sorted(unknown_classes)}")
+            errors.append(
+                f"flow {fid} uses unknown data classes: {sorted(unknown_classes)}"
+            )
         if not flow.get("purpose"):
             errors.append(f"flow {fid} missing purpose")
     if len(flow_ids) != len(set(flow_ids)):
