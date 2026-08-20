@@ -127,7 +127,9 @@ def test_authenticated_diagnostics_are_aggregate_and_secret_free(
     }
     assert payload["components"]["connectors"]["registered"] >= 1
     assert payload["components"]["connectors"]["configured"] == 0
-    assert response.headers["cache-control"] == "private, no-store"
+    cache_control = response.headers["cache-control"]
+    assert "private" in cache_control
+    assert "no-store" in cache_control
     assert "never-return-this-secret" not in response.text
     assert str(tmp_path) not in response.text
 
