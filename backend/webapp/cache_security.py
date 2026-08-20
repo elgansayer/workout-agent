@@ -41,10 +41,12 @@ _PUBLIC_ASSET_SUFFIXES = (
     ".webmanifest",
 )
 _VERSION_QUERY_RE = re.compile(r"^[A-Fa-f0-9]{8,64}$")
-# Angular/Vite style content hashes are commonly hexadecimal or base36/base64url
-# chunks between separators, e.g. main-LWJRVJ2F.js or styles.a1b2c3d4.css.
-_HASHED_FILENAME_RE = re.compile(
-    r"(?:^|[._-])[A-Za-z0-9_-]{8,64}(?=\.(?:css|js|mjs|map|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)$)",
+_HASHED_ASSET_RE = re.compile(
+    r"(?:^|[._-])[A-Fa-f0-9]{8,64}(?=\.(?:css|js|mjs|map|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)$)",
+    re.IGNORECASE,
+)
+_ANGULAR_BUNDLE_RE = re.compile(
+    r"^(?:main|polyfills|runtime|styles|vendor|chunk)[._-][A-Za-z0-9]{8,64}\.(?:css|js|mjs|map)$",
     re.IGNORECASE,
 )
 
@@ -81,7 +83,9 @@ def _is_explicitly_versioned_asset(scope: Scope) -> bool:
     if _has_version_query(scope):
         return True
     filename = path.rsplit("/", 1)[-1]
-    return bool(_HASHED_FILENAME_RE.search(filename))
+    return bool(
+        _HASHED_ASSET_RE.search(filename) or _ANGULAR_BUNDLE_RE.fullmatch(filename)
+    )
 
 
 def _merge_vary(headers: MutableHeaders, *values: str) -> None:
