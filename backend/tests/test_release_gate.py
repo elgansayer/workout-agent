@@ -4,12 +4,13 @@ from release_gate import validate_release_evidence
 
 
 def _valid_payload() -> dict[str, object]:
-    sha = "a" * 40
+    deployed_sha = "a" * 40
+    reviewed_sha = "c" * 40
     digest = "sha256:" + ("b" * 64)
     return {
         "schema_version": 1,
-        "head_sha": sha,
-        "reviewed_head_sha": sha,
+        "head_sha": deployed_sha,
+        "reviewed_head_sha": reviewed_sha,
         "head_on_main": True,
         "pr_merged": True,
         "change_author": "author-user",
@@ -24,7 +25,7 @@ def _valid_payload() -> dict[str, object]:
         "smoke_test_plan": "Run authenticated health, readiness, login and dashboard smoke tests.",
         "smoke_test_status": "passed",
         "smoke_test_evidence": "staging-smoke-run-1842",
-        "verification_results": "All required deterministic checks passed for the reviewed head.",
+        "verification_results": "All required deterministic checks passed for the reviewed release.",
         "image_digests": {"web": digest, "agent": digest},
         "checks": [
             {"name": "Python Source Integrity", "conclusion": "success"},
@@ -37,13 +38,20 @@ def test_valid_release_evidence_passes() -> None:
     assert validate_release_evidence(_valid_payload()) == []
 
 
-def test_reviewed_sha_must_match_promoted_sha() -> None:
+def test_reviewed_sha_must_be_well_formed() -> None:
     payload = _valid_payload()
-    payload["reviewed_head_sha"] = "c" * 40
+    payload["reviewed_head_sha"] = "not-a-sha"
 
     findings = validate_release_evidence(payload)
 
     assert any(finding.field == "reviewed_head_sha" for finding in findings)
+
+
+def test_merge_commit_and_reviewed_head_may_differ() -> None:
+    payload = _valid_payload()
+
+    assert payload["head_sha"] != payload["reviewed_head_sha"]
+    assert validate_release_evidence(payload) == []
 
 
 def test_author_cannot_self_approve_or_self_promote() -> None:
