@@ -44,9 +44,16 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-web.txt
 
-      - name: Install focused test dependency
-        run: python -m pip install "pytest>=8,<9"
+      - name: Install focused test dependencies
+        run: >-
+          python -m pip install
+          -r backend/requirements.txt
+          -r backend/requirements-web.txt
+          "pytest>=8,<9"
 
       - name: Compile runtime security modules
         run: >-
