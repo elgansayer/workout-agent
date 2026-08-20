@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Fail CI on common data-classification policy violations.
+"""Fail CI on common data-classification and public-source policy violations.
 
-This checker intentionally targets high-confidence mistakes only. It does not
-replace code review: it catches credential values passed directly to logging
-calls and verifies that sensitive SQLite columns are not left unclassified.
+The checker intentionally targets high-confidence mistakes. It does not replace
+code review: it catches credential values passed directly to logging calls,
+verifies sensitive SQLite columns are classified, and rejects likely real-user
+identity/health data in public documentation and fixtures.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -45,6 +47,26 @@ _SENSITIVE_SCHEMA_HINTS = (
     "reasoning",
     "insight",
 )
+
+_SYNTHETIC_MARKERS = (
+    "synthetic-profile: true",
+    '"synthetic_profile": true',
+    "'synthetic_profile': true",
+)
+_PUBLIC_DATA_EXTENSIONS = {".md", ".json", ".jsonl", ".csv", ".yaml", ".yml", ".py"}
+_EMAIL_RE = re.compile(r"(?<![\w.+-])([\w.+-]+)@([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?![\w.-])")
+_EXAMPLE_EMAIL_DOMAINS = {"example.com", "example.org", "example.net", "example.invalid", "test.invalid"}
+_NAMED_SUBJECT_RE = re.compile(
+    r"\b(?:athlete|trainee|client|member)\s*(?:named\s+|[:(]\s*)([A-Z][A-Za-z'’-]{2,})"
+)
+_FIRST_PERSON_RE = re.compile(r"\b(?:i\s+have|i\s+am|i'm|my|mine)\b", re.IGNORECASE)
+_SENSITIVE_PROFILE_RE = re.compile(
+    r"\b(?:diagnos(?:is|ed)|gout|injur(?:y|ies)|joint pain|bad toes|body[ -]?fat|"
+    r"bodyweight|weight_kg|resting(?:_| )heart(?:_| )rate|resting_hr|hrv|sleep(?:_| )hours?|"
+    r"medical|medication|caloric deficit|protein target|training constraint)\b",
+    re.IGNORECASE,
+)
+_PERSONAL_CONTEXT_RADIUS = 180
 
 
 @dataclass(frozen=True)
@@ -126,6 +148,110 @@ def find_schema_violations(database_path: Path) -> list[Finding]:
     return findings
 
 
+def _line_for(source: str, offset: int) -> int:
+    return source.count("\n", 0, offset) + 1
+
+
+def _has_synthetic_marker(source: str) -> bool:
+    lowered = source.lower()
+    return any(marker in lowered for marker in _SYNTHETIC_MARKERS)
+
+
+def _first_person_sensitive_offset(source: str) -> int | None:
+    """Return a sensitive-term offset when first-person language is nearby."""
+    for sensitive in _SENSITIVE_PROFILE_RE.finditer(source):
+        start = max(0, sensitive.start() - _PERSONAL_CONTEXT_RADIUS)
+        end = min(len(source), sensitive.end() + _PERSONAL_CONTEXT_RADIUS)
+        if _FIRST_PERSON_RE.search(source[start:end]):
+            return sensitive.start()
+    return None
+
+
+def find_public_data_violations(path: Path, *, require_synthetic_marker: bool = False) -> list[Finding]:
+    """Detect high-confidence real-user data leaks in public docs/fixtures."""
+    source = path.read_text(encoding="utf-8")
+    synthetic = _has_synthetic_marker(source)
+    sensitive = _SENSITIVE_PROFILE_RE.search(source)
+    findings: list[Finding] = []
+
+    # Real-looking emails are forbidden in fixtures and in documents that also
+    # contain health/profile material. Ordinary project/support addresses in a
+    # non-sensitive document are not treated as user-data incidents.
+    if require_synthetic_marker or sensitive is not None:
+        for match in _EMAIL_RE.finditer(source):
+            domain = match.group(2).lower()
+            if domain not in _EXAMPLE_EMAIL_DOMAINS:
+                findings.append(
+                    Finding(
+                        str(path),
+                        _line_for(source, match.start()),
+                        "non-example email address in sensitive public documentation/fixture; replace with synthetic data",
+                    )
+                )
+
+    if not synthetic:
+        named = _NAMED_SUBJECT_RE.search(source)
+        if named:
+            findings.append(
+                Finding(
+                    str(path),
+                    _line_for(source, named.start()),
+                    f"named {named.group(0).split()[0].lower()} profile in public source; use an anonymous synthetic profile",
+                )
+            )
+
+        personal_offset = _first_person_sensitive_offset(source)
+        if personal_offset is not None:
+            findings.append(
+                Finding(
+                    str(path),
+                    _line_for(source, personal_offset),
+                    "first-person health/training constraint in public source; use synthetic data",
+                )
+            )
+
+        if require_synthetic_marker and sensitive is not None:
+            findings.append(
+                Finding(
+                    str(path),
+                    _line_for(source, sensitive.start()),
+                    "sensitive example fixture is missing an explicit synthetic-profile marker",
+                )
+            )
+
+    return findings
+
+
+def _iter_public_data_files(repo_root: Path) -> list[tuple[Path, bool]]:
+    candidates: dict[Path, bool] = {}
+
+    for name in ("README.md", "current-workout.md"):
+        path = repo_root / name
+        if path.exists():
+            candidates[path] = name == "current-workout.md"
+
+    docs = repo_root / "docs"
+    if docs.exists():
+        for path in docs.rglob("*.md"):
+            candidates[path] = False
+
+    for path in repo_root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() not in _PUBLIC_DATA_EXTENSIONS:
+            continue
+        lowered_parts = {part.lower() for part in path.parts}
+        stem = path.stem.lower()
+        is_example_data = (
+            "fixtures" in lowered_parts
+            or "samples" in lowered_parts
+            or "fixture" in stem
+            or "sample" in stem
+        )
+        if is_example_data:
+            candidates[path] = True
+
+    return sorted(candidates.items(), key=lambda item: str(item[0]))
+
+
 def scan(root: Path = ROOT) -> list[Finding]:
     findings: list[Finding] = []
     for path in sorted(root.rglob("*.py")):
@@ -138,6 +264,12 @@ def scan(root: Path = ROOT) -> list[Finding]:
     database_path = root / "database.py"
     if database_path.exists():
         findings.extend(find_schema_violations(database_path))
+
+    repo_root = root.parent
+    for path, require_synthetic_marker in _iter_public_data_files(repo_root):
+        findings.extend(
+            find_public_data_violations(path, require_synthetic_marker=require_synthetic_marker)
+        )
     return findings
 
 
