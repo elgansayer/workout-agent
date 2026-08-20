@@ -1,0 +1,293 @@
+name: Production release
+
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Exact reviewed commit SHA already merged to main
+        required: true
+        type: string
+      web_image_digest:
+        description: Immutable workout-agent-web digest (sha256:...)
+        required: true
+        type: string
+      agent_image_digest:
+        description: Immutable workout-agent digest (sha256:...)
+        required: true
+        type: string
+      config_version:
+        description: Production configuration version
+        required: true
+        type: string
+      migration_plan:
+        description: Reviewed migration intent and sequencing
+        required: true
+        type: string
+      database_migration:
+        description: Migration identifier/command, or "none"
+        required: true
+        type: string
+      backup_status:
+        description: Backup verification state
+        required: true
+        type: choice
+        options:
+          - verified
+          - not-verified
+      security_review:
+        description: Security review result (no secrets)
+        required: true
+        type: string
+      smoke_test_plan:
+        description: Post-deploy smoke-test plan
+        required: true
+        type: string
+      rollback_command:
+        description: Reviewed rollback command (no secrets)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+  actions: read
+
+jobs:
+  promote:
+    name: Evidence gate and production promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - name: Checkout exact release SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Verify SHA is the checked-out commit on main
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+        run: |
+          set -euo pipefail
+          case "$HEAD_SHA" in
+            (*[!0-9a-f]*|'') echo "head_sha must be lowercase hexadecimal" >&2; exit 1 ;;
+          esac
+          test "${#HEAD_SHA}" -eq 40
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          git fetch origin main
+          git merge-base --is-ancestor "$HEAD_SHA" origin/main
+
+      - name: Resolve merged PR and independent approval
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+          OPERATOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPOSITORY/commits/$HEAD_SHA/pulls?per_page=100" > release-prs.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          prs = json.loads(Path("release-prs.json").read_text(encoding="utf-8"))
+          candidates = [
+              pr for pr in prs
+              if pr.get("merged_at") and pr.get("base", {}).get("ref") == "main"
+          ]
+          if not candidates:
+              raise SystemExit("release gate: no merged pull request to main is associated with head_sha")
+
+          pr = max(candidates, key=lambda item: item.get("merged_at") or "")
+          author = pr.get("user", {}).get("login", "")
+          operator = os.environ["OPERATOR"]
+          if not author:
+              raise SystemExit("release gate: merged PR author is unavailable")
+          if author.casefold() == operator.casefold():
+              raise SystemExit("release gate: change author cannot operate their own production promotion")
+
+          number = int(pr["number"])
+          output = Path(os.environ["GITHUB_OUTPUT"])
+          with output.open("a", encoding="utf-8") as handle:
+              handle.write(f"pr_number={number}\n")
+              handle.write(f"change_author={author}\n")
+          PY
+
+          PR_NUMBER="$(python -c 'import json; print(max([p for p in json.load(open("release-prs.json")) if p.get("merged_at") and p.get("base", {}).get("ref") == "main"], key=lambda p: p.get("merged_at") or "")["number"])')"
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100" > release-reviews.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          reviews = json.loads(Path("release-reviews.json").read_text(encoding="utf-8"))
+          author = os.environ.get("CHANGE_AUTHOR", "")
+          approvals = [
+              review for review in reviews
+              if review.get("state") == "APPROVED"
+              and review.get("user", {}).get("login", "").casefold() != author.casefold()
+          ]
+          if not approvals:
+              raise SystemExit("release gate: merged PR has no independent APPROVED review")
+          reviewer = approvals[-1].get("user", {}).get("login", "")
+          if not reviewer:
+              raise SystemExit("release gate: approving reviewer is unavailable")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"approved_by={reviewer}\n")
+          PY
+        env:
+          CHANGE_AUTHOR: ${{ steps.review.outputs.change_author }}
+
+      - name: Verify deterministic checks are complete and green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          REPOSITORY: ${{ github.repository }}
+          CURRENT_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api -H 'Accept: application/vnd.github+json' \
+            "repos/$REPOSITORY/commits/$HEAD_SHA/check-runs?per_page=100" > release-check-runs.json
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.loads(Path("release-check-runs.json").read_text(encoding="utf-8"))
+          current_run = f"/actions/runs/{os.environ['CURRENT_RUN_ID']}"
+          runs = [
+              run for run in payload.get("check_runs", [])
+              if current_run not in (run.get("details_url") or "")
+          ]
+          if not runs:
+              raise SystemExit("release gate: no deterministic check runs found for head_sha")
+
+          allowed = {"success", "neutral", "skipped"}
+          blocked = [
+              run for run in runs
+              if run.get("status") != "completed" or run.get("conclusion") not in allowed
+          ]
+          if blocked:
+              summary = ", ".join(
+                  f"{run.get('name')}={run.get('status')}/{run.get('conclusion')}"
+                  for run in blocked
+              )
+              raise SystemExit(f"release gate: non-green check runs: {summary}")
+
+          evidence = [
+              {"name": run.get("name") or "unnamed", "conclusion": run.get("conclusion")}
+              for run in runs
+          ]
+          Path("release-checks.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Build and validate release evidence
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          CHANGE_AUTHOR: ${{ steps.review.outputs.change_author }}
+          APPROVED_BY: ${{ steps.review.outputs.approved_by }}
+          OPERATOR: ${{ github.actor }}
+          WEB_IMAGE_DIGEST: ${{ inputs.web_image_digest }}
+          AGENT_IMAGE_DIGEST: ${{ inputs.agent_image_digest }}
+          CONFIG_VERSION: ${{ inputs.config_version }}
+          MIGRATION_PLAN: ${{ inputs.migration_plan }}
+          DATABASE_MIGRATION: ${{ inputs.database_migration }}
+          BACKUP_STATUS: ${{ inputs.backup_status }}
+          SECURITY_REVIEW: ${{ inputs.security_review }}
+          SMOKE_TEST_PLAN: ${{ inputs.smoke_test_plan }}
+          ROLLBACK_COMMAND: ${{ inputs.rollback_command }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          evidence = {
+              "schema_version": 1,
+              "head_sha": os.environ["HEAD_SHA"],
+              "reviewed_head_sha": os.environ["HEAD_SHA"],
+              "head_on_main": True,
+              "pr_merged": True,
+              "change_author": os.environ["CHANGE_AUTHOR"],
+              "approved_by": os.environ["APPROVED_BY"],
+              "operator": os.environ["OPERATOR"],
+              "config_version": os.environ["CONFIG_VERSION"],
+              "migration_plan": os.environ["MIGRATION_PLAN"],
+              "database_migration": os.environ["DATABASE_MIGRATION"],
+              "backup_status": os.environ["BACKUP_STATUS"],
+              "security_review": os.environ["SECURITY_REVIEW"],
+              "smoke_test_plan": os.environ["SMOKE_TEST_PLAN"],
+              "rollback_command": os.environ["ROLLBACK_COMMAND"],
+              "image_digests": {
+                  "web": os.environ["WEB_IMAGE_DIGEST"],
+                  "agent": os.environ["AGENT_IMAGE_DIGEST"],
+              },
+              "checks": json.loads(Path("release-checks.json").read_text(encoding="utf-8")),
+          }
+          Path("release-evidence.json").write_text(
+              json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          python backend/release_gate.py release-evidence.json
+
+      - name: Trigger protected Portainer deployment
+        env:
+          PORTAINER_WEBHOOK: ${{ secrets.PORTAINER_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PORTAINER_WEBHOOK:-}" ]; then
+            echo "PORTAINER_WEBHOOK must be configured on the protected production environment" >&2
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error -X POST "$PORTAINER_WEBHOOK"
+
+      - name: Write immutable release record
+        env:
+          PR_NUMBER: ${{ steps.review.outputs.pr_number }}
+          RELEASED_AT: ${{ github.event.repository.updated_at }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          record = json.loads(Path("release-evidence.json").read_text(encoding="utf-8"))
+          record.update(
+              {
+                  "pull_request": int(os.environ["PR_NUMBER"]),
+                  "released_at": datetime.now(timezone.utc).isoformat(),
+                  "workflow_run": (
+                      f"{os.environ['SERVER_URL']}/{os.environ['REPOSITORY']}"
+                      f"/actions/runs/{os.environ['RUN_ID']}"
+                  ),
+              }
+          )
+          Path("release-record.json").write_text(
+              json.dumps(record, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload release record
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-release-record
+          path: release-record.json
+          if-no-files-found: error
+          retention-days: 90
