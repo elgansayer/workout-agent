@@ -1,0 +1,39 @@
+name: Data classification policy
+
+on:
+  pull_request:
+    paths:
+      - 'backend/**/*.py'
+      - 'docs/DATA_CLASSIFICATION.md'
+      - '.github/workflows/data-classification-policy.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'backend/**/*.py'
+      - 'docs/DATA_CLASSIFICATION.md'
+      - '.github/workflows/data-classification-policy.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install 'pytest>=8,<9'
+      - name: Compile policy code
+        working-directory: backend
+        run: python -m py_compile data_classification.py scripts/check_data_policy.py tests/test_data_classification.py tests/test_data_policy_check.py
+      - name: Run focused policy tests
+        working-directory: backend
+        run: python -m pytest -q tests/test_data_classification.py tests/test_data_policy_check.py
+      - name: Scan repository policy boundaries
+        working-directory: backend
+        run: python scripts/check_data_policy.py
