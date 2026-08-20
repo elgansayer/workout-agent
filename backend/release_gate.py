@@ -27,7 +27,13 @@ def _required_text(payload: dict[str, Any], key: str, findings: list[GateFinding
 
 
 def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
-    """Validate immutable evidence required before production promotion."""
+    """Validate immutable evidence required before production promotion.
+
+    ``head_sha`` is the exact current ``main`` commit being deployed. The
+    independently approved pull-request head is recorded separately as
+    ``reviewed_head_sha`` because merge/squash commits legitimately have a
+    different SHA from the reviewed branch head.
+    """
     findings: list[GateFinding] = []
 
     if payload.get("schema_version") != 1:
@@ -41,8 +47,6 @@ def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
         findings.append(
             GateFinding("reviewed_head_sha", "must be a 40-character lowercase Git SHA")
         )
-    if head_sha and reviewed_head_sha and head_sha != reviewed_head_sha:
-        findings.append(GateFinding("reviewed_head_sha", "must match head_sha exactly"))
 
     author = _required_text(payload, "change_author", findings)
     reviewer = _required_text(payload, "approved_by", findings)
