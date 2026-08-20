@@ -1,0 +1,37 @@
+name: Privacy data-flow inventory
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docs/PRIVACY.md"
+      - "docs/data-flow-inventory.json"
+      - "tools/validate_data_flow_inventory.py"
+      - "tools/test_data_flow_inventory.py"
+      - ".github/workflows/data-flow-inventory.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "frontend/**"
+      - "docs/PRIVACY.md"
+      - "docs/data-flow-inventory.json"
+      - "tools/validate_data_flow_inventory.py"
+      - "tools/test_data_flow_inventory.py"
+      - ".github/workflows/data-flow-inventory.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Validate machine-readable inventory
+        run: python tools/validate_data_flow_inventory.py
+      - name: Run inventory regression tests
+        run: python -m unittest tools.test_data_flow_inventory
