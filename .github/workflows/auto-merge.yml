@@ -14,11 +14,31 @@ jobs:
       - name: Fetch Dependabot metadata
         if: github.actor == 'dependabot[bot]'
         id: metadata
-        uses: dependabot/fetch-metadata@v2
+        uses: dependabot/fetch-metadata@21025c705c08248db411dc16f3619e6b5f9ea21a # v2.5.0
         with:
           github-token: '${{ secrets.GITHUB_TOKEN }}'
 
+      - name: Record GitHub Actions provenance for review
+        if: github.actor == 'dependabot[bot]' && steps.metadata.outputs.package-ecosystem == 'github-actions'
+        env:
+          DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
+          PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
+          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
+          UPDATED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+        run: |
+          {
+            echo '### GitHub Actions supply-chain review required'
+            echo
+            echo "- Dependencies: \`$DEPENDENCIES\`"
+            echo "- Previous version: \`$PREVIOUS_VERSION\`"
+            echo "- New version: \`$NEW_VERSION\`"
+            echo "- Dependabot metadata: \`$UPDATED_DEPENDENCIES\`"
+            echo
+            echo 'Review the Dependabot release notes and verify each new full commit SHA against the upstream release before merging.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Approve and Auto-Merge PR
+        if: github.actor != 'dependabot[bot]' || steps.metadata.outputs.package-ecosystem != 'github-actions'
         run: |
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
