@@ -57,6 +57,7 @@ from database import (
     get_active_programme,
     get_body_metrics,
     get_chat_messages,
+    get_checkins,
     get_daily_logs,
     get_dashboard_insight,
     get_exercise_volumes,
@@ -618,6 +619,19 @@ def _dashboard_context(
 @app.get("/")
 def dashboard(request: Request):
     return FileResponse(FRONTEND_DIST / "index.html")
+
+
+
+@app.get("/api/checkins")
+def api_checkins(request: Request):
+    user_id = _check_api_auth(request)
+    checkins = get_checkins(db_path=DB_PATH, user_id=user_id)
+    return JSONResponse(
+        jsonable_encoder({
+            "checkins": checkins,
+            "loading_svg": charts._empty_chart("Check-in cycle in progress", 300, 100) if not checkins else None
+        })
+    )
 
 
 @app.get("/api/dashboard")
