@@ -10,9 +10,9 @@ The current-tree remediation is to remove the named/personal profile from `READM
 
 ## History implications
 
-Deleting or replacing a file on `main` does not delete earlier blobs from Git history, forks, caches, or existing clones. Because the affected material is personal health/training information, a project owner who requires deletion from the public Git history should treat the cleanup as a coordinated history rewrite rather than assuming this pull request erases prior versions.
+Deleting or replacing a file on `main` does not delete earlier blobs from Git history, forks, caches, or existing clones. The identified personal profile was committed to the repository, so **a coordinated Git-history rewrite is required if the remediation goal includes purging that material from the repository's reachable public history**. This pull request deliberately sanitizes the current tree but does not rewrite shared history.
 
-The connector used for this remediation can inspect the current repository and individual GitHub resources but cannot perform an exhaustive `git log -S`/blob scan across every historical object. A local full-history scan is therefore a required gate before any destructive rewrite. Do not claim historical erasure until that scan and rewrite have actually completed.
+The connector used for this remediation can inspect the current repository and individual GitHub resources but cannot perform an exhaustive `git log -S`/blob scan across every historical object. A local full-history scan is therefore a required gate before any destructive rewrite so the complete affected commit/path set is known. Do not claim historical erasure until that scan and rewrite have actually completed.
 
 Recommended pre-rewrite review from a full clone:
 
@@ -23,17 +23,17 @@ git log -S'bad toes' --all --oneline
 git rev-list --objects --all > /tmp/workout-agent-objects.txt
 ```
 
-Also run the repository's approved secret scanner across all refs before deciding whether credential rotation is needed.
+Also run the repository's approved secret scanner across all refs before executing the rewrite.
 
-## Rewrite decision
+## Rewrite and credential decision
 
 - **Current tree:** sanitize immediately. This pull request does that.
-- **Historical personal health/training data:** if complete public-history deletion is required, perform a coordinated `git filter-repo` rewrite after a full-history scan confirms the affected paths/commits. A rewrite is disruptive and must be announced before execution.
-- **Credentials:** the current finding is personal health/training data, not a credential disclosure. Credential rotation is **not indicated by this finding alone**. If the full-history secret scan discovers an API key, OAuth token, cookie secret, encryption key, webhook secret, or similar credential, revoke/rotate it immediately regardless of whether history is rewritten.
+- **Historical personal health/training data:** a coordinated rewrite is required to purge the already-committed profile from reachable public Git history. Before rewriting, run the full-history scan above to identify every affected commit/path and use the narrowest `git filter-repo` replacement that removes the material. A rewrite is disruptive and must be announced before execution.
+- **Credentials:** the identified incident contains personal health/training information, not credential material. Credential rotation is therefore **not required by this finding**. If the all-ref secret scan discovers an API key, OAuth token, cookie secret, encryption key, webhook secret, or similar credential, revoke/rotate that credential immediately regardless of whether history is rewritten.
 
 ## Coordinated rewrite procedure
 
-If the project owner elects to remove the historical personal profile:
+If the project owner proceeds with public-history purging:
 
 1. Freeze merges and automated branch writers.
 2. Capture the exact affected commits/paths from a full-history scan.
