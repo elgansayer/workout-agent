@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ALLOW_ANONYMOUS_WEB", "1")
@@ -60,10 +62,16 @@ class SecurityHeaderPolicyTests(unittest.TestCase):
             "script-src 'self'", "script-src 'self' 'unsafe-inline'"
         )
         failures = validate_headers(headers)
-        self.assertTrue(any("script-src must not allow unsafe-inline" in item for item in failures))
+        self.assertTrue(
+            any("script-src must not allow unsafe-inline" in item for item in failures)
+        )
 
 
 class SecurityHeadersMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def _receive() -> dict:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
     async def test_html_response_gets_headers_and_matching_body_nonce(self) -> None:
         async def app(scope, receive, send):
             body = (
@@ -80,24 +88,30 @@ class SecurityHeadersMiddlewareTests(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             )
-            await send({"type": "http.response.body", "body": body[:30], "more_body": True})
-            await send({"type": "http.response.body", "body": body[30:], "more_body": False})
+            await send(
+                {"type": "http.response.body", "body": body[:30], "more_body": True}
+            )
+            await send(
+                {"type": "http.response.body", "body": body[30:], "more_body": False}
+            )
 
         messages: list[dict] = []
-
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
 
         async def send(message):
             messages.append(message)
 
         middleware = SecurityHeadersMiddleware(app)
         scope = {"type": "http", "method": "GET", "path": "/", "state": {}}
-        await middleware(scope, receive, send)
+        await middleware(scope, self._receive, send)
 
-        self.assertEqual([m["type"] for m in messages], ["http.response.start", "http.response.body"])
+        self.assertEqual(
+            [message["type"] for message in messages],
+            ["http.response.start", "http.response.body"],
+        )
         start, body_message = messages
-        headers = {k.decode("ascii"): v.decode("ascii") for k, v in start["headers"]}
+        headers = {
+            key.decode("ascii"): value.decode("ascii") for key, value in start["headers"]
+        }
         csp = headers["content-security-policy"]
         match = re.search(r"'nonce-([A-Za-z0-9_-]+)'", csp)
         self.assertIsNotNone(match)
@@ -106,9 +120,97 @@ class SecurityHeadersMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(f'ngCspNonce="{nonce}"', body)
         self.assertIn(f'<script nonce="{nonce}"', body)
         self.assertEqual(int(headers["content-length"]), len(body_message["body"]))
-        self.assertEqual(headers["strict-transport-security"], "max-age=31536000; includeSubDomains")
+        self.assertEqual(
+            headers["strict-transport-security"],
+            "max-age=31536000; includeSubDomains",
+        )
         self.assertEqual(headers["x-content-type-options"], "nosniff")
         self.assertEqual(headers["cross-origin-opener-policy"], "same-origin")
+
+    async def test_file_response_pathsend_is_converted_to_nonce_html(self) -> None:
+        source = (
+            b'<html><body><app-root></app-root>'
+            b'<script src="main.js"></script></body></html>'
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            index = Path(directory) / "index.html"
+            index.write_bytes(source)
+
+            async def app(scope, receive, send):
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 200,
+                        "headers": [
+                            (b"content-type", b"text/html; charset=utf-8"),
+                            (b"content-length", str(len(source)).encode("ascii")),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.pathsend", "path": str(index)})
+
+            messages: list[dict] = []
+
+            async def send(message):
+                messages.append(message)
+
+            await SecurityHeadersMiddleware(app)(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/",
+                    "state": {},
+                    "extensions": {"http.response.pathsend": {}},
+                },
+                self._receive,
+                send,
+            )
+
+        self.assertEqual(
+            [message["type"] for message in messages],
+            ["http.response.start", "http.response.body"],
+        )
+        headers = {
+            key.decode("ascii"): value.decode("ascii")
+            for key, value in messages[0]["headers"]
+        }
+        nonce = re.search(
+            r"'nonce-([A-Za-z0-9_-]+)'", headers["content-security-policy"]
+        ).group(1)
+        body = messages[1]["body"].decode("utf-8")
+        self.assertIn(f'ngCspNonce="{nonce}"', body)
+        self.assertIn(f'<script nonce="{nonce}"', body)
+
+    async def test_head_html_keeps_file_content_length_and_has_headers(self) -> None:
+        async def app(scope, receive, send):
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 200,
+                    "headers": [
+                        (b"content-type", b"text/html; charset=utf-8"),
+                        (b"content-length", b"123"),
+                    ],
+                }
+            )
+            await send({"type": "http.response.body", "body": b""})
+
+        messages: list[dict] = []
+
+        async def send(message):
+            messages.append(message)
+
+        await SecurityHeadersMiddleware(app)(
+            {"type": "http", "method": "HEAD", "path": "/", "state": {}},
+            self._receive,
+            send,
+        )
+        headers = {
+            key.decode("ascii"): value.decode("ascii")
+            for key, value in messages[0]["headers"]
+        }
+        self.assertEqual(headers["content-length"], "123")
+        self.assertIn("content-security-policy", headers)
 
     async def test_non_html_body_is_not_buffered_or_changed(self) -> None:
         async def app(scope, receive, send):
@@ -123,20 +225,20 @@ class SecurityHeadersMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
         messages: list[dict] = []
 
-        async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
-
         async def send(message):
             messages.append(message)
 
         await SecurityHeadersMiddleware(app)(
             {"type": "http", "method": "GET", "path": "/api/private", "state": {}},
-            receive,
+            self._receive,
             send,
         )
 
         self.assertEqual(messages[1]["body"], b'{"detail":"no"}')
-        headers = {k.decode("ascii"): v.decode("ascii") for k, v in messages[0]["headers"]}
+        headers = {
+            key.decode("ascii"): value.decode("ascii")
+            for key, value in messages[0]["headers"]
+        }
         self.assertIn("content-security-policy", headers)
         self.assertEqual(headers["referrer-policy"], "strict-origin-when-cross-origin")
 
