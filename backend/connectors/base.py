@@ -33,12 +33,12 @@ class ConnectorCapabilities:
 
 @dataclass(frozen=True, slots=True)
 class ConnectorContext:
-    user_id: int
+    user_id: str
     connection_id: str | None = None
 
     def __post_init__(self) -> None:
-        if self.user_id <= 0:
-            raise ValueError("connector context requires a positive user_id")
+        if not self.user_id:
+            raise ValueError("connector context requires a non-empty user_id")
 
 
 @dataclass(frozen=True, slots=True)

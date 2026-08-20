@@ -114,30 +114,60 @@
     </div>
 </section>
 
-<!-- ──────────── Google Health ──────────── -->
-<section class="card" id="settings-gh">
+<!-- ──────────── Health & Wearable Connectors ──────────── -->
+<section class="card" id="settings-connectors">
     <div class="card-head">
-        <h2>📊 Google Health / Fitbit</h2>
-        @if (data.gh_connected) {
-        <span class="status on">Connected</span>
-        } @else {
-        <span class="status off">Not connected</span>
-        }
+        <h2>📊 Health & Wearables</h2>
     </div>
     <p class="muted">
-        Sync scale weight, body fat %, and resting heart rate automatically from Google Health / Fitbit.
+        Sync data automatically from Google Health, Fitbit, Garmin, Oura, Polar, and Withings.
     </p>
 
-    @if (data.gh_configured) {
-        @if (data.gh_connected) {
-        <form method="post" action="/google-health/disconnect">
-            <button class="btn btn-ghost btn-danger btn-sm" type="submit">Disconnect Google Health</button>
-        </form>
+    <!-- Legacy Google Health -->
+    <div class="provider-config" style="margin-bottom: 1.5rem;">
+        <div class="card-head" style="margin-bottom: 0.5rem;">
+            <h3>Google Health / Fitbit</h3>
+            @if (data.gh_connected) {
+            <span class="status on">Connected</span>
+            } @else {
+            <span class="status off">Not connected</span>
+            }
+        </div>
+        @if (data.gh_configured) {
+            @if (data.gh_connected) {
+            <form method="post" action="/google-health/disconnect">
+                <button class="btn btn-ghost btn-danger btn-sm" type="submit">Disconnect</button>
+            </form>
+            } @else {
+            <a href="/google-health/connect" class="btn btn-sm">Connect</a>
+            }
         } @else {
-        <a href="/google-health/connect" class="btn btn-sm">Connect Google Health</a>
+            <p class="muted" style="font-size:0.85rem;">Google Health OAuth credentials are not set on the server.</p>
         }
-    } @else {
-        <p class="muted" style="font-size:0.85rem;">Google Health OAuth credentials are not set on the server.</p>
+    </div>
+
+    <!-- New Platform Connectors -->
+    @for (connector of data.connectors_info; track connector.provider) {
+    <div class="provider-config" style="margin-bottom: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+        <div class="card-head" style="margin-bottom: 0.5rem;">
+            <h3>{{ connector.name }}</h3>
+            @if (connector.state === 'connected') {
+            <span class="status on">Connected</span>
+            } @else if (connector.state === 'pending') {
+            <span class="status warning">Pending</span>
+            } @else {
+            <span class="status off">Not connected</span>
+            }
+        </div>
+        
+        <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem;">
+            {{ connector.message || 'Status: ' + connector.state }}
+        </p>
+
+        @if (connector.authorize_supported && connector.state !== 'connected') {
+            <button class="btn btn-sm" disabled>Connect (Coming Soon)</button>
+        }
+    </div>
     }
 </section>
 
