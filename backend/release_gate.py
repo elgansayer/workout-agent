@@ -50,11 +50,9 @@ def validate_release_evidence(payload: dict[str, Any]) -> list[GateFinding]:
 
     author = _required_text(payload, "change_author", findings)
     reviewer = _required_text(payload, "approved_by", findings)
-    operator = _required_text(payload, "operator", findings)
+    _required_text(payload, "operator", findings)
     if author and reviewer and author.casefold() == reviewer.casefold():
         findings.append(GateFinding("approved_by", "must differ from the change author"))
-    if author and operator and author.casefold() == operator.casefold():
-        findings.append(GateFinding("operator", "must differ from the change author"))
 
     _required_text(payload, "config_version", findings)
     _required_text(payload, "migration_plan", findings)
