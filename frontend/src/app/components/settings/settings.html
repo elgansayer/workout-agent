@@ -130,11 +130,11 @@
 
     @if (data.gh_configured) {
         @if (data.gh_connected) {
-        <form method="post" action="/api/settings/google-health/disconnect">
+        <form method="post" action="/google-health/disconnect">
             <button class="btn btn-ghost btn-danger btn-sm" type="submit">Disconnect Google Health</button>
         </form>
         } @else {
-        <a href="/login/google-health" class="btn btn-sm">Connect Google Health</a>
+        <a href="/google-health/connect" class="btn btn-sm">Connect Google Health</a>
         }
     } @else {
         <p class="muted" style="font-size:0.85rem;">Google Health OAuth credentials are not set on the server.</p>
