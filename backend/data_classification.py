@@ -1,7 +1,7 @@
 """Central data-classification and handling policy for Workout Agent.
 
 The policy is deliberately code-readable: callers should use these helpers
-instead of inventing per-feature rules for logs and exports.  Unknown fields
+instead of inventing per-feature rules for logs and exports. Unknown fields
 fail closed to ``internal`` rather than being treated as public.
 """
 
@@ -80,7 +80,7 @@ POLICIES: dict[DataClass, HandlingPolicy] = {
         encryption="encrypted transport and protected at-rest storage",
         logging="aggregated values only",
         retention="bounded analytics window",
-        exportable=True,
+        exportable=False,
         access="owner plus authorised product analytics",
     ),
     DataClass.CREDENTIAL: HandlingPolicy(
@@ -101,7 +101,7 @@ POLICIES: dict[DataClass, HandlingPolicy] = {
     ),
 }
 
-# Exact schema/API names that carry an unambiguous classification.  Keep this
+# Exact schema/API names that carry an unambiguous classification. Keep this
 # list explicit so schema reviews can assert that sensitive fields are known.
 FIELD_CLASSES: dict[str, DataClass] = {
     # credentials / auth material
@@ -147,11 +147,12 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "plan": DataClass.WORKOUT,
     # AI prompts / responses
     "prompt": DataClass.PROMPT,
-    "system_prompt": DataClass.PROMPT,
+    "user_prompt": DataClass.PROMPT,
+    "system_prompt": DataClass.INTERNAL,
     "content": DataClass.PROMPT,
     "reasoning": DataClass.PROMPT,
-    "insight_json": DataClass.PROMPT,
-    "insight_markdown": DataClass.PROMPT,
+    "insight_json": DataClass.ANALYTICS,
+    "insight_markdown": DataClass.ANALYTICS,
     # analytics / derived metrics
     "confidence": DataClass.ANALYTICS,
     "score": DataClass.ANALYTICS,
@@ -236,24 +237,20 @@ def safe_log_value(field_name: str, value: Any) -> Any:
         DataClass.PROMPT,
     }:
         return f"[REDACTED:{classification.value.upper()}]"
+    if classification is DataClass.ANALYTICS:
+        return "[REDACTED:ANALYTICS]"
     return value
 
 
 def redact_for_log(value: Any, *, field_name: str | None = None) -> Any:
     """Recursively redact a structure before it is emitted to logs.
 
-    Mapping keys drive classification.  Sequence contents inherit the parent
+    Mapping keys drive classification. Sequence contents inherit the parent
     field's classification so a list of tokens or health samples cannot leak.
     """
     if field_name is not None:
         classification = classify_field(field_name)
-        if classification in {
-            DataClass.CREDENTIAL,
-            DataClass.IDENTIFIER,
-            DataClass.HEALTH,
-            DataClass.WORKOUT,
-            DataClass.PROMPT,
-        }:
+        if classification is not DataClass.PUBLIC and classification is not DataClass.INTERNAL:
             return safe_log_value(field_name, value)
 
     if isinstance(value, Mapping):
@@ -267,11 +264,11 @@ def redact_for_log(value: Any, *, field_name: str | None = None) -> Any:
 
 
 def sanitize_for_export(value: Any, *, field_name: str | None = None) -> Any:
-    """Return an export-safe copy, dropping classes that must never be exported.
+    """Return an export-safe copy, dropping non-exportable data classes.
 
-    Credential and internal fields are removed from mappings.  Public,
-    identifier, health, workout, prompt, and analytics data remain eligible
-    for a user's own authenticated export; callers still need tenant checks.
+    Credential, analytics, and internal fields are removed from mappings.
+    Public, identifier, health, workout, and user-prompt data remain eligible
+    for the owning user's authenticated export; callers still need tenant checks.
     """
     if isinstance(value, Mapping):
         exported: dict[str, Any] = {}
