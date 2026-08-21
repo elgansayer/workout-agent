@@ -1,4 +1,4 @@
-import { HttpClient, HttpInterceptorFn } from '@angular/common/http';
+import { HttpBackend, HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { switchMap } from 'rxjs';
 
@@ -34,12 +34,12 @@ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
     return next(modifiedReq);
   }
 
-  // Each browser mutation uses a fresh, server-side single-use nonce. The
-  // nested GET passes through this interceptor once but is a safe method, so it
-  // cannot recurse into another token request.
-  const http = inject(HttpClient);
+  // Each browser mutation uses a fresh, server-side single-use nonce. Use the
+  // raw backend client so the token lookup cannot recursively re-enter this
+  // interceptor; the request URL and credentials are explicit here instead.
+  const csrfClient = new HttpClient(inject(HttpBackend));
   const csrfUrl = baseUrl ? `${baseUrl}/api/csrf-token` : '/api/csrf-token';
-  return http
+  return csrfClient
     .get<CsrfTokenResponse>(csrfUrl, { withCredentials: true })
     .pipe(
       switchMap(({ token }) =>
