@@ -1,0 +1,103 @@
+name: Encrypted backup restore
+
+on:
+  pull_request:
+    paths:
+      - 'tools/backup_restore.py'
+      - 'tools/test_backup_restore.py'
+      - 'docs/BACKUP_RESTORE_RUNBOOK.md'
+      - '.github/workflows/encrypted-backup-restore.yml'
+      - 'backend/database.py'
+      - 'backend/webapp/**'
+      - 'backend/requirements*.txt'
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/backup_restore.py'
+      - 'tools/test_backup_restore.py'
+      - 'docs/BACKUP_RESTORE_RUNBOOK.md'
+      - '.github/workflows/encrypted-backup-restore.yml'
+      - 'backend/database.py'
+      - 'backend/webapp/**'
+      - 'backend/requirements*.txt'
+  schedule:
+    - cron: '23 4 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-web.txt
+
+      - name: Install runtime and test dependencies
+        run: >-
+          python -m pip install
+          -r backend/requirements.txt
+          -r backend/requirements-web.txt
+
+      - name: Compile backup boundary
+        run: >-
+          python -m py_compile
+          tools/backup_restore.py
+          tools/test_backup_restore.py
+
+      - name: Run encrypted-backup unit tests
+        run: python -m pytest -q tools/test_backup_restore.py
+
+      - name: Run synthetic restore drill
+        run: >-
+          python tools/backup_restore.py drill
+          --repo-root .
+          --backend-dir backend
+          --output artifacts/backup-restore-drill.json
+
+      - name: Add drill evidence to job summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ -f artifacts/backup-restore-drill.json ]]; then
+            {
+              echo '### Backup restore drill evidence'
+              echo '```json'
+              cat artifacts/backup-restore-drill.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Open or update restore-failure alert
+        if: failure() && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='Backup restore drill failed'
+          run_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+          existing="$(gh issue list --repo "$GH_REPO" --state open --search "$title in:title" --limit 10 --json number,title --jq '.[] | select(.title == "Backup restore drill failed") | .number' | head -n1)"
+          body="Encrypted backup restore verification failed for workflow run: $run_url\n\nInvestigate before relying on the current backup set. Follow docs/BACKUP_RESTORE_RUNBOOK.md and keep this issue open until a restore drill passes."
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GH_REPO" --body "$body"
+          else
+            gh issue create --repo "$GH_REPO" --title "$title" --body "$body"
+          fi
