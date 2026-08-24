@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +23,13 @@ Send = Callable[[dict[str, Any]], Awaitable[None]]
 ASGIApp = Callable[[dict[str, Any], Receive, Send], Awaitable[None]]
 
 # These tables are created by the current init_db migration path and represent
-# the minimum schema needed to serve authenticated product traffic safely.
+# the minimum schema needed to serve authenticated product traffic and this
+# diagnostics surface safely.
 _REQUIRED_TABLES = frozenset(
     {
         "users",
         "user_preferences",
+        "user_api_keys",
         "programmes",
         "workout_history",
         "notifications",
@@ -205,12 +207,14 @@ def install_authenticated_diagnostics(app: FastAPI, *, db_path: str) -> None:
 
     @app.get(path, include_in_schema=False)
     def diagnostics(request: Request) -> JSONResponse:
-        # Deliberately stricter than legacy anonymous mode. Dependency details
-        # are never available without an authenticated, tenant-scoped session.
+        # Require the same complete signed-session identity as the global
+        # mutation boundary. Dependency details are never available in legacy
+        # anonymous mode or from an incomplete session.
+        user = request.session.get("user")
         user_id = request.session.get("user_id")
-        if not isinstance(user_id, str) or not user_id:
+        if not user or not isinstance(user_id, str) or not user_id.strip():
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-        status_code, payload = authenticated_diagnostics(db_path, user_id)
+        status_code, payload = authenticated_diagnostics(db_path, user_id.strip())
         return JSONResponse(
             payload,
             status_code=status_code,
