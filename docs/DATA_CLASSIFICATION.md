@@ -33,16 +33,36 @@ Sensitive database fields must have an explicit or pattern-derived non-Internal 
 
 Any migration that adds a credential, identifier, health, workout, prompt, or analytics column should update `FIELD_CLASSES` in the same pull request. The focused tests assert the current high-value database boundary so accidental reclassification fails review.
 
+## Public source and synthetic-data rule
+
+The public repository is not an approved storage location for real-user Identifier, Health, Workout, Prompt, Analytics, or Credential data. This applies to documentation, examples, fixtures, sample payloads, screenshots, generated reports, issue reproductions, and copied provider exports.
+
+When an example needs user-shaped data:
+
+- create a fictional profile rather than adapting a real user's profile;
+- mark sensitive fixture/profile examples explicitly with `synthetic-profile: true` or `"synthetic_profile": true`;
+- use reserved example email domains such as `example.com`;
+- use generic, non-identifying workout and health values;
+- reduce bugs from Hevy, Garmin, Google Health/Health Connect, Fitbit, Apple Health, or other providers to the smallest synthetic payload that reproduces the behavior;
+- never paste a production export, screenshot, prompt transcript, API response, credential, or personal coaching profile into source control.
+
+A synthetic marker is an assertion by the contributor that the data is fictional. It is not permission to copy a real record and relabel it. Reviewers must reject examples that appear derived from a real person even when a marker is present.
+
+If real personal data has already been committed, removing it from the current tree is only the first step. Follow `docs/PUBLIC_DATA_HISTORY_REVIEW.md` to decide whether a coordinated history rewrite is required. Any credential discovered in current or historical content must be revoked or rotated independently of history cleanup.
+
 ## Enforcement
 
-`backend/scripts/check_data_policy.py` performs two high-confidence repository checks:
+`backend/scripts/check_data_policy.py` performs high-confidence repository checks:
 
 1. it parses Python logging calls and fails when credential-like variables are passed directly rather than through a central redaction helper;
-2. it scans SQLite schema declarations and fails when sensitive-looking columns resolve to the fail-closed Internal class.
+2. it scans SQLite schema declarations and fails when sensitive-looking columns resolve to the fail-closed Internal class;
+3. it scans public documentation and fixture/sample sources for likely named personal profiles, nearby first-person health/training details, non-example email addresses in sensitive example data, and sensitive fixtures that lack an explicit synthetic marker.
+
+The public-source heuristic is deliberately conservative. It is a prevention layer, not a complete DLP or historical-secret scanner, and does not replace review of screenshots, binary attachments, generated artifacts, or Git history.
 
 `backend/tests/test_data_classification.py` verifies the complete matrix, classification fallbacks, recursive log redaction, and export filtering. `backend/tests/test_data_policy_check.py` exercises the static checker against synthetic safe and unsafe code.
 
-The `Data classification policy` GitHub Actions workflow runs the focused tests and repository scanner whenever classification code, database code, backend Python, or the policy workflow changes.
+The `Data classification policy` GitHub Actions workflow runs the focused tests and repository scanner when backend policy code, public documentation, fixture paths, or the workflow itself changes.
 
 ## Review checklist
 
@@ -53,3 +73,5 @@ The `Data classification policy` GitHub Actions workflow runs the focused tests 
 - Treat exports as a new disclosure boundary; filter by owner first and classification second.
 - Do not downgrade a class to make a test pass. Add a purpose-specific reviewed DTO when a legitimate disclosure is required.
 - Keep retention and deletion behavior aligned with the class matrix and connector-specific policy.
+- Keep public docs, examples, fixtures, and samples synthetic and non-identifying.
+- Treat removal from `main` and removal from Git history as separate remediation steps.

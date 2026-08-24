@@ -1,55 +1,43 @@
-Your 6-Day Stage-Prep Arnold Split
+<!-- synthetic-profile: true -->
+# Synthetic six-day hypertrophy example
 
-This routine is optimised for a "Greek god" physique, focusing on the V-taper, 3D shoulder caps, and deep muscular separation. Every set requires a 3-second negative phase to maximise hypertrophy without crushing your joints.
+This document is a fictional programme-shaped example used for documentation and development. It is not derived from a real user's training history, health conditions, injuries, biometric data, or preferences.
 
-The Schedule
+Production programme selection and coaching must use the authenticated user's imported routines, programme state, goals, and explicitly supplied constraints.
 
-Mon/Thu: Chest & Back (V-Taper Focus)
+## Schedule
 
-Tue/Fri: Shoulders & Arms (3D Cap & Peak Focus)
+| Day | Focus |
+| --- | --- |
+| Monday / Thursday | Chest and back |
+| Tuesday / Friday | Shoulders and arms |
+| Wednesday / Saturday | Legs and trunk |
+| Sunday | Rest |
 
-Wed/Sat: Legs & Abs (Mass & Symmetry)
+## Day 1 and 4: chest and back
 
-Sun: Rest & Recovery
+- Incline dumbbell fly: 3 sets x 12-15 reps
+- Incline machine press: 3 sets x 10-12 reps
+- Chest-supported row: 3 sets x 10-12 reps
+- Lat pulldown: 3 sets x 10-15 reps
+- Straight-arm cable pulldown: 2 sets x 12-15 reps
 
-Daily Routine Details
+## Day 2 and 5: shoulders and arms
 
-Day 1 & 4: Chest & Back
+- Cable lateral raise: 3 sets x 12-20 reps
+- Reverse pec deck: 3 sets x 12-20 reps
+- Incline dumbbell curl: 3 sets x 10-15 reps
+- Cable triceps extension: 3 sets x 10-15 reps
+- Cable curl: 2 sets x 12-15 reps
 
-Incline Dumbbell Flyes: 4 sets x 12–15 reps
+## Day 3 and 6: legs and trunk
 
-Incline Smith Machine Press: 3 sets x 10–12 reps
+- Lying leg curl: 3 sets x 10-15 reps
+- Leg extension: 3 sets x 10-15 reps
+- Leg press: 3 sets x 10-15 reps
+- Romanian deadlift: 3 sets x 8-12 reps
+- Calf raise: 3 sets x 12-20 reps
+- Hanging leg raise: 3 sets x 10-15 reps
+- Cable crunch: 3 sets x 10-15 reps
 
-Chest Supported T-Bar Rows: 3 sets x 10–12 reps
-
-Wide Grip Lat Pulldowns: 4 sets x 12 reps
-
-Straight Arm Cable Pull Downs: 3 sets x 15 reps
-
-Day 2 & 5: Shoulders & Arms
-
-Cable Lateral Raises: 5 sets x 15–20 reps
-
-Reverse Pec Deck Flyes: 4 sets x 15 reps
-
-Incline Dumbbell Curls: 4 sets x 12 reps
-
-Tricep Overhead Cable Extensions: 4 sets x 12–15 reps
-
-Reverse Grip Cable Curls: 3 sets x 15 reps
-
-Day 3 & 6: Legs & Abs
-
-Lying Leg Curls: 4 sets x 12 reps
-
-Leg Extensions: 4 sets x 15 reps
-
-Leg Press: 3 sets x 10–12 reps (Feet flat on the platform)
-
-Romanian Deadlifts (Dumbbells): 4 sets x 12 reps
-
-Leg Press Calf Raises: 4 sets x 15–20 reps
-
-Hanging Leg Raises: 4 sets x 12–15 reps
-
-Kneeling Cable Crunches: 4 sets x 10–12 reps
+The values above are intentionally generic and synthetic. Tests or documentation that need additional health or workout examples should create minimal fictional fixtures rather than copying user exports.

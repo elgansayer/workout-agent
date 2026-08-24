@@ -6,7 +6,8 @@
     "start": "ng serve",
     "build": "ng build",
     "watch": "ng build --watch --configuration development",
-    "test": "ng test"
+    "test": "ng test",
+    "test:a11y-preferences": "node scripts/check-accessibility-preferences.mjs"
   },
   "private": true,
   "packageManager": "npm@11.12.1",

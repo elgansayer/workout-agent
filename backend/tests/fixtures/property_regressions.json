@@ -1,4 +1,5 @@
 {
+  "synthetic_profile": true,
   "parser_payloads": [
     {
       "title": "Malformed set entry",

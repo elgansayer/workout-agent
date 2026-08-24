@@ -1,0 +1,47 @@
+name: Production release policy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/build-images.yml'
+      - '.github/workflows/production-release.yml'
+      - '.github/workflows/production-release-policy.yml'
+      - 'backend/release_gate.py'
+      - 'backend/tests/test_release_gate.py'
+      - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-images.yml'
+      - '.github/workflows/production-release.yml'
+      - '.github/workflows/production-release-policy.yml'
+      - 'backend/release_gate.py'
+      - 'backend/tests/test_release_gate.py'
+      - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install focused test dependency
+        run: python3 -m pip install 'pytest>=8,<9'
+
+      - name: Compile release policy
+        run: >-
+          python3 -m py_compile
+          backend/release_gate.py
+          backend/tests/test_release_gate.py
+
+      - name: Run release-gate regression tests
+        working-directory: backend
+        run: python3 -m pytest -q tests/test_release_gate.py
