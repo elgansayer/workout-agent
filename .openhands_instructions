@@ -1,13 +1,31 @@
 # OpenHands Instructions for Workout Agent
 
-Welcome to the Workout Agent project! When you start a task, you **MUST** read and adhere to `AGENTS.md` (The Engineering Constitution).
-It contains critical instructions regarding our Technology Stack, Multi-Tenancy Mandate, AI Provider Mandate, Python Code Standards, and Verification Gates.
+OpenHands Agent Canvas on the VPS is the **single autonomous engineering control plane** for this repository. Read `AGENTS.md` and `docs/AUTONOMOUS_ENGINEERING.md` before changing code.
 
-## Key Directives:
-1. **Verification Gate**: Before considering any task complete, you must run our verification gates (`ruff check .`, `pytest`, `mypy`). Code must be 100% clean and pass all tests before you push.
-2. **Multi-Tenancy**: All new tables must have a `user_id` column. All database access must be filtered by `user_id`. Do not break data isolation.
-3. **AI Providers**: Never call an AI SDK (like `google.generativeai`) directly. You must use `ai_provider.get_provider()` to respect the user's preferred AI model and API key.
-4. **Skills System**: Check `.agents/skills/` for detailed guides on how to implement specific recurring patterns (e.g., adding a FastAPI route, migrating a table, or wiring an AI provider).
-5. **GitHub Projects & Issues**: When you pick up a task, use the `gh issue view` command to get the full context. When you complete the task and open a PR, use `gh issue edit` or `gh project item-edit` (if attached to a project board) to update its status to "In Review".
+## Control-plane rules
 
-Read `AGENTS.md` thoroughly before starting any new GitHub Issue.
+1. Select work from GitHub Issues only after searching open/recent pull requests and branches for overlapping implementation.
+2. Use one canonical issue → branch → pull request path. Resume viable existing work instead of opening a duplicate.
+3. Start new implementation branches from current `main`.
+4. Make the implementation, migrations, tests, and documentation on the canonical branch. Do not delegate autonomous coding, planning, reviewing, or repair to GitHub-hosted agent workflows.
+5. GitHub Actions are deterministic verification/package/deploy/smoke/status infrastructure only. The retired swarm, auto-dispatcher, architect, resolver, reviewer, and recurring GitHub-hosted coding workflows must remain inert.
+6. Respond to review and CI failures by repairing the same canonical branch when viable. Never create a second autonomous worker path for the same issue.
+7. Open a PR with the source issue, exact verification commands/results, safety/migration notes, and remaining external prerequisites. Do not claim checks that were not run.
+
+## Engineering requirements
+
+- **Multi-tenancy:** every user-owned table, query, cache, cursor, job, connector, secret, notification, export, and programme operation must be scoped by authenticated `user_id`.
+- **Secrets:** never log or commit API keys, OAuth tokens, session secrets, encryption keys, or real user/provider payloads.
+- **AI providers:** resolve user-facing AI through the tenant-aware provider abstraction; do not bypass it with a shared SDK client.
+- **Security:** do not weaken authentication, authorization, CSRF, cache, proxy, security-header, or route-inventory controls to make a task pass.
+- **Skills:** consult `.agents/skills/` for recurring repository-specific patterns.
+- **Verification:** run focused tests plus the relevant repository verification gate before declaring completion.
+
+For control-plane/documentation changes specifically:
+
+```bash
+python tools/check_openhands_control_plane.py
+python -m unittest tools.test_openhands_control_plane -v
+```
+
+If repository instructions conflict, `AGENTS.md` and `docs/AUTONOMOUS_ENGINEERING.md` are canonical and the stale instruction must be fixed.
