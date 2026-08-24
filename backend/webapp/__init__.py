@@ -1,10 +1,11 @@
 """Security bootstrap for the internal workout web application.
 
 Importing the package always validates the runtime authentication boundary.
-When the optional web dependencies are installed it also installs fail-safe
-response-cache and state-changing-request guards. Focused runtime-security
-checks intentionally do not install FastAPI, so optional web guard installation
-must stay lazy in those environments.
+When the optional web dependencies are installed it also installs process-wide
+authentication, response-cache, and state-changing-request guards so personalised
+responses fail closed by default. Focused runtime-security checks intentionally
+do not install FastAPI, so optional web guard installation must stay lazy in
+those environments.
 """
 
 from __future__ import annotations
@@ -22,9 +23,11 @@ except ModuleNotFoundError:
     # the dependency.
     pass
 else:
+    from webapp.auth_boundary import install_authentication_boundary
     from webapp.cache_security import install_response_cache_guard
     from webapp.mutation_security import install_mutation_security_guard
 
+    install_authentication_boundary()
     install_response_cache_guard()
     install_mutation_security_guard()
 
