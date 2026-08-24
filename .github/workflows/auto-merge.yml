@@ -19,12 +19,12 @@ jobs:
           github-token: '${{ secrets.GITHUB_TOKEN }}'
 
       - name: Record GitHub Actions provenance for review
-        if: github.actor == 'dependabot[bot]' && steps.metadata.outputs.package-ecosystem == 'github-actions'
+        if: github.actor == 'dependabot[bot]' && steps.metadata.outputs['package-ecosystem'] == 'github-actions'
         env:
-          DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
-          PREVIOUS_VERSION: ${{ steps.metadata.outputs.previous-version }}
-          NEW_VERSION: ${{ steps.metadata.outputs.new-version }}
-          UPDATED_DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          DEPENDENCIES: ${{ steps.metadata.outputs['dependency-names'] }}
+          PREVIOUS_VERSION: ${{ steps.metadata.outputs['previous-version'] }}
+          NEW_VERSION: ${{ steps.metadata.outputs['new-version'] }}
+          UPDATED_DEPENDENCIES: ${{ steps.metadata.outputs['updated-dependencies-json'] }}
         run: |
           {
             echo '### GitHub Actions supply-chain review required'
@@ -38,7 +38,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Approve and Auto-Merge PR
-        if: github.actor != 'dependabot[bot]' || steps.metadata.outputs.package-ecosystem != 'github-actions'
+        if: github.actor != 'dependabot[bot]' || steps.metadata.outputs['package-ecosystem'] != 'github-actions'
         run: |
           gh pr review --approve "$PR_URL"
           gh pr merge --auto --squash "$PR_URL"
