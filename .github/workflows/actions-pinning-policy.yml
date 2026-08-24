@@ -1,0 +1,45 @@
+name: GitHub Actions pinning policy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+      - 'tools/check_actions_pinning.py'
+      - 'tools/test_actions_pinning.py'
+      - 'docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/actions/**'
+      - '.github/dependabot.yml'
+      - 'tools/check_actions_pinning.py'
+      - 'tools/test_actions_pinning.py'
+      - 'docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Run policy unit tests
+        run: python -m unittest tools.test_actions_pinning -v
+
+      - name: Reject mutable external action refs
+        run: python tools/check_actions_pinning.py --root .
