@@ -4,10 +4,30 @@ from __future__ import annotations
 
 import os
 
-from webapp.app import DB_PATH, app as application
-from webapp.csrf_security import CSRFMiddleware
-from webapp.health import OperationalHealthMiddleware, install_authenticated_diagnostics
-from webapp.security_headers import SecurityHeadersMiddleware
+from webapp.proxy_security import ProxySecurityMiddleware, load_proxy_security_config
+
+# Validate the canonical origin and trusted proxy policy before importing the
+# route graph so production startup fails closed on unsafe deployment settings.
+# Starlette's TestClient uses ``testserver`` as its synthetic request host, so
+# give the explicit test runtime a matching local origin unless a test provides
+# a stricter WEB_PUBLIC_URL itself. Production and development policy is
+# unchanged.
+_proxy_environment = os.environ
+if (
+    os.environ.get("APP_ENV", "").strip().lower() == "test"
+    and not os.environ.get("WEB_PUBLIC_URL", "").strip()
+):
+    _proxy_environment = dict(os.environ)
+    _proxy_environment["WEB_PUBLIC_URL"] = "http://testserver"
+_PROXY_SECURITY = load_proxy_security_config(_proxy_environment)
+
+from webapp.app import DB_PATH, app as application  # noqa: E402
+from webapp.csrf_security import CSRFMiddleware  # noqa: E402
+from webapp.health import (  # noqa: E402
+    OperationalHealthMiddleware,
+    install_authenticated_diagnostics,
+)
+from webapp.security_headers import SecurityHeadersMiddleware  # noqa: E402
 
 
 def _trusted_browser_origins() -> tuple[str, ...]:
@@ -42,9 +62,9 @@ def _trusted_browser_origins() -> tuple[str, ...]:
 install_authenticated_diagnostics(application, db_path=DB_PATH)
 
 # Keep the canonical FastAPI object importable for unit tests, while the
-# production entrypoint wraps every route. CSRF is installed only when cookie
-# authentication is configured; production runtime validation already requires
-# that configuration and fails startup before this module is reached otherwise.
+# production entrypoint wraps every interactive route. CSRF is installed only
+# when cookie authentication is configured; production runtime validation
+# already requires that configuration and fails startup otherwise.
 secured_application = application
 _session_secret = os.environ.get("WEB_AUTH_SECRET", "").strip()
 _google_client_id = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
@@ -56,9 +76,14 @@ if _session_secret and _google_client_id:
         trusted_origins=_trusted_browser_origins(),
     )
 
-# Liveness/readiness stay outside interactive auth and CSRF so orchestrators can
-# probe the service without a browser session, while security headers still wrap
-# every response including the public operational probes.
+# ProxySecurityMiddleware is the request-side boundary for the interactive app:
+# it validates Host and strips untrusted forwarding metadata before FastAPI,
+# OAuth, rate limiting, or audit logging can consume it. Operational probes stay
+# outside that boundary so container/orchestrator health checks can reach them
+# directly. Security headers remain outermost for every response.
 app = SecurityHeadersMiddleware(
-    OperationalHealthMiddleware(secured_application, db_path=DB_PATH)
+    OperationalHealthMiddleware(
+        ProxySecurityMiddleware(secured_application, _PROXY_SECURITY),
+        db_path=DB_PATH,
+    )
 )

@@ -33,6 +33,9 @@ services:
       DATABASE_PATH: /data/workout_agent.db
       TZ: "Europe/London"
       APP_ENV: ${APP_ENV:-development}
+      # Canonical request origin. The local default matches the default WEB_PORT;
+      # set WEB_PUBLIC_URL explicitly whenever the host or port differs.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:8770}
       # Deliberately defaults off. Set ALLOW_ANONYMOUS_WEB=1 only for a trusted
       # local network, or configure the three WEB_* Google auth variables.
       ALLOW_ANONYMOUS_WEB: ${ALLOW_ANONYMOUS_WEB:-0}
