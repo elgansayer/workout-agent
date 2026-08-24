@@ -8,7 +8,18 @@ from webapp.proxy_security import ProxySecurityMiddleware, load_proxy_security_c
 
 # Validate the canonical origin and trusted proxy policy before importing the
 # route graph so production startup fails closed on unsafe deployment settings.
-_PROXY_SECURITY = load_proxy_security_config()
+# Starlette's TestClient uses ``testserver`` as its synthetic request host, so
+# give the explicit test runtime a matching local origin unless a test provides
+# a stricter WEB_PUBLIC_URL itself. Production and development policy is
+# unchanged.
+_proxy_environment = os.environ
+if (
+    os.environ.get("APP_ENV", "").strip().lower() == "test"
+    and not os.environ.get("WEB_PUBLIC_URL", "").strip()
+):
+    _proxy_environment = dict(os.environ)
+    _proxy_environment["WEB_PUBLIC_URL"] = "http://testserver"
+_PROXY_SECURITY = load_proxy_security_config(_proxy_environment)
 
 from webapp.app import DB_PATH, app as application  # noqa: E402
 from webapp.csrf_security import CSRFMiddleware  # noqa: E402
