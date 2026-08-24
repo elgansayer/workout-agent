@@ -32,8 +32,16 @@ def _diagnostic_client(db_path: str) -> TestClient:
     app = FastAPI()
     app.add_middleware(SessionMiddleware, secret_key="test-secret")
 
-    @app.post("/__test/login/{user_id}")
+    # Use GET for the test-only session bootstrap. The production mutation
+    # security boundary correctly rejects anonymous POST/PUT/PATCH/DELETE calls.
+    @app.get("/__test/login/{user_id}")
     def login(user_id: str, request: Request) -> dict[str, str]:
+        request.session["user"] = "test@example.com"
+        request.session["user_id"] = user_id
+        return {"status": "ok"}
+
+    @app.get("/__test/incomplete/{user_id}")
+    def incomplete_login(user_id: str, request: Request) -> dict[str, str]:
         request.session["user_id"] = user_id
         return {"status": "ok"}
 
@@ -89,7 +97,7 @@ def test_readiness_passes_after_database_initialisation(tmp_path: Path) -> None:
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_diagnostics_requires_authenticated_tenant_session(
+def test_diagnostics_requires_complete_authenticated_tenant_session(
     tmp_path: Path,
     monkeypatch: Any,
 ) -> None:
@@ -99,9 +107,14 @@ def test_diagnostics_requires_authenticated_tenant_session(
 
     with _diagnostic_client(db_path) as client:
         response = client.get("/api/diagnostics/health")
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Not authenticated"}
 
-    assert response.status_code == 401
-    assert response.json() == {"detail": "Not authenticated"}
+        assert client.get("/__test/incomplete/user-a").status_code == 200
+        incomplete = client.get("/api/diagnostics/health")
+
+    assert incomplete.status_code == 401
+    assert incomplete.json() == {"detail": "Not authenticated"}
 
 
 def test_authenticated_diagnostics_are_aggregate_and_secret_free(
@@ -113,7 +126,7 @@ def test_authenticated_diagnostics_are_aggregate_and_secret_free(
     monkeypatch.setenv("GEMINI_API_KEY", "never-return-this-secret")
 
     with _diagnostic_client(db_path) as client:
-        assert client.post("/__test/login/user-a").status_code == 200
+        assert client.get("/__test/login/user-a").status_code == 200
         response = client.get("/api/diagnostics/health")
 
     assert response.status_code == 200
@@ -138,7 +151,7 @@ def test_authenticated_diagnostics_degrade_without_database(tmp_path: Path) -> N
     missing = str(tmp_path / "missing.db")
 
     with _diagnostic_client(missing) as client:
-        assert client.post("/__test/login/user-a").status_code == 200
+        assert client.get("/__test/login/user-a").status_code == 200
         response = client.get("/api/diagnostics/health")
 
     assert response.status_code == 503
