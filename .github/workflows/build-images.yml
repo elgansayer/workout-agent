@@ -1,12 +1,12 @@
 name: Build and push images
 
-# Builds the container images and pushes them to the GitHub Container Registry
-# (GHCR) so a Portainer stack can pull them by URL. No secrets are required:
-# the workflow authenticates with the built-in GITHUB_TOKEN.
+# Builds container images and pushes them to GHCR. This workflow deliberately
+# does not deploy production. Production promotion is owned exclusively by
+# .github/workflows/production-release.yml after its independent evidence gate.
 #
-# Published images (for the repo owner "OWNER"):
-#   ghcr.io/OWNER/workout-agent-web   <- the dashboard used by the Portainer stack
-#   ghcr.io/OWNER/workout-agent       <- the daily agent (optional)
+# Published images:
+#   ghcr.io/OWNER/workout-agent-web
+#   ghcr.io/OWNER/workout-agent
 
 on:
   push:
@@ -70,15 +70,3 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger Portainer Webhook
-        run: |
-          if [ -n "${{ secrets.PORTAINER_WEBHOOK }}" ]; then
-            curl -X POST "${{ secrets.PORTAINER_WEBHOOK }}"
-          else
-            echo "No PORTAINER_WEBHOOK secret found. Skipping deploy."
-          fi

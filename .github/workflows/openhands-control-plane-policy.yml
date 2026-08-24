@@ -1,0 +1,47 @@
+name: OpenHands control-plane policy
+
+on:
+  pull_request:
+    paths:
+      - "AGENTS.md"
+      - ".openhands_instructions"
+      - "docs/AUTONOMOUS_ENGINEERING.md"
+      - "tools/check_openhands_control_plane.py"
+      - "tools/test_openhands_control_plane.py"
+      - ".github/workflows/**"
+  push:
+    branches:
+      - main
+    paths:
+      - "AGENTS.md"
+      - ".openhands_instructions"
+      - "docs/AUTONOMOUS_ENGINEERING.md"
+      - "tools/check_openhands_control_plane.py"
+      - "tools/test_openhands_control_plane.py"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openhands-control-plane-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  policy:
+    name: Verify control-plane ownership
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Compile policy tooling
+        run: python -m py_compile tools/check_openhands_control_plane.py tools/test_openhands_control_plane.py
+
+      - name: Run policy unit tests
+        run: python -m unittest tools.test_openhands_control_plane -v
+
+      - name: Enforce repository contract
+        run: python tools/check_openhands_control_plane.py

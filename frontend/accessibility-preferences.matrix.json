@@ -1,0 +1,28 @@
+{
+  "sharedChecks": [
+    "focus-visible",
+    "current-or-selected-state",
+    "error-warning-success-state",
+    "form-controls",
+    "charts-and-legends",
+    "loading-and-streaming-state"
+  ],
+  "routes": [
+    "login",
+    "profile",
+    "dashboard",
+    "chat",
+    "checkins",
+    "history",
+    "plan",
+    "programmes",
+    "progress",
+    "settings",
+    "stats"
+  ],
+  "preferences": [
+    "prefers-reduced-motion: reduce",
+    "forced-colors: active",
+    "prefers-contrast: more"
+  ]
+}

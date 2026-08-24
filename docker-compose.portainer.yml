@@ -21,9 +21,11 @@
 #   WEB_AUTH_SECRET           random value containing at least 32 characters
 #   WEB_GOOGLE_CLIENT_ID      Google OAuth web application client ID
 #   WEB_GOOGLE_CLIENT_SECRET  Google OAuth web application client secret
+#   WEB_PUBLIC_URL            canonical HTTPS origin, e.g. https://workout.example.com
 #
 # Recommended web restriction:
 #   ALLOWED_EMAILS            comma-separated email allowlist
+#   WEB_TRUSTED_PROXY_CIDRS   narrow CIDRs for proxies allowed to set forwarding headers
 #
 # Optional env vars (leave unset to disable that feature):
 #   HEVY_API_KEY                    reference your last logged Hevy session
@@ -72,6 +74,12 @@ services:
       TZ: ${TZ:-Europe/London}
       APP_ENV: production
       ALLOW_ANONYMOUS_WEB: "0"
+      # Public-origin and proxy trust boundary. WEB_PUBLIC_URL is the canonical
+      # host/scheme used for OAuth and absolute URLs. Proxy CIDRs default to an
+      # empty trust list so forwarding headers are ignored unless opted in.
+      WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:?WEB_PUBLIC_URL is required}
+      WEB_ALLOWED_HOSTS: ${WEB_ALLOWED_HOSTS:-}
+      WEB_TRUSTED_PROXY_CIDRS: ${WEB_TRUSTED_PROXY_CIDRS:-}
       # Enables the "Connect Google Health" button on the dashboard's Settings
       # page, so you can link your account in the browser (no manual token).
       # GOOGLE_HEALTH_REDIRECT_URI must be the dashboard's public callback URL,

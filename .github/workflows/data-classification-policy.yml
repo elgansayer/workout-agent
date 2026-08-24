@@ -3,15 +3,21 @@ name: Data classification policy
 on:
   pull_request:
     paths:
+      - 'README.md'
+      - 'current-workout.md'
       - 'backend/**/*.py'
-      - 'docs/DATA_CLASSIFICATION.md'
+      - 'backend/**/fixtures/**'
+      - 'docs/**/*.md'
       - '.github/workflows/data-classification-policy.yml'
   push:
     branches:
       - main
     paths:
+      - 'README.md'
+      - 'current-workout.md'
       - 'backend/**/*.py'
-      - 'docs/DATA_CLASSIFICATION.md'
+      - 'backend/**/fixtures/**'
+      - 'docs/**/*.md'
       - '.github/workflows/data-classification-policy.yml'
 
 permissions:
