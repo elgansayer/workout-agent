@@ -31,6 +31,4 @@ RUN mkdir -p /data /app/frontend/dist
 COPY --from=frontend-builder /build/dist /app/frontend/dist
 
 EXPOSE 8000
-# Do not let Uvicorn consume Forwarded/X-Forwarded-* before our ASGI trust
-# boundary can inspect the real socket peer. webapp.secure_app owns proxy trust.
 CMD ["uvicorn", "webapp.secure_app:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

@@ -33,15 +33,27 @@ services:
       DATABASE_PATH: /data/workout_agent.db
       TZ: "Europe/London"
       APP_ENV: ${APP_ENV:-development}
-      # Deliberately defaults off. Set ALLOW_ANONYMOUS_WEB=1 only for a trusted
-      # local network, or configure the three WEB_* Google auth variables.
-      ALLOW_ANONYMOUS_WEB: ${ALLOW_ANONYMOUS_WEB:-0}
       # Canonical request origin. The local default matches the default WEB_PORT;
       # set WEB_PUBLIC_URL explicitly whenever the host or port differs.
       WEB_PUBLIC_URL: ${WEB_PUBLIC_URL:-http://localhost:8770}
+      # Deliberately defaults off. Set ALLOW_ANONYMOUS_WEB=1 only for a trusted
+      # local network, or configure the three WEB_* Google auth variables.
+      ALLOW_ANONYMOUS_WEB: ${ALLOW_ANONYMOUS_WEB:-0}
     ports:
       - "${WEB_PORT:-8770}:8000"
     volumes:
       # Same volume as the agent, so the dashboard reads live data.
       - ./data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
