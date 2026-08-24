@@ -1,4 +1,4 @@
-"""Production ASGI entrypoint with layered HTTP security boundaries."""
+"""Production ASGI entrypoint with operational and layered HTTP security boundaries."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 
 from webapp.app import DB_PATH, app as application
 from webapp.csrf_security import CSRFMiddleware
+from webapp.health import OperationalHealthMiddleware, install_authenticated_diagnostics
 from webapp.security_headers import SecurityHeadersMiddleware
 
 
@@ -36,6 +37,10 @@ def _trusted_browser_origins() -> tuple[str, ...]:
     return tuple(dict.fromkeys(configured))
 
 
+# Register authenticated diagnostics on the canonical FastAPI application so
+# its existing session/auth boundary remains authoritative.
+install_authenticated_diagnostics(application, db_path=DB_PATH)
+
 # Keep the canonical FastAPI object importable for unit tests, while the
 # production entrypoint wraps every route. CSRF is installed only when cookie
 # authentication is configured; production runtime validation already requires
@@ -51,4 +56,9 @@ if _session_secret and _google_client_id:
         trusted_origins=_trusted_browser_origins(),
     )
 
-app = SecurityHeadersMiddleware(secured_application)
+# Liveness/readiness stay outside interactive auth and CSRF so orchestrators can
+# probe the service without a browser session, while security headers still wrap
+# every response including the public operational probes.
+app = SecurityHeadersMiddleware(
+    OperationalHealthMiddleware(secured_application, db_path=DB_PATH)
+)

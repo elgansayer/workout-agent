@@ -1,0 +1,67 @@
+name: Operational health
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "backend/webapp/health.py"
+      - "backend/webapp/secure_app.py"
+      - "backend/webapp/__init__.py"
+      - "backend/tests/test_operational_health.py"
+      - "docker-compose.yml"
+      - "docs/OPERATIONAL_HEALTH.md"
+      - ".github/workflows/operational-health.yml"
+  push:
+    branches: [main]
+    paths:
+      - "backend/webapp/health.py"
+      - "backend/webapp/secure_app.py"
+      - "backend/webapp/__init__.py"
+      - "backend/tests/test_operational_health.py"
+      - "docker-compose.yml"
+      - "docs/OPERATIONAL_HEALTH.md"
+      - ".github/workflows/operational-health.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      APP_ENV: test
+      ALLOW_ANONYMOUS_WEB: "1"
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-web.txt
+
+      - name: Install focused web test dependencies
+        run: >-
+          python -m pip install
+          -r backend/requirements.txt
+          -r backend/requirements-web.txt
+          "pytest>=8,<9"
+
+      - name: Compile operational health boundary
+        run: >-
+          python -m py_compile
+          backend/webapp/health.py
+          backend/webapp/secure_app.py
+          backend/tests/test_operational_health.py
+
+      - name: Run operational health tests
+        working-directory: backend
+        run: python -m pytest -q tests/test_operational_health.py
