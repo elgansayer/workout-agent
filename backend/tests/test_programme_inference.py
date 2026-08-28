@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from hevy_reader import (
     CompletedWorkout,
     ExerciseTemplate,
@@ -148,11 +150,12 @@ def test_compute_frequency_from_workouts() -> None:
         "1": _make_template("1", "Bench", "chest"),
         "2": _make_template("2", "Deadlift", "lats"),
     }
+    now = datetime.now(UTC)
     workouts = [
         CompletedWorkout(
             id="w1",
             title="Push",
-            start_time="2026-07-28T10:00:00Z",
+            start_time=(now - timedelta(days=7)).isoformat(),
             exercises=[
                 _make_workout_exercise("1", "Bench", 100, 5),
                 _make_workout_exercise("1", "Bench", 100, 5),  # same muscle
@@ -161,7 +164,7 @@ def test_compute_frequency_from_workouts() -> None:
         CompletedWorkout(
             id="w2",
             title="Pull",
-            start_time="2026-07-30T10:00:00Z",
+            start_time=(now - timedelta(days=3)).isoformat(),
             exercises=[_make_workout_exercise("2", "Deadlift", 140, 5)],
         ),
     ]

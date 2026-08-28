@@ -48,7 +48,10 @@ def _client(tmp_path: Path, *, trusted_origins: tuple[str, ...] = ()) -> TestCli
 def _token(client: TestClient, **headers: str) -> str:
     response = client.get("/api/csrf-token", headers=headers)
     assert response.status_code == 200
-    assert response.headers["cache-control"] == "no-store"
+    cache_control = response.headers["cache-control"]
+    assert "private" in cache_control
+    assert "no-store" in cache_control
+    assert "max-age=0" in cache_control
     return response.json()["token"]
 
 
@@ -148,7 +151,8 @@ def test_production_and_spa_wiring_keep_csrf_boundary_enabled() -> None:
     assert "CSRFMiddleware" in secure_entrypoint
     assert "session_secret=_session_secret" in secure_entrypoint
     assert "trusted_origins=_trusted_browser_origins()" in secure_entrypoint
-    assert "SecurityHeadersMiddleware(secured_application)" in secure_entrypoint
+    assert "app = SecurityHeadersMiddleware(" in secure_entrypoint
+    assert "ProxySecurityMiddleware(secured_application" in secure_entrypoint
 
     assert "UNSAFE_METHODS" in interceptor
     assert "/api/csrf-token" in interceptor

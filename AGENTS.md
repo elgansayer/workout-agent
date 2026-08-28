@@ -4,7 +4,7 @@ This file is the authoritative contribution contract for humans and coding agent
 
 ## 1. Autonomous control plane
 
-**OpenHands Agent Canvas on the VPS is the single autonomous engineering control plane for this repository.** GitHub Issues are the work queue and GitHub pull requests are the review/merge boundary. GitHub Actions are deterministic verification, packaging, deployment, smoke-test, and status-reporting infrastructure only.
+**Repo Factory, powered by OpenHands Agent Canvas on the VPS, is the single autonomous engineering control plane for this repository.** GitHub Issues are the work queue and GitHub pull requests are the review/merge boundary. GitHub Actions are deterministic verification, packaging, deployment, smoke-test, and status-reporting infrastructure only.
 
 The retired GitHub-hosted swarm, auto-dispatcher, architect, resolver, reviewer, hourly/daily/weekly coding agents, and self-healing issue generator must never be re-enabled as autonomous schedulers or code authors. Their inert workflow stubs may remain only as explicit retirement records.
 

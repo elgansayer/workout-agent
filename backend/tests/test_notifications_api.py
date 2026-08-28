@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
+import base64
 import importlib
+import json
+
 import pytest
 from database import get_or_create_user, init_db, save_notification
+from itsdangerous import TimestampSigner
 from starlette.testclient import TestClient
+
+_SECRET = "notifications-test-secret-that-is-long-enough"
+
+
+def _session_cookie(user_id: str) -> str:
+    payload = base64.b64encode(
+        json.dumps({"user": "user1@example.com", "user_id": user_id}).encode()
+    )
+    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 @pytest.fixture
@@ -13,8 +26,10 @@ def client_with_db(tmp_path, monkeypatch):
     db_file = str(tmp_path / "test_api_notifications.db")
     init_db(db_file)
     monkeypatch.setenv("DATABASE_PATH", db_file)
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "")
-    monkeypatch.setenv("WEB_AUTH_SECRET", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "notifications-client-id")
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "notifications-client-secret")
+    monkeypatch.setenv("WEB_AUTH_SECRET", _SECRET)
 
     import webapp.app as webapp_app
     importlib.reload(webapp_app)
@@ -25,6 +40,7 @@ def client_with_db(tmp_path, monkeypatch):
     monkeypatch.setattr(webapp_app, "_check_api_auth", lambda request: u1["id"])
 
     client = TestClient(webapp_app.app)
+    client.cookies.set("session", _session_cookie(u1["id"]))
     return client, db_file, u1["id"], u2["id"]
 
 
