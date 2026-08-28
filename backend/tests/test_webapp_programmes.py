@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import importlib
+import json
 from datetime import date
 from typing import Any
 
@@ -12,7 +14,17 @@ from hevy_reader import (
     Routine,
     RoutineExercise,
 )
+from itsdangerous import TimestampSigner
 from starlette.testclient import TestClient
+
+_SECRET = "programmes-test-secret-that-is-long-enough"
+
+
+def _session_cookie(user_id: str) -> str:
+    payload = base64.b64encode(
+        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
+    )
+    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 def _training_data() -> HevyTrainingData:
@@ -90,12 +102,10 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     db_file = str(tmp_path / "test.db")
     database.init_db(db_file)
     monkeypatch.setenv("DATABASE_PATH", db_file)
-    monkeypatch.setenv("WEB_AUTH_SECRET", "")
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "")
-
-    monkeypatch.setenv("WEB_AUTH_SECRET", "")
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "")
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "")
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("WEB_AUTH_SECRET", _SECRET)
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "programmes-client-id")
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "programmes-client-secret")
 
     import webapp.app as app_module
 
@@ -111,7 +121,9 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
         "_load_hevy_training_for_user",
         lambda *args, **kwargs: _training_data(),
     )
-    return TestClient(app_module.app), app_module, db_file
+    client = TestClient(app_module.app)
+    client.cookies.set("session", _session_cookie(database.get_legacy_user_id(db_file)))
+    return client, app_module, db_file
 
 
 def _payload() -> dict[str, Any]:
