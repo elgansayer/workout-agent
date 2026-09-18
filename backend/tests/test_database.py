@@ -1487,6 +1487,29 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
             VALUES ('2030-01-02', 'Synthetic Press', 50.0, 12, 3)
             """,
         )
+        conn.execute("DROP TABLE daily_log")
+        conn.execute(
+            """
+            CREATE TABLE daily_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                day INTEGER,
+                focus TEXT NOT NULL,
+                carb_tier TEXT NOT NULL,
+                plan TEXT NOT NULL,
+                lifestyle TEXT NOT NULL,
+                user_id TEXT
+            )
+            """,
+        )
+        conn.execute(
+            """
+            INSERT INTO daily_log
+                (date, day, focus, carb_tier, plan, lifestyle, user_id)
+            VALUES
+                ('2030-01-02', 1, 'Synthetic', 'medium', 'Plan', 'Walk', NULL)
+            """,
+        )
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
             "VALUES ('2030-01-02', '{}', NULL)",
@@ -1515,6 +1538,7 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
         ).fetchone()[0]
         partial_queries = {
             "exercise_progress": "SELECT user_id FROM exercise_progress",
+            "daily_log": "SELECT user_id FROM daily_log",
             "workout_history": "SELECT user_id FROM workout_history",
             "body_metrics": "SELECT user_id FROM body_metrics",
             "check_ins": "SELECT user_id FROM check_ins",
@@ -1524,6 +1548,12 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
             tenant_ids = conn.execute(query).fetchall()
             assert tenant_ids
             assert all(row[0] == legacy_user_id for row in tenant_ids), table
+
+        daily_log_foreign_keys = conn.execute(
+            'SELECT "table", "from", "to" FROM pragma_foreign_key_list(?)',
+            ("daily_log",),
+        ).fetchall()
+        assert ("users", "user_id", "id") in daily_log_foreign_keys
 
 
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:

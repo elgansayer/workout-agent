@@ -369,6 +369,43 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)"
             )
+        else:
+            dl_foreign_keys = cursor.execute(
+                "PRAGMA foreign_key_list(daily_log)"
+            ).fetchall()
+            has_user_foreign_key = any(
+                row[2] == "users" and row[3] == "user_id" and row[4] == "id"
+                for row in dl_foreign_keys
+            )
+            if not has_user_foreign_key:
+                # Databases created by the previous schema already have user_id,
+                # but the column did not declare its users(id) reference. Rebuild
+                # the table so upgrades receive the same constraint as fresh DBs.
+                cursor.execute("DROP TABLE IF EXISTS daily_log_new")
+                cursor.execute(
+                    """
+                    CREATE TABLE daily_log_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        date TEXT NOT NULL,
+                        day INTEGER,
+                        focus TEXT NOT NULL,
+                        carb_tier TEXT NOT NULL,
+                        plan TEXT NOT NULL,
+                        lifestyle TEXT NOT NULL,
+                        user_id TEXT REFERENCES users(id)
+                    )
+                    """,
+                )
+                cursor.execute(
+                    """
+                    INSERT INTO daily_log_new
+                        (id, date, day, focus, carb_tier, plan, lifestyle, user_id)
+                    SELECT id, date, day, focus, carb_tier, plan, lifestyle, user_id
+                    FROM daily_log
+                    """,
+                )
+                cursor.execute("DROP TABLE daily_log")
+                cursor.execute("ALTER TABLE daily_log_new RENAME TO daily_log")
 
         # Backfill legacy rows with a stable legacy tenant.
         legacy = _get_or_create_legacy_user(cursor)
