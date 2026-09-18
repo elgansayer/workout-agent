@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call, patch
 
 import pytest
-
 from ai_provider import (
     AIProvider,
     ClaudeProvider,
     DeepSeekProvider,
     GeminiProvider,
     OpenAIProvider,
+    available_providers,
     get_provider,
     resolve_provider,
 )
@@ -44,6 +45,142 @@ def test_get_provider_deepseek():
 def test_get_provider_unknown_raises():
     with pytest.raises(ValueError, match="Unknown AI provider"):
         get_provider("nonsense", "fake-key")
+
+
+def test_gemini_provider_generates_and_streams() -> None:
+    model = MagicMock()
+    model.generate_content.side_effect = [
+        SimpleNamespace(text="  complete response  "),
+        [
+            SimpleNamespace(text="first "),
+            SimpleNamespace(text=""),
+            SimpleNamespace(text="second"),
+        ],
+    ]
+
+    with (
+        patch("google.generativeai.configure") as configure,
+        patch(
+            "google.generativeai.GenerativeModel",
+            return_value=model,
+        ) as model_factory,
+    ):
+        provider = GeminiProvider("synthetic-key", model="gemini-test")
+
+    assert provider.generate("prompt") == "complete response"
+    stream = provider.generate("prompt", stream=True)
+    assert not isinstance(stream, str)
+    assert list(stream) == ["first ", "second"]
+    configure.assert_called_once_with(api_key="synthetic-key")
+    model_factory.assert_called_once_with("gemini-test")
+    assert model.generate_content.call_args_list == [
+        call("prompt"),
+        call("prompt", stream=True),
+    ]
+
+
+def test_claude_provider_generates_and_streams() -> None:
+    client = MagicMock()
+    client.messages.create.return_value = SimpleNamespace(
+        content=[SimpleNamespace(kind="metadata"), SimpleNamespace(text="  answer  ")],
+    )
+    stream_context = MagicMock()
+    stream_context.__enter__.return_value = SimpleNamespace(
+        text_stream=iter(["first ", "second"]),
+    )
+    client.messages.stream.return_value = stream_context
+
+    with patch("anthropic.Anthropic", return_value=client) as client_factory:
+        provider = ClaudeProvider("synthetic-key", model="claude-test")
+
+    assert provider.generate("prompt") == "answer"
+    stream = provider.generate("prompt", stream=True)
+    assert not isinstance(stream, str)
+    assert list(stream) == ["first ", "second"]
+    assert provider.name() == "Claude (claude-test)"
+    client_factory.assert_called_once_with(api_key="synthetic-key")
+    client.messages.create.assert_called_once_with(
+        model="claude-test",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": "prompt"}],
+    )
+    client.messages.stream.assert_called_once_with(
+        model="claude-test",
+        max_tokens=4096,
+        messages=[{"role": "user", "content": "prompt"}],
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "model", "expected_name", "client_kwargs"),
+    [
+        (
+            OpenAIProvider,
+            "gpt-test",
+            "OpenAI (gpt-test)",
+            {"api_key": "synthetic-key"},
+        ),
+        (
+            DeepSeekProvider,
+            "deepseek-test",
+            "DeepSeek (deepseek-test)",
+            {
+                "api_key": "synthetic-key",
+                "base_url": DeepSeekProvider.BASE_URL,
+            },
+        ),
+    ],
+)
+def test_openai_compatible_providers_generate_and_stream(
+    provider_type: type[OpenAIProvider | DeepSeekProvider],
+    model: str,
+    expected_name: str,
+    client_kwargs: dict[str, str],
+) -> None:
+    client = MagicMock()
+    client.chat.completions.create.side_effect = [
+        SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="  answer  "))],
+        ),
+        [
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="first "))],
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content=None))],
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(delta=SimpleNamespace(content="second"))],
+            ),
+        ],
+    ]
+
+    with patch("openai.OpenAI", return_value=client) as client_factory:
+        provider = provider_type("synthetic-key", model=model)
+
+    assert provider.generate("prompt") == "answer"
+    stream = provider.generate("prompt", stream=True)
+    assert not isinstance(stream, str)
+    assert list(stream) == ["first ", "second"]
+    assert provider.name() == expected_name
+    client_factory.assert_called_once_with(**client_kwargs)
+    assert client.chat.completions.create.call_args_list == [
+        call(model=model, messages=[{"role": "user", "content": "prompt"}]),
+        call(
+            model=model,
+            messages=[{"role": "user", "content": "prompt"}],
+            stream=True,
+        ),
+    ]
+
+
+def test_available_providers_exposes_registered_defaults() -> None:
+    providers = {provider["id"]: provider for provider in available_providers()}
+
+    assert providers["gemini"]["name"] == "Gemini"
+    assert providers["claude"]["default_model"] == "claude-sonnet-4-20250514"
+    assert providers["openai"]["default_model"] == "gpt-4o"
+    assert providers["deepseek"]["default_model"] == "deepseek-chat"
 
 
 # ---------------------------------------------------------------------------
