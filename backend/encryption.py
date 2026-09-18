@@ -4,8 +4,9 @@ Uses Fernet (AES-128-CBC with HMAC) from the `cryptography` library. A single
 master key, read from the ``ENCRYPTION_KEY`` environment variable, encrypts every
 secret before it hits SQLite and decrypts it when it comes back out.
 
-If ``ENCRYPTION_KEY`` is not set the functions fall back to a no-op (plaintext),
-so existing deployments keep working until the operator provisions a key.
+If ``ENCRYPTION_KEY`` is not set the functions fall back to a no-op (plaintext)
+and emit a warning, so existing deployments keep working while making the
+unsafe storage mode visible to operators.
 
 Generate a fresh key once with::
 
@@ -33,6 +34,9 @@ except ImportError:
 def _fernet() -> Fernet | None:
     key = os.environ.get("ENCRYPTION_KEY", "").strip()
     if not key:
+        logger.warning(
+            "ENCRYPTION_KEY is not configured. API keys will be stored in PLAINTEXT.",
+        )
         return None
     if not _HAS_CRYPTOGRAPHY:
         logger.warning(
