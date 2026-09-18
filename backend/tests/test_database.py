@@ -16,6 +16,7 @@ from database import (
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
+    get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
     get_routine_record,
@@ -24,6 +25,7 @@ from database import (
     save_body_metrics,
     save_daily_log,
     save_progress,
+    save_reasoning_log,
     save_routine_record,
     save_workout,
     set_meta,
@@ -1152,9 +1154,21 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
     """A brand-new database seeds a programme_state row for the legacy user."""
     db = _db(tmp_path)
     init_db(db)
-    from database import get_current_day
 
     assert get_current_day(db) == 1
+
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        rows = conn.execute(
+            "SELECT user_id, current_day FROM programme_state",
+        ).fetchall()
+        legacy_user_id = conn.execute(
+            "SELECT id FROM users WHERE email = ?",
+            ("legacy@local",),
+        ).fetchone()[0]
+
+    assert rows == [(legacy_user_id, 1)]
 
 
 # ---------- hevy_meta migration tests ----------
@@ -1241,3 +1255,330 @@ def test_hevy_routines_delete_scoped(tmp_path: Any) -> None:
     delete_routine_record("push", db, user_id=u1["id"])
     assert get_routine_record("push", db, user_id=u1["id"]) is None
     assert get_routine_record("push", db, user_id=u2["id"]) == ("rid2", "h2")
+
+
+def _create_pre_multi_tenant_schema(db: str) -> None:
+    """Create the complete synthetic schema that predated tenant migrations."""
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE workout_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hevy_payload TEXT NOT NULL
+            );
+            CREATE TABLE programme_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                current_day INTEGER NOT NULL,
+                split_name TEXT NOT NULL
+            );
+            CREATE TABLE exercise_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                exercise_name TEXT NOT NULL,
+                top_weight_kg REAL,
+                top_reps INTEGER,
+                sets INTEGER NOT NULL
+            );
+            CREATE TABLE hevy_routines (
+                routine_key TEXT PRIMARY KEY,
+                routine_id TEXT NOT NULL,
+                content_hash TEXT NOT NULL
+            );
+            CREATE TABLE hevy_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE check_ins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                number INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                workouts_done INTEGER NOT NULL,
+                weeks INTEGER NOT NULL,
+                message TEXT NOT NULL
+            );
+            CREATE TABLE daily_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                day INTEGER,
+                focus TEXT NOT NULL,
+                carb_tier TEXT NOT NULL,
+                plan TEXT NOT NULL,
+                lifestyle TEXT NOT NULL
+            );
+            CREATE TABLE body_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                weight_kg REAL,
+                body_fat_pct REAL,
+                muscle_pct REAL,
+                resting_hr INTEGER,
+                hrv REAL
+            );
+            CREATE TABLE dashboard_insights (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                date TEXT NOT NULL,
+                insight_json TEXT NOT NULL
+            );
+            CREATE TABLE deep_correlations (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                date TEXT NOT NULL,
+                insight_markdown TEXT NOT NULL
+            );
+            CREATE TABLE reasoning_logs (
+                context_id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                exercise_name TEXT NOT NULL,
+                reasoning TEXT NOT NULL
+            );
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            INSERT INTO workout_history (date, hevy_payload)
+            VALUES ('2030-01-01', '{"synthetic": true}');
+            INSERT INTO programme_state (id, current_day, split_name)
+            VALUES (1, 3, 'Synthetic Legacy Split');
+            INSERT INTO exercise_progress
+                (date, exercise_name, top_weight_kg, top_reps, sets)
+            VALUES ('2030-01-01', 'Synthetic Squat', 100.0, 10, 3);
+            INSERT INTO hevy_routines (routine_key, routine_id, content_hash)
+            VALUES ('synthetic-routine', 'routine-1', 'hash-1');
+            INSERT INTO hevy_meta (key, value)
+            VALUES ('programme_start_date', '2030-01-01');
+            INSERT INTO check_ins
+                (number, date, workouts_done, weeks, message)
+            VALUES (1, '2030-01-01', 4, 1, 'Synthetic check-in');
+            INSERT INTO daily_log
+                (date, day, focus, carb_tier, plan, lifestyle)
+            VALUES
+                ('2030-01-01', 1, 'Synthetic focus', 'medium', 'Plan', 'Walk');
+            INSERT INTO body_metrics (date, weight_kg)
+            VALUES ('2030-01-01', 75.0);
+            INSERT INTO dashboard_insights (id, date, insight_json)
+            VALUES (1, '2030-01-01', '{"synthetic": true}');
+            INSERT INTO deep_correlations (id, date, insight_markdown)
+            VALUES (1, '2030-01-01', 'Synthetic correlation');
+            INSERT INTO reasoning_logs
+                (context_id, date, exercise_name, reasoning)
+            VALUES
+                ('synthetic-context', '2030-01-01', 'Synthetic Squat', 'Synthetic reason');
+            INSERT INTO chat_messages (role, content, created_at)
+            VALUES ('user', 'Synthetic message', '2030-01-01T00:00:00+00:00');
+            """,
+        )
+
+
+def _user_id_is_indexed_first(conn: Any, table: str) -> bool:
+    index_names = conn.execute(
+        "SELECT name FROM pragma_index_list(?)",
+        (table,),
+    ).fetchall()
+    for (index_name,) in index_names:
+        columns = conn.execute(
+            "SELECT name FROM pragma_index_info(?) ORDER BY seqno",
+            (index_name,),
+        ).fetchall()
+        if columns and columns[0][0] == "user_id":
+            return True
+    return False
+
+
+def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
+    tmp_path: Any,
+) -> None:
+    """A complete pre-tenant database migrates twice without loss or duplicates."""
+    import sqlite3
+
+    db = _db(tmp_path)
+    _create_pre_multi_tenant_schema(db)
+
+    init_db(db)
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        legacy_rows = conn.execute(
+            "SELECT id FROM users WHERE email = ?",
+            ("legacy@local",),
+        ).fetchall()
+        assert len(legacy_rows) == 1
+        legacy_user_id = legacy_rows[0][0]
+
+        migrated_queries = {
+            "workout_history": "SELECT user_id FROM workout_history",
+            "exercise_progress": "SELECT user_id FROM exercise_progress",
+            "hevy_routines": "SELECT user_id FROM hevy_routines",
+            "hevy_meta": "SELECT user_id FROM hevy_meta",
+            "check_ins": "SELECT user_id FROM check_ins",
+            "daily_log": "SELECT user_id FROM daily_log",
+            "body_metrics": "SELECT user_id FROM body_metrics",
+            "dashboard_insights": "SELECT user_id FROM dashboard_insights",
+            "deep_correlations": "SELECT user_id FROM deep_correlations",
+            "reasoning_logs": "SELECT user_id FROM reasoning_logs",
+            "chat_messages": "SELECT user_id FROM chat_messages",
+            "programme_state": "SELECT user_id FROM programme_state",
+        }
+        for table, query in migrated_queries.items():
+            assert conn.execute(query).fetchall() == [(legacy_user_id,)], table
+            assert _user_id_is_indexed_first(conn, table), table
+
+        for table in ("user_api_keys", "user_preferences", "programmes"):
+            assert _user_id_is_indexed_first(conn, table), table
+
+        index_names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'",
+            ).fetchall()
+        }
+        assert {
+            "idx_workout_history_user_date",
+            "idx_exercise_progress_user_name_id",
+            "idx_exercise_progress_user_date",
+            "idx_body_metrics_user_date_id",
+            "idx_chat_messages_user",
+            "idx_reasoning_logs_user",
+            "idx_daily_log_user_date",
+            "idx_check_ins_user",
+            "idx_programmes_user_active",
+            "idx_hevy_routines_user",
+        } <= index_names
+
+        routine = conn.execute(
+            "SELECT routine_key, routine_id, content_hash FROM hevy_routines",
+        ).fetchone()
+        assert routine == ("synthetic-routine", "routine-1", "hash-1")
+        state = conn.execute(
+            "SELECT current_day, split_name FROM programme_state",
+        ).fetchone()
+        assert state == (3, "Synthetic Legacy Split")
+
+
+def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
+    """Partially applied tenant migrations are completed on the next init."""
+    import sqlite3
+
+    db = _db(tmp_path)
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        conn.execute("DROP TABLE exercise_progress")
+        conn.execute(
+            """
+            CREATE TABLE exercise_progress (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                exercise_name TEXT NOT NULL,
+                top_weight_kg REAL,
+                top_reps INTEGER,
+                sets INTEGER NOT NULL
+            )
+            """,
+        )
+        conn.execute(
+            """
+            INSERT INTO exercise_progress
+                (date, exercise_name, top_weight_kg, top_reps, sets)
+            VALUES ('2030-01-02', 'Synthetic Press', 50.0, 12, 3)
+            """,
+        )
+        conn.execute(
+            "INSERT INTO workout_history (date, hevy_payload, user_id) "
+            "VALUES ('2030-01-02', '{}', NULL)",
+        )
+        conn.execute(
+            "INSERT INTO body_metrics (date, weight_kg, user_id) "
+            "VALUES ('2030-01-02', 75.0, NULL)",
+        )
+        conn.execute(
+            "INSERT INTO check_ins "
+            "(number, date, workouts_done, weeks, message, user_id) "
+            "VALUES (2, '2030-01-02', 4, 1, 'Synthetic', NULL)",
+        )
+        conn.execute(
+            "INSERT INTO chat_messages (role, content, created_at, user_id) "
+            "VALUES ('user', 'Synthetic', '2030-01-02T00:00:00+00:00', NULL)",
+        )
+
+    init_db(db)
+    init_db(db)
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        legacy_user_id = conn.execute(
+            "SELECT id FROM users WHERE email = ?",
+            ("legacy@local",),
+        ).fetchone()[0]
+        partial_queries = {
+            "exercise_progress": "SELECT user_id FROM exercise_progress",
+            "workout_history": "SELECT user_id FROM workout_history",
+            "body_metrics": "SELECT user_id FROM body_metrics",
+            "check_ins": "SELECT user_id FROM check_ins",
+            "chat_messages": "SELECT user_id FROM chat_messages",
+        }
+        for table, query in partial_queries.items():
+            tenant_ids = conn.execute(query).fetchall()
+            assert tenant_ids
+            assert all(row[0] == legacy_user_id for row in tenant_ids), table
+
+
+def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
+    db = _db(tmp_path)
+    init_db(db)
+
+    save_reasoning_log(
+        "shared-context",
+        "Synthetic Squat",
+        "Reason A",
+        db,
+        user_id="user-a",
+    )
+    save_reasoning_log(
+        "shared-context",
+        "Synthetic Squat",
+        "Reason B",
+        db,
+        user_id="user-b",
+    )
+
+    assert get_reasoning_log("shared-context", db, user_id="user-a") == "Reason A"
+    assert get_reasoning_log("shared-context", db, user_id="user-b") == "Reason B"
+
+
+def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
+    """Every current tenant-owned table declares its user ownership."""
+    import sqlite3
+
+    db = _db(tmp_path)
+    init_db(db)
+
+    user_owned_tables = (
+        "workout_history",
+        "programme_state",
+        "exercise_progress",
+        "hevy_routines",
+        "hevy_meta",
+        "check_ins",
+        "daily_log",
+        "body_metrics",
+        "dashboard_insights",
+        "deep_correlations",
+        "reasoning_logs",
+        "chat_messages",
+        "user_api_keys",
+        "push_subscriptions",
+        "notifications",
+        "user_preferences",
+        "programmes",
+    )
+    with sqlite3.connect(db, timeout=10) as conn:
+        for table in user_owned_tables:
+            foreign_keys = conn.execute(
+                'SELECT "table", "from" FROM pragma_foreign_key_list(?)',
+                (table,),
+            ).fetchall()
+            assert ("users", "user_id") in foreign_keys, table

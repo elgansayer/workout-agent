@@ -93,7 +93,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """
             CREATE TABLE IF NOT EXISTS hevy_routines (
                 user_id TEXT NOT NULL REFERENCES users(id),
-                routine_key TEXT,
+                routine_key TEXT NOT NULL,
                 routine_id TEXT NOT NULL,
                 content_hash TEXT NOT NULL,
                 PRIMARY KEY (user_id, routine_key)
@@ -134,7 +134,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 carb_tier TEXT NOT NULL,
                 plan TEXT NOT NULL,
                 lifestyle TEXT NOT NULL,
-                user_id TEXT
+                user_id TEXT REFERENCES users(id)
             )
             """,
         )
@@ -398,27 +398,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE workout_history ADD COLUMN user_id TEXT REFERENCES users(id)"
             )
-            # Backfill existing rows with a synthesised legacy user
-            from uuid import uuid4
-
-            now = datetime.now(tz=timezone.utc).isoformat()
-            # Check if legacy user exists, create if not
-            legacy_row = cursor.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
-            ).fetchone()
-            if legacy_row:
-                legacy_id = legacy_row[0]
-            else:
-                legacy_id = str(uuid4())
-                cursor.execute(
-                    "INSERT INTO users (id, email, display_name, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (legacy_id, "legacy@local", "Legacy Data", now),
-                )
-            cursor.execute(
-                "UPDATE workout_history SET user_id = ? WHERE user_id IS NULL",
-                (legacy_id,),
-            )
+        cursor.execute(
+            "UPDATE workout_history SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_workout_history_user_date "
             "ON workout_history (user_id, date DESC, id DESC)",
@@ -431,10 +414,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE exercise_progress ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
-            cursor.execute(
-                "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
-                (legacy_id,),
-            )
+        cursor.execute(
+            "UPDATE exercise_progress SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
         cursor.execute("DROP INDEX IF EXISTS idx_exercise_progress_user")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_exercise_progress_user_name_id "
@@ -452,10 +435,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
-            cursor.execute(
-                "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
-                (legacy_id,),
-            )
+        cursor.execute(
+            "UPDATE body_metrics SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
         cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
@@ -528,11 +511,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE chat_messages ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
-            chat_legacy_id = _ensure_legacy_user(cursor)
-            cursor.execute(
-                "UPDATE chat_messages SET user_id = ? WHERE user_id IS NULL",
-                (chat_legacy_id,),
-            )
+        cursor.execute(
+            "UPDATE chat_messages SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_user "
             "ON chat_messages (user_id, id DESC)",
@@ -633,22 +615,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "ALTER TABLE deep_correlations_new RENAME TO deep_correlations",
             )
 
-        # Migration: Add user_id column to daily_log for multi-tenancy
-        cursor.execute("PRAGMA table_info(daily_log)")
-        dl_columns = {row[1] for row in cursor.fetchall()}
-        if "user_id" not in dl_columns:
-            cursor.execute(
-                "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)",
-            )
-            dl_legacy_id = _ensure_legacy_user(cursor)
-            cursor.execute(
-                "UPDATE daily_log SET user_id = ? WHERE user_id IS NULL",
-                (dl_legacy_id,),
-            )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
-            "ON daily_log (user_id, date DESC, id DESC)",
-        )
+
 
         # Migration: Add user_id column to check_ins for multi-tenancy
         cursor.execute("PRAGMA table_info(check_ins)")
@@ -657,11 +624,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "ALTER TABLE check_ins ADD COLUMN user_id TEXT REFERENCES users(id)",
             )
-            ci_legacy_id = _ensure_legacy_user(cursor)
-            cursor.execute(
-                "UPDATE check_ins SET user_id = ? WHERE user_id IS NULL",
-                (ci_legacy_id,),
-            )
+        cursor.execute(
+            "UPDATE check_ins SET user_id = ? WHERE user_id IS NULL",
+            (legacy,),
+        )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_check_ins_user "
             "ON check_ins (user_id, id DESC)",
@@ -701,6 +667,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 )
             cursor.execute("DROP TABLE programme_state")
             cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
+        cursor.execute(
+            "INSERT OR IGNORE INTO programme_state "
+            "(user_id, current_day, split_name) VALUES (?, 1, ?)",
+            (legacy, SPLIT_NAME),
+        )
 
         # Migration: Migrate hevy_meta from key PK to (user_id, key) composite PK
         cursor.execute("PRAGMA table_info(hevy_meta)")
@@ -738,8 +709,72 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute("DROP TABLE hevy_meta")
             cursor.execute("ALTER TABLE hevy_meta_new RENAME TO hevy_meta")
 
-        # Note: The programme_start_date INSERT OR IGNORE below is now redundant
-        # for new DBs (migration above handles it) but harmless as a fallback.
+        cursor.execute(
+            "INSERT OR IGNORE INTO hevy_meta (user_id, key, value) "
+            "VALUES (?, 'programme_start_date', ?)",
+            (legacy, datetime.now(tz=timezone.utc).date().isoformat()),
+        )
+
+        # Migration: Migrate hevy_routines to a tenant-scoped composite key.
+        cursor.execute("PRAGMA table_info(hevy_routines)")
+        hr_columns = {row[1] for row in cursor.fetchall()}
+        if "user_id" not in hr_columns:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS hevy_routines_new (
+                    user_id TEXT NOT NULL REFERENCES users(id),
+                    routine_key TEXT NOT NULL,
+                    routine_id TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    PRIMARY KEY (user_id, routine_key)
+                )
+                """,
+            )
+            old_rows = cursor.execute(
+                "SELECT routine_key, routine_id, content_hash FROM hevy_routines",
+            ).fetchall()
+            for row in old_rows:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO hevy_routines_new "
+                    "(user_id, routine_key, routine_id, content_hash) "
+                    "VALUES (?, ?, ?, ?)",
+                    (legacy, row[0], row[1], row[2]),
+                )
+            cursor.execute("DROP TABLE hevy_routines")
+            cursor.execute(
+                "ALTER TABLE hevy_routines_new RENAME TO hevy_routines",
+            )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hevy_routines_user "
+            "ON hevy_routines (user_id, routine_key)",
+        )
+
+        # Ensure every user_id scoped table has an explicit idx_<table_name>_user
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dashboard_insights_user "
+            "ON dashboard_insights (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_deep_correlations_user "
+            "ON deep_correlations (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_state_user "
+            "ON programme_state (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hevy_meta_user "
+            "ON hevy_meta (user_id, key)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_preferences_user "
+            "ON user_preferences (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
+            "ON user_api_keys (user_id)"
+        )
+
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -1606,7 +1641,9 @@ def save_reasoning_log(
     If *user_id* is provided, the log is scoped to that user.
     """
     with _connect(db_path) as conn:
-        conn.execute(
+        cursor = conn.cursor()
+        uid = user_id or _get_or_create_legacy_user(cursor)
+        cursor.execute(
             """
             INSERT INTO reasoning_logs (user_id, context_id, date, exercise_name, reasoning)
             VALUES (?, ?, ?, ?, ?)
@@ -1614,6 +1651,7 @@ def save_reasoning_log(
                 reasoning = excluded.reasoning
             """,
             (
+                uid,
                 context_id,
                 datetime.now(tz=timezone.utc).date().isoformat(),
                 exercise_name,
