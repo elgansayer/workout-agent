@@ -1,0 +1,16 @@
+name: Retired GitHub-Hosted OpenHands Agent
+
+# OpenHands runs only through the repository's VPS control plane. This inert
+# workflow is retained as an explicit retirement record and has no automatic
+# trigger or write permission.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  retired:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "The GitHub-hosted OpenHands agent is retired; no code was changed."
