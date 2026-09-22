@@ -5,11 +5,10 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from _pytest.monkeypatch import MonkeyPatch
-
 import checkin
+from _pytest.monkeypatch import MonkeyPatch
 from config import Config
-from database import get_checkins, get_meta, init_db, set_meta
+from database import get_checkins, get_meta, get_or_create_user, init_db, set_meta
 from program import BLOCKS
 
 
@@ -134,3 +133,75 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
 def test_analyse_without_hevy_returns_empty(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
     assert checkin._analyse(config, BLOCKS[1]) == []
+
+
+def test_run_checkin_resolves_the_acting_users_provider(
+    monkeypatch: MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    config = _config(tmp_path, hevy_api_key=None)
+    due_info = checkin.CheckinDue(
+        number=1,
+        workouts_done=24,
+        weeks_elapsed=4,
+        total_count=24,
+    )
+    captured: dict[str, Any] = {}
+    provider = object()
+
+    def fake_resolve_provider(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return provider
+
+    def fake_generate(resolved_provider: object, **kwargs: Any) -> str:
+        captured["provider"] = resolved_provider
+        captured["generation"] = kwargs
+        return "Selected provider check-in."
+
+    monkeypatch.setattr(checkin, "resolve_provider", fake_resolve_provider)
+    monkeypatch.setattr(checkin, "generate_checkin_message", fake_generate)
+
+    message = checkin.run_checkin(
+        config,
+        due_info,
+        week=4,
+        block=BLOCKS[1],
+        user_id="user-a",
+    )
+
+    assert message == "Selected provider check-in."
+    assert captured["user_id"] == "user-a"
+    assert captured["db_path"] == config.database_path
+    assert captured["provider"] is provider
+
+
+def test_record_keeps_checkin_metadata_tenant_scoped(tmp_path: Any) -> None:
+    config = _config(tmp_path)
+    user_a = get_or_create_user("a@example.test", db_path=config.database_path)["id"]
+    user_b = get_or_create_user("b@example.test", db_path=config.database_path)["id"]
+
+    checkin.record(
+        config,
+        checkin.CheckinDue(1, 12, 4, 12),
+        "User A check-in",
+        today=date(2026, 9, 1),
+        user_id=user_a,
+    )
+    checkin.record(
+        config,
+        checkin.CheckinDue(3, 18, 5, 18),
+        "User B check-in",
+        today=date(2026, 9, 2),
+        user_id=user_b,
+    )
+
+    assert get_meta("checkin_number", config.database_path, user_id=user_a) == "1"
+    assert (
+        get_meta("last_checkin_date", config.database_path, user_id=user_a)
+        == "2026-09-01"
+    )
+    assert get_meta("checkin_number", config.database_path, user_id=user_b) == "3"
+    assert (
+        get_meta("last_checkin_date", config.database_path, user_id=user_b)
+        == "2026-09-02"
+    )

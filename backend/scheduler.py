@@ -85,7 +85,9 @@ def _is_due(tz: str, run_times: list[str]) -> bool:
 def _run_coaching(user_id: str) -> bool:
     """Run daily coaching for a user."""
     try:
-        res = subprocess.run([sys.executable, "main.py", "--user-id", user_id], check=True)
+        res = subprocess.run(
+            [sys.executable, "main.py", "--user-id", user_id], check=True
+        )
         return res.returncode == 0
     except Exception:  # noqa: BLE001
         return False
@@ -150,37 +152,57 @@ def run_scheduler() -> None:
 
 
 def run_coaching(config: Config) -> int:
-    """Run the daily coaching message (main.py's run function)."""
+    """Run one isolated daily coaching cycle per persisted user."""
     from main import run as main_run
 
-    logger.info("Running daily coaching cycle...")
-    try:
-        return main_run(preview=False)
-    except Exception:
-        logger.exception("Daily coaching run failed.")
-        return 1
+    logger.info("Running daily coaching cycles...")
+    result = 0
+    users = get_all_users(config.database_path)
+    if not users:
+        try:
+            return main_run(preview=False)
+        except Exception:
+            logger.exception("Daily coaching run failed.")
+            return 1
+
+    for user in users:
+        user_id = user.get("id")
+        if not user_id:
+            logger.warning("Skipping user row without an id.")
+            result = max(result, 1)
+            continue
+        try:
+            result = max(result, main_run(preview=False, user_id=user_id))
+        except Exception:
+            logger.exception("Daily coaching run failed for user %s.", user_id)
+            result = max(result, 1)
+    return result
 
 
 def run_daily_insight(config: Config) -> None:
-    """Generate the daily dashboard insight header."""
+    """Generate a tenant-scoped daily dashboard insight for every user."""
     from insight_cron import generate_daily_header
 
-    logger.info("Generating daily insight header...")
-    try:
-        generate_daily_header(config)
-    except Exception:
-        logger.exception("Daily insight generation failed.")
+    logger.info("Generating daily insight headers...")
+    for user in get_all_users(config.database_path):
+        user_id = user["id"]
+        try:
+            generate_daily_header(config, user_id=user_id)
+        except Exception:
+            logger.exception("Daily insight generation failed for user %s.", user_id)
 
 
 def run_weekly_correlations(config: Config) -> None:
-    """Generate weekly deep correlations."""
+    """Generate tenant-scoped weekly correlations for every user."""
     from insight_cron import generate_weekly_correlations
 
     logger.info("Generating weekly deep correlations...")
-    try:
-        generate_weekly_correlations(config)
-    except Exception:
-        logger.exception("Weekly correlations failed.")
+    for user in get_all_users(config.database_path):
+        user_id = user["id"]
+        try:
+            generate_weekly_correlations(config, user_id=user_id)
+        except Exception:
+            logger.exception("Weekly correlations failed for user %s.", user_id)
 
 
 def run_once(config: Config) -> int:
@@ -295,9 +317,7 @@ def main(argv: list[str] | None = None) -> int:
         run_schedule(config)
         return 0
     else:
-        logger.error(
-            "Unknown MODE '%s' -- use schedule, once, or preview.", mode
-        )
+        logger.error("Unknown MODE '%s' -- use schedule, once, or preview.", mode)
         return 1
 
 

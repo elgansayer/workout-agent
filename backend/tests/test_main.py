@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
-
 from main import (
     _changes_footer,
     _compose,
     _parse_args,
+    _scope_config_to_user,
     run,
 )
 
@@ -97,6 +97,75 @@ def test_parse_args_unknown_raises() -> None:
         _parse_args(["--nonexistent"])
 
 
+def test_scope_config_to_user_uses_only_that_users_connector_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from config import Config
+    from cryptography.fernet import Fernet
+    from database import (
+        get_legacy_user_id,
+        get_or_create_user,
+        init_db,
+        save_user_api_key,
+    )
+
+    db_path = str(tmp_path / "tenant-config.db")
+    init_db(db_path)
+    legacy_user_id = get_legacy_user_id(db_path)
+    user = get_or_create_user(
+        "synthetic-user@example.com",
+        "Synthetic User",
+        db_path,
+    )
+    user_without_key = get_or_create_user(
+        "synthetic-no-key@example.com",
+        "Synthetic User Without Key",
+        db_path,
+    )
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    save_user_api_key(
+        user["id"],
+        "hevy",
+        "synthetic-user-hevy-key",
+        db_path=db_path,
+    )
+    config = Config(
+        hevy_api_key="synthetic-server-hevy-key",
+        gemini_api_key=None,
+        gemini_model="gemini-2.5-flash",
+        health_connect_file="/synthetic/legacy-health.json",
+        database_path=db_path,
+        hevy_sync_routines=True,
+        hevy_prefill_weights=False,
+        checkin_enabled=False,
+        lifestyle_enabled=False,
+        google_health_client_id="synthetic-client-id",
+        google_health_client_secret="synthetic-client-secret",
+        google_health_refresh_token="synthetic-legacy-refresh-token",
+        self_review_enabled=False,
+        self_review_weekday=6,
+    )
+
+    scoped = _scope_config_to_user(config, user["id"])
+    assert scoped.hevy_api_key == "synthetic-user-hevy-key"
+    assert scoped.health_connect_file is None
+    assert scoped.google_health_client_id is None
+    assert scoped.google_health_client_secret is None
+    assert scoped.google_health_refresh_token is None
+
+    unconfigured = _scope_config_to_user(config, user_without_key["id"])
+    assert unconfigured.hevy_api_key is None
+    assert unconfigured.google_health_client_id is None
+    assert unconfigured.google_health_client_secret is None
+    assert unconfigured.google_health_refresh_token is None
+
+    legacy = _scope_config_to_user(config, legacy_user_id)
+    assert legacy.hevy_api_key == "synthetic-server-hevy-key"
+    assert legacy.health_connect_file == "/synthetic/legacy-health.json"
+    assert legacy.google_health_refresh_token == "synthetic-legacy-refresh-token"
+
+
 # ---------------------------------------------------------------------------
 # run (preview mode — training day)
 # ---------------------------------------------------------------------------
@@ -139,6 +208,7 @@ def _make_config(
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
     # Patch _resolve_run_user to return a fixed test user_id
     monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
     # Patch _resolve_provider to avoid DB lookups in test
     monkeypatch.setattr(
         "main._resolve_provider",
@@ -164,7 +234,7 @@ def test_run_preview_training_day(
     )
 
     # Mock Hevy sync returns no statuses
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
 
     # Mock Google Health
     monkeypatch.setattr(
@@ -286,7 +356,7 @@ def test_run_preview_rest_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
@@ -357,7 +427,7 @@ def test_run_preview_with_sync_statuses(
 
     monkeypatch.setattr(
         "main.sync_routines",
-        lambda cfg: ["Day 1: updated", "Day 2: created"],
+        lambda cfg, **kw: ["Day 1: updated", "Day 2: created"],
     )
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
@@ -404,7 +474,7 @@ def test_run_preview_with_lifestyle(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
@@ -448,7 +518,7 @@ def test_run_preview_training_day_with_checkin(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
 
     # Make check-in due
     import checkin
@@ -570,7 +640,7 @@ def test_run_deliver_sends_push(
 ) -> None:
     """Non-preview mode sends the plan via Web Push."""
     _make_config(monkeypatch, tmp_path)
-    
+
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
 
     monkeypatch.setattr(
@@ -581,7 +651,7 @@ def test_run_deliver_sends_push(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
@@ -605,7 +675,9 @@ def test_run_deliver_sends_push(
         push_calls.append((sub, payload, vapid_key))
         return True
 
-    monkeypatch.setattr("main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}])
+    monkeypatch.setattr(
+        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
+    )
     monkeypatch.setattr("main.send_push_notification", _fake_send)
 
     result = run(preview=False)
@@ -620,7 +692,7 @@ def test_run_deliver_returns_2_when_push_fails(
 ) -> None:
     """When Push delivery fails, run returns 2."""
     _make_config(monkeypatch, tmp_path)
-    
+
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
 
     monkeypatch.setattr(
@@ -631,7 +703,7 @@ def test_run_deliver_returns_2_when_push_fails(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,
@@ -650,7 +722,9 @@ def test_run_deliver_returns_2_when_push_fails(
     )
 
     # Push fails
-    monkeypatch.setattr("main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}])
+    monkeypatch.setattr(
+        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
+    )
     monkeypatch.setattr(
         "main.send_push_notification",
         lambda *a, **kw: False,
@@ -696,7 +770,9 @@ def test_run_hevy_sync_failure_does_not_block(
     )
 
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
-    monkeypatch.setattr("main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}])
+    monkeypatch.setattr(
+        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
+    )
     monkeypatch.setattr(
         "main.send_push_notification",
         lambda *a, **kw: True,
@@ -720,7 +796,7 @@ def test_run_checkin_due_failure_does_not_block(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.checkin.due",
         MagicMock(side_effect=RuntimeError("DB error")),
@@ -742,7 +818,9 @@ def test_run_checkin_due_failure_does_not_block(
         lambda *args, **kw: date(2026, 8, 3),
     )
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
-    monkeypatch.setattr("main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}])
+    monkeypatch.setattr(
+        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
+    )
     monkeypatch.setattr(
         "main.send_push_notification",
         lambda *a, **kw: True,
@@ -778,6 +856,7 @@ def test_run_self_review_on_configured_weekday(
     monkeypatch.setattr("main.Config.load", lambda: config2)
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
     monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
     monkeypatch.setattr(
         "main._resolve_provider",
         lambda config, **kw: MagicMock(name="test-provider"),
@@ -792,7 +871,7 @@ def test_run_self_review_on_configured_weekday(
         ),
     )
 
-    monkeypatch.setattr("main.sync_routines", lambda cfg: [])
+    monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
         lambda *args: None,

@@ -184,12 +184,16 @@ def _routine_id_from_response(result: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _ensure_folder(config: Config) -> int | None:
-    """Return the Hevy folder id for our routines, creating it if needed."""
+def _ensure_folder(
+    config: Config,
+    *,
+    user_id: str | None = None,
+) -> int | None:
+    """Return this user's Hevy folder id, creating it if needed."""
     api_key = config.hevy_api_key
     if api_key is None:
         return None
-    stored = get_meta(FOLDER_META_KEY, config.database_path)
+    stored = get_meta(FOLDER_META_KEY, config.database_path, user_id=user_id)
     if stored is not None:
         return int(stored)
 
@@ -198,7 +202,12 @@ def _ensure_folder(config: Config) -> int | None:
         for folder in folders:
             if folder.get("title") == FOLDER_NAME:
                 folder_id = int(folder["id"])
-                set_meta(FOLDER_META_KEY, str(folder_id), config.database_path)
+                set_meta(
+                    FOLDER_META_KEY,
+                    str(folder_id),
+                    config.database_path,
+                    user_id=user_id,
+                )
                 return folder_id
 
     created = create_routine_folder(api_key, FOLDER_NAME)
@@ -207,7 +216,12 @@ def _ensure_folder(config: Config) -> int | None:
         return None
     folder = created.get("routine_folder", created)
     folder_id = int(folder["id"])
-    set_meta(FOLDER_META_KEY, str(folder_id), config.database_path)
+    set_meta(
+        FOLDER_META_KEY,
+        str(folder_id),
+        config.database_path,
+        user_id=user_id,
+    )
     return folder_id
 
 
@@ -222,18 +236,41 @@ def _find_existing_routine_id(api_key: str, title: str) -> str | None:
     return None
 
 
-def _migrate_titles(config: Config) -> None:
-    """Carry tracked routine records across renamed titles so the existing
-    Hevy routine is updated in place rather than orphaned."""
+def _migrate_titles(
+    config: Config,
+    *,
+    user_id: str | None = None,
+) -> None:
+    """Carry only this user's tracked records across renamed routine titles."""
     for old_title, new_title in _TITLE_MIGRATIONS.items():
-        old_record = get_routine_record(old_title, config.database_path)
+        old_record = get_routine_record(
+            old_title,
+            config.database_path,
+            user_id=user_id,
+        )
         if old_record is None:
             continue
-        if get_routine_record(new_title, config.database_path) is None:
+        if (
+            get_routine_record(
+                new_title,
+                config.database_path,
+                user_id=user_id,
+            )
+            is None
+        ):
             routine_id, _ = old_record
-            # Empty hash forces a PUT on next sync, renaming the routine.
-            save_routine_record(new_title, routine_id, "", config.database_path)
-        delete_routine_record(old_title, config.database_path)
+            save_routine_record(
+                new_title,
+                routine_id,
+                "",
+                config.database_path,
+                user_id=user_id,
+            )
+        delete_routine_record(
+            old_title,
+            config.database_path,
+            user_id=user_id,
+        )
 
 
 def _sync_session(
@@ -242,16 +279,21 @@ def _sync_session(
     built: list[dict[str, Any]],
     folder_id: int | None,
     notes: str,
+    *,
+    user_id: str | None = None,
 ) -> str:
-    """Create or update a single routine. Returns a short status string."""
+    """Create or update one tenant-scoped routine."""
     api_key = config.hevy_api_key
     if api_key is None:
         return f"{title}: skipped (no Hevy API key)"
     content_hash = _content_hash(title, built, notes)
 
-    record = get_routine_record(title, config.database_path)
+    record = get_routine_record(
+        title,
+        config.database_path,
+        user_id=user_id,
+    )
     if record is None:
-        # Maybe it exists in Hevy already but is not tracked locally.
         existing_id = _find_existing_routine_id(api_key, title)
         if existing_id is not None:
             record = (existing_id, "")
@@ -266,7 +308,13 @@ def _sync_session(
         result = update_routine(api_key, routine_id, update_payload)
         if result is None:
             return f"{title}: update failed"
-        save_routine_record(title, routine_id, content_hash, config.database_path)
+        save_routine_record(
+            title,
+            routine_id,
+            content_hash,
+            config.database_path,
+            user_id=user_id,
+        )
         return f"{title}: updated"
 
     create_payload: dict[str, Any] = {
@@ -285,14 +333,24 @@ def _sync_session(
     new_routine_id = _routine_id_from_response(result)
     if new_routine_id is None:
         return f"{title}: created (id missing)"
-    save_routine_record(title, new_routine_id, content_hash, config.database_path)
+    save_routine_record(
+        title,
+        new_routine_id,
+        content_hash,
+        config.database_path,
+        user_id=user_id,
+    )
     return f"{title}: created"
 
 
-def sync_routines(config: Config) -> list[str]:
-    """Sync all distinct sessions to Hevy. Returns per-routine status lines."""
-    _migrate_titles(config)
-    start = get_programme_start_date(config.database_path)
+def sync_routines(
+    config: Config,
+    *,
+    user_id: str,
+) -> list[str]:
+    """Sync deterministic routine payloads for only the acting user."""
+    _migrate_titles(config, user_id=user_id)
+    start = get_programme_start_date(config.database_path, user_id=user_id)
     week = week_in_cycle(start)
     block = block_for_week(week)
     notes = (
@@ -300,55 +358,21 @@ def sync_routines(config: Config) -> list[str]:
         f"(weeks {block.weeks}). {block.focus} "
         "Built and kept in sync by your workout agent."
     )
-    folder_id = _ensure_folder(config)
+    folder_id = _ensure_folder(config, user_id=user_id)
     weights = (
         _compute_target_weights(config, block) if config.hevy_prefill_weights else {}
     )
-    base_routines = {}
+    routines: dict[str, list[dict[str, Any]]] = {}
     for day in _SESSION_DAYS:
         title = day_focus(day)
         exercises = day_exercises(day, block)
-        base_routines[title] = _build_exercises(exercises, weights)
+        routines[title] = _build_exercises(exercises, weights)
 
-    updated_routines = base_routines
-    if config.gemini_api_key:
-        try:
-            from ai_provider import resolve_provider
-            from database import get_body_metrics, get_recent_hevy_logs
-            from gemini_engine import apply_autonomous_adjustments
-            from health_connect import read_recovery_metrics
-            from insights import analyse_recovery
-
-            try:
-                from weather import get_current_weather
-
-                weather = get_current_weather()
-            except ImportError:
-                weather = None
-
-            logs = get_recent_hevy_logs(limit=15, db_path=config.database_path)
-            body_metrics = get_body_metrics(limit=14, db_path=config.database_path)
-            recovery_data = read_recovery_metrics(config.health_connect_file)
-            recovery_insight = analyse_recovery(body_metrics, recovery_data)
-
-            logger.info("Requesting autonomous routine adjustments...")
-            provider = resolve_provider(
-                server_gemini_key=config.gemini_api_key,
-                server_gemini_model=config.gemini_model,
-            )
-            updated_routines = apply_autonomous_adjustments(
-                provider,
-                base_routines=base_routines,
-                hevy_logs=logs,
-                weather=weather,
-                is_catabolic=getattr(recovery_insight, "is_catabolic", False),
-                provider=resolve_provider(user_id=None),
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Failed to apply autonomous adjustments: %s", exc)
-
+    # Free-form LLM output must not write directly into active Hevy
+    # prescriptions. Adaptation belongs behind the dynamic programme
+    # validator and explicit activation flow.
     statuses: list[str] = []
-    for title, built in updated_routines.items():
+    for title, built in routines.items():
         statuses.append(
             _sync_session(
                 config,
@@ -356,6 +380,7 @@ def sync_routines(config: Config) -> list[str]:
                 built,
                 folder_id,
                 notes,
+                user_id=user_id,
             ),
         )
     return statuses

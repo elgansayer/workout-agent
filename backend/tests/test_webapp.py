@@ -6,8 +6,11 @@ requirements-web.txt, separate from the agent's core dependencies).
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import json
 import os
+import sqlite3
 from collections.abc import Generator
 from typing import Any
 
@@ -17,8 +20,6 @@ pytest.importorskip("fastapi")
 pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
-from fastapi.testclient import TestClient
-
 from database import (
     init_db,
     save_body_metrics,
@@ -26,6 +27,7 @@ from database import (
     save_daily_log,
     save_progress,
 )
+from fastapi.testclient import TestClient
 from hevy_parser import ExerciseSummary, WorkoutSummary
 
 
@@ -309,11 +311,9 @@ def test_api_programmes_select_requires_template_key(client: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Angular migration")
 def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
-    """The XAI reasoning endpoint resolves via ai_provider.resolve_provider."""
+    """The XAI endpoint resolves through the canonical user/provider boundary."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
-
 
     captured: list[dict] = []
     saved_prompts: list[str] = []
@@ -357,11 +357,9 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
     assert captured[0]["server_gemini_key"] == "test-gem-key"
 
 
-@pytest.mark.skip(reason="Angular migration")
 def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
-    """The project_peak endpoint resolves via ai_provider.resolve_provider."""
+    """The project_peak endpoint resolves through the canonical boundary."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
-
 
     captured: list[dict] = []
 
@@ -394,11 +392,9 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
     assert len(captured) == 1
 
 
-@pytest.mark.skip(reason="Angular migration")
 def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None:
-    """The RAG search (chat) endpoint resolves via ai_provider.resolve_provider."""
+    """The RAG endpoint resolves and streams the provider-neutral contract."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
-
 
     captured: list[dict] = []
 
@@ -433,11 +429,9 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
     assert len(captured) == 1
 
 
-@pytest.mark.skip(reason="Angular migration")
 def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
     """Repeated RAG search requests hit the rate limiter."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
-
 
     class _StubProvider:
         def generate(self, prompt: Any, *, stream: bool = False) -> Any:
@@ -458,12 +452,150 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
     assert response.status_code == 429
 
 
-@pytest.mark.skip(reason="Angular migration")
 def test_xai_reasoning_invalid_context(client: Any) -> None:
     """An invalid context ID returns a graceful error, not a stack trace."""
     response = client.get("/api/xai_reasoning/nounderscore")
     assert response.status_code == 200
     assert response.json() == {"reasoning": "Invalid context ID"}
+
+
+def test_settings_provider_catalog_matches_registry(client: Any) -> None:
+    """Settings renders the same providers and defaults as the backend registry."""
+    from ai_provider import available_providers
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    payload = response.json()
+    expected = available_providers()
+    assert payload["ai_providers"] == expected
+    assert set(payload["user_keys"]) == {
+        "hevy",
+        *(provider["id"] for provider in expected),
+    }
+
+
+def test_selecting_provider_without_override_uses_registry_default(
+    client: Any,
+) -> None:
+    """Changing providers cannot retain an incompatible model from the old one."""
+    import webapp.app as app_module
+    from ai_provider import PROVIDERS
+    from database import (
+        get_legacy_user_id,
+        get_user_preferences,
+        save_user_preferences,
+    )
+    from starlette.requests import Request
+
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    save_user_preferences(
+        user_id,
+        preferred_ai="openai",
+        ai_model="gpt-old-provider",
+        db_path=app_module.DB_PATH,
+    )
+    body = json.dumps({"preferred_ai": "claude"}).encode()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/settings/preferences",
+            "headers": [],
+            "query_string": b"",
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "session": {"user_id": user_id},
+        },
+        receive,
+    )
+    result = asyncio.run(app_module.save_preferences(request))
+
+    assert result == {"status": "ok"}
+    preferences = get_user_preferences(user_id, app_module.DB_PATH)
+    assert preferences["preferred_ai"] == "claude"
+    assert preferences["ai_model"] == PROVIDERS["claude"]["default_model"]
+
+
+def test_rag_search_uses_selected_encrypted_claude_key(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """The real DB-to-resolver-to-stream path honours a user's Claude choice."""
+    import ai_provider
+    import webapp.app as app_module
+    from cryptography.fernet import Fernet
+    from database import (
+        get_legacy_user_id,
+        save_user_api_key,
+        save_user_preferences,
+    )
+
+    db_path = app_module.DB_PATH
+    user_id = get_legacy_user_id(db_path)
+    synthetic_key = "synthetic-claude-key"
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    save_user_preferences(
+        user_id,
+        preferred_ai="claude",
+        ai_model="claude-synthetic-model",
+        db_path=db_path,
+    )
+    save_user_api_key(
+        user_id,
+        "claude",
+        synthetic_key,
+        extra={"model": "stale-model-metadata"},
+        db_path=db_path,
+    )
+
+    with sqlite3.connect(db_path) as connection:
+        row = connection.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, "claude"),
+        ).fetchone()
+    assert row is not None
+    assert row[0] != synthetic_key
+
+    constructed: list[tuple[str, str]] = []
+    scoped_users: list[str | None] = []
+
+    class _FakeClaude:
+        def generate(self, prompt: str, *, stream: bool = False) -> Any:
+            assert stream is True
+            assert "synthetic question" in prompt
+            return iter(["Claude ", "response"])
+
+    def _build_claude(*, api_key: str, model: str) -> _FakeClaude:
+        constructed.append((api_key, model))
+        return _FakeClaude()
+
+    monkeypatch.setitem(
+        ai_provider.PROVIDERS,
+        "claude",
+        {
+            "class": _build_claude,
+            "default_model": "claude-sonnet-4-20250514",
+        },
+    )
+
+    def _personal_records(*, db_path: str, user_id: str | None = None) -> list[Any]:
+        scoped_users.append(user_id)
+        return []
+
+    monkeypatch.setattr(app_module, "get_personal_records", _personal_records)
+
+    response = client.get("/api/rag_search?q=synthetic+question")
+
+    assert response.status_code == 200
+    assert response.text == "Claude response"
+    assert constructed == [(synthetic_key, "claude-synthetic-model")]
+    assert scoped_users == [user_id]
 
 
 # ---------------------------------------------------------------------------

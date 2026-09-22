@@ -11,6 +11,7 @@ Workout Agent is a multi-user fitness intelligence platform for importing workou
 - Track workout progress and body/recovery metrics.
 - Connect supported health providers.
 - Configure AI providers and models per user.
+  The latest evidence is recorded in the [AI provider parity audit](docs/AI_PROVIDER_PARITY.md).
 - Use the web dashboard, Coach, programme builder, history, progress, settings, and check-in views.
 - Deliver notifications through supported user-configured channels.
 

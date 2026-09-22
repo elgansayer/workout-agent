@@ -45,16 +45,10 @@ def _parse_weekday(value: str, default: int = 6) -> int:
     return _WEEKDAYS.get(text[:3], default)
 
 
-# A one-line hint for each required key, shown when it is missing.
-_REQUIRED_HINTS = {
-    "GEMINI_API_KEY": "Create one at https://aistudio.google.com/app/apikey",
-}
-
-
 @dataclass(frozen=True)
 class Config:
     hevy_api_key: str | None
-    gemini_api_key: str
+    gemini_api_key: str | None
     gemini_model: str
     health_connect_file: str | None
     database_path: str
@@ -70,22 +64,9 @@ class Config:
 
     @classmethod
     def load(cls) -> Config:
-        missing: list[str] = []
-
-        def required(name: str) -> str:
-            value: str = os.environ.get(name, "").strip()
-            if not value:
-                missing.append(name)
-            return value
-
-        gemini_api_key = required("GEMINI_API_KEY")
-
-        if missing:
-            lines = ["Missing required environment variables:"]
-            for name in missing:
-                lines.append(f"  - {name}: {_REQUIRED_HINTS.get(name, '')}")
-            lines.append("Copy .env.example to .env and fill it in.")
-            raise ConfigError("\n".join(lines))
+        # A server Gemini key is an optional legacy fallback. Authenticated
+        # users may instead configure any registered provider in Settings.
+        gemini_api_key = os.environ.get("GEMINI_API_KEY", "").strip() or None
 
         # Hevy is optional: without it the agent still builds and sends a plan,
         # it just cannot reference your last logged session.

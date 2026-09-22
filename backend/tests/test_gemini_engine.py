@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
 from gemini_engine import (
-    _build_autonomous_prompt,
     _build_checkin_prompt,
     _build_prompt,
     _build_rest_prompt,
     _fallback_plan,
     _fallback_rest_message,
     _format_history,
-    apply_autonomous_adjustments,
     generate_checkin_message,
     generate_next_workout,
     generate_rest_day_message,
@@ -314,96 +311,3 @@ def test_generate_checkin_message_exception_falls_back() -> None:
         fallback="Fallback check-in.",
     )
     assert result == "Fallback check-in."
-
-
-# ---------------------------------------------------------------------------
-# _build_autonomous_prompt / apply_autonomous_adjustments
-# ---------------------------------------------------------------------------
-
-
-def test_build_autonomous_prompt_includes_routines() -> None:
-    routines = {"Push Day": [{"name": "Bench Press", "sets": 4}]}
-    prompt = _build_autonomous_prompt(routines, [], None, False)
-    assert "Bench Press" in prompt
-
-
-def test_build_autonomous_prompt_extreme_heat() -> None:
-    from weather import WeatherConditions
-
-    weather = WeatherConditions(temperature_c=38, humidity_pct=20, is_extreme_heat=True)
-    routines: dict[str, list[dict[str, object]]] = {"Day 1": []}
-    prompt = _build_autonomous_prompt(routines, [], weather, False)
-    assert "thermal stress" in prompt.lower()
-
-
-def test_build_autonomous_prompt_catabolic() -> None:
-    routines: dict[str, list[dict[str, object]]] = {"Day 1": []}
-    prompt = _build_autonomous_prompt(routines, [], None, True)
-    assert "catabolic" in prompt.lower()
-
-
-def test_apply_autonomous_adjustments_success() -> None:
-    updated = {"Push Day": [{"name": "Bench Press", "sets": 3}]}
-    mock_provider = _make_mock_provider(json.dumps(updated))
-
-    result = apply_autonomous_adjustments(
-        mock_provider,
-        base_routines={"Push Day": [{"name": "Bench Press", "sets": 4}]},
-        hevy_logs=[],
-    )
-    assert result == updated
-
-
-def test_apply_autonomous_adjustments_strips_markdown() -> None:
-    updated = {"Day 1": [{"name": "Squat", "sets": 3}]}
-    mock_provider = _make_mock_provider(f"```json\n{json.dumps(updated)}\n```")
-
-    result = apply_autonomous_adjustments(
-        mock_provider,
-        base_routines={"Day 1": [{"name": "Squat", "sets": 4}]},
-        hevy_logs=[],
-    )
-    assert result == updated
-
-
-def test_apply_autonomous_adjustments_non_dict_falls_back() -> None:
-    mock_provider = _make_mock_provider("[1, 2, 3]")
-
-    base = {"Day 1": [{"name": "Squat", "sets": 4}]}
-    result = apply_autonomous_adjustments(
-        mock_provider,
-        base_routines=base,
-        hevy_logs=[],
-    )
-    assert result is base  # returned unchanged
-
-
-def test_apply_autonomous_adjustments_exception_falls_back() -> None:
-    mock_provider = _make_mock_provider("", raise_error=True)
-
-    base = {"Day 1": [{"name": "Squat", "sets": 4}]}
-    result = apply_autonomous_adjustments(
-        mock_provider,
-        base_routines=base,
-        hevy_logs=[],
-    )
-    assert result is base  # returned unchanged
-
-
-def test_apply_autonomous_adjustments_invalid_json_falls_back() -> None:
-    mock_provider = _make_mock_provider("not valid json {")
-
-    base = {"Day 1": [{"name": "Squat", "sets": 4}]}
-    result = apply_autonomous_adjustments(
-        mock_provider,
-        base_routines=base,
-        hevy_logs=[],
-    )
-    assert result is base
-
-
-# ---------------------------------------------------------------------------
-# get_provider re-export
-# ---------------------------------------------------------------------------
-
-

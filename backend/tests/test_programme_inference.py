@@ -196,8 +196,8 @@ def test_determine_next_least_recent() -> None:
     legs = _make_training_day("Legs")
     days = [push, pull, legs]
     workouts = [
-        CompletedWorkout(id="w1", title="Push", start_time="2026-08-01T10:00:00Z"),
-        CompletedWorkout(id="w2", title="Pull", start_time="2026-08-04T10:00:00Z"),
+        CompletedWorkout(id="w1", title="Push", start_time="2026-09-10T10:00:00Z"),
+        CompletedWorkout(id="w2", title="Pull", start_time="2026-09-08T10:00:00Z"),
     ]
     nxt = _determine_next_routine(days, workouts)
     # Legs never done -> highest priority.
@@ -210,8 +210,8 @@ def test_determine_next_round_robin() -> None:
     pull = _make_training_day("Pull")
     days = [push, pull]
     workouts = [
-        CompletedWorkout(id="w1", title="Push", start_time="2026-08-05T10:00:00Z"),
-        CompletedWorkout(id="w2", title="Pull", start_time="2026-08-03T10:00:00Z"),
+        CompletedWorkout(id="w1", title="Push", start_time="2026-09-10T10:00:00Z"),
+        CompletedWorkout(id="w2", title="Pull", start_time="2026-09-08T10:00:00Z"),
     ]
     nxt = _determine_next_routine(days, workouts)
     # Pull is least recent.
@@ -271,13 +271,13 @@ def test_infer_programme_full_flow() -> None:
         CompletedWorkout(
             id="w1",
             title="Push Day",
-            start_time="2026-08-04T10:00:00Z",
+            start_time="2026-09-10T10:00:00Z",
             exercises=[_make_workout_exercise("1", "Bench Press", 100, 5)],
         ),
         CompletedWorkout(
             id="w2",
             title="Pull Day",
-            start_time="2026-08-03T10:00:00Z",
+            start_time="2026-09-09T10:00:00Z",
             exercises=[_make_workout_exercise("2", "Deadlift", 140, 5)],
         ),
     ]

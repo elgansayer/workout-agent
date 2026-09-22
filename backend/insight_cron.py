@@ -6,7 +6,8 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
-from ai_provider import AIProvider, resolve_provider
+from ai_provider import AIProvider
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
@@ -83,7 +84,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         # Validate JSON
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
-            save_dashboard_insight(json.dumps(parsed), db_path=config.database_path, user_id=uid)
+            save_dashboard_insight(
+                json.dumps(parsed), db_path=config.database_path, user_id=uid
+            )
             if uid:
                 fatigue = parsed.get("fatigue", "Normal")
                 advice = parsed.get("advice", "")
@@ -185,6 +188,10 @@ def main() -> None:
         action="store_true",
         help="Generate weekly deep correlations",
     )
+    parser.add_argument(
+        "--user-id",
+        help="Generate insights for this server-selected user identifier.",
+    )
     args = parser.parse_args()
 
     try:
@@ -195,10 +202,10 @@ def main() -> None:
         sys.exit(1)
 
     if args.daily:
-        generate_daily_header(config)
+        generate_daily_header(config, user_id=args.user_id)
 
     if args.weekly:
-        generate_weekly_correlations(config)
+        generate_weekly_correlations(config, user_id=args.user_id)
 
 
 if __name__ == "__main__":
