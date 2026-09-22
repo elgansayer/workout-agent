@@ -1138,7 +1138,7 @@ nav a.nav-coach.on {
 }
 
 @media (max-width: 620px) {
-    .two-col { grid-template-columns: 1fr; }
+    .two-col, .dashboard-grid, .chart-grid, .proj-grid, .block-grid, .programme-grid, .day-grid { grid-template-columns: 1fr; }
     .topbar {
         position: fixed;
         bottom: 0;

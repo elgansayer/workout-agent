@@ -1,0 +1,1738 @@
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-8.4.2, pluggy-1.6.0
+rootdir: /mnt/HC_Volume_106574422/repo-factory/workout-agent/worktrees/issue-740
+plugins: hypothesis-6.165.10, anyio-4.14.2
+collected 839 items
+
+backend/tests/test_adaptive_audit.py .                                   [  0%]
+backend/tests/test_ai_provider.py ............                           [  1%]
+backend/tests/test_ai_widgets.py ..............                          [  3%]
+backend/tests/test_analytics.py ........                                 [  4%]
+backend/tests/test_anonymous_access_routes.py .F...F                     [  4%]
+backend/tests/test_builtin_connectors.py .                               [  5%]
+backend/tests/test_charts.py .........                                   [  6%]
+backend/tests/test_checkin.py ........                                   [  7%]
+backend/tests/test_commit_hygiene.py ................................... [ 11%]
+.....                                                                    [ 11%]
+backend/tests/test_config.py ........................                    [ 14%]
+backend/tests/test_connector_conformance.py .                            [ 14%]
+backend/tests/test_connector_errors.py .                                 [ 14%]
+backend/tests/test_connector_fixtures.py ..                              [ 15%]
+backend/tests/test_connector_health.py ......................            [ 17%]
+backend/tests/test_connector_oauth.py ..                                 [ 17%]
+backend/tests/test_connector_permissions.py .                            [ 18%]
+backend/tests/test_connector_platform.py ....                            [ 18%]
+backend/tests/test_connector_simulator.py ..                             [ 18%]
+backend/tests/test_connector_status.py .                                 [ 18%]
+backend/tests/test_csrf_security.py .......                              [ 19%]
+backend/tests/test_data_classification.py ........                       [ 20%]
+backend/tests/test_data_policy_check.py ...........                      [ 22%]
+backend/tests/test_database.py ......................................... [ 26%]
+............                                                             [ 28%]
+backend/tests/test_dynamic_programme.py .........                        [ 29%]
+backend/tests/test_encryption.py .........                               [ 30%]
+backend/tests/test_fitbit_migration_policy.py .....                      [ 31%]
+backend/tests/test_garmin_connector.py ..                                [ 31%]
+backend/tests/test_gemini_engine.py ................................     [ 35%]
+backend/tests/test_google_health_auth.py ......                          [ 35%]
+backend/tests/test_google_health_client.py ..................            [ 38%]
+backend/tests/test_health_activity_reconcile.py ..                       [ 38%]
+backend/tests/test_health_adapter_checks.py .                            [ 38%]
+backend/tests/test_health_api_contract.py .                              [ 38%]
+backend/tests/test_health_api_models.py .                                [ 38%]
+backend/tests/test_health_audit_event.py .                               [ 38%]
+backend/tests/test_health_backfill.py ..                                 [ 38%]
+backend/tests/test_health_backfill_state.py .                            [ 39%]
+backend/tests/test_health_cache_policy.py .                              [ 39%]
+backend/tests/test_health_capability_state.py ..                         [ 39%]
+backend/tests/test_health_checkin.py .                                   [ 39%]
+backend/tests/test_health_coaching_context.py .                          [ 39%]
+backend/tests/test_health_companion.py .                                 [ 39%]
+backend/tests/test_health_conflicts.py ..                                [ 40%]
+backend/tests/test_health_connect.py ........                            [ 41%]
+backend/tests/test_health_connect_connector.py .                         [ 41%]
+backend/tests/test_health_connect_ingest.py ..                           [ 41%]
+backend/tests/test_health_connection.py ..                               [ 41%]
+backend/tests/test_health_connection_errors.py .                         [ 41%]
+backend/tests/test_health_connector_config.py .                          [ 41%]
+backend/tests/test_health_consent.py .                                   [ 41%]
+backend/tests/test_health_contract_fixture.py ..                         [ 42%]
+backend/tests/test_health_cursor.py .                                    [ 42%]
+backend/tests/test_health_daily_pipeline.py .                            [ 42%]
+backend/tests/test_health_data_quality.py .                              [ 42%]
+backend/tests/test_health_dedup.py ....                                  [ 43%]
+backend/tests/test_health_delete.py .                                    [ 43%]
+backend/tests/test_health_disconnect.py .                                [ 43%]
+backend/tests/test_health_export.py .                                    [ 43%]
+backend/tests/test_health_feature_flags.py ..                            [ 43%]
+backend/tests/test_health_freshness.py .                                 [ 43%]
+backend/tests/test_health_ingestion.py ..                                [ 43%]
+backend/tests/test_health_legacy_bridge.py .                             [ 44%]
+backend/tests/test_health_limits.py .                                    [ 44%]
+backend/tests/test_health_metric_validation.py .                         [ 44%]
+backend/tests/test_health_migration.py .                                 [ 44%]
+backend/tests/test_health_migration_status.py .                          [ 44%]
+backend/tests/test_health_models.py ...                                  [ 44%]
+backend/tests/test_health_normalization.py ..                            [ 45%]
+backend/tests/test_health_notification_context.py .                      [ 45%]
+backend/tests/test_health_observability.py .                             [ 45%]
+backend/tests/test_health_outliers.py .                                  [ 45%]
+backend/tests/test_health_payload.py ..                                  [ 45%]
+backend/tests/test_health_platform_compile.py .                          [ 45%]
+backend/tests/test_health_provenance_view.py .                           [ 46%]
+backend/tests/test_health_provider_catalog.py .                          [ 46%]
+backend/tests/test_health_provider_contracts.py .                        [ 46%]
+backend/tests/test_health_provider_identity.py .                         [ 46%]
+backend/tests/test_health_provider_matrix.py .                           [ 46%]
+backend/tests/test_health_provider_scores.py .                           [ 46%]
+backend/tests/test_health_quota.py .                                     [ 46%]
+backend/tests/test_health_readiness.py ..                                [ 46%]
+backend/tests/test_health_replay.py .                                    [ 47%]
+backend/tests/test_health_repository_contract.py .                       [ 47%]
+backend/tests/test_health_retention.py ..                                [ 47%]
+backend/tests/test_health_schedule.py .                                  [ 47%]
+backend/tests/test_health_schema.py .                                    [ 47%]
+backend/tests/test_health_secret_redaction.py .                          [ 47%]
+backend/tests/test_health_service.py .                                   [ 47%]
+backend/tests/test_health_source_explanation.py .                        [ 48%]
+backend/tests/test_health_source_policy.py ..                            [ 48%]
+backend/tests/test_health_sqlite_repository.py ..                        [ 48%]
+backend/tests/test_health_status_summary.py .                            [ 48%]
+backend/tests/test_health_summary.py ..                                  [ 48%]
+backend/tests/test_health_sync.py ..                                     [ 49%]
+backend/tests/test_health_sync_lock.py .                                 [ 49%]
+backend/tests/test_health_sync_orchestrator.py .                         [ 49%]
+backend/tests/test_health_sync_plan.py .                                 [ 49%]
+backend/tests/test_health_sync_progress.py .                             [ 49%]
+backend/tests/test_health_sync_security.py .                             [ 49%]
+backend/tests/test_health_test_action.py .                               [ 49%]
+backend/tests/test_health_time.py ..                                     [ 50%]
+backend/tests/test_health_units.py .                                     [ 50%]
+backend/tests/test_health_user_preferences.py .                          [ 50%]
+backend/tests/test_health_write_guard.py ..                              [ 50%]
+backend/tests/test_hevy_client.py ...................................... [ 55%]
+....                                                                     [ 55%]
+backend/tests/test_hevy_parser.py .........                              [ 56%]
+backend/tests/test_hevy_reader.py ....................                   [ 58%]
+backend/tests/test_hevy_sync.py ..........................               [ 62%]
+backend/tests/test_insight_cron.py .........                             [ 63%]
+backend/tests/test_insights.py .............                             [ 64%]
+backend/tests/test_lifestyle.py ..........                               [ 65%]
+backend/tests/test_main.py ....................                          [ 68%]
+backend/tests/test_mutation_security.py ............................F    [ 71%]
+backend/tests/test_notifications_api.py FFFFF                            [ 72%]
+backend/tests/test_notifications_db.py ...                               [ 72%]
+backend/tests/test_openhands.py .                                        [ 72%]
+backend/tests/test_operational_health.py .......                         [ 73%]
+backend/tests/test_program.py ..............                             [ 75%]
+backend/tests/test_programme_inference.py ............F...               [ 77%]
+backend/tests/test_property_based_boundaries.py ...........              [ 78%]
+backend/tests/test_provider_scaffolds.py ...                             [ 78%]
+backend/tests/test_proxy_security.py ...........                         [ 80%]
+backend/tests/test_push_notifier.py ...                                  [ 80%]
+backend/tests/test_recovery_adaptive.py .....                            [ 81%]
+backend/tests/test_release_gate.py ..............                        [ 82%]
+backend/tests/test_repository_inventory.py .......                       [ 83%]
+backend/tests/test_scheduler.py ..................                       [ 85%]
+backend/tests/test_security_headers.py .........                         [ 86%]
+backend/tests/test_service_worker_cache_policy.py ............           [ 88%]
+backend/tests/test_sync_history.py .........                             [ 89%]
+backend/tests/test_telegram_notifier.py .                                [ 89%]
+backend/tests/test_training_export.py ..                                 [ 89%]
+backend/tests/test_weather.py ...........                                [ 91%]
+backend/tests/test_web_cache_security.py ........................        [ 93%]
+backend/tests/test_web_runtime_security.py ..........                    [ 95%]
+backend/tests/test_webapp.py ssssssssssssssssssssssssssssssssssss        [ 99%]
+backend/tests/test_webapp_programmes.py FFFFF                            [100%]
+
+=================================== FAILURES ===================================
+__________ test_every_personalised_route_fails_closed_when_logged_out __________
+
+authenticated_boundary_app = <fastapi.applications.FastAPI object at 0x7f7788f65bd0>
+
+    def test_every_personalised_route_fails_closed_when_logged_out(
+        authenticated_boundary_app: Any,
+    ) -> None:
+        failures: list[str] = []
+    
+>       with TestClient(authenticated_boundary_app) as client:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_anonymous_access_routes.py:101: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:698: in __enter__
+    portal.call(self.wait_startup)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:727: in wait_startup
+    message = await receive()
+              ^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:724: in receive
+    self.task.result()
+/usr/lib/python3.13/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:714: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+backend/webapp/cache_security.py:145: in _guarded_fastapi_call
+    await original(app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788f65bd0>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+______________ test_future_personalised_suffix_route_fails_closed ______________
+
+authenticated_boundary_app = <fastapi.applications.FastAPI object at 0x7f778833a0d0>
+
+    def test_future_personalised_suffix_route_fails_closed(
+        authenticated_boundary_app: Any,
+    ) -> None:
+        """A route that old suffix-based auth would expose must default to private."""
+    
+        @authenticated_boundary_app.get("/api/future-export.json")
+        def future_export() -> dict[str, str]:
+            return {"refresh_token": "must-never-be-anonymous"}
+    
+>       with TestClient(authenticated_boundary_app) as client:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_anonymous_access_routes.py:173: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:698: in __enter__
+    portal.call(self.wait_startup)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:727: in wait_startup
+    message = await receive()
+              ^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:724: in receive
+    self.task.result()
+/usr/lib/python3.13/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:714: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+backend/webapp/cache_security.py:145: in _guarded_fastapi_call
+    await original(app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f778833a0d0>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+_________ test_real_application_has_no_anonymous_mutation_escape_hatch _________
+
+actual_anonymous_app = <fastapi.applications.FastAPI object at 0x7f778825bb10>
+
+    def test_real_application_has_no_anonymous_mutation_escape_hatch(
+        actual_anonymous_app: Any,
+    ) -> None:
+        """Even the deliberate anonymous dev mode is strictly read-only."""
+    
+        routes = [route for route in actual_anonymous_app.routes if isinstance(route, APIRoute)]
+        mutation_routes = [
+            (route, method)
+            for route in routes
+            for method in sorted((route.methods or set()) & _MUTATION_METHODS)
+        ]
+        assert mutation_routes, "Expected the production app to expose mutation routes"
+    
+        discovered_paths = {route.path for route, _method in mutation_routes}
+        assert {
+            "/api/settings/key",
+            "/api/settings/preferences",
+            "/api/programmes/activate",
+            "/api/notifications/{notification_id}/read",
+            "/google-health/disconnect",
+        } <= discovered_paths
+    
+        failures: list[str] = []
+>       with TestClient(actual_anonymous_app) as client:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_mutation_security.py:251: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:698: in __enter__
+    portal.call(self.wait_startup)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:727: in wait_startup
+    message = await receive()
+              ^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:724: in receive
+    self.task.result()
+/usr/lib/python3.13/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:714: in lifespan
+    await self.app(scope, self.stream_receive.receive, self.stream_send.send)
+backend/webapp/cache_security.py:145: in _guarded_fastapi_call
+    await original(app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f778825bb10>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+_________________________ test_get_notifications_empty _________________________
+
+client_with_db = (<starlette.testclient.TestClient object at 0x7f77882d5950>, '/tmp/pytest-of-root/pytest-2/test_get_notifications_empty0/test_api_notifications.db', '3700d29a-a171-4c9f-805c-10a395a3b4b5', '97945a52-461f-4fcd-84c9-9c02503e7724')
+
+    def test_get_notifications_empty(client_with_db) -> None:
+        client, db_file, u1, u2 = client_with_db
+>       response = client.get("/api/notifications")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_notifications_api.py:49: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:483: in get
+    return super().get(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1113: in get
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f778825ad50>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+______________________ test_get_notifications_with_items _______________________
+
+client_with_db = (<starlette.testclient.TestClient object at 0x7f77882d5650>, '/tmp/pytest-of-root/pytest-2/test_get_notifications_with_it0/test_api_notifications.db', '2ddd675a-0aa4-420f-b64b-5cad0a8bb3d1', 'b0df8f3d-74f2-4875-854f-c4cc564a2459')
+
+    def test_get_notifications_with_items(client_with_db) -> None:
+        client, db_file, u1, u2 = client_with_db
+        save_notification(u1, "Title 1", "Message 1", type="coach", link="/dashboard", db_path=db_file)
+        save_notification(u1, "Title 2", "Message 2", type="sync", link="/history", db_path=db_file)
+        save_notification(u2, "Title U2", "Message U2", type="system", db_path=db_file)
+    
+>       response = client.get("/api/notifications")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_notifications_api.py:62: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:483: in get
+    return super().get(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1113: in get
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788fc0190>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+_______________________ test_mark_notification_read_api ________________________
+
+client_with_db = (<starlette.testclient.TestClient object at 0x7f77882d6e50>, '/tmp/pytest-of-root/pytest-2/test_mark_notification_read_ap0/test_api_notifications.db', 'c0330289-268b-40fe-a8ba-ea40686867dd', 'c72119bf-1dd3-4220-b896-9bf20df4435f')
+
+    def test_mark_notification_read_api(client_with_db) -> None:
+        client, db_file, u1, u2 = client_with_db
+        nid = save_notification(u1, "T1", "M1", db_path=db_file)
+    
+>       response = client.post(f"/api/notifications/{nid}/read")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_notifications_api.py:75: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:556: in post
+    return super().post(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1204: in post
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7789010b90>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+_______________________ test_mark_all_read_and_clear_api _______________________
+
+client_with_db = (<starlette.testclient.TestClient object at 0x7f77882d7050>, '/tmp/pytest-of-root/pytest-2/test_mark_all_read_and_clear_a0/test_api_notifications.db', '6283c799-df0e-4e47-a141-4e0d1765fbf2', '6646d8b1-a6eb-4104-81d9-79f1772c5fa2')
+
+    def test_mark_all_read_and_clear_api(client_with_db) -> None:
+        client, db_file, u1, u2 = client_with_db
+        save_notification(u1, "T1", "M1", db_path=db_file)
+        save_notification(u1, "T2", "M2", db_path=db_file)
+    
+        # Mark all read
+>       resp1 = client.post("/api/notifications/read-all")
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_notifications_api.py:91: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:556: in post
+    return super().post(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1204: in post
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788fc0a50>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+____________________ test_test_coach_notification_endpoint _____________________
+
+client_with_db = (<starlette.testclient.TestClient object at 0x7f77882d6750>, '/tmp/pytest-of-root/pytest-2/test_test_coach_notification_e0/test_api_notifications.db', '97a87030-be93-4ecf-be1d-2214c384bb08', '02071e7f-c2ea-4c65-9a24-dcf74ec8dfa2')
+
+    def test_test_coach_notification_endpoint(client_with_db) -> None:
+        client, db_file, u1, u2 = client_with_db
+>       resp = client.post("/api/notifications/test-coach")
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_notifications_api.py:108: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:556: in post
+    return super().post(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1204: in post
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f77881d3ed0>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+________________________ test_infer_programme_full_flow ________________________
+
+    def test_infer_programme_full_flow() -> None:
+        """End-to-end: build a HevyTrainingData and infer the programme."""
+        templates = {
+            "1": _make_template("1", "Bench Press", "chest", ["triceps"]),
+            "2": _make_template("2", "Deadlift", "lats"),
+            "3": _make_template("3", "Squat", "quads", ["glutes"]),
+        }
+        routines = [
+            _make_routine(
+                "Push Day",
+                "r1",
+                [
+                    _make_routine_exercise("1", "Bench Press"),
+                    _make_routine_exercise("1", "Bench Press"),
+                ],
+            ),
+            _make_routine(
+                "Pull Day",
+                "r2",
+                [_make_routine_exercise("2", "Deadlift")],
+            ),
+            _make_routine(
+                "Leg Day",
+                "r3",
+                [_make_routine_exercise("3", "Squat")],
+            ),
+        ]
+        workouts = [
+            CompletedWorkout(
+                id="w1",
+                title="Push Day",
+                start_time="2026-08-04T10:00:00Z",
+                exercises=[_make_workout_exercise("1", "Bench Press", 100, 5)],
+            ),
+            CompletedWorkout(
+                id="w2",
+                title="Pull Day",
+                start_time="2026-08-03T10:00:00Z",
+                exercises=[_make_workout_exercise("2", "Deadlift", 140, 5)],
+            ),
+        ]
+        data = HevyTrainingData(
+            username="test_user",
+            workout_count=50,
+            exercise_templates=templates,
+            routines=routines,
+            recent_workouts=workouts,
+        )
+    
+        prog = infer_programme(data)
+        assert prog.split_type == "push_pull_legs"
+        assert len(prog.training_days) == 3
+        assert prog.training_days[0].title == "Push Day"
+>       assert prog.sessions_per_week > 0
+E       AssertionError: assert 0.0 > 0
+E        +  where 0.0 = InferredProgramme(training_days=[TrainingDay(title='Push Day', routine_id='r1', primary_muscles=['chest', 'triceps'], ... superset_id=None, target_weight_kg=None, target_reps=None, target_rep_range=None, set_targets=[])], exercise_count=1)).sessions_per_week
+
+backend/tests/test_programme_inference.py:296: AssertionError
+_________ test_programme_builder_returns_hevy_source_without_templates _________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-2/test_programme_builder_returns0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f778cef4c90>
+
+    def test_programme_builder_returns_hevy_source_without_templates(
+        tmp_path: Any,
+        monkeypatch: Any,
+    ) -> None:
+        client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    
+>       response = client.get("/api/programmes")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_webapp_programmes.py:148: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:483: in get
+    return super().get(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1113: in get
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f778ceb6990>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+_________________ test_preview_activation_and_plan_round_trip __________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-2/test_preview_activation_and_pl0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f778ce59a20>
+
+    def test_preview_activation_and_plan_round_trip(
+        tmp_path: Any,
+        monkeypatch: Any,
+    ) -> None:
+        client, _app_module, db_file = _client(tmp_path, monkeypatch)
+    
+>       before = client.get("/api/dashboard")
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_webapp_programmes.py:167: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:483: in get
+    return super().get(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1113: in get
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788f67750>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+________________ test_activation_rejects_changed_preview_token _________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-2/test_activation_rejects_change0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7783367c40>
+
+    def test_activation_rejects_changed_preview_token(
+        tmp_path: Any,
+        monkeypatch: Any,
+    ) -> None:
+        client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    
+>       response = client.post(
+            "/api/programmes/activate",
+            json={**_payload(), "preview_token": "0" * 64},
+        )
+
+backend/tests/test_webapp_programmes.py:215: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:556: in post
+    return super().post(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1204: in post
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7789011310>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+________________ test_static_template_compatibility_key_is_gone ________________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-2/test_static_template_compatibi0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f778333fbd0>
+
+    def test_static_template_compatibility_key_is_gone(
+        tmp_path: Any,
+        monkeypatch: Any,
+    ) -> None:
+        client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    
+>       response = client.post(
+            "/api/programmes/select",
+            json={"template_key": "hybrid_powerbuilding"},
+        )
+
+backend/tests/test_webapp_programmes.py:228: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:556: in post
+    return super().post(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1204: in post
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788f64910>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+__________ test_disconnected_builder_does_not_return_static_fallback ___________
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-2/test_disconnected_builder_does0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f7783389b00>
+
+    def test_disconnected_builder_does_not_return_static_fallback(
+        tmp_path: Any,
+        monkeypatch: Any,
+    ) -> None:
+        client, app_module, _db_file = _client(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            app_module,
+            "get_user_api_keys",
+            lambda *args, **kwargs: {},
+        )
+    
+>       response = client.get("/api/programmes")
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_webapp_programmes.py:247: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:483: in get
+    return super().get(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1113: in get
+    return self.request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:455: in request
+    return super().request(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:797: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:980: in send
+    response = self._send_handling_auth(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1008: in _send_handling_auth
+    response = self._send_handling_redirects(
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1043: in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/httpx2/_client.py:1076: in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:354: in handle_request
+    raise exc
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/testclient.py:351: in handle_request
+    portal.call(self.app, scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:338: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+           ^^^^^^^^^^^^^^^^^^^
+/usr/lib/python3.13/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/anyio/from_thread.py:263: in _call_func
+    retval = await retval_or_awaitable
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/cache_security.py:152: in _guarded_fastapi_call
+    await original(app, scope, receive, guarded_send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1163: in __call__
+    await super().__call__(scope, receive, send)
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/starlette/applications.py:95: in __call__
+    self.middleware_stack = self.build_middleware_stack()
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+backend/webapp/auth_boundary.py:173: in guarded_build_middleware_stack
+    return original(self)
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <fastapi.applications.FastAPI object at 0x7f7788fc2d50>
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Duplicate/override from Starlette to add AsyncExitStackMiddleware
+        # inside of ExceptionMiddleware, inside of custom user middlewares
+        debug = self.debug
+        error_handler = None
+        exception_handlers: dict[Any, ExceptionHandler] = {}
+    
+        for key, value in self.exception_handlers.items():
+            if key in (500, Exception):
+                error_handler = value
+            else:
+                exception_handlers[key] = value
+    
+        middleware = (
+            [Middleware(ServerErrorMiddleware, handler=error_handler, debug=debug)]
+            + self.user_middleware
+            + [
+                Middleware(
+                    ExceptionMiddleware,
+                    handlers=exception_handlers,
+                    debug=debug,
+                ),
+                # Add FastAPI-specific AsyncExitStackMiddleware for closing files.
+                # Before this was also used for closing dependencies with yield but
+                # those now have their own AsyncExitStack, to properly support
+                # streaming responses while keeping compatibility with the previous
+                # versions (as of writing 0.117.1) that allowed doing
+                # except HTTPException inside a dependency with yield.
+                # This needs to happen after user middlewares because those create a
+                # new contextvars context copy by using a new AnyIO task group.
+                # This AsyncExitStack preserves the context for contextvars, not
+                # strictly necessary for closing files but it was one of the original
+                # intentions.
+                # If the AsyncExitStack lived outside of the custom middlewares and
+                # contextvars were set, for example in a dependency with 'yield'
+                # in that internal contextvars context, the values would not be
+                # available in the outer context of the AsyncExitStack.
+                # By placing the middleware and the AsyncExitStack here, inside all
+                # user middlewares, the same context is used.
+                # This is currently not needed, only for closing files, but used to be
+                # important when dependencies with yield were closed here.
+                Middleware(AsyncExitStackMiddleware),
+            ]
+        )
+    
+        app = self.router
+        for cls, args, kwargs in reversed(middleware):
+>           app = cls(app, *args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+E           TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+
+/var/lib/repo-factory/workout-agent/repository/.venv/lib/python3.13/site-packages/fastapi/applications.py:1067: TypeError
+=============================== warnings summary ===============================
+backend/tests/test_ai_provider.py::test_get_provider_gemini_default_model
+  /mnt/HC_Volume_106574422/repo-factory/workout-agent/worktrees/issue-740/backend/ai_provider.py:45: FutureWarning: 
+  
+  All support for the `google.generativeai` package has ended. It will no longer be receiving 
+  updates or bug fixes. Please switch to the `google.genai` package as soon as possible.
+  See README for more details:
+  
+  https://github.com/google-gemini/deprecated-generative-ai-python/blob/main/README.md
+  
+    import google.generativeai as genai
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED backend/tests/test_anonymous_access_routes.py::test_every_personalised_route_fails_closed_when_logged_out - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_anonymous_access_routes.py::test_future_personalised_suffix_route_fails_closed - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_mutation_security.py::test_real_application_has_no_anonymous_mutation_escape_hatch - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_notifications_api.py::test_get_notifications_empty - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_notifications_api.py::test_get_notifications_with_items - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_notifications_api.py::test_mark_notification_read_api - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_notifications_api.py::test_mark_all_read_and_clear_api - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_notifications_api.py::test_test_coach_notification_endpoint - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_programme_inference.py::test_infer_programme_full_flow - AssertionError: assert 0.0 > 0
+ +  where 0.0 = InferredProgramme(training_days=[TrainingDay(title='Push Day', routine_id='r1', primary_muscles=['chest', 'triceps'], ... superset_id=None, target_weight_kg=None, target_reps=None, target_rep_range=None, set_targets=[])], exercise_count=1)).sessions_per_week
+FAILED backend/tests/test_webapp_programmes.py::test_programme_builder_returns_hevy_source_without_templates - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_webapp_programmes.py::test_preview_activation_and_plan_round_trip - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_webapp_programmes.py::test_activation_rejects_changed_preview_token - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_webapp_programmes.py::test_static_template_compatibility_key_is_gone - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+FAILED backend/tests/test_webapp_programmes.py::test_disconnected_builder_does_not_return_static_fallback - TypeError: CSRFMiddleware.__init__() missing 2 required keyword-only arguments: 'db_path' and 'session_secret'
+============ 14 failed, 789 passed, 36 skipped, 1 warning in 36.00s ============

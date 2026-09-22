@@ -105,13 +105,14 @@ from program import (
 )
 from webapp import ai_widgets, charts
 
+
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
 
 @lru_cache(maxsize=1)
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
-    user_id = request.session.get("user_id") if hasattr(request, "session") else None
+    user_id = _check_api_auth(request) if hasattr(request, "session") else None
     return resolve_provider(
         user_id=user_id,
         fallback_api_key=config.gemini_api_key,
@@ -271,7 +272,7 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
                     "/login/google",
                     "/logout",
                     "/auth",
-                    "/google-health/callback",
+                    
                     "/favicon.ico",
                     "/sw.js",
                 ]
@@ -614,7 +615,7 @@ def _dashboard_context(
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
     }
 
 
@@ -911,7 +912,7 @@ def _load_hevy_training_for_user(
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
@@ -944,7 +945,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
@@ -965,13 +966,13 @@ def project_peak(request: Request) -> dict[str, Any]:
 
 @app.get("/api/chat/history")
 def chat_history(request: Request):
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request):
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
 
@@ -979,16 +980,16 @@ def chat_clear(request: Request):
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
     biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
 
     context = json.dumps(
         {
@@ -1065,7 +1066,7 @@ def _gh_redirect_uri(request: Request) -> str:
 async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -1103,7 +1104,7 @@ async def save_api_key(request: Request) -> dict[str, str]:
 async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -1120,7 +1121,7 @@ async def remove_api_key(request: Request) -> dict[str, str]:
 async def verify_hevy_key(request: Request) -> dict[str, Any]:
     """Test a Hevy API key by calling /v1/workouts/count."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -1144,7 +1145,7 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
 async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -1167,7 +1168,7 @@ async def save_preferences(request: Request) -> dict[str, str]:
 async def save_push_subscription_route(request: Request) -> dict[str, str]:
     """Save a push subscription for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
@@ -1192,7 +1193,7 @@ def google_health_connect(request: Request) -> RedirectResponse:
     _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     state = secrets.token_urlsafe(16)
     set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
     url = build_authorize_url(
@@ -1210,7 +1211,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
@@ -1233,7 +1234,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
@@ -1425,7 +1426,11 @@ def api_stats(request: Request):
 def api_history(request: Request):
     user_id = _check_api_auth(request)
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    return JSONResponse(jsonable_encoder({"logs": logs}))
+    levels = _training_levels(user_id=user_id)
+    return JSONResponse(jsonable_encoder({
+        "logs": logs,
+        "calendar": charts.calendar_heatmap(levels)
+    }))
 
 
 @app.get("/api/plan")
