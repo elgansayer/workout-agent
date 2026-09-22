@@ -1555,6 +1555,19 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
         ).fetchall()
         assert ("users", "user_id", "id") in daily_log_foreign_keys
 
+        daily_log_indexes = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'index' AND tbl_name = 'daily_log'",
+            ).fetchall()
+        }
+        assert {
+            "idx_daily_log_date",
+            "idx_daily_log_date_id",
+            "idx_daily_log_user_date",
+        } <= daily_log_indexes
+
 
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
     db = _db(tmp_path)

@@ -419,6 +419,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_daily_log_user_date "
             "ON daily_log (user_id, date DESC, id DESC)"
         )
+        # Recreate the date-only indexes after the legacy-table rebuild. SQLite
+        # drops indexes owned by the replaced table, and these are initially
+        # created before the migration block above.
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_date_id "
+            "ON daily_log (date DESC, id DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log (date)"
+        )
 
         cursor.execute(
             """
