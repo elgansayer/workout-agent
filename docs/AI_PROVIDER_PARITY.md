@@ -2,7 +2,7 @@
 
 Audit date: 2026-09-18  
 Tracking issue: #737  
-Comparison baseline: `main` at `cf55e30f5230f8159ec58892ba14cc6abcb8617b` on 2026-09-11
+Comparison baseline: `main` at `cf55e30f3565927d764165b21decb3327b10698a` on 2026-09-11
 
 ## Result
 
