@@ -48,6 +48,8 @@ A call site counts as migrated only when the acting user is carried into the can
 
 Both `Dockerfile` and `Dockerfile.web` install `backend/requirements.txt`. Import checks run against the repository virtual environment. The production Portainer definition supplies the same mandatory `ENCRYPTION_KEY` to both services so the agent can decrypt credentials saved by the web service; an environment Gemini key is now only an optional fallback.
 
+The legacy Gemini SDK resolves clients lazily from process-global configuration. The Gemini adapter serialises configuration and generation so concurrent users cannot bind a request to another tenant's API-key client.
+
 ## Settings parity
 
 The Angular Settings page renders the provider list and default model placeholders returned by `GET /api/settings`; neither layer keeps a second hardcoded provider list. The API response is derived from `available_providers()`, returns only masked credential status, and includes non-secret model metadata. Saving preferences persists both the selected provider and its current model. Request-time provider resolution is deliberately uncached so credential and preference changes take effect without a process restart.

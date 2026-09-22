@@ -9,6 +9,7 @@ sites should resolve a user's chosen provider before calling ``generate()``.
 from __future__ import annotations
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
@@ -41,24 +42,38 @@ class AIProvider(ABC):
 class GeminiProvider(AIProvider):
     """Google Gemini via the ``google-generativeai`` SDK."""
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
-        import google.generativeai as genai
+    _configuration_lock = threading.RLock()
 
-        genai.configure(api_key=api_key)
-        self._model = genai.GenerativeModel(model)
+    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+        import google.generativeai as genai  # type: ignore[import-untyped]
+
+        self._genai = genai
+        self._api_key = api_key
+        with self._configuration_lock:
+            genai.configure(api_key=api_key)
+            self._model = genai.GenerativeModel(model)
         self._model_name = model
 
     def generate(self, prompt: str, *, stream: bool = False) -> str | Iterator[str]:
         if stream:
             return self._stream(prompt)
-        response = self._model.generate_content(prompt)
+        # google-generativeai resolves a model's client lazily from process-global
+        # configuration. Keep configuration and first use atomic so concurrent
+        # tenants cannot bind a model to another user's API-key client.
+        with self._configuration_lock:
+            self._genai.configure(api_key=self._api_key)
+            response = self._model.generate_content(prompt)
         return (response.text or "").strip()
 
     def _stream(self, prompt: str) -> Iterator[str]:
-        response = self._model.generate_content(prompt, stream=True)
-        for chunk in response:
-            if chunk.text:
-                yield chunk.text
+        # Hold the lock for the stream lifetime because the SDK uses global
+        # configuration when creating its default client.
+        with self._configuration_lock:
+            self._genai.configure(api_key=self._api_key)
+            response = self._model.generate_content(prompt, stream=True)
+            for chunk in response:
+                if chunk.text:
+                    yield chunk.text
 
     def name(self) -> str:
         return f"Gemini ({self._model_name})"

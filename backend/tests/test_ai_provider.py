@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -25,6 +26,33 @@ def test_get_provider_gemini_default_model():
     provider = get_provider("gemini", "fake-key")
     assert isinstance(provider, GeminiProvider)
     assert "gemini" in provider.name().lower()
+
+
+def test_gemini_provider_keeps_api_keys_isolated_between_users():
+    """Lazy SDK clients must bind to the provider owner's key, not the last key."""
+    import google.generativeai as genai
+
+    active_configuration: dict[str, str] = {}
+
+    class _LazyModel:
+        def __init__(self, model: str) -> None:
+            self.model = model
+
+        def generate_content(self, prompt: str, *, stream: bool = False):
+            assert stream is False
+            return SimpleNamespace(text=active_configuration["api_key"])
+
+    def _configure(*, api_key: str) -> None:
+        active_configuration["api_key"] = api_key
+
+    with (
+        patch.object(genai, "configure", _configure),
+        patch.object(genai, "GenerativeModel", _LazyModel),
+    ):
+        first_user = GeminiProvider("tenant-a-key")
+        GeminiProvider("tenant-b-key")
+
+        assert first_user.generate("prompt") == "tenant-a-key"
 
 
 def test_get_provider_openai_custom_model():
