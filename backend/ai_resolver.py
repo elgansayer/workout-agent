@@ -68,7 +68,7 @@ def resolve_provider(
                 "Add a key in Settings -> AI Providers.",
             )
         api_key = server_gemini_key
-    if model is None:
+    if model is None and provider_name == "gemini":
         model = server_gemini_model
 
     if not api_key:

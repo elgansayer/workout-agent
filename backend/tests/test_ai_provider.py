@@ -290,6 +290,22 @@ def test_resolve_provider_preference_model_wins_over_stale_key_metadata():
     assert "gpt-stale" not in provider.name()
 
 
+@pytest.mark.parametrize("provider_name", ["claude", "openai", "deepseek"])
+def test_non_gemini_provider_does_not_inherit_server_gemini_model(provider_name: str):
+    with (
+        patch("database.get_user_preferences", return_value={"preferred_ai": provider_name}),
+        patch("database.get_user_api_key", return_value={"api_key": "synthetic-user-key"}),
+        patch("ai_resolver.get_provider") as factory,
+    ):
+        resolve_provider(
+            user_id="synthetic-user",
+            server_gemini_key="synthetic-server-key",
+            server_gemini_model="gemini-server-model",
+        )
+
+    factory.assert_called_once_with(provider_name, api_key="synthetic-user-key", model=None)
+
+
 def test_available_providers_is_a_projection_of_registry():
     providers = available_providers()
 
