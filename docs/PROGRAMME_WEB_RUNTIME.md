@@ -26,10 +26,10 @@ but not ingested, sync history in Settings; refreshing the dashboard reads the
 database but does not perform a provider sync. With no synced completion the
 first routine remains next, with an explicit explanation.
 
-The wider #976 work remains open: scheduled coaching still has legacy static
-programme consumers, and durable exposure/adaptation records and full calendar
-scheduling are not implemented by this change. The screen deliberately labels
-the result "Next workout" rather than claiming a mandatory workout today.
+The wider #976 programme improvements continue incrementally: scheduled coaching
+retains its transitional paths, while durable exposure/adaptation records and
+calendar scheduling are deferred to future dedicated slices. The screen displays
+the result as "Next workout" rather than claiming a mandatory workout today.
 
 Verification includes synthetic tests for completion order, duplicate syncs,
 missed days, renamed routines, ambiguous matches, current-block targets,
