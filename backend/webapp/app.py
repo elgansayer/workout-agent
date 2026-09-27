@@ -30,11 +30,24 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 import analytics
 import insights
 import lifestyle
 from ai_provider import AIProvider, resolve_provider
-from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -85,16 +98,6 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
@@ -102,10 +105,6 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
-from programme_runtime import local_today, resolve_programme_runtime
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
 from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
@@ -469,6 +468,7 @@ def _dashboard_context(
     user_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a dashboard from the active Hevy programme, or a setup state."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
     user = get_user_by_id(user_id, DB_PATH) if user_id else None
     timezone_name = (user.get("timezone") if user else None) or "UTC"
@@ -1434,6 +1434,7 @@ def api_history(request: Request):
 @app.get("/api/plan")
 def api_plan(request: Request) -> JSONResponse:
     """Render only an activated Hevy-native programme; never a static fallback."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)

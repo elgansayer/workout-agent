@@ -263,7 +263,7 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
 ) -> None:
     from dynamic_programme import ProgrammePreviewRequest, build_programme_preview
 
-    client, app_module, db_file = _client(tmp_path, monkeypatch)
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
     user_id = database.get_legacy_user_id(db_file)
     definition = build_programme_preview(
         _training_data(),
@@ -274,7 +274,7 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     )
     second_block = definition["blocks"][1]
     today = date(2026, 9, 1) + timedelta(weeks=second_block["start_week"] - 1)
-    monkeypatch.setattr(app_module, "local_today", lambda timezone_name: today)
+    monkeypatch.setattr("programme_runtime.local_today", lambda timezone_name: today)
     database.save_workout(
         {
             "id": "synthetic-completion",
