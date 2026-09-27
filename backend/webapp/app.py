@@ -71,9 +71,11 @@ from database import (
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
+    get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
     get_user_api_keys,
+    get_user_by_id,
     get_user_preferences,
     init_db,
     mark_all_notifications_read,
@@ -466,14 +468,24 @@ def _dashboard_context(
     user_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a dashboard from the active Hevy programme, or a setup state."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
-    today = today or datetime.now(tz=timezone.utc).date()
+    user = get_user_by_id(user_id, DB_PATH) if user_id else None
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    today = today or local_today(timezone_name)
     active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
     definition = active.get("definition") if active else None
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
-    setup_required = not bool(definition)
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id)
+        if user_id else [],
+        today=today,
+        timezone_name=timezone_name,
+    )
+    setup_required = runtime.status == "setup_required"
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
     current_day_number: int | None = None
@@ -491,36 +503,18 @@ def _dashboard_context(
         "progression": "",
     }
 
-    if definition:
-        spec = definition.get("programme_spec") or {}
-        cycle_weeks = int(
-            spec.get("duration_weeks") or definition.get("cycle_weeks") or 1
-        )
-        try:
-            start = date.fromisoformat(
-                str(
-                    spec.get("start_date")
-                    or get_programme_start_date(DB_PATH, user_id=user_id)
-                )
-            )
-        except ValueError:
-            start = get_programme_start_date(DB_PATH, user_id=user_id)
-        elapsed_days = max(0, (today - start).days)
-        week = min(cycle_weeks, elapsed_days // 7 + 1)
-
-        for candidate in definition.get("blocks", []):
-            start_week = int(candidate.get("start_week") or 1)
-            end_week = int(candidate.get("end_week") or start_week)
-            if start_week <= week <= end_week:
-                block = dict(candidate)
-                block_weeks = max(1, end_week - start_week + 1)
-                week_in_block = week - start_week + 1
-                break
-
-        days = definition.get("days") or []
-        if days:
-            current_day_number = elapsed_days % len(days) + 1
-            active_day = days[current_day_number - 1]
+    if not setup_required:
+        cycle_weeks = runtime.cycle_weeks
+        week = runtime.week
+        if runtime.block:
+            block = runtime.block
+            start_week = int(block.get("start_week") or 1)
+            end_week = int(block.get("end_week") or start_week)
+            block_weeks = max(1, end_week - start_week + 1)
+            week_in_block = week - start_week + 1
+        active_day = runtime.next_day
+        if active_day:
+            current_day_number = int(active_day.get("number") or 1)
             focus = str(active_day.get("focus") or "Training")
             is_rest_day = False
             for exercise in active_day.get("exercises", []):
@@ -540,6 +534,11 @@ def _dashboard_context(
                         "role": exercise.get("role"),
                     }
                 )
+        else:
+            focus = (
+                "Programme review" if runtime.status == "needs_review"
+                else runtime.status.replace("_", " ").capitalize()
+            )
 
     metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
@@ -579,6 +578,10 @@ def _dashboard_context(
 
     return {
         "active": "today",
+        "programme_status": runtime.status,
+        "rotation_message": runtime.message,
+        "last_completed_at": runtime.last_completed_at,
+        "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
         "setup_required": setup_required,
         "active_programme_name": (definition.get("name") if definition else None),
         "quote": _daily_quote(today),
@@ -1431,6 +1434,7 @@ def api_history(request: Request):
 @app.get("/api/plan")
 def api_plan(request: Request) -> JSONResponse:
     """Render only an activated Hevy-native programme; never a static fallback."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
@@ -1463,29 +1467,18 @@ def api_plan(request: Request) -> JSONResponse:
         )
 
     spec = definition.get("programme_spec") or {}
-    cycle_weeks = max(
-        1,
-        int(spec.get("duration_weeks") or definition.get("cycle_weeks") or 1),
+    user = get_user_by_id(user_id, DB_PATH)
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
+        today=local_today(timezone_name),
+        timezone_name=timezone_name,
     )
-    try:
-        start_date = date.fromisoformat(str(spec.get("start_date")))
-    except (TypeError, ValueError):
-        start_date = get_programme_start_date(DB_PATH, user_id=user_id)
-
-    today = datetime.now(tz=timezone.utc).date()
-    elapsed_days = max(0, (today - start_date).days)
-    week = min(cycle_weeks, elapsed_days // 7 + 1)
-
-    blocks: list[dict[str, Any]] = []
-    current_block: dict[str, Any] | None = None
-    for raw_block in definition.get("blocks") or []:
-        block = dict(raw_block)
-        start_week = int(block.get("start_week") or 1)
-        end_week = int(block.get("end_week") or start_week)
-        block["is_current"] = start_week <= week <= end_week
-        if block["is_current"]:
-            current_block = block
-        blocks.append(block)
+    cycle_weeks = runtime.cycle_weeks
+    week = runtime.week
+    blocks = runtime.blocks
+    current_block = runtime.block
 
     return JSONResponse(
         jsonable_encoder(
@@ -1503,7 +1496,10 @@ def api_plan(request: Request) -> JSONResponse:
                 "cycle_weeks": cycle_weeks,
                 "current_block": (current_block.get("name") if current_block else None),
                 "blocks": blocks,
-                "days": definition.get("days") or [],
+                "days": runtime.days,
+                "programme_status": runtime.status,
+                "rotation_message": runtime.message,
+                "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
