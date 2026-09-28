@@ -1,7 +1,8 @@
 name: Retired Auto Dispatcher
 
-# GitHub-hosted issue dispatch is retired. Repo Factory and OpenHands Agent
-# Canvas on the VPS exclusively own issue selection and task dispatch.
+# Issue selection and dispatch belong to the OpenHands control plane on the
+# VPS. This inert record cannot claim issues, create branches, or dispatch an
+# autonomous GitHub-hosted coding agent.
 on:
   workflow_dispatch:
 
@@ -12,4 +13,4 @@ jobs:
   retired:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "The GitHub-hosted auto-dispatcher is retired; no task was dispatched."
+      - run: echo "The GitHub-hosted auto-dispatcher is retired; no work was dispatched."

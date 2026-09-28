@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
 
-from ai_provider import resolve_provider
+from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
@@ -84,12 +84,25 @@ def _seed_baseline_if_missing(
     *,
     user_id: str | None = None,
 ) -> None:
-    """Initialise check-in tracking the first time we ever see this account."""
-    if get_meta(_KEY_NUMBER, config.database_path) is None:
-        set_meta(_KEY_NUMBER, "0", config.database_path)
-        set_meta(_KEY_LAST_DATE, datetime.now(tz=timezone.utc).date().isoformat(), config.database_path)
-    if total_count is not None and get_meta(_KEY_LAST_COUNT, config.database_path) is None:
-        set_meta(_KEY_LAST_COUNT, str(total_count), config.database_path)
+    """Initialise check-in tracking for only the acting user."""
+    if get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) is None:
+        set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
+        set_meta(
+            _KEY_LAST_DATE,
+            datetime.now(tz=timezone.utc).date().isoformat(),
+            config.database_path,
+            user_id=user_id,
+        )
+    if (
+        total_count is not None
+        and get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id) is None
+    ):
+        set_meta(
+            _KEY_LAST_COUNT,
+            str(total_count),
+            config.database_path,
+            user_id=user_id,
+        )
 
 
 def due(
@@ -257,14 +270,21 @@ def _fallback_message(
     return "\n".join(lines)
 
 
-def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block, *, user_id: str | None = None) -> str:
-    """Build the check-in message from logged data versus the plan."""
+def run_checkin(
+    config: Config,
+    due_info: CheckinDue,
+    week: int,
+    block: Block,
+    *,
+    user_id: str | None = None,
+) -> str:
+    """Build the acting user's check-in with their selected AI provider."""
     reviews = _analyse(config, block, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
-        user_id=None,
-        fallback_api_key=config.gemini_api_key,
-        fallback_model=config.gemini_model,
+        user_id=user_id,
+        server_gemini_key=config.gemini_api_key,
+        server_gemini_model=config.gemini_model,
         db_path=config.database_path,
     )
     return generate_checkin_message(
@@ -276,20 +296,32 @@ def run_checkin(config: Config, due_info: CheckinDue, week: int, block: Block, *
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),
         fallback=fallback,
-        server_gemini_key=config.gemini_api_key,
-        server_gemini_model=config.gemini_model,
-        db_path=config.database_path,
     )
 
 
 def record(
-    config: Config, due_info: CheckinDue, message: str, today: date | None = None, *, user_id: str | None = None
+    config: Config,
+    due_info: CheckinDue,
+    message: str,
+    today: date | None = None,
+    *,
+    user_id: str | None = None,
 ) -> None:
-    """Persist the completed check-in and reset the tracking baseline."""
+    """Persist the completed check-in and reset this user's tracking baseline."""
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
-    set_meta(_KEY_NUMBER, str(due_info.number), config.database_path)
-    set_meta(_KEY_LAST_DATE, today.isoformat(), config.database_path)
+    set_meta(
+        _KEY_NUMBER,
+        str(due_info.number),
+        config.database_path,
+        user_id=user_id,
+    )
+    set_meta(
+        _KEY_LAST_DATE,
+        today.isoformat(),
+        config.database_path,
+        user_id=user_id,
+    )
     if due_info.total_count is not None:
         set_meta(
             _KEY_LAST_COUNT,

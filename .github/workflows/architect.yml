@@ -1,7 +1,8 @@
 name: Retired Architect Agent
 
-# GitHub-hosted architecture work is retired. Repo Factory and OpenHands Agent
-# Canvas on the VPS own issue-scoped implementation and product decisions.
+# Architecture planning belongs to the OpenHands control plane on the VPS.
+# This inert record remains only to prevent the retired GitHub-hosted agent
+# from being recreated with autonomous triggers or repository write access.
 on:
   workflow_dispatch:
 
@@ -12,4 +13,4 @@ jobs:
   retired:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "The GitHub-hosted architect agent is retired; no changes were made."
+      - run: echo "The GitHub-hosted architect agent is retired; no plans were authored."

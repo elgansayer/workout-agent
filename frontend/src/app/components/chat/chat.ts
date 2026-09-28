@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { environment } from '../../../environments/environment';
 
 @Component({
   selector: 'app-chat',
@@ -21,6 +22,7 @@ export class Chat implements OnInit {
   userInput = '';
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
+  error = signal<string | null>(null);
   private abortController: AbortController | null = null;
 
   ngOnInit() {
@@ -57,6 +59,7 @@ export class Chat implements OnInit {
     this.userInput = '';
     this.isStreaming.set(true);
     this.currentStreamText.set('');
+    this.error.set(null);
 
     const userMsg = { role: 'user', content: query, created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) };
     this.messages.set([...this.messages(), userMsg]);
@@ -65,18 +68,26 @@ export class Chat implements OnInit {
     this.abortController = new AbortController();
 
     try {
-      const response = await fetch(`/api/rag_search?q=${encodeURIComponent(query)}`, {
-        signal: this.abortController.signal
+      const baseUrl = environment.apiUrl.replace(/\/$/, '');
+      const response = await fetch(`${baseUrl}/api/rag_search?q=${encodeURIComponent(query)}`, {
+        signal: this.abortController.signal,
+        credentials: 'include',
+        cache: 'no-store'
       });
 
       if (!response.ok) {
-        this.messages.set([
-          ...this.messages(),
-          { role: 'assistant', content: 'Sorry, I encountered an error connecting to Coach. Please try again.' }
-        ]);
-        this.isStreaming.set(false);
-        this.scrollToBottom();
-        return;
+        const payload = await response.json().catch(() => null);
+        const message = response.status === 401
+          ? 'Your session has expired. Sign in again to use Coach.'
+          : response.status === 429
+            ? 'Too many requests. Wait a minute, then try again.'
+            : typeof payload?.detail === 'string'
+              ? payload.detail
+              : 'Coach could not connect. Check your AI provider in Settings and try again.';
+        throw new Error(message);
+      }
+      if (!response.headers.get('content-type')?.startsWith('text/plain')) {
+        throw new Error('Coach returned an unexpected response. Sign in again and try once more.');
       }
 
       const reader = response.body?.getReader();
@@ -94,6 +105,10 @@ export class Chat implements OnInit {
         }
       }
 
+      fullText += decoder.decode();
+      if (!fullText.trim()) {
+        throw new Error('Coach returned no response. Check your AI provider in Settings and try again.');
+      }
       this.messages.set([
         ...this.messages(),
         {
@@ -104,10 +119,8 @@ export class Chat implements OnInit {
       ]);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
-        this.messages.set([
-          ...this.messages(),
-          { role: 'assistant', content: 'Sorry, something went wrong while streaming the response.' }
-        ]);
+        this.error.set(err instanceof Error ? err.message : 'Could not reach Coach. Try again.');
+        if (!this.userInput) this.userInput = query;
       }
     } finally {
       this.isStreaming.set(false);

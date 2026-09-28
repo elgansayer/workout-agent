@@ -9,8 +9,8 @@
             <div>
                 <h1 class="chat-title">Coach</h1>
                 <div class="chat-status">
-                    <span class="status-dot" [class.online]="!isStreaming()" [class.thinking]="isStreaming()"></span>
-                    <span class="status-text">{{ isStreaming() ? 'Responding...' : 'Online · Trained on your data' }}</span>
+                    <span class="status-dot" [class.thinking]="isStreaming()"></span>
+                    <span class="status-text" role="status">{{ isStreaming() ? 'Responding...' : error() ? 'Could not connect' : 'Ask about your training' }}</span>
                 </div>
             </div>
         </div>
@@ -108,9 +108,13 @@
     </div>
 
     <div class="chat-input-area">
+        @if (error()) {
+            <p role="alert">{{ error() }} <a href="/settings">Open Settings</a></p>
+        }
         <div class="chat-input-wrap">
             <textarea
                 id="chat-input"
+                aria-label="Message Coach"
                 class="chat-textarea"
                 [(ngModel)]="userInput"
                 (keydown)="onKeyDown($event)"

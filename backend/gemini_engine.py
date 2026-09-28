@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
@@ -18,14 +18,6 @@ from program import (
     day_focus,
     format_day,
 )
-
-if TYPE_CHECKING:
-    from ai_provider import AIProvider
-
-try:
-    from weather import WeatherConditions
-except ImportError:
-    WeatherConditions = Any  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +140,7 @@ def generate_next_workout(
 
     Args:
         provider: A resolved AI provider instance from
-            :func:`ai_provider.resolve_provider`.
+            :func:`ai_resolver.resolve_provider`.
     """
     try:
         prompt = _build_prompt(
@@ -164,9 +156,9 @@ def generate_next_workout(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty response; using baseline plan.")
+        logger.warning("AI provider returned an empty response; using baseline plan.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Gemini generation failed (%s); using baseline plan.", exc)
+        logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
     return _fallback_plan(day, week, block)
 
@@ -212,16 +204,18 @@ def generate_rest_day_message(
 
     Args:
         provider: A resolved AI provider instance from
-            :func:`ai_provider.resolve_provider`.
+            :func:`ai_resolver.resolve_provider`.
     """
     try:
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty rest-day response; using fallback.")
+        logger.warning(
+            "AI provider returned an empty rest-day response; using fallback."
+        )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Gemini rest-day generation failed (%s); using fallback.", exc)
+        logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
     return _fallback_rest_message()
 
@@ -283,7 +277,7 @@ def generate_checkin_message(
 
     Args:
         provider: A resolved AI provider instance from
-            :func:`ai_provider.resolve_provider`.
+            :func:`ai_resolver.resolve_provider`.
     """
     try:
         prompt = _build_checkin_prompt(
@@ -297,99 +291,8 @@ def generate_checkin_message(
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
-        logger.warning("Gemini returned an empty check-in; using fallback.")
+        logger.warning("AI provider returned an empty check-in; using fallback.")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Gemini check-in generation failed (%s); using fallback.", exc)
+        logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
     return fallback
-
-
-def _build_autonomous_prompt(
-    base_routines: dict[str, list[dict[str, Any]]],
-    hevy_logs: list[dict[str, Any]],
-    weather: WeatherConditions | None,
-    is_catabolic: bool,
-) -> str:
-    routines_json = json.dumps(base_routines, indent=2)
-    # We only send a subset of logs to avoid blowing up context
-    logs_json = json.dumps(hevy_logs[:15], indent=2) if hevy_logs else "[]"
-
-    thermal_text = "None"
-    if weather and weather.is_extreme_heat:
-        thermal_text = f"ACTIVE: {weather.as_text()}. Reduce high-tax compound volume by 10% to account for thermal stress."
-
-    catabolism_text = "None"
-    if is_catabolic:
-        catabolism_text = "ACTIVE: Scale data indicates a sudden, disproportionate drop in muscle mass percentage (catabolic state). Increase the daily protein target calculation (e.g., to 2.5 g/kg) in your thought process and importantly, REDUCE training volume across routines until the trend reverses."
-
-    return f"""You are the backend logic engine for an autonomous powerbuilding programme. Analyse the provided JSON payload containing the user's recent `hevy_logs` and the `base_routines`.
-
-Execute the following autonomous adjustments and output the updated workout templates:
-
-1. Cross-Routine Progression Linker
-Scan for identical `exercise_template_id` values that appear in different weekly routines. If the progression (load or reps) achieved in Routine A exceeds the planned baseline for Routine B, automatically normalise Routine B to match this new, higher baseline. Never let identical exercises lag across different days.
-
-2. Predictive Plateau Detection
-Calculate the progression velocity for all main compound lifts over the last 14 days from the logs. Look for a deceleration in rep or load accumulation. If a lift's progression velocity drops by more than 80% compared to the previous week, preemptively reduce the target working sets by 1 for the upcoming session. Do not wait for a complete failure to prescribe a micro-deload.
-
-3. Workout Density & Rest Auto-Tuner
-Evaluate "workout density" in the logs (total volume vs duration). If you detect performance decayed sharply in recent sessions and the duration was unusually short (rushed rest periods), increase the `rest_seconds` field in the updated JSON by 30-60 seconds to force adequate ATP replenishment.
-
-4. Environmental Thermal Scaling
-{thermal_text}
-
-5. Asymmetric Catabolism Detector
-{catabolism_text}
-
----
-DATA:
-base_routines:
-{routines_json}
-
-hevy_logs (recent):
-{logs_json}
----
-
-Ensure all output uses British English spelling.
-Output ONLY valid JSON representing the updated `base_routines` object. The root should be a JSON object where keys are the routine titles and values are the list of exercise objects.
-Do not wrap it in markdown block quotes. Output raw JSON only."""
-
-
-def apply_autonomous_adjustments(
-    provider: AIProvider,
-    base_routines: dict[str, list[dict[str, Any]]],
-    hevy_logs: list[dict[str, Any]],
-    weather: WeatherConditions | None = None,
-    is_catabolic: bool = False,
-) -> dict[str, list[dict[str, Any]]]:
-    """Applies the unified autonomous progression and returns updated JSON routines.
-
-    Args:
-        provider: A resolved AI provider instance from
-            :func:`ai_provider.resolve_provider`.
-    """
-    try:
-        
-        prompt = _build_autonomous_prompt(
-            base_routines, hevy_logs, weather, is_catabolic
-        )
-        text = str(provider.generate(prompt)).strip()
-
-        # Remove any markdown wrapping if the LLM hallucinated it
-        text = text.strip()
-        if text.startswith("```json"):
-            text = text[7:].strip()
-        if text.startswith("```"):
-            text = text[3:].strip()
-        if text.endswith("```"):
-            text = text[:-3].strip()
-
-        updated = json.loads(text)
-        if isinstance(updated, dict):
-            return updated
-            
-        logger.warning("Gemini autonomous routines did not return a dict; using baseline.")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Gemini autonomous adjustment failed (%s); using baseline routines.", exc)
-
-    return base_routines

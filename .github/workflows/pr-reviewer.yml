@@ -1,7 +1,8 @@
-name: Retired PR Reviewer Agent
+name: Retired Pull Request Reviewer Agent
 
-# GitHub-hosted autonomous review is retired. Review and repair remain on the
-# canonical issue branch under the Repo Factory/OpenHands VPS control plane.
+# Pull-request review automation must remain deterministic; OpenHands handles
+# review feedback through the VPS control plane. This retired workflow cannot
+# review, approve, modify, or merge a pull request.
 on:
   workflow_dispatch:
 
@@ -12,4 +13,4 @@ jobs:
   retired:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "The GitHub-hosted PR reviewer is retired; no review was authored."
+      - run: echo "The GitHub-hosted PR reviewer is retired; no review was submitted."

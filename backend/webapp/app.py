@@ -23,31 +23,18 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
-
-from authlib.integrations.starlette_client import OAuth
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
 import analytics
 import insights
 import lifestyle
-from ai_provider import AIProvider, resolve_provider
+from ai_provider import AIProvider, available_providers
+from ai_resolver import resolve_provider
+from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -71,9 +58,11 @@ from database import (
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
+    get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
     get_user_api_keys,
+    get_user_by_id,
     get_user_preferences,
     init_db,
     mark_all_notifications_read,
@@ -96,6 +85,16 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
@@ -103,20 +102,33 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 from webapp import ai_widgets, charts
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
 
-@lru_cache(maxsize=1)
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
-    user_id = request.session.get("user_id") if hasattr(request, "session") else None
-    return resolve_provider(
-        user_id=user_id,
-        fallback_api_key=config.gemini_api_key,
-        fallback_model=config.gemini_model,
-    )
+    """Resolve the authenticated user's provider without caching credentials."""
+    user_id = _check_api_auth(request)
+    try:
+        return resolve_provider(
+            user_id=user_id,
+            server_gemini_key=config.gemini_api_key,
+            server_gemini_model=config.gemini_model,
+            db_path=DB_PATH,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ImportError as exc:
+        logger.exception("The selected AI provider SDK is unavailable.")
+        raise HTTPException(
+            status_code=503,
+            detail="The selected AI provider is unavailable on this server.",
+        ) from exc
 
 
 def get_config():
@@ -141,6 +153,8 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
     _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
     if len(_RATE_LIMITS[ip]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    _RATE_LIMITS[ip].append(now)
 
 
 WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
@@ -214,7 +228,11 @@ else:
     )  # Local dev
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
-app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST)), name="angular_assets")
+app.mount(
+    "/assets",
+    StaticFiles(directory=str(FRONTEND_DIST), check_dir=False),
+    name="angular_assets",
+)
 
 # Enable CORS for external/remote frontend hosting
 _cors_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
@@ -466,14 +484,24 @@ def _dashboard_context(
     user_id: str | None = None,
 ) -> dict[str, Any]:
     """Build a dashboard from the active Hevy programme, or a setup state."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
-    today = today or datetime.now(tz=timezone.utc).date()
+    user = get_user_by_id(user_id, DB_PATH) if user_id else None
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    today = today or local_today(timezone_name)
     active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
     definition = active.get("definition") if active else None
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
-    setup_required = not bool(definition)
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id)
+        if user_id else [],
+        today=today,
+        timezone_name=timezone_name,
+    )
+    setup_required = runtime.status == "setup_required"
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
     current_day_number: int | None = None
@@ -491,36 +519,18 @@ def _dashboard_context(
         "progression": "",
     }
 
-    if definition:
-        spec = definition.get("programme_spec") or {}
-        cycle_weeks = int(
-            spec.get("duration_weeks") or definition.get("cycle_weeks") or 1
-        )
-        try:
-            start = date.fromisoformat(
-                str(
-                    spec.get("start_date")
-                    or get_programme_start_date(DB_PATH, user_id=user_id)
-                )
-            )
-        except ValueError:
-            start = get_programme_start_date(DB_PATH, user_id=user_id)
-        elapsed_days = max(0, (today - start).days)
-        week = min(cycle_weeks, elapsed_days // 7 + 1)
-
-        for candidate in definition.get("blocks", []):
-            start_week = int(candidate.get("start_week") or 1)
-            end_week = int(candidate.get("end_week") or start_week)
-            if start_week <= week <= end_week:
-                block = dict(candidate)
-                block_weeks = max(1, end_week - start_week + 1)
-                week_in_block = week - start_week + 1
-                break
-
-        days = definition.get("days") or []
-        if days:
-            current_day_number = elapsed_days % len(days) + 1
-            active_day = days[current_day_number - 1]
+    if not setup_required:
+        cycle_weeks = runtime.cycle_weeks
+        week = runtime.week
+        if runtime.block:
+            block = runtime.block
+            start_week = int(block.get("start_week") or 1)
+            end_week = int(block.get("end_week") or start_week)
+            block_weeks = max(1, end_week - start_week + 1)
+            week_in_block = week - start_week + 1
+        active_day = runtime.next_day
+        if active_day:
+            current_day_number = int(active_day.get("number") or 1)
             focus = str(active_day.get("focus") or "Training")
             is_rest_day = False
             for exercise in active_day.get("exercises", []):
@@ -540,6 +550,11 @@ def _dashboard_context(
                         "role": exercise.get("role"),
                     }
                 )
+        else:
+            focus = (
+                "Programme review" if runtime.status == "needs_review"
+                else runtime.status.replace("_", " ").capitalize()
+            )
 
     metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
@@ -579,6 +594,10 @@ def _dashboard_context(
 
     return {
         "active": "today",
+        "programme_status": runtime.status,
+        "rotation_message": runtime.message,
+        "last_completed_at": runtime.last_completed_at,
+        "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
         "setup_required": setup_required,
         "active_programme_name": (definition.get("name") if definition else None),
         "quote": _daily_quote(today),
@@ -623,16 +642,21 @@ def dashboard(request: Request):
     return FileResponse(FRONTEND_DIST / "index.html")
 
 
-
 @app.get("/api/checkins")
 def api_checkins(request: Request):
     user_id = _check_api_auth(request)
     checkins = get_checkins(db_path=DB_PATH, user_id=user_id)
     return JSONResponse(
-        jsonable_encoder({
-            "checkins": checkins,
-            "loading_svg": charts._empty_chart("Check-in cycle in progress", 300, 100) if not checkins else None
-        })
+        jsonable_encoder(
+            {
+                "checkins": checkins,
+                "loading_svg": charts._empty_chart(
+                    "Check-in cycle in progress", 300, 100
+                )
+                if not checkins
+                else None,
+            }
+        )
     )
 
 
@@ -911,7 +935,7 @@ def _load_hevy_training_for_user(
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
@@ -933,8 +957,8 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         response = provider.generate(prompt)
         response_text = response if isinstance(response, str) else "".join(response)
         reasoning = (response_text or "Could not determine reasoning.").strip()
-    except Exception as exc:  # noqa: BLE001
-        logger.error(f"Error in xai_reasoning: {exc}")
+    except Exception:
+        logger.exception("AI reasoning generation failed.")
         reasoning = "Could not determine reasoning."
 
     save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
@@ -944,7 +968,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
@@ -965,13 +989,13 @@ def project_peak(request: Request) -> dict[str, Any]:
 
 @app.get("/api/chat/history")
 def chat_history(request: Request):
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request):
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
     return {"status": "ok"}
 
@@ -979,16 +1003,15 @@ def chat_clear(request: Request):
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
-    user_id = request.session.get("user_id")
+    user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
-    user_id = request.session.get("user_id")
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
     biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH)
+    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
 
     context = json.dumps(
         {
@@ -1013,8 +1036,8 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
-    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in Elgan's training dashboard.
-You have full access to his training logs, body composition data, personal records, and programme history.
+    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+You have access to this user's training logs, body composition data, personal records, and programme history.
 
 Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
@@ -1032,17 +1055,21 @@ User's new message: {q}
 
 Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
 
-    def generate():
+    def generate() -> Iterator[str]:
         collected: list[str] = []
         try:
             response = provider.generate(prompt, stream=True)
-            for chunk in response:
-                if chunk.text:
-                    collected.append(chunk.text)
-                    yield chunk.text
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Error during Gemini streaming: {e}")
-            error_msg = "Sorry, Coach is currently unavailable or encountered an error. Please try again."
+            chunks = (response,) if isinstance(response, str) else response
+            for chunk in chunks:
+                if chunk:
+                    collected.append(chunk)
+                    yield chunk
+        except Exception:
+            logger.exception("AI chat streaming failed.")
+            error_msg = (
+                "Sorry, Coach is currently unavailable or encountered an error. "
+                "Please try again."
+            )
             collected.append(error_msg)
             yield error_msg
         finally:
@@ -1070,32 +1097,50 @@ async def save_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    provider = body.get("provider", "").strip().lower()
-    api_key = body.get("api_key", "").strip()
+    provider_value = body.get("provider")
+    api_key_value = body.get("api_key")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
 
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
 
-    valid_providers = {"hevy", "gemini", "claude", "openai", "deepseek"}
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    ai_provider_ids = set(ai_provider_defaults)
+    valid_providers = {"hevy", *ai_provider_ids}
     if provider not in valid_providers:
         raise HTTPException(
             status_code=400,
-            detail=f"Unknown provider '{provider}'. Use: {', '.join(valid_providers)}",
+            detail=(
+                f"Unknown provider '{provider}'. "
+                f"Use: {', '.join(sorted(valid_providers))}"
+            ),
         )
 
-    # Optional model override for AI providers.
-    extra = {}
-    model = body.get("model", "").strip()
-    if model:
-        extra["model"] = model
+    model_value = body.get("model")
+    if model_value is not None and not isinstance(model_value, str):
+        raise HTTPException(status_code=400, detail="Model must be a string")
+    model = model_value.strip() if isinstance(model_value, str) else ""
+    if len(model) > 200:
+        raise HTTPException(status_code=400, detail="Model is too long")
 
     save_user_api_key(
         user_id,
         provider,
         api_key,
-        extra=extra or None,
+        extra={"model": model} if model else None,
         db_path=DB_PATH,
     )
+    if provider in ai_provider_ids:
+        preferences = get_user_preferences(user_id, DB_PATH)
+        if preferences.get("preferred_ai") == provider:
+            save_user_preferences(
+                user_id,
+                ai_model=model or ai_provider_defaults[provider],
+                db_path=DB_PATH,
+            )
     return {"status": "ok", "provider": provider}
 
 
@@ -1149,14 +1194,41 @@ async def save_preferences(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
+    preferred_ai_value = body.get("preferred_ai")
+    preferred_ai: str | None = None
+    if preferred_ai_value is not None:
+        if not isinstance(preferred_ai_value, str):
+            raise HTTPException(
+                status_code=400,
+                detail="Preferred AI provider must be a string",
+            )
+        preferred_ai = preferred_ai_value.strip().lower()
+        ai_provider_defaults = {
+            item["id"]: item["default_model"] for item in available_providers()
+        }
+        if preferred_ai not in ai_provider_defaults:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown AI provider '{preferred_ai}'.",
+            )
+
+    ai_model_value = body.get("ai_model")
+    if ai_model_value is not None and not isinstance(ai_model_value, str):
+        raise HTTPException(status_code=400, detail="AI model must be a string")
+    ai_model = ai_model_value.strip() if isinstance(ai_model_value, str) else None
+    if ai_model and len(ai_model) > 200:
+        raise HTTPException(status_code=400, detail="AI model is too long")
+    if preferred_ai is not None and not ai_model:
+        ai_model = ai_provider_defaults[preferred_ai]
+
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
         constraints=body.get("constraints"),
         experience_level=body.get("experience_level"),
         coaching_style=body.get("coaching_style"),
-        preferred_ai=body.get("preferred_ai"),
-        ai_model=body.get("ai_model"),
+        preferred_ai=preferred_ai,
+        ai_model=ai_model,
         custom_rules=body.get("custom_rules"),
         db_path=DB_PATH,
     )
@@ -1431,6 +1503,7 @@ def api_history(request: Request):
 @app.get("/api/plan")
 def api_plan(request: Request) -> JSONResponse:
     """Render only an activated Hevy-native programme; never a static fallback."""
+    from programme_runtime import local_today, resolve_programme_runtime
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
@@ -1463,29 +1536,18 @@ def api_plan(request: Request) -> JSONResponse:
         )
 
     spec = definition.get("programme_spec") or {}
-    cycle_weeks = max(
-        1,
-        int(spec.get("duration_weeks") or definition.get("cycle_weeks") or 1),
+    user = get_user_by_id(user_id, DB_PATH)
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
+        today=local_today(timezone_name),
+        timezone_name=timezone_name,
     )
-    try:
-        start_date = date.fromisoformat(str(spec.get("start_date")))
-    except (TypeError, ValueError):
-        start_date = get_programme_start_date(DB_PATH, user_id=user_id)
-
-    today = datetime.now(tz=timezone.utc).date()
-    elapsed_days = max(0, (today - start_date).days)
-    week = min(cycle_weeks, elapsed_days // 7 + 1)
-
-    blocks: list[dict[str, Any]] = []
-    current_block: dict[str, Any] | None = None
-    for raw_block in definition.get("blocks") or []:
-        block = dict(raw_block)
-        start_week = int(block.get("start_week") or 1)
-        end_week = int(block.get("end_week") or start_week)
-        block["is_current"] = start_week <= week <= end_week
-        if block["is_current"]:
-            current_block = block
-        blocks.append(block)
+    cycle_weeks = runtime.cycle_weeks
+    week = runtime.week
+    blocks = runtime.blocks
+    current_block = runtime.block
 
     return JSONResponse(
         jsonable_encoder(
@@ -1503,7 +1565,10 @@ def api_plan(request: Request) -> JSONResponse:
                 "cycle_weeks": cycle_weeks,
                 "current_block": (current_block.get("name") if current_block else None),
                 "blocks": blocks,
-                "days": definition.get("days") or [],
+                "days": runtime.days,
+                "programme_status": runtime.status,
+                "rotation_message": runtime.message,
+                "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
@@ -1579,31 +1644,25 @@ def api_settings(request: Request):
     user_id = _check_api_auth(request)
 
     prefs = get_user_preferences(user_id, DB_PATH)
-    keys = get_user_api_keys(
-        user_id, DB_PATH
-    )  # dict mapping provider_name -> record dict
+    keys = get_user_api_keys(user_id, DB_PATH)
+    ai_providers = available_providers()
 
-    user_keys = {}
-    known_providers = ["hevy", "gemini", "claude", "openai", "deepseek"]
-    for p in known_providers:
-        k_data = keys.get(p, {})
-        key_str = k_data.get("api_key", "")
-        if key_str:
-            masked = f"••••••••{key_str[-4:]}" if len(key_str) >= 4 else "••••••••"
-            user_keys[p] = {"has_key": True, "masked": masked}
-        else:
-            user_keys[p] = {"has_key": False, "masked": None}
+    user_keys: dict[str, dict[str, Any]] = {}
+    known_providers = ["hevy", *[item["id"] for item in ai_providers]]
+    for provider_id in known_providers:
+        key_data = keys.get(provider_id, {})
+        key_value = key_data.get("api_key", "")
+        masked = None
+        if key_value:
+            masked = f"••••••••{key_value[-4:]}" if len(key_value) >= 4 else "••••••••"
 
-    ai_providers = [
-        {"id": "gemini", "name": "Google Gemini", "default_model": "gemini-2.5-flash"},
-        {
-            "id": "claude",
-            "name": "Anthropic Claude",
-            "default_model": "claude-3-5-sonnet-20241022",
-        },
-        {"id": "openai", "name": "OpenAI", "default_model": "gpt-4o"},
-        {"id": "deepseek", "name": "DeepSeek", "default_model": "deepseek-chat"},
-    ]
+        extra = key_data.get("extra")
+        configured_model = extra.get("model") if isinstance(extra, dict) else None
+        user_keys[provider_id] = {
+            "has_key": bool(key_value),
+            "masked": masked,
+            "model": configured_model,
+        }
 
     gh_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id))
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
@@ -1617,15 +1676,19 @@ def api_settings(request: Request):
             status = connector.status(ctx)
             if status.state == "pending":
                 continue
-            connectors_info.append({
-                "provider": connector.provider,
-                "name": connector.provider.title().replace("_", " "),
-                "state": status.state,
-                "message": status.message,
-                "authorize_supported": connector.capabilities.authorize,
-            })
+            connectors_info.append(
+                {
+                    "provider": connector.provider,
+                    "name": connector.provider.title().replace("_", " "),
+                    "state": status.state,
+                    "message": status.message,
+                    "authorize_supported": connector.capabilities.authorize,
+                }
+            )
         except Exception:
-            pass
+            logger.exception(
+                "Could not read status for connector %s.", connector.provider
+            )
 
     return JSONResponse(
         jsonable_encoder(
