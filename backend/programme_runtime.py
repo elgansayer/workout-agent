@@ -1,7 +1,8 @@
 """Read-only, deterministic web runtime for an activated Hevy programme.
 
-Rotation follows elapsed calendar days. Prescriptions
-are materialised from the current block without changing the stored snapshot.
+Rotation follows completed Hevy sessions, so missed calendar days do not skip
+workouts. Prescriptions are materialised from the current block without
+changing the stored snapshot.
 """
 
 from __future__ import annotations
@@ -172,9 +173,19 @@ def resolve_programme_runtime(
     if eligible:
         completed_at, latest = max(eligible, key=lambda entry: entry[0])
         result.last_completed_at = completed_at.isoformat()
-        
-    position = max(0, elapsed) % len(result.days)
-    result.message = "Today's planned workout."
+        completed_position = _match_day(latest, result.days)
+        if completed_position is None:
+            result.status = "needs_review"
+            result.message = (
+                "The latest workout could not be matched to this programme. "
+                "Review your routine mapping."
+            )
+            return result
+        position = (completed_position + 1) % len(result.days)
+    else:
+        position = 0
+
+    result.message = "Your next planned workout."
     result.status = "active"
     result.next_day = result.days[position]
     return result
