@@ -117,7 +117,7 @@ class Config:
         return cls(
             hevy_api_key=hevy_api_key,
             gemini_api_key=gemini_api_key,
-            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip(),
+            gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip(),
             health_connect_file=health_file,
             database_path=os.environ.get("DATABASE_PATH", "workout_agent.db").strip(),
             hevy_sync_routines=sync_routines,

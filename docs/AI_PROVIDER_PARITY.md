@@ -41,7 +41,7 @@ A call site counts as migrated only when the acting user is carried into the can
 
 | Registry ID | Adapter SDK | Python import | Default model | Agent image | Web image |
 | --- | --- | --- | --- | --- | --- |
-| `gemini` | `google-generativeai` | `google.generativeai` | `gemini-2.5-flash` | shared requirements | shared requirements |
+| `gemini` | `google-generativeai` | `google.generativeai` | `gemini-3.8-flash` | shared requirements | shared requirements |
 | `claude` | `anthropic` | `anthropic` | `claude-sonnet-4-20250514` | shared requirements | shared requirements |
 | `openai` | `openai` | `openai` | `gpt-4o` | shared requirements | shared requirements |
 | `deepseek` | `openai` (OpenAI-compatible API) | `openai` | `deepseek-chat` | shared requirements | shared requirements |

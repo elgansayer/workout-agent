@@ -226,7 +226,7 @@ def _config_for_sync(tmp_path: Path) -> Config:
     return Config(
         hevy_api_key="synthetic-hevy-key",
         gemini_api_key=None,
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=str(tmp_path),
         hevy_sync_routines=True,

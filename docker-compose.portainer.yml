@@ -58,7 +58,7 @@ services:
       GOOGLE_HEALTH_CLIENT_SECRET: ${GOOGLE_HEALTH_CLIENT_SECRET:-}
       GOOGLE_HEALTH_REFRESH_TOKEN: ${GOOGLE_HEALTH_REFRESH_TOKEN:-}
       # --- Optional toggles (defaults shown) ---
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       HEVY_SYNC_ROUTINES: ${HEVY_SYNC_ROUTINES:-1}
       HEVY_PREFILL_WEIGHTS: ${HEVY_PREFILL_WEIGHTS:-1}
       CHECKIN_ENABLED: ${CHECKIN_ENABLED:-1}
@@ -80,7 +80,7 @@ services:
       ALLOW_ANONYMOUS_WEB: "0"
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.8-flash}
       # Public-origin and proxy trust boundary. WEB_PUBLIC_URL is the canonical
       # host/scheme used for OAuth and absolute URLs. Proxy CIDRs default to an
       # empty trust list so forwarding headers are ignored unless opted in.

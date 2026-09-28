@@ -44,7 +44,7 @@ class GeminiProvider(AIProvider):
 
     _configuration_lock = threading.RLock()
 
-    def __init__(self, api_key: str, model: str = "gemini-2.5-flash") -> None:
+    def __init__(self, api_key: str, model: str = "gemini-3.8-flash") -> None:
         import google.generativeai as genai  # type: ignore[import-untyped]
 
         self._genai = genai
@@ -222,7 +222,7 @@ class DeepSeekProvider(AIProvider):
 
 # Recognised provider names mapped to their default model.
 PROVIDERS: dict[str, dict[str, Any]] = {
-    "gemini": {"class": GeminiProvider, "default_model": "gemini-2.5-flash"},
+    "gemini": {"class": GeminiProvider, "default_model": "gemini-3.8-flash"},
     "claude": {"class": ClaudeProvider, "default_model": "claude-sonnet-4-20250514"},
     "openai": {"class": OpenAIProvider, "default_model": "gpt-4o"},
     "deepseek": {"class": DeepSeekProvider, "default_model": "deepseek-chat"},

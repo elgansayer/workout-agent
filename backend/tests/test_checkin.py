@@ -18,7 +18,7 @@ def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
     return Config(
         hevy_api_key=hevy_api_key,
         gemini_api_key="g",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
         hevy_sync_routines=True,
