@@ -241,7 +241,7 @@ def _register_fake_providers():
     return {
         "gemini": {
             "class": lambda api_key, model: _FakeProvider("gemini", api_key, model),
-            "default_model": "gemini-2.5-flash",
+            "default_model": "gemini-3.8-flash",
         },
         "claude": {
             "class": lambda api_key, model: _FakeProvider("claude", api_key, model),
@@ -295,7 +295,7 @@ def test_resolve_provider_user_prefers_gemini_no_user_key_falls_back(
         provider = resolve_provider(
             user_id=user["id"],
             fallback_api_key="server-key-abc",
-            fallback_model="gemini-2.5-flash",
+            fallback_model="gemini-3.8-flash",
             db_path=db,
         )
     assert "gemini" in provider.name().lower()

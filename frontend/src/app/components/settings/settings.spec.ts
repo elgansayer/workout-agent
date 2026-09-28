@@ -7,7 +7,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Settings } from './settings';
 
 const providers = [
-  { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-2.5-flash' },
+  { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-3.8-flash' },
   { id: 'claude', name: 'Anthropic Claude', default_model: 'claude-sonnet-4-20250514' },
   { id: 'openai', name: 'OpenAI', default_model: 'gpt-4o' },
   { id: 'deepseek', name: 'DeepSeek', default_model: 'deepseek-chat' },

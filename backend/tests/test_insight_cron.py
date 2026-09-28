@@ -19,7 +19,7 @@ class _FakeConfig:
     def __init__(self, tmp_path: Path) -> None:
         self.database_path = str(tmp_path / "test_cron.db")
         self.gemini_api_key = "server-gemini-key"
-        self.gemini_model = "gemini-2.5-flash"
+        self.gemini_model = "gemini-3.8-flash"
 
 
 # ---------------------------------------------------------------------------

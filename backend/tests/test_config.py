@@ -68,7 +68,7 @@ class TestConfigLoad:
         assert cfg.gemini_api_key == "gemini-key"
 
         assert cfg.hevy_api_key is None
-        assert cfg.gemini_model == "gemini-2.5-flash"
+        assert cfg.gemini_model == "gemini-3.8-flash"
         assert cfg.database_path == "workout_agent.db"
 
     def test_hevy_api_key_optional(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,7 +151,7 @@ class TestConfigLoad:
 
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         cfg = Config.load()
-        assert cfg.gemini_model == "gemini-2.5-flash"
+        assert cfg.gemini_model == "gemini-3.8-flash"
 
         monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-pro")
         cfg = Config.load()

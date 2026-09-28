@@ -133,7 +133,7 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
     config = Config(
         hevy_api_key="synthetic-server-hevy-key",
         gemini_api_key=None,
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file="/synthetic/legacy-health.json",
         database_path=db_path,
         hevy_sync_routines=True,
@@ -188,7 +188,7 @@ def _make_config(
     config = Config(
         hevy_api_key=hevy_api_key,
         gemini_api_key="test-gemini-key",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
         hevy_sync_routines=False,
@@ -402,7 +402,7 @@ def test_run_preview_with_sync_statuses(
     config2 = Config(
         hevy_api_key="hevy-key",
         gemini_api_key="test-gemini-key",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
         hevy_sync_routines=True,
@@ -840,7 +840,7 @@ def test_run_self_review_on_configured_weekday(
     config2 = Config(
         hevy_api_key=None,
         gemini_api_key="test-gemini-key",
-        gemini_model="gemini-2.5-flash",
+        gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
         hevy_sync_routines=False,
