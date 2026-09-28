@@ -73,7 +73,14 @@
 
   <div class="dashboard-grid">
     <section class="today">
-      <h2>{{ data.weekday }}: {{ data.focus }}</h2>
+      <h2>Next workout: {{ data.focus }}</h2>
+      @if (data.rotation_message) {
+        <p class="muted" role="status">{{ data.rotation_message }}</p>
+      }
+      @if (data.last_completed_at) {
+        <p class="muted">Last synced workout: {{ data.last_completed_at | date:'medium' }}</p>
+      }
+      <button class="btn" type="button" (click)="refresh()" [disabled]="loading()">Refresh workout</button>
       @if (data.setup_required) {
         <p class="muted">
           Programme prescriptions appear here after a Hevy-derived programme

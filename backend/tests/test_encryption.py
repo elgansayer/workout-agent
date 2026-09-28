@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from unittest import mock
 
 import pytest
-
 from encryption import decrypt, encrypt
 
 
@@ -22,11 +22,20 @@ class TestEncryptDecryptRoundTrip:
         assert ciphertext != plaintext
         assert decrypt(ciphertext) == plaintext
 
-    def test_round_trip_without_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_round_trip_without_key_warns_without_exposing_secret(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
         monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
         plaintext = "sk-abc123-def456"
-        assert encrypt(plaintext) == plaintext
-        assert decrypt(plaintext) == plaintext
+        with caplog.at_level(logging.WARNING, logger="encryption"):
+            assert encrypt(plaintext) == plaintext
+            assert decrypt(plaintext) == plaintext
+
+        assert "ENCRYPTION_KEY is not configured" in caplog.text
+        assert "PLAINTEXT" in caplog.text
+        assert plaintext not in caplog.text
 
     def test_round_trip_with_empty_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("ENCRYPTION_KEY", "")
@@ -102,6 +111,25 @@ class TestEncryptDecryptWithInvalidKey:
 
 class TestEncryptDecryptWithoutCryptography:
     """Graceful fallback when cryptography package is not importable."""
+
+    def test_configured_key_warns_without_cryptography(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setenv("ENCRYPTION_KEY", "synthetic-configured-key")
+        plaintext = "synthetic-provider-secret"
+
+        with (
+            mock.patch("encryption._HAS_CRYPTOGRAPHY", False),
+            caplog.at_level(logging.WARNING, logger="encryption"),
+        ):
+            result = encrypt(plaintext)
+
+        assert result == plaintext
+        assert "cryptography" in caplog.text
+        assert "PLAINTEXT" in caplog.text
+        assert plaintext not in caplog.text
 
     def test_generate_falls_back_when_fernet_is_none(self) -> None:
         with mock.patch("encryption._fernet", return_value=None):

@@ -41,7 +41,14 @@ export class Settings implements OnInit {
       next: (res: any) => {
         this.data.set(res);
         const prefs = res.user_prefs || {};
-        this.selectedAiProvider.set(prefs.preferred_ai || 'gemini');
+        const selectedProvider = prefs.preferred_ai || 'gemini';
+        this.selectedAiProvider.set(selectedProvider);
+        for (const provider of res.ai_providers || []) {
+          this.aiModelInputs[provider.id] = res.user_keys?.[provider.id]?.model || '';
+        }
+        if (prefs.ai_model) {
+          this.aiModelInputs[selectedProvider] = prefs.ai_model;
+        }
         this.selectedGoals.set(prefs.goals || []);
         this.selectedExperience.set(prefs.experience_level || 'intermediate');
         this.constraintsInput = (prefs.constraints || []).join('. ');
@@ -150,6 +157,7 @@ export class Settings implements OnInit {
       constraints,
       experience_level: this.selectedExperience(),
       preferred_ai: this.selectedAiProvider(),
+      ai_model: (this.aiModelInputs[this.selectedAiProvider()] || '').trim() || undefined,
     };
 
     this.http.post('/api/settings/preferences', payload).subscribe({

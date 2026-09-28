@@ -15,6 +15,7 @@ import argparse
 import logging
 import os
 import sys
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,16 +23,19 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
-from ai_provider import AIProvider, resolve_provider
+from ai_provider import AIProvider
+from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
     get_body_metrics,
     get_daily_logs,
+    get_legacy_user_id,
     get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
+    get_user_api_key,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -61,11 +65,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("workout_agent")
 
+
 def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
     """Print the message in preview mode, otherwise send it via Web Push."""
     if user_id:
         try:
-            first_line = message.strip().split("\n")[0] if message else "Today's workout plan is ready."
+            first_line = (
+                message.strip().split("\n")[0]
+                if message
+                else "Today's workout plan is ready."
+            )
             save_notification(
                 user_id,
                 title="🏋️ Today's Workout Plan Ready",
@@ -89,18 +98,17 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
 
     subscriptions = get_push_subscriptions(user_id, config.database_path)
     if not subscriptions:
-        logger.warning(f"No push subscriptions found for user {user_id}. Plan was not delivered.")
+        logger.warning(
+            f"No push subscriptions found for user {user_id}. Plan was not delivered."
+        )
         return 2
 
     success = False
     for sub in subscriptions:
-        payload = {
-            "title": "Workout Agent",
-            "body": message
-        }
+        payload = {"title": "Workout Agent", "body": message}
         if send_push_notification(sub, payload, vapid_private):
             success = True
-    
+
     if not success:
         logger.error("Plan was generated but could not be delivered to any device.")
         return 2
@@ -109,15 +117,16 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
     return 0
 
 
-def _sync_hevy_routines(config: Config) -> list[str]:
-    """Keep the Hevy routines in sync so today's session is ready to start.
-
-    Returns the per-routine status lines so changes can be reported.
-    """
+def _sync_hevy_routines(
+    config: Config,
+    *,
+    user_id: str,
+) -> list[str]:
+    """Keep the acting user's Hevy routines ready to start."""
     if not config.hevy_api_key or not config.hevy_sync_routines:
         return []
     try:
-        statuses = sync_routines(config)
+        statuses = sync_routines(config, user_id=user_id)
         for status in statuses:
             logger.info("Hevy routine %s", status)
         return statuses
@@ -144,13 +153,13 @@ def _maybe_check_in(
     block: Block,
     preview: bool,
     *,
-    user_id: str | None = None,
+    user_id: str,
 ) -> None:
     """Run a programme check-in if one is due, delivering it as its own message."""
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config)
+        due_info = checkin.due(config, user_id=user_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
@@ -175,7 +184,7 @@ def _maybe_self_review(
     block: Block,
     preview: bool,
     *,
-    user_id: str | None = None,
+    user_id: str,
 ) -> None:
     """On the configured weekday, send a self-review of how training is going."""
     if not config.self_review_enabled:
@@ -228,6 +237,31 @@ def _resolve_run_user(db_path: str) -> str:
     return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
 
 
+def _scope_config_to_user(config: Config, user_id: str) -> Config:
+    """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
+    key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
+    user_hevy_key = None
+    if key_record:
+        user_hevy_key = str(key_record.get("api_key") or "").strip() or None
+
+    is_legacy_user = user_id == get_legacy_user_id(config.database_path)
+    hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
+    return replace(
+        config,
+        hevy_api_key=hevy_key,
+        health_connect_file=(config.health_connect_file if is_legacy_user else None),
+        google_health_client_id=(
+            config.google_health_client_id if is_legacy_user else None
+        ),
+        google_health_client_secret=(
+            config.google_health_client_secret if is_legacy_user else None
+        ),
+        google_health_refresh_token=(
+            config.google_health_refresh_token if is_legacy_user else None
+        ),
+    )
+
+
 def run(preview: bool = False, user_id: str | None = None) -> int:
     try:
         config = Config.load()
@@ -239,11 +273,10 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     if user_id is None:
         user_id = _resolve_run_user(config.database_path)
+    config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 
-    provider = _resolve_provider(config, user_id=user_id)
-
-    statuses = _sync_hevy_routines(config)
+    statuses = _sync_hevy_routines(config, user_id=user_id)
     footer = _changes_footer(statuses)
 
     today = datetime.now(tz=timezone.utc).date()
@@ -268,13 +301,26 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         recovery = {**(recovery or {}), **synced}
     if not preview:
         save_body_metrics(
-            body_metrics_from_recovery(recovery), when, config.database_path
+            body_metrics_from_recovery(recovery),
+            when,
+            config.database_path,
+            user_id=user_id,
         )
 
-    _maybe_self_review(config, recovery, week, block, preview)
+    _maybe_self_review(
+        config,
+        recovery,
+        week,
+        block,
+        preview,
+        user_id=user_id,
+    )
 
-    provider = _resolve_provider(config, user_id=user_id)
-
+    try:
+        provider = _resolve_provider(config, user_id=user_id)
+    except (ImportError, ValueError) as exc:
+        logger.error("AI provider configuration failed: %s", exc)
+        return 1
     day = today_day(today)
 
     if day is None:
@@ -361,7 +407,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--preview",
         action="store_true",
-        help="Dry run: print the generated plan to stdout without sending push notification.",
+        help="Dry run: print the generated plan without sending a notification.",
+    )
+    parser.add_argument(
+        "--user-id",
+        help="Run for this server-selected user identifier.",
+    )
+    parser.add_argument(
+        "--sync-history",
+        action="store_true",
+        help="Rebuild Hevy history before exiting.",
     )
     return parser.parse_args(argv)
 
@@ -369,17 +424,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 if __name__ == "__main__":
     args = _parse_args()
     if args.sync_history:
-        from sync_history import sync_all
+        from scripts.sync_history import sync_all
 
-        api_key = Config.load().hevy_api_key
+        config = Config.load()
+        init_db(config.database_path)
+        sync_user_id = args.user_id or _resolve_run_user(config.database_path)
+        config = _scope_config_to_user(config, sync_user_id)
+        api_key = config.hevy_api_key
         if not api_key:
-            logger.error("HEVY_API_KEY is not set in .env")
+            logger.error("No Hevy API key is configured for this user.")
             sys.exit(1)
-        result = sync_all(api_key)
+        result = sync_all(
+            api_key,
+            config.database_path,
+            user_id=sync_user_id,
+        )
         if "error" in result:
             logger.error("%s", result["error"])
             sys.exit(1)
-        else:
-            logger.info("%s", result)
-            sys.exit(0)
-    sys.exit(run(preview=args.preview))
+        logger.info("%s", result)
+        sys.exit(0)
+    sys.exit(run(preview=args.preview, user_id=args.user_id))

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
+from datetime import date
+from pathlib import Path
 
 import hevy_sync
+import pytest
+from config import Config
 from program import BLOCKS, Exercise, day_exercises
 
 
@@ -217,3 +220,61 @@ def test_target_weight_weights_is_float_when_above_top() -> None:
     result = hevy_sync._target_weight(ex, history)
     assert isinstance(result, float)
     assert result == 102.5
+
+
+def _config_for_sync(tmp_path: Path) -> Config:
+    return Config(
+        hevy_api_key="synthetic-hevy-key",
+        gemini_api_key=None,
+        gemini_model="gemini-2.5-flash",
+        health_connect_file=None,
+        database_path=str(tmp_path),
+        hevy_sync_routines=True,
+        hevy_prefill_weights=False,
+        checkin_enabled=False,
+        lifestyle_enabled=False,
+        google_health_client_id=None,
+        google_health_client_secret=None,
+        google_health_refresh_token=None,
+        self_review_enabled=False,
+        self_review_weekday=6,
+    )
+
+
+def test_sync_routines_threads_user_id_through_persistence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config_for_sync(tmp_path)
+    captured: list[tuple[str, str | None]] = []
+
+    monkeypatch.setattr(
+        hevy_sync,
+        "_migrate_titles",
+        lambda _config, *, user_id=None: captured.append(("migrate", user_id)),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "get_programme_start_date",
+        lambda _db, *, user_id=None: (
+            captured.append(("programme", user_id)) or date(2026, 9, 18)
+        ),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_ensure_folder",
+        lambda _config, *, user_id=None: captured.append(("folder", user_id)) or None,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_sync_session",
+        lambda _config, title, built, folder_id, notes, *, user_id=None: (
+            captured.append((title, user_id)) or f"{title}: up to date"
+        ),
+    )
+
+    statuses = hevy_sync.sync_routines(config, user_id="user-a")
+
+    assert len(statuses) == 3
+    assert captured
+    assert all(user_id == "user-a" for _operation, user_id in captured)

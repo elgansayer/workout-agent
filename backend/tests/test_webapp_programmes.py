@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import importlib
 import json
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import database
@@ -255,3 +255,64 @@ def test_disconnected_builder_does_not_return_static_fallback(
     assert plan["setup_required"] is True
     assert plan["blocks"] == []
     assert plan["days"] == []
+
+
+def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    from dynamic_programme import ProgrammePreviewRequest, build_programme_preview
+
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+    user_id = database.get_legacy_user_id(db_file)
+    definition = build_programme_preview(
+        _training_data(),
+        ProgrammePreviewRequest(**_payload()),
+    )
+    database.set_active_programme(
+        user_id, "hevy", "synthetic-rotation", definition, db_file
+    )
+    second_block = definition["blocks"][1]
+    today = date(2026, 9, 1) + timedelta(weeks=second_block["start_week"] - 1)
+    monkeypatch.setattr("programme_runtime.local_today", lambda timezone_name: today)
+    database.save_workout(
+        {
+            "id": "synthetic-completion",
+            "routine_id": "routine-b",
+            "end_time": f"{today.isoformat()}T08:00:00Z",
+        },
+        db_file,
+        user_id=user_id,
+    )
+    other = database.get_or_create_user("other@example.test", db_path=db_file)
+    database.save_workout(
+        {
+            "id": "other-completion",
+            "routine_id": "routine-a",
+            "end_time": f"{today.isoformat()}T09:00:00Z",
+        },
+        db_file,
+        user_id=other["id"],
+    )
+
+    dashboard = client.get("/api/dashboard").json()
+    plan = client.get("/api/plan").json()
+    start_date = date.fromisoformat(definition["programme_spec"]["start_date"])
+    position = (today - start_date).days % len(definition["days"])
+    selected_day = definition["days"][position]
+    expected = selected_day["exercises"][0]["prescriptions"][1]
+    assert dashboard["focus"] == selected_day["focus"]
+    assert (
+        dashboard["next_routine_id"]
+        == plan["next_routine_id"]
+        == selected_day["routine_id"]
+    )
+    assert (
+        dashboard["rows"][0]["planned"]
+        == f"{expected['sets']} × {expected['rep_range']}"
+    )
+    assert plan["days"][position]["exercises"][0]["sets"] == expected["sets"]
+    assert plan["week"] == dashboard["week"] == second_block["start_week"]
+    stored = database.get_active_programme(user_id, db_file)
+    assert stored is not None
+    assert stored["definition"] == definition

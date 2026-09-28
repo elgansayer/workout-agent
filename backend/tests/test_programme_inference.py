@@ -272,13 +272,13 @@ def test_infer_programme_full_flow() -> None:
         CompletedWorkout(
             id="w1",
             title="Push Day",
-            start_time=(now - timedelta(days=2)).isoformat(),
+            start_time=(now - timedelta(days=1)).isoformat(),
             exercises=[_make_workout_exercise("1", "Bench Press", 100, 5)],
         ),
         CompletedWorkout(
             id="w2",
             title="Pull Day",
-            start_time=(now - timedelta(days=3)).isoformat(),
+            start_time=(now - timedelta(days=2)).isoformat(),
             exercises=[_make_workout_exercise("2", "Deadlift", 140, 5)],
         ),
     ]

@@ -168,20 +168,28 @@ def test_settings_api_returns_masks_not_plaintext_keys() -> None:
     segment = ast.get_source_segment(source, function)
     assert segment is not None
 
-    assert 'masked = f"••••••••{key_str[-4:]}"' in segment
-    assert 'user_keys[p] = {"has_key": True, "masked": masked}' in segment
+    assert 'f"••••••••{key_value[-4:]}"' in segment
+    assert '"has_key": bool(key_value)' in segment
+    assert '"masked": masked' in segment
+    assert '"model": configured_model' in segment
     # The plaintext key is read only to derive the mask; it must not be placed
     # in the response mapping under an api_key/key/value field.
-    assert '"api_key": key_str' not in segment
-    assert '"key": key_str' not in segment
-    assert '"value": key_str' not in segment
+    assert '"api_key": key_value' not in segment
+    assert '"key": key_value' not in segment
+    assert '"value": key_value' not in segment
 
 
 def test_settings_form_never_hydrates_password_inputs_from_server_masks() -> None:
     """Masks are placeholders only; password models remain empty on page load."""
 
     component_path = (
-        _REPO_ROOT / "frontend" / "src" / "app" / "components" / "settings" / "settings.ts"
+        _REPO_ROOT
+        / "frontend"
+        / "src"
+        / "app"
+        / "components"
+        / "settings"
+        / "settings.ts"
     )
     template_path = component_path.with_name("settings.html")
     component = component_path.read_text(encoding="utf-8")

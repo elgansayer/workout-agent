@@ -1,8 +1,8 @@
-name: Retired GitHub-Hosted Architect
+name: Retired Architect Agent
 
-# Architecture and gap-analysis decisions belong to the OpenHands control plane
-# on the VPS. This GitHub-hosted autonomous author is retained only as an
-# explicit retirement record.
+# Architecture planning belongs to the OpenHands control plane on the VPS.
+# This inert record remains only to prevent the retired GitHub-hosted agent
+# from being recreated with autonomous triggers or repository write access.
 on:
   workflow_dispatch:
 
@@ -13,4 +13,4 @@ jobs:
   retired:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "The GitHub-hosted architect is retired; no repository changes were made."
+      - run: echo "The GitHub-hosted architect agent is retired; no plans were authored."

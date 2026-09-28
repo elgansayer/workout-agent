@@ -1,8 +1,8 @@
-name: Retired GitHub-Hosted PR Reviewer
+name: Retired Pull Request Reviewer Agent
 
-# Review decisions and repairs belong to the OpenHands control plane on the
-# VPS and repository maintainers. This GitHub-hosted autonomous reviewer is
-# retained only as an explicit retirement record.
+# Pull-request review automation must remain deterministic; OpenHands handles
+# review feedback through the VPS control plane. This retired workflow cannot
+# review, approve, modify, or merge a pull request.
 on:
   workflow_dispatch:
 
