@@ -1497,7 +1497,8 @@ def api_stats(request: Request):
 def api_history(request: Request):
     user_id = _check_api_auth(request)
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    return JSONResponse(jsonable_encoder({"logs": logs}))
+    levels = _training_levels(user_id=user_id)
+    return JSONResponse(jsonable_encoder({"logs": logs, "calendar": charts.calendar_heatmap(levels)}))
 
 
 @app.get("/api/plan")

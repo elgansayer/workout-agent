@@ -81,7 +81,7 @@ The engine may propose, explain and bound changes. It must not pretend low-confi
 - **Source routine:** A routine currently stored in Hevy.
 - **Routine snapshot:** An immutable local copy of a source routine revision at programme activation or reconciliation.
 - **Routine selection:** Ordered references to source routine IDs/snapshots used by one programme.
-- **Rotation:** The intended sequence of routines independent of weekdays. A missed session delays the rotation rather than skipping a workout.
+- **Rotation:** The intended sequence of routines advances once per elapsed local calendar day from the programme start date.
 - **Programme specification:** User intent and constraints: goal, duration, priorities, schedule, experience and adaptation policy.
 - **Block:** A multi-week phase with a coherent objective and prescription policy.
 - **Week prescription:** The planned dose and progression rules for one programme week.
@@ -635,7 +635,7 @@ Allowed initial decisions:
 - defer an exercise and request confirmation;
 - substitute only from an explicitly approved equivalence set.
 
-A missed session advances nothing. The next session remains the next routine in rotation unless the user changes it.
+A missed session does not pause the calendar. The displayed routine continues to advance once per elapsed local day so every surface resolves the same deterministic position.
 
 ### 14.2 Exposure-level progression
 
@@ -1070,8 +1070,8 @@ Safety-sensitive symptoms, pain or medical constraints should pause or narrow au
 - new user connects Hevy, syncs, selects routines, generates and activates;
 - existing legacy-static user migrates without history loss;
 - Hevy routine edit creates a conflict and does not alter active prescriptions;
-- completed workout advances the correct rotation and progression state;
-- missed workout does not skip the routine;
+- elapsed local calendar days advance the correct rotation while completed workouts remain progression evidence;
+- missing or unmatched workout history does not override the elapsed-day position;
 - programme switch archives rather than overwrites;
 - cross-user isolation for every route and table.
 

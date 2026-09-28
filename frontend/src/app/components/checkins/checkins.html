@@ -22,7 +22,7 @@
 <section class="checkin">
     <div class="checkin-head">
         <span class="checkin-num">Check-in {{ item.number }}</span>
-        <span class="muted">{{ item.date }} | {{ item.workouts_done }} sessions | {{ item.weeks }} weeks</span>
+        <span class="muted">{{ item.date | date:'shortDate' }} | {{ item.workouts_done }} sessions | {{ item.weeks }} weeks</span>
     </div>
     <pre class="checkin-body">{{ item.message }}</pre>
 </section>

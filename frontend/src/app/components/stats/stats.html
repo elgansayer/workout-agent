@@ -130,7 +130,7 @@
                     <td>{{ pr.exercise }}</td>
                     <td class="num-cell">{{ pr.e1rm }} kg</td>
                     <td class="muted">{{ pr.detail }}</td>
-                    <td class="muted">{{ pr.date }}</td>
+                    <td class="muted">{{ pr.date | date:'shortDate' }}</td>
                 </tr>
                 }
             </tbody>

@@ -1,12 +1,12 @@
 """Read-only, deterministic web runtime for an activated Hevy programme.
 
-Rotation follows synced completions, not elapsed calendar days. Prescriptions
-are materialised from the current block without changing the stored snapshot.
+Rotation follows elapsed local calendar days from the programme start date.
+Prescriptions are materialised from the current block without changing the
+stored snapshot.
 """
 
 from __future__ import annotations
 
-from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -51,32 +51,6 @@ def _timestamp(value: Any) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def _match_day(workout: dict[str, Any], days: list[dict[str, Any]]) -> int | None:
-    routine_id = workout.get("routine_id")
-    if routine_id:
-        matches = [
-            i for i, day in enumerate(days) if day.get("routine_id") == routine_id
-        ]
-    else:
-        # Historical Hevy payloads may omit a routine relation. Only an exact,
-        # unique exercise-template signature may resolve those records. Titles
-        # are mutable and never establish identity.
-        exercises = workout.get("exercises") or []
-        if not exercises or any(
-            not isinstance(item, dict) or not item.get("exercise_template_id")
-            for item in exercises
-        ):
-            return None
-        signature = Counter(item["exercise_template_id"] for item in exercises)
-        matches = [
-            i
-            for i, day in enumerate(days)
-            if signature
-            == Counter(item.get("template_id") for item in day.get("exercises", []))
-        ]
-    return matches[0] if len(matches) == 1 else None
 
 
 def resolve_programme_runtime(
@@ -150,7 +124,7 @@ def resolve_programme_runtime(
         result.message = "No routine rotation is available. Review your programme."
         return result
 
-    eligible: list[tuple[datetime, dict[str, Any]]] = []
+    eligible: list[datetime] = []
     seen: set[str] = set()
     for workout in workouts:
         if not isinstance(workout, dict):
@@ -167,21 +141,14 @@ def resolve_programme_runtime(
             <= timestamp.astimezone(user_timezone(timezone_name)).date()
             <= today
         ):
-            eligible.append((timestamp, workout))
+            eligible.append(timestamp)
 
-    position = 0
     if eligible:
-        completed_at, latest = max(eligible, key=lambda entry: entry[0])
-        result.last_completed_at = completed_at.isoformat()
-        previous = _match_day(latest, result.days)
-        if previous is None:
-            result.status = "needs_review"
-            result.message = "The latest synced workout could not be matched uniquely to your rotation. Sync Hevy history and review the selected routines."
-            return result
-        position = (previous + 1) % len(result.days)
-        result.message = "Next in your rotation after your last synced workout."
-    else:
-        result.message = "No completed workout has been synced for this programme yet. Log your session in Hevy and sync history to advance."
+        result.last_completed_at = max(eligible).isoformat()
+
+    position = elapsed % len(result.days)
+
+    result.message = "Your workout for today."
     result.status = "active"
     result.next_day = result.days[position]
     return result
