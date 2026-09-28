@@ -12,8 +12,10 @@
 # CREDENTIALS LIVE ONLY IN PORTAINER, never in git. The compose only references
 # variable names (${...}); you supply the values in the stack's env panel.
 #
-# Required agent env vars:
-#   GEMINI_API_KEY            https://aistudio.google.com/app/apikey
+# Required shared secret (agent and web must use the same value):
+#   ENCRYPTION_KEY            Fernet key used for per-user credentials
+#
+# Required agent notification env vars:
 #   TELEGRAM_BOT_TOKEN        from @BotFather
 #   TELEGRAM_CHAT_ID          your Telegram chat id
 #
@@ -28,6 +30,7 @@
 #   WEB_TRUSTED_PROXY_CIDRS   narrow CIDRs for proxies allowed to set forwarding headers
 #
 # Optional env vars (leave unset to disable that feature):
+#   GEMINI_API_KEY                  server fallback; users can bring their own key
 #   HEVY_API_KEY                    reference your last logged Hevy session
 #   GOOGLE_HEALTH_CLIENT_ID         smart-scale body-composition auto-sync
 #   GOOGLE_HEALTH_CLIENT_SECRET     (run google_health_auth.py once on your
@@ -45,10 +48,11 @@ services:
       TZ: ${TZ:-Europe/London}
       DATABASE_PATH: /data/workout_agent.db
       # --- Required ---
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       # --- Optional integrations ---
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       HEVY_API_KEY: ${HEVY_API_KEY:-}
       GOOGLE_HEALTH_CLIENT_ID: ${GOOGLE_HEALTH_CLIENT_ID:-}
       GOOGLE_HEALTH_CLIENT_SECRET: ${GOOGLE_HEALTH_CLIENT_SECRET:-}
@@ -74,6 +78,9 @@ services:
       TZ: ${TZ:-Europe/London}
       APP_ENV: production
       ALLOW_ANONYMOUS_WEB: "0"
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       # Public-origin and proxy trust boundary. WEB_PUBLIC_URL is the canonical
       # host/scheme used for OAuth and absolute URLs. Proxy CIDRs default to an
       # empty trust list so forwarding headers are ignored unless opted in.

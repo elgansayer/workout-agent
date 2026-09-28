@@ -7,7 +7,6 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-
 import scheduler
 
 # ---------------------------------------------------------------------------
@@ -235,3 +234,49 @@ def test_now_in_tz_invalid_falls_back_to_utc() -> None:
     dt = scheduler._now_in_tz("Not/A_Valid_Zone")
     assert dt.tzinfo is not None
     assert str(dt.tzinfo) == "UTC"
+
+
+def test_active_scheduler_runs_coaching_for_each_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str | None] = []
+    config = MagicMock(database_path="synthetic.db")
+    monkeypatch.setattr(
+        scheduler,
+        "get_all_users",
+        lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
+    )
+    monkeypatch.setattr(
+        "main.run",
+        lambda *, preview, user_id=None: calls.append(user_id) or 0,
+    )
+
+    assert scheduler.run_coaching(config) == 0
+    assert calls == ["user-a", "user-b"]
+
+
+def test_active_scheduler_scopes_each_insight_job_to_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    daily_calls: list[str] = []
+    weekly_calls: list[str] = []
+    config = MagicMock(database_path="synthetic.db")
+    monkeypatch.setattr(
+        scheduler,
+        "get_all_users",
+        lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
+    )
+    monkeypatch.setattr(
+        "insight_cron.generate_daily_header",
+        lambda _config, *, user_id=None: daily_calls.append(user_id),
+    )
+    monkeypatch.setattr(
+        "insight_cron.generate_weekly_correlations",
+        lambda _config, *, user_id=None: weekly_calls.append(user_id),
+    )
+
+    scheduler.run_daily_insight(config)
+    scheduler.run_weekly_correlations(config)
+
+    assert daily_calls == ["user-a", "user-b"]
+    assert weekly_calls == ["user-a", "user-b"]

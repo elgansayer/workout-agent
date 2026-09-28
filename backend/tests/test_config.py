@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import pytest
-
-from config import Config, ConfigError, _parse_weekday
+from config import Config, _parse_weekday
 
 
 class TestParseWeekday:
@@ -52,23 +51,13 @@ class TestParseWeekday:
 
 
 class TestConfigLoad:
-    def test_missing_required_raises_config_error(
+    def test_gemini_key_is_optional_for_per_user_byok(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        with pytest.raises(ConfigError, match="Missing required"):
-            Config.load()
-
-    def test_missing_shows_all_missing_at_once(
-        self,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-        with pytest.raises(ConfigError) as exc_info:
-            Config.load()
-        msg = str(exc_info.value)
-        assert "GEMINI_API_KEY" in msg
+        cfg = Config.load()
+        assert cfg.gemini_api_key is None
 
     def test_minimal_valid_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
@@ -78,7 +67,6 @@ class TestConfigLoad:
         cfg = Config.load()
         assert cfg.gemini_api_key == "gemini-key"
 
-
         assert cfg.hevy_api_key is None
         assert cfg.gemini_model == "gemini-2.5-flash"
         assert cfg.database_path == "workout_agent.db"
@@ -86,14 +74,12 @@ class TestConfigLoad:
     def test_hevy_api_key_optional(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-
         monkeypatch.delenv("HEVY_API_KEY", raising=False)
         cfg = Config.load()
         assert cfg.hevy_api_key is None
 
     def test_hevy_api_key_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         monkeypatch.setenv("HEVY_API_KEY", "hevy-key")
         cfg = Config.load()
@@ -104,7 +90,6 @@ class TestConfigLoad:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         for var in (
             "GOOGLE_HEALTH_CLIENT_ID",
@@ -120,7 +105,6 @@ class TestConfigLoad:
     def test_google_health_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-
         monkeypatch.setenv("GOOGLE_HEALTH_CLIENT_ID", "gh-id")
         monkeypatch.setenv("GOOGLE_HEALTH_CLIENT_SECRET", "gh-secret")
         monkeypatch.setenv("GOOGLE_HEALTH_REFRESH_TOKEN", "gh-refresh")
@@ -131,7 +115,6 @@ class TestConfigLoad:
 
     def test_boolean_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         monkeypatch.setenv("HEVY_SYNC_ROUTINES", "1")
         monkeypatch.setenv("HEVY_PREFILL_WEIGHTS", "true")
@@ -147,7 +130,6 @@ class TestConfigLoad:
 
     def test_boolean_env_falsey_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         monkeypatch.setenv("HEVY_SYNC_ROUTINES", "0")
         monkeypatch.setenv("HEVY_PREFILL_WEIGHTS", "false")
@@ -167,7 +149,6 @@ class TestConfigLoad:
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-
         monkeypatch.delenv("GEMINI_MODEL", raising=False)
         cfg = Config.load()
         assert cfg.gemini_model == "gemini-2.5-flash"
@@ -182,7 +163,6 @@ class TestConfigLoad:
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-
         monkeypatch.delenv("DATABASE_PATH", raising=False)
         cfg = Config.load()
         assert cfg.database_path == "workout_agent.db"
@@ -191,14 +171,11 @@ class TestConfigLoad:
         cfg = Config.load()
         assert cfg.database_path == "/tmp/test.db"
 
-
-
     def test_self_review_weekday_default_and_override(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         monkeypatch.delenv("SELF_REVIEW_WEEKDAY", raising=False)
         cfg = Config.load()
@@ -215,17 +192,15 @@ class TestConfigLoad:
         assert cfg.gemini_api_key == "gk"
         assert cfg.hevy_api_key == "hevy"
 
-    def test_whitespace_only_treated_as_missing(
+    def test_whitespace_only_gemini_key_is_absent(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "   ")
-        with pytest.raises(ConfigError):
-            Config.load()
+        assert Config.load().gemini_api_key is None
 
     def test_health_connect_file(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         monkeypatch.delenv("HEALTH_CONNECT_FILE", raising=False)
         cfg = Config.load()
@@ -237,7 +212,6 @@ class TestConfigLoad:
 
     def test_config_is_frozen(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
-
 
         cfg = Config.load()
         with pytest.raises(AttributeError):
