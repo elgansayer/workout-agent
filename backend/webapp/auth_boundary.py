@@ -28,7 +28,7 @@ PUBLIC_EXACT_PATHS = frozenset(
         "/login",
         "/login/google",
         "/auth",
-        "/google-health/callback",
+        
         "/livez",
         "/readyz",
         "/favicon.ico",

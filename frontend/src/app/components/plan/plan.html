@@ -27,7 +27,7 @@
         Week {{ data.week }} of {{ data.cycle_weeks }}
         @if (data.current_block) { · {{ data.current_block }} }
         @if (data.analysis?.confidence) {
-          ¡' inference confidence {{ data.analysis.confidence }}
+          &middot; inference confidence {{ data.analysis.confidence }}
         }
       </p>
     </header>
@@ -59,7 +59,7 @@
             <ul class="block-schemes">
               <li>
                 <span>Volume</span>
-                <strong>{{ block.volume_multiplier }}Õ imported source</strong>
+                <strong>{{ block.volume_multiplier }}&times; imported source</strong>
               </li>
               <li>
                 <span>Effort</span>
