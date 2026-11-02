@@ -7,20 +7,22 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+EXPECTED_SERVICE_REVISION = "80030f73057e72c607a86a07e939ceebe2ee19a6"
+
 
 def attach_evidence(response_path: Path, release_path: Path, expected_sha: str) -> None:
     response = json.loads(response_path.read_text(encoding="utf-8"))
     if not isinstance(response, dict):
         raise TypeError("Deployment receipt must be an object")
     expected = {
-        "schema_version": 1, "service": "website-ops", "head_sha": expected_sha,
+        "schema_version": 1, "service": "website-ops",
+        "service_revision": EXPECTED_SERVICE_REVISION, "head_sha": expected_sha,
         "status": "accepted", "backup": "verified", "sqlite_integrity_check": "ok",
         "arcane_status": 202,
     }
     if any(type(response.get(key)) is not type(value) or response[key] != value for key, value in expected.items()):
         raise ValueError("Receipt does not prove backup verification and Arcane acceptance")
     patterns = {
-        "service_revision": r"[0-9a-f]{40}",
         "deployment_id": r"workout-[0-9]+-[0-9a-f]{12}",
         "backup_id": r"pre-deploy-[0-9]+\.sqlite3",
         "backup_sha256": r"[0-9a-f]{64}",

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.deployment_receipt import attach_evidence
+from tools.deployment_receipt import EXPECTED_SERVICE_REVISION, attach_evidence
 
 
 class ReceiptChecks(unittest.TestCase):
@@ -22,7 +22,8 @@ class ReceiptChecks(unittest.TestCase):
                     for key, image in [("AGENT_IMAGE", "workout-agent"), ("WEB_IMAGE", "workout-agent-web")]
                 ))
                 receipt = {
-                    "schema_version": 1, "service": "website-ops", "service_revision": "c" * 40,
+                    "schema_version": 1, "service": "website-ops",
+                    "service_revision": EXPECTED_SERVICE_REVISION,
                     "deployment_id": "workout-123-aabbccddeeff", "head_sha": "a" * 40,
                     "status": "accepted", "backup": "verified", "backup_id": "pre-deploy-123.sqlite3",
                     "backup_sha256": "d" * 64, "backup_bytes": 8192, "sqlite_integrity_check": "ok",
@@ -32,7 +33,8 @@ class ReceiptChecks(unittest.TestCase):
                 for key, bad in [("schema_version", True), ("head_sha", "e" * 40), ("status", "prepared"),
                                  ("backup", "pending"), ("backup_id", "../data.db"), ("backup_sha256", "invalid"),
                                  ("backup_bytes", 0), ("sqlite_integrity_check", "failed"), ("arcane_status", 200),
-                                 ("service_revision", "unknown"), ("accepted_at", "2025-01-01T00:00:00+00:00")]:
+                                 ("service_revision", "c" * 40),
+                                 ("accepted_at", "2025-01-01T00:00:00+00:00")]:
                     release.write_text(json.dumps(eligible))
                     response.write_text(json.dumps(dict(receipt, **{key: bad})))
                     with self.subTest(field=key), self.assertRaises(ValueError):

@@ -136,12 +136,13 @@ response. Backups and receipts remain mode 0600 on the host. Tokens, database
 contents and absolute paths never enter CI evidence.
 
 `tools/deployment_receipt.py` validates the response against this versioned
-contract and the requested commit, then embeds it and the promoted immutable
-image references in `auto-release-evidence.json`. Missing or malformed evidence
-fails the release. CI does not download the private database; the receipt attests
-the backup operation, while the synthetic HTTP tests check the real backup
-ordering, checksum, persistence and failure boundaries. Arcane acceptance is
-recorded separately from completed rollout, which still requires smoke checks.
+contract, the pinned website-ops revision, and the requested commit, then embeds
+it and the promoted immutable image references in `auto-release-evidence.json`.
+Missing, malformed, or unreviewed server-revision evidence fails the release. CI
+does not download the private database; the receipt attests the backup operation,
+while the synthetic HTTP tests check the real backup ordering, checksum,
+persistence and failure boundaries. Arcane acceptance is recorded separately
+from completed rollout, which still requires smoke checks.
 
 Use the recorded immutable image references and private database snapshots for
 rollback, after checking schema compatibility. The manual release evidence path
