@@ -34,12 +34,17 @@ class ReceiptChecks(unittest.TestCase):
                                  ("backup", "pending"), ("backup_id", "../data.db"), ("backup_sha256", "invalid"),
                                  ("backup_bytes", 0), ("sqlite_integrity_check", "failed"), ("arcane_status", 200),
                                  ("service_revision", "c" * 40),
+                                 ("prepared_at", "2026-11-01T01:00:00+01:00"),
                                  ("accepted_at", "2025-01-01T00:00:00+00:00")]:
                     release.write_text(json.dumps(eligible))
                     response.write_text(json.dumps(dict(receipt, **{key: bad})))
                     with self.subTest(field=key), self.assertRaises(ValueError):
                         attach_evidence(response, release, "a" * 40)
                     self.assertEqual(json.loads(release.read_text()), eligible)
+                response.write_text(json.dumps(dict(receipt, database_path="/private/workout.db")))
+                with self.assertRaises(ValueError):
+                    attach_evidence(response, release, "a" * 40)
+                self.assertEqual(json.loads(release.read_text()), eligible)
                 response.write_text(json.dumps({"status": "accepted"}))
                 with self.assertRaises(ValueError):
                     attach_evidence(response, release, "a" * 40)

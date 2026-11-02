@@ -461,6 +461,7 @@ jobs:
           done
       - name: Back up server database and trigger scoped Arcane deployment
         env:
+          GH_TOKEN: ${{ github.token }}
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
           DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
@@ -480,6 +481,7 @@ jobs:
               "images": {"agent": os.environ["AGENT_IMAGE"], "web": os.environ["WEB_IMAGE"]},
           }, sort_keys=True) + "\n", encoding="utf-8")
           PY
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
           curl --fail-with-body --silent --show-error --output deployment-response.json \
             --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST \
             --header 'Content-Type: application/json' \

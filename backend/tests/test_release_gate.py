@@ -180,6 +180,7 @@ def test_production_workflow_has_independent_fail_closed_controls() -> None:
         'latest_digest" = "$sha_digest',
         "python backend/release_gate.py release-evidence.json",
         "PORTAINER_WEBHOOK",
+        'test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"',
     )
     for fragment in required_fragments:
         assert fragment in workflow

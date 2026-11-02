@@ -138,7 +138,9 @@ contents and absolute paths never enter CI evidence.
 `tools/deployment_receipt.py` validates the response against this versioned
 contract, the pinned website-ops revision, and the requested commit, then embeds
 it and the promoted immutable image references in `auto-release-evidence.json`.
-Missing, malformed, or unreviewed server-revision evidence fails the release. CI
+Missing, additional, malformed, non-UTC, or unreviewed server-revision evidence
+fails the release. The workflow also rechecks current `main` immediately before
+the deployment request so a superseded build cannot cross the host boundary. CI
 does not download the private database; the receipt attests the backup operation,
 while the synthetic HTTP tests check the real backup ordering, checksum,
 persistence and failure boundaries. Arcane acceptance is recorded separately

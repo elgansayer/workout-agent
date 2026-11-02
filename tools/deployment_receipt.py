@@ -8,12 +8,30 @@ from datetime import datetime
 from pathlib import Path
 
 EXPECTED_SERVICE_REVISION = "80030f73057e72c607a86a07e939ceebe2ee19a6"
+_RECEIPT_FIELDS = {
+    "schema_version",
+    "service",
+    "service_revision",
+    "deployment_id",
+    "head_sha",
+    "status",
+    "backup",
+    "backup_id",
+    "backup_sha256",
+    "backup_bytes",
+    "sqlite_integrity_check",
+    "prepared_at",
+    "accepted_at",
+    "arcane_status",
+}
 
 
 def attach_evidence(response_path: Path, release_path: Path, expected_sha: str) -> None:
     response = json.loads(response_path.read_text(encoding="utf-8"))
     if not isinstance(response, dict):
         raise TypeError("Deployment receipt must be an object")
+    if set(response) != _RECEIPT_FIELDS:
+        raise ValueError("Deployment receipt fields do not match schema version 1")
     expected = {
         "schema_version": 1, "service": "website-ops",
         "service_revision": EXPECTED_SERVICE_REVISION, "head_sha": expected_sha,
@@ -33,8 +51,14 @@ def attach_evidence(response_path: Path, release_path: Path, expected_sha: str) 
         raise ValueError("Receipt backup must contain bytes")
     prepared = datetime.fromisoformat(response["prepared_at"])
     accepted = datetime.fromisoformat(response["accepted_at"])
-    if prepared.tzinfo is None or accepted.tzinfo is None or accepted < prepared:
-        raise ValueError("Receipt timestamps must record ordered UTC-aware events")
+    if (
+        prepared.tzinfo is None
+        or accepted.tzinfo is None
+        or prepared.utcoffset().total_seconds() != 0
+        or accepted.utcoffset().total_seconds() != 0
+        or accepted < prepared
+    ):
+        raise ValueError("Receipt timestamps must record ordered UTC events")
     release = json.loads(release_path.read_text(encoding="utf-8"))
     if release.get("sha") != expected_sha or release.get("decision") != "eligible":
         raise ValueError("Release evidence does not match the eligible commit")
