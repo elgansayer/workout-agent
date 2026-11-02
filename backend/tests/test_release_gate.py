@@ -157,6 +157,15 @@ def test_build_workflow_cannot_trigger_production_deploy() -> None:
     assert "Trigger Portainer" not in workflow
 
 
+def test_production_compose_only_consumes_promoted_images() -> None:
+    compose = (_ROOT / "docker-compose.portainer.yml").read_text(encoding="utf-8")
+
+    assert "ghcr.io/elgansayer/workout-agent:production" in compose
+    assert "ghcr.io/elgansayer/workout-agent-web:production" in compose
+    assert "ghcr.io/elgansayer/workout-agent:latest" not in compose
+    assert "ghcr.io/elgansayer/workout-agent-web:latest" not in compose
+
+
 def test_production_workflow_has_independent_fail_closed_controls() -> None:
     workflow = (_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8"
@@ -171,6 +180,7 @@ def test_production_workflow_has_independent_fail_closed_controls() -> None:
         'latest_digest" = "$sha_digest',
         "python backend/release_gate.py release-evidence.json",
         "PORTAINER_WEBHOOK",
+        'test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"',
     )
     for fragment in required_fragments:
         assert fragment in workflow

@@ -1,6 +1,10 @@
 name: Production release
 
 on:
+  workflow_run:
+    workflows: [Build and push images]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       head_sha:
@@ -63,6 +67,13 @@ permissions:
 
 jobs:
   promote:
+    if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      packages: write
     name: Evidence gate and production promotion
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -320,16 +331,28 @@ jobs:
           PY
           python backend/release_gate.py release-evidence.json
 
+      - name: Promote manually approved immutable images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          . ./image-digests.env
+          docker buildx imagetools create --tag "ghcr.io/$OWNER/workout-agent-web:production" "ghcr.io/$OWNER/workout-agent-web@$WEB_IMAGE_DIGEST"
+          docker buildx imagetools create --tag "ghcr.io/$OWNER/workout-agent:production" "ghcr.io/$OWNER/workout-agent@$AGENT_IMAGE_DIGEST"
+
       - name: Trigger protected Portainer deployment
         env:
           PORTAINER_WEBHOOK: ${{ secrets.PORTAINER_WEBHOOK }}
+          DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
         run: |
           set -euo pipefail
           if [ -z "${PORTAINER_WEBHOOK:-}" ]; then
             echo "PORTAINER_WEBHOOK must be configured on the protected production environment" >&2
             exit 1
           fi
-          curl --fail-with-body --silent --show-error -X POST "$PORTAINER_WEBHOOK"
+          curl --fail-with-body --silent --show-error --resolve "$DEPLOY_RESOLVE" -X POST "$PORTAINER_WEBHOOK"
 
       - name: Write immutable release record
         env:
@@ -368,5 +391,108 @@ jobs:
         with:
           name: production-release-record-${{ inputs.head_sha }}
           path: release-record.json
+          if-no-files-found: error
+          retention-days: 90
+
+  auto-promote:
+    name: Verified automatic production promotion
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: production
+    concurrency:
+      group: workout-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: read
+      packages: write
+    steps:
+      - name: Validate source identity before checking out executable code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Verify required CI, merged PR and independent factory review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/check_auto_release.py
+          --repository '${{ github.repository }}'
+          --sha '${{ github.event.workflow_run.head_sha }}'
+          --build-run '${{ github.event.workflow_run.id }}'
+          --output auto-release-evidence.json
+      - name: Promote exact tested images to production tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+          : > promoted-images.env
+          for image in workout-agent workout-agent-web; do
+            ref="ghcr.io/$OWNER/$image:sha-${HEAD_SHA:0:7}"
+            docker pull "$ref"
+            test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$HEAD_SHA"
+            immutable_ref="$(docker image inspect "$ref" --format '{{ index .RepoDigests 0 }}')"
+            case "$immutable_ref" in
+              (ghcr.io/*/workout-agent*@sha256:????????????????????????????????????????????????????????????????) ;;
+              (*) echo "Release rejected: immutable digest unavailable for $ref" >&2; exit 1 ;;
+            esac
+            if [ "$image" = workout-agent ]; then
+              printf 'AGENT_IMAGE=%s\n' "$immutable_ref" >> promoted-images.env
+            else
+              printf 'WEB_IMAGE=%s\n' "$immutable_ref" >> promoted-images.env
+            fi
+            docker tag "$ref" "ghcr.io/$OWNER/$image:production"
+            docker push "ghcr.io/$OWNER/$image:production"
+          done
+      - name: Back up server database and trigger scoped Arcane deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_WEBHOOK_URL"
+          set -a
+          . ./promoted-images.env
+          set +a
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path("deployment-request.json").write_text(json.dumps({
+              "head_sha": os.environ["HEAD_SHA"],
+              "images": {"agent": os.environ["AGENT_IMAGE"], "web": os.environ["WEB_IMAGE"]},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+          curl --fail-with-body --silent --show-error --output deployment-response.json \
+            --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST \
+            --header 'Content-Type: application/json' \
+            --data-binary @deployment-request.json "$DEPLOY_WEBHOOK_URL"
+          python3 -m tools.deployment_receipt \
+            --response deployment-response.json \
+            --release-evidence auto-release-evidence.json \
+            --expected-sha "$HEAD_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: auto-release-${{ github.event.workflow_run.head_sha }}
+          path: auto-release-evidence.json
           if-no-files-found: error
           retention-days: 90

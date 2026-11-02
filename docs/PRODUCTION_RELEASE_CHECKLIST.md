@@ -99,3 +99,53 @@ After Portainer accepts the webhook, execute the recorded production smoke-test 
 - no new error-rate or security alerts.
 
 If a production smoke test fails, stop further promotion and run the recorded rollback command. Preserve the failed release evidence and verification output rather than overwriting it with a later successful run.
+
+
+## Automatic GHCR deployment
+
+Website operations now requests automatic updates after main changes. Image builds
+run on every main push. Production release remains the sole promotion workflow:
+its automatic path requires a successful canonical image build, the exact current
+main merge commit, all required CI from the configured GitHub App, and a successful
+`factory/independent-review` status on the exact merged PR head. Missing, pending,
+failed, skipped or neutral required evidence blocks promotion. The existing manual
+release evidence gate remains available unchanged.
+
+Only verified commit images are promoted to `:production`; the server follows
+that tag rather than the ungated build `:latest` tag. The live scoped endpoint
+is owned by the private MOHCentral/website-ops operations repository, deployed
+as the `deployment-hooks` Arcane project. Its reviewed implementation and host
+wiring are pinned here:
+
+- [Snapshot, integrity verification and Arcane forwarding](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/server.py)
+- [Live Compose wiring](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/compose.yaml)
+- [Version 1 receipt contract and failure semantics](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/docs/deployment-receipt-contract.md)
+- [Synthetic HTTP boundary tests](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/test_server.py)
+
+The configured repository secret `DEPLOY_WEBHOOK_URL` selects
+`https://moh-central.net/api/website-deploy/workout/<private-token>`.
+`DEPLOY_RESOLVE` routes certificate-verified HTTPS to the origin. The endpoint
+uses the fixed production database and forwards only to Workout's native Arcane
+`/api/webhooks/trigger/<private-token>` URL on loopback; it cannot select another
+project or command from caller input. No additional gateway or token is needed.
+
+Before forwarding, the service creates a consistent SQLite online backup,
+checks integrity, hashes the closed backup, and persists a prepared receipt.
+Only an Arcane HTTP 202 and persisted accepted receipt produce an accepted
+response. Backups and receipts remain mode 0600 on the host. Tokens, database
+contents and absolute paths never enter CI evidence.
+
+`tools/deployment_receipt.py` validates the response against this versioned
+contract, the pinned website-ops revision, and the requested commit, then embeds
+it and the promoted immutable image references in `auto-release-evidence.json`.
+Missing, additional, malformed, non-UTC, or unreviewed server-revision evidence
+fails the release. The workflow also rechecks current `main` immediately before
+the deployment request so a superseded build cannot cross the host boundary. CI
+does not download the private database; the receipt attests the backup operation,
+while the synthetic HTTP tests check the real backup ordering, checksum,
+persistence and failure boundaries. Arcane acceptance is recorded separately
+from completed rollout, which still requires smoke checks.
+
+Use the recorded immutable image references and private database snapshots for
+rollback, after checking schema compatibility. The manual release evidence path
+remains available.
