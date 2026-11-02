@@ -6,6 +6,8 @@ on:
       - '.github/workflows/build-images.yml'
       - '.github/workflows/production-release.yml'
       - '.github/workflows/production-release-policy.yml'
+      - 'tools/check_auto_release.py'
+      - 'tools/test_auto_release.py'
       - 'backend/release_gate.py'
       - 'backend/tests/test_release_gate.py'
       - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
@@ -15,6 +17,8 @@ on:
       - '.github/workflows/build-images.yml'
       - '.github/workflows/production-release.yml'
       - '.github/workflows/production-release-policy.yml'
+      - 'tools/check_auto_release.py'
+      - 'tools/test_auto_release.py'
       - 'backend/release_gate.py'
       - 'backend/tests/test_release_gate.py'
       - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
@@ -45,3 +49,5 @@ jobs:
       - name: Run release-gate regression tests
         working-directory: backend
         run: python3 -m pytest -q tests/test_release_gate.py
+      - name: Verify automatic eligibility checks and negative cases
+        run: python3 -m unittest tools.test_auto_release -v

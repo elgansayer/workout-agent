@@ -2,7 +2,7 @@ name: Build and push images
 
 # Builds container images and pushes them to GHCR. This workflow deliberately
 # does not deploy production. Production promotion is owned exclusively by
-# .github/workflows/production-release.yml after its independent evidence gate.
+# .github/workflows/production-release.yml after required CI and independent review.
 #
 # Published images:
 #   ghcr.io/OWNER/workout-agent-web
@@ -11,14 +11,6 @@ name: Build and push images
 on:
   push:
     branches: [main]
-    paths:
-      - '**.py'
-      - 'requirements*.txt'
-      - 'Dockerfile'
-      - 'Dockerfile.web'
-      - 'docker-entrypoint.sh'
-      - 'webapp/**'
-      - '.github/workflows/build-images.yml'
   workflow_dispatch:
 
 env:

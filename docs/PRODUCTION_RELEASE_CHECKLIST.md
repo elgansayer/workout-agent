@@ -99,3 +99,22 @@ After Portainer accepts the webhook, execute the recorded production smoke-test 
 - no new error-rate or security alerts.
 
 If a production smoke test fails, stop further promotion and run the recorded rollback command. Preserve the failed release evidence and verification output rather than overwriting it with a later successful run.
+
+
+## Automatic GHCR deployment
+
+Website operations now requests automatic updates after main changes. Image builds
+run on every main push. Production release remains the sole promotion workflow:
+its automatic path requires a successful canonical image build, the exact current
+main merge commit, all required CI from the configured GitHub App, and a successful
+`factory/independent-review` status on the exact merged PR head. Missing, pending,
+failed, skipped or neutral required evidence blocks promotion. The existing manual
+release evidence gate remains available unchanged.
+
+Only verified commit images are promoted to `:production`; the server follows
+that tag rather than the ungated build `:latest` tag. Before accepting each scoped
+server deployment, the webhook service takes and integrity-checks a consistent
+SQLite backup. Runtime secrets and data remain on the host. Arcane manages the
+Compose deployment and records the outcome. Use the recorded immutable image
+references and private database snapshots for rollback, after checking schema
+compatibility. Asynchronous webhook acceptance is not a successful rollout claim.

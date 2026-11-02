@@ -1,6 +1,10 @@
 name: Production release
 
 on:
+  workflow_run:
+    workflows: [Build and push images]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
     inputs:
       head_sha:
@@ -63,6 +67,7 @@ permissions:
 
 jobs:
   promote:
+    if: github.event_name == 'workflow_dispatch'
     name: Evidence gate and production promotion
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -368,5 +373,75 @@ jobs:
         with:
           name: production-release-record-${{ inputs.head_sha }}
           path: release-record.json
+          if-no-files-found: error
+          retention-days: 90
+
+  auto-promote:
+    name: Verified automatic production promotion
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: production
+    concurrency:
+      group: workout-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+      actions: read
+      packages: write
+    steps:
+      - name: Validate source identity before checking out executable code
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Verify required CI, merged PR and independent factory review
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 tools/check_auto_release.py
+          --repository '${{ github.repository }}'
+          --sha '${{ github.event.workflow_run.head_sha }}'
+          --build-run '${{ github.event.workflow_run.id }}'
+          --output auto-release-evidence.json
+      - name: Promote exact tested images to production tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+          for image in workout-agent workout-agent-web; do
+            ref="ghcr.io/$OWNER/$image:sha-${HEAD_SHA:0:7}"
+            docker pull "$ref"
+            test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$HEAD_SHA"
+            docker tag "$ref" "ghcr.io/$OWNER/$image:production"
+            docker push "ghcr.io/$OWNER/$image:production"
+          done
+      - name: Back up server database and trigger scoped Arcane deployment
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
+        run: |
+          set -euo pipefail
+          test -n "$DEPLOY_WEBHOOK_URL"
+          status=$(curl --silent --show-error --output /tmp/deploy.json --write-out '%{http_code}' --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST "$DEPLOY_WEBHOOK_URL")
+          test "$status" = 202 || { echo "Deployment trigger returned HTTP $status" >&2; exit 1; }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: auto-release-${{ github.event.workflow_run.head_sha }}
+          path: auto-release-evidence.json
           if-no-files-found: error
           retention-days: 90
