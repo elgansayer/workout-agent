@@ -112,36 +112,28 @@ failed, skipped or neutral required evidence blocks promotion. The existing manu
 release evidence gate remains available unchanged.
 
 Only verified commit images are promoted to `:production`; the server follows
-that tag rather than the ungated build `:latest` tag. The live scoped endpoint
-is owned by the private MOHCentral/website-ops operations repository, deployed
-as the `deployment-hooks` Arcane project. Its reviewed implementation and host
-wiring are pinned here:
+that tag rather than the ungated `:latest` tag. The complete host boundary is
+implemented by `tools/deployment_gateway.py`, with its service and mode-0600
+environment templates under `deploy/`. This keeps the implementation that
+creates and verifies the backup, persists the attempt, and calls Arcane available
+for independent review in the same change as its release consumer.
 
-- [Snapshot, integrity verification and Arcane forwarding](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/server.py)
-- [Live Compose wiring](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/compose.yaml)
-- [Version 1 receipt contract and failure semantics](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/docs/deployment-receipt-contract.md)
-- [Synthetic HTTP boundary tests](https://github.com/MOHCentral/website-ops/blob/80030f73057e72c607a86a07e939ceebe2ee19a6/webhooks/test_server.py)
+The gateway accepts only `POST /v1/deployments/workout-agent` with the dedicated
+`DEPLOY_WEBHOOK_TOKEN`. It validates the exact commit and immutable Workout image
+digests, creates an encrypted snapshot through SQLite online backup, verifies the
+decrypted digest, schema, foreign keys, and `integrity_check`, and durably records
+that verified state before it contacts the fixed Arcane URL. Only Arcane HTTP 202
+is accepted. Any backup, persistence, or Arcane failure is recorded and fails the
+request closed.
 
-The configured repository secret `DEPLOY_WEBHOOK_URL` selects
-`https://moh-central.net/api/website-deploy/workout/<private-token>`.
-`DEPLOY_RESOLVE` routes certificate-verified HTTPS to the origin. The endpoint
-uses the fixed production database and forwards only to Workout's native Arcane
-`/api/webhooks/trigger/<private-token>` URL on loopback; it cannot select another
-project or command from caller input. No additional gateway or token is needed.
-
-Before forwarding, the service creates a consistent SQLite online backup,
-checks integrity, hashes the closed backup, and persists a prepared receipt.
-Only an Arcane HTTP 202 and persisted accepted receipt produce an accepted
-response. Backups and receipts remain mode 0600 on the host. Tokens, database
-contents and absolute paths never enter CI evidence.
-
-`tools/deployment_receipt.py` validates the response against this versioned
-contract and the requested commit, then embeds it and the promoted immutable
-image references in `auto-release-evidence.json`. Missing or malformed evidence
-fails the release. CI does not download the private database; the receipt attests
-the backup operation, while the synthetic HTTP tests check the real backup
-ordering, checksum, persistence and failure boundaries. Arcane acceptance is
-recorded separately from completed rollout, which still requires smoke checks.
+Install `deploy/workout-deployment-gateway.service` on the production host and
+route certificate-verified HTTPS only to its loopback listener. Configure
+`DEPLOY_WEBHOOK_URL`, `DEPLOY_WEBHOOK_TOKEN`, and `DEPLOY_RESOLVE` on the protected
+GitHub `production` environment. Database contents, encryption keys, snapshots,
+Arcane credentials, and bounded Arcane response bodies remain on the host. The
+workflow validates the structured response and preserves only hashes, identifiers,
+integrity results, and immutable image references in release evidence. Arcane
+acceptance remains distinct from rollout completion and subsequent smoke checks.
 
 Use the recorded immutable image references and private database snapshots for
 rollback, after checking schema compatibility. The manual release evidence path

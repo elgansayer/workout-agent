@@ -1,0 +1,21 @@
+[Unit]
+Description=Workout Agent backup-before-Arcane deployment gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=workout-deploy
+Group=workout-deploy
+WorkingDirectory=/srv/workout-agent
+EnvironmentFile=/etc/workout-agent/deployment-gateway.env
+ExecStart=/srv/workout-agent/.venv/bin/python -m tools.deployment_gateway serve --host 127.0.0.1 --port 8792
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/workout-agent/data /srv/workout-agent/backups /srv/workout-agent/deployment-records
+
+[Install]
+WantedBy=multi-user.target
