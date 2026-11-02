@@ -68,6 +68,12 @@ permissions:
 jobs:
   promote:
     if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+      actions: read
+      packages: write
     name: Evidence gate and production promotion
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -325,16 +331,28 @@ jobs:
           PY
           python backend/release_gate.py release-evidence.json
 
+      - name: Promote manually approved immutable images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          . ./image-digests.env
+          docker buildx imagetools create --tag "ghcr.io/$OWNER/workout-agent-web:production" "ghcr.io/$OWNER/workout-agent-web@$WEB_IMAGE_DIGEST"
+          docker buildx imagetools create --tag "ghcr.io/$OWNER/workout-agent:production" "ghcr.io/$OWNER/workout-agent@$AGENT_IMAGE_DIGEST"
+
       - name: Trigger protected Portainer deployment
         env:
           PORTAINER_WEBHOOK: ${{ secrets.PORTAINER_WEBHOOK }}
+          DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
         run: |
           set -euo pipefail
           if [ -z "${PORTAINER_WEBHOOK:-}" ]; then
             echo "PORTAINER_WEBHOOK must be configured on the protected production environment" >&2
             exit 1
           fi
-          curl --fail-with-body --silent --show-error -X POST "$PORTAINER_WEBHOOK"
+          curl --fail-with-body --silent --show-error --resolve "$DEPLOY_RESOLVE" -X POST "$PORTAINER_WEBHOOK"
 
       - name: Write immutable release record
         env:
