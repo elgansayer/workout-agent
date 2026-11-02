@@ -112,9 +112,26 @@ failed, skipped or neutral required evidence blocks promotion. The existing manu
 release evidence gate remains available unchanged.
 
 Only verified commit images are promoted to `:production`; the server follows
-that tag rather than the ungated build `:latest` tag. Before accepting each scoped
-server deployment, the webhook service takes and integrity-checks a consistent
-SQLite backup. Runtime secrets and data remain on the host. Arcane manages the
-Compose deployment and records the outcome. Use the recorded immutable image
-references and private database snapshots for rollback, after checking schema
-compatibility. Asynchronous webhook acceptance is not a successful rollout claim.
+that tag rather than the ungated build `:latest` tag. The scoped endpoint is
+implemented by `tools/deployment_gateway.py` and accepts only
+`POST /v1/deployments/workout-agent` with its dedicated bearer token. It creates
+an encrypted snapshot with SQLite's online-backup API, decrypts and verifies its
+digest, schema metadata, foreign keys and `integrity_check`, persists that state,
+and only then forwards the immutable commit and image digests to Arcane.
+
+Install `deploy/workout-deployment-gateway.service` and the mode-0600 environment
+file based on `deploy/deployment-gateway.env.example` on the production host.
+Terminate TLS at the existing private ingress and route only the scoped path to
+the loopback listener. Configure `DEPLOY_WEBHOOK_URL`, `DEPLOY_WEBHOOK_TOKEN` and
+`DEPLOY_RESOLVE` on the protected GitHub `production` environment. The database,
+backup keyring, encrypted `.wab` files, Arcane credential, and complete Arcane
+response remain on the host; GitHub receives only hashes, identifiers and status.
+
+The gateway writes a mode-0600 record for every attempt. A successful record
+links the commit and immutable image references to the backup identity/integrity
+evidence, Arcane HTTP result, bounded response body and response hash. The
+workflow validates the structured response and embeds it in
+`auto-release-evidence.json`; an opaque HTTP 202 cannot pass. Use the recorded
+immutable image references and private database snapshots for rollback, after
+checking schema compatibility. Arcane acceptance is recorded distinctly from a
+completed rollout, which still requires the production smoke checks.

@@ -441,22 +441,56 @@ jobs:
           set -euo pipefail
           printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
           test "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
+          : > promoted-images.env
           for image in workout-agent workout-agent-web; do
             ref="ghcr.io/$OWNER/$image:sha-${HEAD_SHA:0:7}"
             docker pull "$ref"
             test "$(docker image inspect "$ref" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$HEAD_SHA"
+            immutable_ref="$(docker image inspect "$ref" --format '{{ index .RepoDigests 0 }}')"
+            case "$immutable_ref" in
+              (ghcr.io/*/workout-agent*@sha256:????????????????????????????????????????????????????????????????) ;;
+              (*) echo "Release rejected: immutable digest unavailable for $ref" >&2; exit 1 ;;
+            esac
+            if [ "$image" = workout-agent ]; then
+              printf 'AGENT_IMAGE=%s\n' "$immutable_ref" >> promoted-images.env
+            else
+              printf 'WEB_IMAGE=%s\n' "$immutable_ref" >> promoted-images.env
+            fi
             docker tag "$ref" "ghcr.io/$OWNER/$image:production"
             docker push "ghcr.io/$OWNER/$image:production"
           done
       - name: Back up server database and trigger scoped Arcane deployment
         env:
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
           DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_WEBHOOK_URL"
-          status=$(curl --silent --show-error --output /tmp/deploy.json --write-out '%{http_code}' --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST "$DEPLOY_WEBHOOK_URL")
-          test "$status" = 202 || { echo "Deployment trigger returned HTTP $status" >&2; exit 1; }
+          test -n "$DEPLOY_WEBHOOK_TOKEN"
+          set -a
+          . ./promoted-images.env
+          set +a
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          Path("deployment-request.json").write_text(json.dumps({
+              "commit_sha": os.environ["HEAD_SHA"],
+              "images": {"agent": os.environ["AGENT_IMAGE"], "web": os.environ["WEB_IMAGE"]},
+          }, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+          curl --fail-with-body --silent --show-error --output deployment-response.json \
+            --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST \
+            --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
+            --header 'Content-Type: application/json' \
+            --data-binary @deployment-request.json "$DEPLOY_WEBHOOK_URL"
+          python3 -m tools.deployment_gateway record-response \
+            --response deployment-response.json \
+            --release-evidence auto-release-evidence.json \
+            --expected-sha "$HEAD_SHA"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: auto-release-${{ github.event.workflow_run.head_sha }}

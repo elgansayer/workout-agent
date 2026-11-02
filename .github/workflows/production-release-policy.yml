@@ -8,6 +8,8 @@ on:
       - '.github/workflows/production-release-policy.yml'
       - 'tools/check_auto_release.py'
       - 'tools/test_auto_release.py'
+      - 'tools/deployment_gateway.py'
+      - 'tools/test_deployment_gateway.py'
       - 'backend/release_gate.py'
       - 'backend/tests/test_release_gate.py'
       - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
@@ -19,6 +21,8 @@ on:
       - '.github/workflows/production-release-policy.yml'
       - 'tools/check_auto_release.py'
       - 'tools/test_auto_release.py'
+      - 'tools/deployment_gateway.py'
+      - 'tools/test_deployment_gateway.py'
       - 'backend/release_gate.py'
       - 'backend/tests/test_release_gate.py'
       - 'docs/PRODUCTION_RELEASE_CHECKLIST.md'
@@ -37,20 +41,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install focused test dependency
-        run: python3 -m pip install 'pytest>=8,<9'
+      - name: Install focused test dependencies
+        run: >-
+          python3 -m pip install
+          'pytest>=8,<9'
+          'cryptography>=50.0.0'
 
       - name: Compile release policy
         run: >-
           python3 -m py_compile
           backend/release_gate.py
           backend/tests/test_release_gate.py
+          tools/deployment_gateway.py
+          tools/test_deployment_gateway.py
 
       - name: Run release-gate regression tests
         working-directory: backend
         run: python3 -m pytest -q tests/test_release_gate.py
       - name: Verify automatic eligibility checks and negative cases
         run: python3 -m unittest tools.test_auto_release -v
+      - name: Verify backup-before-Arcane deployment boundary
+        run: python3 -m pytest -q tools/test_deployment_gateway.py
       - name: Verify the workflow token can read enforced release requirements
         env:
           GH_TOKEN: ${{ github.token }}
