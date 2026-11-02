@@ -37,7 +37,8 @@ jobs:
 
   frontend:
     name: frontend
-    runs-on: ubuntu-latest
+    # Keep the browser job on the OS supported by the pinned Playwright release.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
