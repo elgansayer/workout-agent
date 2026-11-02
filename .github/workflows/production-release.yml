@@ -419,7 +419,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(gh api "repos/$REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$HEAD_SHA"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
@@ -457,7 +457,7 @@ jobs:
           test -n "$DEPLOY_WEBHOOK_URL"
           status=$(curl --silent --show-error --output /tmp/deploy.json --write-out '%{http_code}' --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST "$DEPLOY_WEBHOOK_URL")
           test "$status" = 202 || { echo "Deployment trigger returned HTTP $status" >&2; exit 1; }
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: auto-release-${{ github.event.workflow_run.head_sha }}
           path: auto-release-evidence.json
