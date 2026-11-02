@@ -1,140 +1,154 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="loading-state muted" role="status">Loading...</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+  <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
+    <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
+      Try again
+    </button>
   </div>
 }
 
 @if (data(); as data) {
-<h1>Stats</h1>
+  <h1>Stats</h1>
 
-<section class="stat-strip">
+  <section class="stat-strip">
     <div class="stat-card big-num">
-        <span class="num">{{ data.total_sessions }}</span>
-        <span class="stat-cap">Sessions logged</span>
+      <span class="num">{{ data.total_sessions }}</span>
+      <span class="stat-cap">Sessions logged</span>
     </div>
     <div class="stat-card big-num">
-        <span class="num">{{ data.exercises_tracked }}</span>
-        <span class="stat-cap">Exercises tracked</span>
+      <span class="num">{{ data.exercises_tracked }}</span>
+      <span class="stat-cap">Exercises tracked</span>
     </div>
     <div class="stat-card big-num">
-        <span class="num">{{ data.total_volume | number:'1.0-0' }}</span>
-        <span class="num-label">kg moved</span>
-        <span class="stat-cap">Est. total load</span>
+      <span class="num">{{ data.total_volume | number: '1.0-0' }}</span>
+      <span class="num-label">kg moved</span>
+      <span class="stat-cap">Est. total load</span>
     </div>
     <div class="stat-card big-num">
-        <span class="num">{{ data.days_on_programme }}</span>
-        <span class="num-label">days</span>
-        <span class="stat-cap">On programme</span>
+      <span class="num">{{ data.days_on_programme }}</span>
+      <span class="num-label">days</span>
+      <span class="stat-cap">On programme</span>
     </div>
-</section>
+  </section>
 
-<div class="flex-row">
+  <div class="flex-row">
     <section class="panel">
-        <h2>Training split</h2>
-        @if (data.has_distribution) {
-            <div [innerHTML]="safeHtml(data.distribution)"></div>
-        } @else {
-            <p class="muted">No sessions logged yet.</p>
-        }
+      <h2>Training split</h2>
+      @if (data.has_distribution) {
+        <div [innerHTML]="safeHtml(data.distribution)"></div>
+      } @else {
+        <p class="muted">No sessions logged yet.</p>
+      }
     </section>
 
     <section class="panel">
-        <h2>Volume by muscle group</h2>
-        @if (data.has_muscle) {
-            <div [innerHTML]="safeHtml(data.muscle_donut)"></div>
-        } @else {
-            <p class="muted">No lifts logged yet.</p>
-        }
+      <h2>Volume by muscle group</h2>
+      @if (data.has_muscle) {
+        <div [innerHTML]="safeHtml(data.muscle_donut)"></div>
+      } @else {
+        <p class="muted">No lifts logged yet.</p>
+      }
     </section>
-</div>
+  </div>
 
-@if (data.projections) {
-<section class="panel">
-    <h2>End-of-cycle projection</h2>
-    <div class="proj-grid">
+  @if (data.projections?.length) {
+    <section class="panel">
+      <h2>End-of-cycle projection</h2>
+      <div class="proj-grid">
         @for (p of data.projections; track p.label) {
-        <div class="proj-card">
+          <div class="proj-card">
             <span class="proj-label">{{ p.label }}</span>
             <span class="proj-now muted">Now {{ p.current }}</span>
             <span class="proj-arrow">to</span>
             <span class="proj-value">{{ p.projected }}</span>
-            <span class="proj-meta muted">{{ p.metric }}@if (p.gain > 0) { | +{{ p.gain }} }</span>
-        </div>
+            <span class="proj-meta muted"
+              >{{ p.metric }}
+              @if (p.gain > 0) {
+                | +{{ p.gain }}
+              }
+            </span>
+          </div>
         }
-    </div>
-    
-    <h2 class="section-head ai-gradient-text">✨ Advanced Data Visualisations</h2>
-    <div class="chart-grid" style="margin-bottom: 20px;">
+      </div>
+
+      <h2 class="section-head ai-gradient-text">✨ Advanced Data Visualisations</h2>
+      <div class="chart-grid" style="margin-bottom: 20px">
         <div [innerHTML]="safeHtml(data.block_phase_svg)"></div>
         <div [innerHTML]="safeHtml(data.recovery_grid_svg)"></div>
         <div [innerHTML]="safeHtml(data.vol_dist_svg)"></div>
-    </div>
+      </div>
 
-    <p class="chart-foot muted" style="margin-top: 15px;">Linear projection from your logged trend to the end of this 12-week cycle.</p>
-</section>
-}
+      <p class="chart-foot muted" style="margin-top: 15px">
+        Projection from your logged training trend. Estimates are not guaranteed results.
+      </p>
+    </section>
+  }
 
-@if (data.dots_chart || data.ratio_chart) {
-<section class="panel">
-    <h2>Relative strength</h2>
-    <div class="chart-grid">
+  @if (data.dots_chart || data.ratio_chart) {
+    <section class="panel">
+      <h2>Relative strength</h2>
+      <div class="chart-grid">
         @if (data.dots_chart) {
-            <div class="chart-card">
-                <h3>DOTS score</h3>
-                <div [innerHTML]="safeHtml(data.dots_chart)"></div>
-                <p class="chart-foot muted">Strength relative to bodyweight (deadlift e1RM).</p>
-            </div>
+          <div class="chart-card">
+            <h3>DOTS score</h3>
+            <div [innerHTML]="safeHtml(data.dots_chart)"></div>
+            <p class="chart-foot muted">Strength relative to bodyweight (deadlift e1RM).</p>
+          </div>
         }
         @if (data.ratio_chart) {
-            <div class="chart-card">
-                <h3>Deadlift / bodyweight</h3>
-                <div [innerHTML]="safeHtml(data.ratio_chart)"></div>
-                <p class="chart-foot muted">Bodyweight multiples on the deadlift.</p>
-            </div>
+          <div class="chart-card">
+            <h3>Deadlift / bodyweight</h3>
+            <div [innerHTML]="safeHtml(data.ratio_chart)"></div>
+            <p class="chart-foot muted">Bodyweight multiples on the deadlift.</p>
+          </div>
         }
-    </div>
-</section>
-}
+      </div>
+    </section>
+  }
 
-<section class="panel">
+  <section class="panel">
     <h2>Recent session load</h2>
     @if (data.has_volume) {
-        <div [innerHTML]="safeHtml(data.volume_bars)"></div>
-        <p class="chart-foot muted">Estimated load = top weight x reps x sets per session.</p>
+      <div [innerHTML]="safeHtml(data.volume_bars)"></div>
+      <p class="chart-foot muted">Estimated load = top weight x reps x sets per session.</p>
     } @else {
-        <p class="muted">No sessions logged yet.</p>
+      <p class="muted">No sessions logged yet.</p>
     }
-</section>
+  </section>
 
-<section class="panel">
+  <section class="panel">
     <h2>Personal records</h2>
     @if (!data.prs || data.prs.length === 0) {
-        <p class="muted">Your estimated 1-rep maxes will appear here once lifts are logged.</p>
+      <p class="muted">Your estimated 1-rep maxes will appear here once lifts are logged.</p>
     } @else {
-        <table class="pr-table">
+      <app-list-controls [list]="records" id="records" label="records">
+        <div class="table-scroll" role="region" aria-label="Personal records" tabindex="0">
+          <table class="pr-table">
             <thead>
-                <tr>
-                    <th>Exercise</th>
-                    <th>Est. 1RM</th>
-                    <th>Best set</th>
-                    <th>Date</th>
-                </tr>
+              <tr>
+                <th>Exercise</th>
+                <th>Est. 1RM</th>
+                <th>Best set</th>
+                <th>Date</th>
+              </tr>
             </thead>
             <tbody>
-                @for (pr of data.prs; track pr.exercise) {
+              @for (pr of records.visible(); track pr.exercise) {
                 <tr>
-                    <td>{{ pr.exercise }}</td>
-                    <td class="num-cell">{{ pr.e1rm }} kg</td>
-                    <td class="muted">{{ pr.detail }}</td>
-                    <td class="muted">{{ pr.date | date:'shortDate' }}</td>
+                  <td>{{ pr.exercise }}</td>
+                  <td class="num-cell">{{ pr.e1rm }} kg</td>
+                  <td class="muted">{{ pr.detail }}</td>
+                  <td class="muted">{{ pr.date | date: 'shortDate' }}</td>
                 </tr>
-                }
+              }
             </tbody>
-        </table>
+          </table>
+        </div>
+      </app-list-controls>
     }
-</section>
+  </section>
 }

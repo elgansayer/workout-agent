@@ -1,4 +1,4 @@
-import { Component, inject, signal, OnInit, ViewChild, ElementRef } from '@angular/core';
+import { Component, inject, signal, OnInit, OnDestroy, ViewChild, ElementRef } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
@@ -10,9 +10,9 @@ import { environment } from '../../../environments/environment';
   standalone: true,
   imports: [CommonModule, FormsModule],
   templateUrl: './chat.html',
-  styleUrl: './chat.css'
+  styleUrl: './chat.css',
 })
-export class Chat implements OnInit {
+export class Chat implements OnInit, OnDestroy {
   private http = inject(HttpClient);
   private sanitizer = inject(DomSanitizer);
 
@@ -29,6 +29,10 @@ export class Chat implements OnInit {
     this.loadChatHistory();
   }
 
+  ngOnDestroy(): void {
+    this.stopGeneration();
+  }
+
   loadChatHistory() {
     this.http.get<{ messages: any[] }>('/api/chat/history').subscribe({
       next: (res) => {
@@ -36,7 +40,7 @@ export class Chat implements OnInit {
         this.messages.set(msgs);
         this.scrollToBottom();
       },
-      error: () => {}
+      error: () => this.error.set('Could not load chat history. Try refreshing the page.'),
     });
   }
 
@@ -46,7 +50,7 @@ export class Chat implements OnInit {
   }
 
   onKeyDown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
       event.preventDefault();
       this.sendMessage();
     }
@@ -61,7 +65,11 @@ export class Chat implements OnInit {
     this.currentStreamText.set('');
     this.error.set(null);
 
-    const userMsg = { role: 'user', content: query, created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) };
+    const userMsg = {
+      role: 'user',
+      content: query,
+      created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    };
     this.messages.set([...this.messages(), userMsg]);
     this.scrollToBottom();
 
@@ -72,18 +80,19 @@ export class Chat implements OnInit {
       const response = await fetch(`${baseUrl}/api/rag_search?q=${encodeURIComponent(query)}`, {
         signal: this.abortController.signal,
         credentials: 'include',
-        cache: 'no-store'
+        cache: 'no-store',
       });
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null);
-        const message = response.status === 401
-          ? 'Your session has expired. Sign in again to use Coach.'
-          : response.status === 429
-            ? 'Too many requests. Wait a minute, then try again.'
-            : typeof payload?.detail === 'string'
-              ? payload.detail
-              : 'Coach could not connect. Check your AI provider in Settings and try again.';
+        const message =
+          response.status === 401
+            ? 'Your session has expired. Sign in again to use Coach.'
+            : response.status === 429
+              ? 'Too many requests. Wait a minute, then try again.'
+              : typeof payload?.detail === 'string'
+                ? payload.detail
+                : 'Coach could not connect. Check your AI provider in Settings and try again.';
         throw new Error(message);
       }
       if (!response.headers.get('content-type')?.startsWith('text/plain')) {
@@ -107,15 +116,17 @@ export class Chat implements OnInit {
 
       fullText += decoder.decode();
       if (!fullText.trim()) {
-        throw new Error('Coach returned no response. Check your AI provider in Settings and try again.');
+        throw new Error(
+          'Coach returned no response. Check your AI provider in Settings and try again.',
+        );
       }
       this.messages.set([
         ...this.messages(),
         {
           role: 'assistant',
           content: fullText,
-          created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-        }
+          created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
       ]);
     } catch (err: any) {
       if (err.name !== 'AbortError') {
@@ -137,11 +148,12 @@ export class Chat implements OnInit {
   }
 
   clearChat() {
-    if (!confirm('Clear all chat history?')) return;
+    if (this.isStreaming() || !confirm('Clear all chat history?')) return;
     this.http.post('/api/chat/clear', {}).subscribe({
       next: () => {
         this.messages.set([]);
-      }
+      },
+      error: () => this.error.set('Could not clear chat history. Please try again.'),
     });
   }
 
@@ -157,15 +169,21 @@ export class Chat implements OnInit {
       .replace(/`([^`]+)`/g, '<code>$1</code>');
 
     const paragraphs = html.split(/\n{2,}/);
-    html = paragraphs.map(p => {
-      p = p.trim();
-      if (!p) return '';
-      const lines = p.split('\n');
-      if (lines.every(l => /^\s*[-•]\s/.test(l))) {
-        return '<ul>' + lines.map(l => '<li>' + l.replace(/^\s*[-•]\s/, '') + '</li>').join('') + '</ul>';
-      }
-      return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
-    }).join('');
+    html = paragraphs
+      .map((p) => {
+        p = p.trim();
+        if (!p) return '';
+        const lines = p.split('\n');
+        if (lines.every((l) => /^\s*[-•]\s/.test(l))) {
+          return (
+            '<ul>' +
+            lines.map((l) => '<li>' + l.replace(/^\s*[-•]\s/, '') + '</li>').join('') +
+            '</ul>'
+          );
+        }
+        return '<p>' + p.replace(/\n/g, '<br>') + '</p>';
+      })
+      .join('');
 
     return this.sanitizer.bypassSecurityTrustHtml(html);
   }
@@ -173,7 +191,8 @@ export class Chat implements OnInit {
   private scrollToBottom() {
     setTimeout(() => {
       if (this.scrollContainer) {
-        this.scrollContainer.nativeElement.scrollTop = this.scrollContainer.nativeElement.scrollHeight;
+        this.scrollContainer.nativeElement.scrollTop =
+          this.scrollContainer.nativeElement.scrollHeight;
       }
     }, 50);
   }

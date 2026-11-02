@@ -1,0 +1,26 @@
+:host { display: block; }
+.today-layout { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.25rem; align-items: start; }
+.today-sidebar { min-width: 0; }
+.programme-overview > summary { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: baseline; }
+.programme-overview > summary::after { content: '+'; margin-left: auto; }
+.programme-overview[open] > summary::after { content: '−'; }
+.programme-overview .hero-rings { justify-content: start; margin-top: 1rem; }
+.today .page-heading { margin-bottom: .75rem; }
+.today .page-heading h2 { margin: 0; font-size: 1.4rem; }
+.exercise { padding: 0; animation: none; }
+.exercise:hover { transform: none; }
+.exercise > summary { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto 1rem; gap: .65rem; align-items: center; padding: .85rem; font-weight: 400; }
+.exercise > summary::after { content: '+'; color: var(--muted); }
+.exercise[open] > summary::after { content: '−'; }
+.exercise-number { color: var(--muted); font-variant-numeric: tabular-nums; }
+.exercise-detail { padding: 0 1rem 1rem; border-top: 1px solid var(--border); }
+.exercise-detail .ex-note { text-transform: capitalize; }
+.ex-planned { white-space: normal; text-align: right; }
+.today-sidebar .review-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'name' 'trend' 'detail'; }
+.today-sidebar .pillars { margin-top: 1rem; }
+@media (max-width: 60rem) { .today-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 28rem) {
+  .exercise > summary { grid-template-columns: 1.2rem minmax(0, 1fr) 1rem; }
+  .ex-planned { grid-column: 2; text-align: left; }
+  .exercise > summary::after { grid-column: 3; grid-row: 1; }
+}

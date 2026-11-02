@@ -1,3 +1,5 @@
+import { PagedList } from '../../shared/paged-list';
+import { ListControls } from '../../shared/list-controls';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
@@ -12,6 +14,7 @@ import { HlmCardImports } from '@spartan-ng/ui/card';
   standalone: true,
   imports: [
     CommonModule,
+    ListControls,
     FormsModule,
     HlmCardImports,
     HlmButtonImports,
@@ -34,8 +37,22 @@ export class Programmes implements OnInit {
   status = signal<string | null>(null);
   selectedRoutineIds = signal<string[]>([]);
 
-  routineSearch = '';
-  folderFilter = '';
+  folderFilter = signal('');
+  readonly routineList = new PagedList<any>(
+    () =>
+      (this.data()?.source?.routines ?? []).filter(
+        (routine: any) =>
+          !this.folderFilter() || String(routine.folder_id ?? '') === this.folderFilter(),
+      ),
+    (routine) =>
+      [
+        routine.title,
+        routine.folder_name,
+        ...(routine.muscle_summary ?? []),
+        ...(routine.exercises ?? []).map((exercise: any) => exercise.title),
+      ].join(' '),
+    6,
+  );
   durationWeeks = 12;
   goal = 'general_fitness';
   startDate = new Date().toISOString().slice(0, 10);
@@ -48,9 +65,10 @@ export class Programmes implements OnInit {
     this.loadProgrammes();
   }
 
-  loadProgrammes(refresh = false): void {
+  loadProgrammes(refresh = false, preserveStatus = false): void {
     this.error.set(null);
-    this.status.set(null);
+    if (!preserveStatus) this.status.set(null);
+    this.preview.set(null);
     if (refresh) {
       this.refreshing.set(true);
     } else {
@@ -60,19 +78,12 @@ export class Programmes implements OnInit {
     this.http.get('/api/programmes').subscribe({
       next: (data: any) => {
         this.data.set(data);
-        const available = new Set(
-          (data.source?.routines ?? []).map((routine: any) => routine.id),
-        );
+        const available = new Set((data.source?.routines ?? []).map((routine: any) => routine.id));
         const activeIds: string[] =
-          data.active_programme?.definition?.programme_spec
-            ?.selected_routine_ids ?? [];
-        const current = this.selectedRoutineIds().filter((id) =>
-          available.has(id),
-        );
+          data.active_programme?.definition?.programme_spec?.selected_routine_ids ?? [];
+        const current = this.selectedRoutineIds().filter((id) => available.has(id));
         if (!current.length && activeIds.length) {
-          this.selectedRoutineIds.set(
-            activeIds.filter((id) => available.has(id)),
-          );
+          this.selectedRoutineIds.set(activeIds.filter((id) => available.has(id)));
         } else if (current.length !== this.selectedRoutineIds().length) {
           this.selectedRoutineIds.set(current);
         }
@@ -80,9 +91,7 @@ export class Programmes implements OnInit {
         this.refreshing.set(false);
       },
       error: (err: any) => {
-        this.error.set(
-          err.error?.detail || 'Failed to load your Hevy routine library.',
-        );
+        this.error.set(err.error?.detail || 'Failed to load your Hevy routine library.');
         this.loading.set(false);
         this.refreshing.set(false);
       },
@@ -90,22 +99,16 @@ export class Programmes implements OnInit {
   }
 
   visibleRoutines(): any[] {
-    const routines = this.data()?.source?.routines ?? [];
-    const query = this.routineSearch.trim().toLowerCase();
-    return routines.filter((routine: any) => {
-      const matchesFolder =
-        !this.folderFilter ||
-        String(routine.folder_id ?? '') === this.folderFilter;
-      const text = [
-        routine.title,
-        routine.folder_name,
-        ...(routine.muscle_summary ?? []),
-        ...(routine.exercises ?? []).map((exercise: any) => exercise.title),
-      ]
-        .join(' ')
-        .toLowerCase();
-      return matchesFolder && (!query || text.includes(query));
-    });
+    return this.routineList.visible();
+  }
+
+  invalidatePreview(): void {
+    this.preview.set(null);
+  }
+
+  filterFolder(folder: string): void {
+    this.folderFilter.set(folder);
+    this.routineList.reset();
   }
 
   isSelected(routineId: string): boolean {
@@ -124,9 +127,7 @@ export class Programmes implements OnInit {
 
   routineById(routineId: string): any | null {
     return (
-      (this.data()?.source?.routines ?? []).find(
-        (routine: any) => routine.id === routineId,
-      ) ?? null
+      (this.data()?.source?.routines ?? []).find((routine: any) => routine.id === routineId) ?? null
     );
   }
 
@@ -136,18 +137,13 @@ export class Programmes implements OnInit {
     if (nextIndex < 0 || nextIndex >= selected.length) {
       return;
     }
-    [selected[index], selected[nextIndex]] = [
-      selected[nextIndex],
-      selected[index],
-    ];
+    [selected[index], selected[nextIndex]] = [selected[nextIndex], selected[index]];
     this.selectedRoutineIds.set(selected);
     this.preview.set(null);
   }
 
   removeRoutine(routineId: string): void {
-    this.selectedRoutineIds.set(
-      this.selectedRoutineIds().filter((id) => id !== routineId),
-    );
+    this.selectedRoutineIds.set(this.selectedRoutineIds().filter((id) => id !== routineId));
     this.preview.set(null);
   }
 
@@ -157,48 +153,47 @@ export class Programmes implements OnInit {
       duration_weeks: Number(this.durationWeeks),
       goal: this.goal,
       start_date: this.startDate,
-      sessions_per_week:
-        this.sessionsPerWeek === null
-          ? null
-          : Number(this.sessionsPerWeek),
+      sessions_per_week: this.sessionsPerWeek === null ? null : Number(this.sessionsPerWeek),
       experience: this.experience,
-      max_session_minutes:
-        this.maxSessionMinutes === null
-          ? null
-          : Number(this.maxSessionMinutes),
+      max_session_minutes: this.maxSessionMinutes === null ? null : Number(this.maxSessionMinutes),
       adaptation_aggressiveness: this.adaptationAggressiveness,
     };
   }
 
   generatePreview(): void {
-    if (!this.selectedRoutineIds().length || this.previewing()) {
+    if (
+      !this.selectedRoutineIds().length ||
+      this.previewing() ||
+      this.activating() ||
+      this.refreshing()
+    ) {
       return;
     }
     this.error.set(null);
     this.status.set(null);
     this.previewing.set(true);
-    this.http
-      .post<any>('/api/programmes/preview', this.buildPayload())
-      .subscribe({
-        next: (response) => {
-          this.preview.set(response.preview);
-          this.previewing.set(false);
-          this.status.set(
-            'Preview generated from the current Hevy source revisions.',
-          );
-        },
-        error: (err: any) => {
-          this.previewing.set(false);
-          this.error.set(
-            err.error?.detail || 'Could not generate the programme preview.',
-          );
-        },
-      });
+    this.preview.set(null);
+    const payload = this.buildPayload();
+    this.http.post<any>('/api/programmes/preview', payload).subscribe({
+      next: (response) => {
+        this.previewing.set(false);
+        if (JSON.stringify(payload) !== JSON.stringify(this.buildPayload())) {
+          this.status.set('Settings changed. Generate a fresh preview.');
+          return;
+        }
+        this.preview.set(response.preview);
+        this.status.set('Preview generated from the current Hevy source revisions.');
+      },
+      error: (err: any) => {
+        this.previewing.set(false);
+        this.error.set(err.error?.detail || 'Could not generate the programme preview.');
+      },
+    });
   }
 
   activatePreview(): void {
     const preview = this.preview();
-    if (!preview || this.activating()) {
+    if (!preview || this.activating() || this.previewing() || this.refreshing()) {
       return;
     }
     this.error.set(null);
@@ -213,13 +208,12 @@ export class Programmes implements OnInit {
         next: () => {
           this.activating.set(false);
           this.status.set('Your Hevy-derived programme is now active.');
-          this.loadProgrammes();
+          this.preview.set(null);
+          this.loadProgrammes(false, true);
         },
         error: (err: any) => {
           this.activating.set(false);
-          this.error.set(
-            err.error?.detail || 'Could not activate the programme.',
-          );
+          this.error.set(err.error?.detail || 'Could not activate the programme.');
         },
       });
   }

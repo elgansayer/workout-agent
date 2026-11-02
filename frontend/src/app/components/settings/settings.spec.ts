@@ -1,8 +1,5 @@
 import { provideHttpClient } from '@angular/common/http';
-import {
-  HttpTestingController,
-  provideHttpClientTesting,
-} from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Settings } from './settings';
 
@@ -60,22 +57,15 @@ describe('Settings AI provider parity', () => {
   it('renders every provider and default model supplied by the registry API', async () => {
     const fixture = await loadSettings();
     const element = fixture.nativeElement as HTMLElement;
-    const labels = Array.from(element.querySelectorAll('.provider-tab')).map(
-      (button) => button.textContent?.replace(/\s+/g, ' ').trim(),
+    const labels = Array.from(element.querySelectorAll('.provider-tab')).map((button) =>
+      button.textContent?.replace(/\s+/g, ' ').trim(),
     );
 
-    expect(labels).toEqual([
-      '✦ Google Gemini',
-      '⬡ Anthropic Claude',
-      '◉ OpenAI',
-      '◉ DeepSeek',
-    ]);
-    expect(
-      element.querySelector<HTMLInputElement>('#deepseek-model')?.placeholder,
-    ).toBe('deepseek-chat');
-    expect(
-      element.querySelector<HTMLInputElement>('#claude-model')?.value,
-    ).toBe('claude-selected');
+    expect(labels).toEqual(['✦ Google Gemini', '⬡ Anthropic Claude', '◉ OpenAI', '◉ DeepSeek']);
+    expect(element.querySelector<HTMLInputElement>('#deepseek-model')?.placeholder).toBe(
+      'deepseek-chat',
+    );
+    expect(element.querySelector<HTMLInputElement>('#claude-model')?.value).toBe('claude-selected');
   });
 
   it('persists the selected provider and its current model preference', async () => {
@@ -91,5 +81,37 @@ describe('Settings AI provider parity', () => {
     expect(request.request.body.preferred_ai).toBe('openai');
     expect(request.request.body.ai_model).toBe('gpt-synthetic');
     request.flush({ status: 'ok' });
+  });
+  it('does not discard unsaved profile edits after saving a connector key', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.constraintsInput = 'Keep this unsaved change';
+    component.selectedGoals.set(['power']);
+    component.hevyKeyInput = 'synthetic-test-key';
+    component.saveKey('hevy');
+    http.expectOne('/api/settings/key').flush({ status: 'ok' });
+    http.expectOne('/api/settings').flush(settingsResponse);
+    expect(component.constraintsInput).toBe('Keep this unsaved change');
+    expect(component.selectedGoals()).toEqual(['power']);
+    expect(component.hevyKeyInput).toBe('');
+  });
+
+  it('explains unsupported notifications instead of silently failing', async () => {
+    const fixture = await loadSettings();
+    await fixture.componentInstance.subscribeToPush();
+    expect(fixture.componentInstance.pushStatus()).toContain('not supported');
+    expect(fixture.componentInstance.pushBusy()).toBe(false);
+  });
+
+  it('disconnects Google Health through HttpClient so the CSRF interceptor is used', async () => {
+    const fixture = await loadSettings();
+    fixture.componentInstance.disconnectGoogleHealth();
+    fixture.componentInstance.disconnectGoogleHealth();
+    const request = http.expectOne('/google-health/disconnect');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.responseType).toBe('text');
+    request.flush('');
+    http.expectOne('/api/settings').flush(settingsResponse);
+    expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
   });
 });

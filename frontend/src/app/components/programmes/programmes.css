@@ -1,17 +1,11 @@
-:host {
-  display: block;
-}
 
-.loading-state {
-  padding: 3rem;
-  text-align: center;
-}
 
 .builder-header,
 .section-heading,
 .active-summary,
 .activation-row {
   align-items: flex-start;
+  flex-wrap: wrap;
   display: flex;
   gap: 1rem;
   justify-content: space-between;
@@ -27,25 +21,8 @@
   min-width: 0;
 }
 
-.eyebrow {
-  color: var(--accent);
-  font-size: 0.78rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  margin: 0 0 0.35rem;
-  text-transform: uppercase;
-}
 
-.error-panel {
-  border-color: #ef4444;
-  color: #fecaca;
-  margin-bottom: 1rem;
-}
 
-.success-panel {
-  border-color: var(--accent);
-  margin-bottom: 1rem;
-}
 
 .empty-state {
   padding: 2rem;
@@ -67,25 +44,15 @@
 .builder-sidebar {
   display: grid;
   gap: 1.25rem;
-  position: sticky;
-  top: 1rem;
+  min-width: 0;
 }
 
-.filters {
-  display: grid;
-  gap: 0.8rem;
-  grid-template-columns: minmax(0, 2fr) minmax(10rem, 1fr);
-  margin: 1rem 0;
-}
 
-.filters label,
 .settings-panel label {
   display: grid;
   gap: 0.4rem;
 }
 
-.filters input,
-.filters select,
 .settings-panel input,
 .settings-panel select {
   background: var(--surface-2, #111827);
@@ -144,18 +111,8 @@
   margin: 0.75rem 0;
 }
 
-.badge.subtle {
-  opacity: 0.75;
-}
 
-details {
-  margin-top: 0.75rem;
-}
 
-summary {
-  cursor: pointer;
-  font-weight: 700;
-}
 
 .source-exercises {
   display: grid;
@@ -301,9 +258,6 @@ summary {
   text-align: right;
 }
 
-.day-card {
-  min-width: 0;
-}
 
 .day-ex li {
   align-items: flex-start;
@@ -332,9 +286,6 @@ summary {
     grid-template-columns: 1fr;
   }
 
-  .builder-sidebar {
-    position: static;
-  }
 }
 
 @media (max-width: 640px) {
@@ -346,9 +297,6 @@ summary {
     flex-direction: column;
   }
 
-  .filters {
-    grid-template-columns: 1fr;
-  }
 
   .selected-routines li {
     align-items: flex-start;
@@ -359,3 +307,8 @@ summary {
     justify-content: flex-start;
   }
 }
+
+.builder-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.routine-select span { min-width: 0; overflow-wrap: anywhere; }
+.settings-panel { grid-template-columns: minmax(0, 1fr); }
+.settings-panel label, .settings-panel input, .settings-panel select { min-width: 0; }

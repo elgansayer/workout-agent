@@ -57,6 +57,12 @@ jobs:
         run: npm run build
       - name: Test frontend
         run: npm test -- --watch=false
+      - name: Check accessibility preferences
+        run: npm run test:a11y-preferences
+      - name: Install UI test browser
+        run: npx playwright install --with-deps chromium
+      - name: Test responsive UI journeys
+        run: npm run test:ui
 
   policy:
     name: control-plane policy

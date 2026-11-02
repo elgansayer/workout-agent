@@ -23,9 +23,11 @@ describe('Coach connection', () => {
 
   it('streams from the configured API origin with the signed-in session', async () => {
     environment.apiUrl = 'https://api.example.test/';
-    const fetchMock = vi.fn().mockResolvedValue(new Response('Good session.', {
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('Good session.', {
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+      }),
+    );
     vi.stubGlobal('fetch', fetchMock);
     chat.userInput = 'How am I doing?';
 
@@ -41,29 +43,51 @@ describe('Coach connection', () => {
   });
 
   it('shows configuration errors and keeps the question available to retry', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
-      JSON.stringify({ detail: 'No AI provider key available. Add your own key in Settings.' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    )));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({
+              detail: 'No AI provider key available. Add your own key in Settings.',
+            }),
+            { status: 400, headers: { 'Content-Type': 'application/json' } },
+          ),
+        ),
+    );
     chat.userInput = 'Review my training';
 
     await chat.sendMessage();
 
     expect(chat.error()).toContain('Add your own key in Settings');
     expect(chat.userInput).toBe('Review my training');
-    expect(chat.messages().some(message => message.role === 'assistant')).toBe(false);
+    expect(chat.messages().some((message) => message.role === 'assistant')).toBe(false);
     expect(chat.isStreaming()).toBe(false);
   });
 
   it('does not show an HTML sign-in page as a successful coach reply', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Sign in</html>', {
-      headers: { 'Content-Type': 'text/html' },
-    })));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response('<html>Sign in</html>', {
+          headers: { 'Content-Type': 'text/html' },
+        }),
+      ),
+    );
     chat.userInput = 'Hello';
 
     await chat.sendMessage();
 
     expect(chat.error()).toContain('Sign in again');
     expect(chat.messages()).toHaveLength(1);
+  });
+  it('does not submit an IME composition or a Shift+Enter newline', () => {
+    const send = vi.spyOn(chat, 'sendMessage').mockResolvedValue();
+    chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true }));
+    chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true }));
+    expect(send).not.toHaveBeenCalled();
+    chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }));
+    expect(send).toHaveBeenCalledOnce();
   });
 });
