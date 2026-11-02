@@ -57,3 +57,13 @@ Angular CLI does not come with an end-to-end testing framework by default. You c
 ## Additional Resources
 
 For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+
+## Responsive UI regression suite
+
+Use `npm ci --legacy-peer-deps` (the existing Spartan/Tailwind peer compatibility
+setting), then `npx playwright install chromium` and `npm run test:ui`.
+The suite starts the Angular development server with an empty test-only proxy
+configuration and mocks every API request with synthetic fixtures. It requires
+no running backend or production account. Desktop, mobile, narrow-screen,
+200% text, keyboard navigation and list-browsing journeys run in required CI.
+`npm run test:a11y-preferences` checks the shared display-preference contract.

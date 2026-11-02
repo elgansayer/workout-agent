@@ -195,7 +195,7 @@ def test_settings_form_never_hydrates_password_inputs_from_server_masks() -> Non
     component = component_path.read_text(encoding="utf-8")
     template = template_path.read_text(encoding="utf-8")
 
-    load_settings = component.split("  loadSettings() {", 1)[1].split(
+    load_settings = component.split("  loadSettings(", 1)[1].split(
         "  selectProvider(", 1
     )[0]
     assert "hevyKeyInput =" not in load_settings

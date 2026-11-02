@@ -1,21 +1,21 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading…</div>
+  <div class="muted" style="text-align: center; padding: 2rem">Loading…</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem">
     <strong>Plan:</strong> {{ error() }}
   </div>
 }
 
 @if (data(); as data) {
   @if (data.setup_required) {
-    <section class="panel" style="text-align: center; padding: 2rem;">
+    <section class="panel" style="text-align: center; padding: 2rem">
       <p class="muted">No active programme</p>
       <h1>Build your plan from Hevy</h1>
       <p class="muted">
-        Select your Hevy routines, programme duration and goal. A built-in
-        fallback is not substituted.
+        Select your Hevy routines, programme duration and goal. A built-in fallback is not
+        substituted.
       </p>
       <a class="btn" href="/programmes">Open programme builder</a>
     </section>
@@ -25,7 +25,9 @@
       <h1>{{ data.split_name }}</h1>
       <p class="muted">
         Week {{ data.week }} of {{ data.cycle_weeks }}
-        @if (data.current_block) { · {{ data.current_block }} }
+        @if (data.current_block) {
+          · {{ data.current_block }}
+        }
         @if (data.analysis?.confidence) {
           &middot; inference confidence {{ data.analysis.confidence }}
         }
@@ -33,7 +35,7 @@
     </header>
 
     @if (data.warnings?.length) {
-      <section class="panel" style="border-color: #f59e0b;">
+      <section class="panel" style="border-color: #f59e0b">
         <h2>Review notes</h2>
         <ul class="rules">
           @for (warning of data.warnings; track warning) {
@@ -53,7 +55,8 @@
             }
             <h3>Block {{ block.number }}: {{ block.name }}</h3>
             <p class="muted">
-              Weeks {{ block.weeks }} · {{ block.start_date | date:'shortDate' }} to {{ block.end_date | date:'shortDate' }}
+              Weeks {{ block.weeks }} · {{ block.start_date | date: 'shortDate' }} to
+              {{ block.end_date | date: 'shortDate' }}
             </p>
             <p>{{ block.focus }}</p>
             <ul class="block-schemes">
@@ -94,19 +97,22 @@
                 · {{ day.muscles.join(', ') }}
               }
             </p>
-            <ul class="day-ex">
-              @for (exercise of day.exercises; track exercise.template_id) {
-                <li>
-                  <span class="ex-n">
-                    {{ exercise.name }}
-                    <small style="display:block; text-transform:capitalize;">
-                      {{ exercise.role }}
-                    </small>
-                  </span>
-                  <span class="ex-s">{{ exercise.scheme }}</span>
-                </li>
-              }
-            </ul>
+            <details>
+              <summary>{{ day.exercises.length }} exercises · View prescription</summary>
+              <ul class="day-ex">
+                @for (exercise of day.exercises; track $index) {
+                  <li>
+                    <span class="ex-n">
+                      {{ exercise.name }}
+                      <small style="display: block; text-transform: capitalize">
+                        {{ exercise.role }}
+                      </small>
+                    </span>
+                    <span class="ex-s">{{ exercise.scheme }}</span>
+                  </li>
+                }
+              </ul>
+            </details>
           </article>
         }
       </div>

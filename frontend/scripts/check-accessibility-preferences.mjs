@@ -83,7 +83,11 @@ for (const link of activeNavigationLinks) {
     `active navigation link must expose page state to assistive technology: ${link}`,
   );
 }
-assert.match(appTemplate, /<nav\s+aria-label="Primary navigation">/);
+assert.match(appTemplate, /<nav\b[^>]*\baria-label="Primary navigation"[^>]*>/);
+
+assert.match(appTemplate, /aria-controls="primary-navigation"/);
+assert.match(appTemplate, /\[attr\.aria-expanded\]="menuOpen\(\)"/);
+assert.match(appTemplate, /<main\b[^>]*id="main-content"[^>]*tabindex="-1"/);
 
 const expectedSharedChecks = [
   'focus-visible',

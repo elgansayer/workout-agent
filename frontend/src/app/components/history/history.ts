@@ -1,3 +1,5 @@
+import { PagedList } from '../../shared/paged-list';
+import { ListControls } from '../../shared/list-controls';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmBadgeImports } from '@spartan-ng/ui/badge';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
@@ -10,19 +12,38 @@ import { FormsModule } from '@angular/forms';
 @Component({
   selector: 'app-history',
   standalone: true,
-  imports: [CommonModule, FormsModule, HlmCardImports, HlmBadgeImports, HlmAlertImports],
+  imports: [
+    ListControls,
+    CommonModule,
+    FormsModule,
+    HlmCardImports,
+    HlmBadgeImports,
+    HlmAlertImports,
+  ],
   templateUrl: './history.html',
-  styleUrl: './history.css'
+  styleUrl: './history.css',
 })
 export class History implements OnInit {
   private http = inject(HttpClient);
   protected sanitizer = inject(DomSanitizer);
-  
+
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
+  readonly logs = new PagedList<any>(
+    () => this.data()?.logs ?? [],
+    (item) => `${item.focus} ${item.date} ${item.plan || ''}`,
+    8,
+  );
+
   ngOnInit() {
+    this.load();
+  }
+
+  load(): void {
+    this.loading.set(true);
+    this.error.set(null);
     this.http.get('/api/history').subscribe({
       next: (data: any) => {
         this.data.set(data);
@@ -31,10 +52,10 @@ export class History implements OnInit {
       error: (err) => {
         this.error.set('Failed to load history data');
         this.loading.set(false);
-      }
+      },
     });
   }
-  
+
   safeHtml(html: string): SafeHtml {
     if (!html) return '';
     return this.sanitizer.bypassSecurityTrustHtml(html);

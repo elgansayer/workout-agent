@@ -1,22 +1,35 @@
 <a href="#main-content" class="skip-to-content">Skip to content</a>
 <header class="topbar">
-    <a class="brand" routerLink="/dashboard">Workout&nbsp;Agent</a>
-    <nav aria-label="Primary navigation">
-        <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Today</a>
-        <a routerLink="/progress" routerLinkActive="on" ariaCurrentWhenActive="page">Progress</a>
-        <a routerLink="/stats" routerLinkActive="on" ariaCurrentWhenActive="page">Stats</a>
-        <a routerLink="/plan" routerLinkActive="on" ariaCurrentWhenActive="page">Plan</a>
-        <a routerLink="/programmes" routerLinkActive="on" ariaCurrentWhenActive="page">Programmes</a>
-        <a routerLink="/history" routerLinkActive="on" ariaCurrentWhenActive="page">History</a>
-        <a routerLink="/checkins" routerLinkActive="on" ariaCurrentWhenActive="page">Check-ins</a>
-        <a routerLink="/chat" class="nav-coach" routerLinkActive="on" ariaCurrentWhenActive="page">✨ Coach</a>
-        <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
-        @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
-        <a href="javascript:void(0)" (click)="auth.logout()" style="color: var(--muted); cursor: pointer;">Logout</a>
-        }
-    </nav>
+  <a class="brand" routerLink="/dashboard">Workout&nbsp;Agent</a>
+  <button
+    #menuButton
+    class="menu-toggle btn btn-ghost"
+    type="button"
+    [attr.aria-expanded]="menuOpen()"
+    aria-controls="primary-navigation"
+    (click)="menuOpen.set(!menuOpen())"
+  >
+    {{ menuOpen() ? 'Close menu' : 'Menu' }}
+  </button>
+  <nav id="primary-navigation" aria-label="Primary navigation" [class.is-open]="menuOpen()">
+    <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Today</a>
+    <a routerLink="/progress" routerLinkActive="on" ariaCurrentWhenActive="page">Progress</a>
+    <a routerLink="/stats" routerLinkActive="on" ariaCurrentWhenActive="page">Stats</a>
+    <a routerLink="/plan" routerLinkActive="on" ariaCurrentWhenActive="page">Plan</a>
+    <a routerLink="/programmes" routerLinkActive="on" ariaCurrentWhenActive="page">Programmes</a>
+    <a routerLink="/history" routerLinkActive="on" ariaCurrentWhenActive="page">History</a>
+    <a routerLink="/checkins" routerLinkActive="on" ariaCurrentWhenActive="page">Check-ins</a>
+    <a routerLink="/chat" class="nav-coach" routerLinkActive="on" ariaCurrentWhenActive="page"
+      >Coach</a
+    >
+    <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
+    @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
+      <a routerLink="/profile" routerLinkActive="on" ariaCurrentWhenActive="page">Account</a>
+      <button class="nav-logout" type="button" (click)="auth.logout()">Log out</button>
+    }
+  </nav>
 </header>
-<main id="main-content">
-    <router-outlet></router-outlet>
+<main #mainContent id="main-content" tabindex="-1">
+  <router-outlet></router-outlet>
 </main>
 <footer class="foot">Adaptive training built from your connected workout data.</footer>

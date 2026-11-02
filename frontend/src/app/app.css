@@ -1,0 +1,19 @@
+.topbar { flex-wrap: wrap; position: relative; padding: .75rem max(1rem, calc((100% - 80rem) / 2)); }
+.brand { white-space: nowrap; }
+nav { align-items: center; }
+nav a, .nav-logout { display: inline-flex; align-items: center; min-height: 44px; padding: .5rem .65rem; font: inherit; font-size: .95rem; }
+.nav-logout { background: none; color: var(--muted); border: 0; cursor: pointer; border-radius: .5rem; }
+.nav-logout:hover { color: var(--text); background: var(--panel-2); }
+.menu-toggle { display: none; }
+main { max-width: 80rem; min-width: 0; padding: 1.5rem; }
+main:focus { outline: none; }
+@media (max-width: 72rem) {
+  .topbar { position: relative; top: auto; bottom: auto; width: auto; padding: .75rem 1rem; }
+  .brand { display: inline; }
+  .menu-toggle { display: inline-flex; }
+  nav { display: none; width: 100%; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .4rem; }
+  nav.is-open { display: grid; }
+  nav a, .nav-logout { justify-content: center; text-align: center; overflow-wrap: anywhere; }
+  main { padding: 1rem; }
+}
+@media (max-width: 25rem) { nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

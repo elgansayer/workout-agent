@@ -1459,3 +1459,61 @@ textarea:focus-visible,
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Shared compact browsing and responsive layout. */
+body { font-size: 1rem; }
+app-root, main > :not(router-outlet) { display: block; min-width: 0; }
+a { color: var(--accent-2); }
+button, input, select, textarea { font: inherit; }
+button, .btn, select, summary { min-height: 2.75rem; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+button:disabled:hover { transform: none; }
+summary { cursor: pointer; padding: .5rem 0; font-weight: 600; }
+summary::marker { color: var(--accent); }
+[hidden] { display: none !important; }
+.panel, .card, .chart-card, .day-card, .block-card, .flex-row > *, .chart-grid > * { min-width: 0; overflow-wrap: anywhere; }
+.page-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem; }
+.page-heading h1 { margin: 0; }
+.eyebrow { color: var(--accent); font-size: .8rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin: 0 0 .3rem; }
+.error-panel { border-color: #f87171; color: #fecaca; }
+.loading-state { text-align: center; padding: 2rem; }
+.list-toolbar { margin: 1rem 0 .5rem; }
+.list-toolbar > label { display: block; font-weight: 600; margin-bottom: .4rem; }
+.list-search, .list-toolbar select { min-width: 0; background: var(--panel-2); border: 1px solid var(--border); border-radius: .5rem; color: var(--text); padding: .6rem .75rem; }
+.list-search { flex: 1 1 12rem; width: 100%; }
+.list-toolbar select { max-width: 100%; }
+.list-pagination, .pager-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.list-pagination { justify-content: space-between; margin-bottom: 1rem; }
+.list-pagination p { margin: 0; }
+.pager-buttons .btn { padding: .4rem .65rem; }
+.table-scroll, .cal-scroll { max-width: 100%; overflow-x: auto; }
+.table-scroll .pr-table { min-width: 32rem; }
+.chart-card-head, .card-head, .model-row, .provider-tabs, .checkin-head, .log-head { flex-wrap: wrap; }
+.model-input { max-width: 100%; }
+.log-head, .checkin-head { min-height: 2.75rem; }
+.log-body, .checkin-body { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.log-row, .checkin { margin-bottom: .65rem; }
+.block-card .badge { position: static; display: inline-block; margin-bottom: .5rem; }
+.day-ex li, .block-schemes li { flex-wrap: wrap; }
+.settings-sections { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.25rem; }
+.settings-sections button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.chat-container { max-width: 60rem; margin-inline: auto; height: calc(100dvh - 12rem); min-height: 26rem; }
+.chat-send-btn, .chat-stop-btn { width: 44px; height: 44px; }
+@media (max-width: 40rem) {
+  .two-col, .dashboard-grid, .chart-grid, .proj-grid, .block-grid, .programme-grid, .day-grid { grid-template-columns: minmax(0, 1fr); }
+  .flex-row > * { flex-basis: 100%; }
+  .hero-main { flex-basis: 100%; min-width: 0; }
+  .review-row { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'name' 'trend' 'detail'; }
+  .chat-container { height: calc(100dvh - 8rem); }
+}
+main { overflow-wrap: anywhere; }
+
+/* Keep content visible immediately and the canvas dark beyond the viewport. */
+html, body { background-color: var(--bg); }
+.hero, .panel, .stat-card, .chart-card, .checkin, .log-row,
+.exercise, .block-card, .programme-card, .day-card, .card { animation: none; }
+body::before { animation: none; }
+
+.success-panel { border-color: var(--accent); }
+
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }

@@ -1,42 +1,49 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="loading-state muted" role="status">Loading...</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+  <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
+    <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
+      Try again
+    </button>
   </div>
 }
 
 @if (data(); as data) {
-<h1>History</h1>
+  <h1>History</h1>
 
-<section class="panel">
+  <section class="panel">
     <h2>Training calendar</h2>
     <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>
-</section>
+  </section>
 
-<section class="panel">
+  <section class="panel">
     <h2>Daily log</h2>
     @if (!data.logs || data.logs.length === 0) {
-    <p class="muted">No daily plans logged yet. Each morning run records the day's
-        plan and lifestyle guidance here.</p>
+      <p class="muted">
+        No daily plans logged yet. Each morning run records the day's plan and lifestyle guidance
+        here.
+      </p>
     }
-    <div class="log-list">
-        @for (log of data.logs; track log.date) {
-        <article class="log-row" [class.rest]="log.day === null || log.day === undefined">
-            <div class="log-head">
-                <span class="log-date">{{ log.date | date:'shortDate' }}</span>
-                <span class="log-focus">{{ log.focus }}</span>
-                @if (log.carb_tier) {
-                    <span class="chip ghost">{{ log.carb_tier }} carb</span>
-                }
-            </div>
+    <app-list-controls [list]="logs" id="history" label="logs">
+      <div class="log-list">
+        @for (log of logs.visible(); track log.date + (logs.start() + $index)) {
+          <details class="log-row" [class.rest]="log.day === null || log.day === undefined">
+            <summary class="log-head">
+              <span class="log-date">{{ log.date | date: 'shortDate' }}</span>
+              <span class="log-focus">{{ log.focus }}</span>
+              @if (log.carb_tier) {
+                <span class="chip ghost">{{ log.carb_tier }} carb</span>
+              }
+            </summary>
             @if (log.plan) {
-                <pre class="log-body">{{ log.plan }}</pre>
+              <pre class="log-body">{{ log.plan }}</pre>
             }
-        </article>
+          </details>
         }
-    </div>
-</section>
+      </div>
+    </app-list-controls>
+  </section>
 }

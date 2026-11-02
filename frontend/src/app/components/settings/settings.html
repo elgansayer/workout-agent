@@ -1,242 +1,311 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="loading-state muted" role="status">Loading...</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+  <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
+    <button class="btn btn-ghost" type="button" (click)="loadSettings()">Try again</button>
   </div>
 }
 
 @if (data(); as data) {
-<h1>Settings</h1>
+  <h1>Settings</h1>
+  <div class="settings-sections" role="group" aria-label="Settings sections">
+    @for (
+      option of [
+        ['connections', 'Connections'],
+        ['ai', 'AI coach'],
+        ['profile', 'Profile'],
+        ['notifications', 'Notifications'],
+      ];
+      track option[0]
+    ) {
+      <button
+        type="button"
+        class="btn btn-ghost"
+        [attr.aria-pressed]="section() === option[0]"
+        (click)="section.set(option[0])"
+      >
+        {{ option[1] }}
+      </button>
+    }
+  </div>
 
-<!-- ──────────── Hevy Integration ──────────── -->
-<section class="card" id="settings-hevy">
+  <!-- ──────────── Hevy Integration ──────────── -->
+  <section class="card" id="settings-hevy" [hidden]="section() !== 'connections'">
     <div class="card-head">
-        <h2>🏋️ Hevy Integration</h2>
-        @if (data.user_keys?.hevy?.has_key) {
+      <h2>Hevy Integration</h2>
+      @if (data.user_keys?.hevy?.has_key) {
         <span class="status on">Connected</span>
-        } @else {
+      } @else {
         <span class="status off">Not connected</span>
-        }
+      }
     </div>
     <p class="muted">
-        Connect your Hevy account so workouts are synced automatically.
-        You need a <strong>Hevy Pro</strong> subscription. Generate an API key at
-        <a href="https://hevy.com/settings?developer" target="_blank" rel="noopener" style="color:var(--accent-2)">hevy.com/settings</a>.
+      Connect your Hevy account so workouts are synced automatically. You need a
+      <strong>Hevy Pro</strong> subscription. Generate an API key at
+      <a
+        href="https://hevy.com/settings?developer"
+        target="_blank"
+        rel="noopener"
+        style="color: var(--accent-2)"
+        >hevy.com/settings</a
+      >.
     </p>
 
     <div class="key-form" id="hevy-form">
-        <div class="input-row">
-            <input
-                type="password"
-                id="hevy-key-input"
-                class="key-input"
-                [placeholder]="data.user_keys?.hevy?.masked || 'Paste your Hevy API key'"
-                autocomplete="off"
-                aria-label="Hevy API key"
-                [(ngModel)]="hevyKeyInput"
-            >
-            <button class="btn btn-sm" (click)="saveKey('hevy')" id="hevy-save-btn">
-                {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
-            </button>
-            @if (data.user_keys?.hevy?.has_key) {
-            <button class="btn btn-ghost btn-sm" (click)="verifyHevy()">Verify</button>
-            <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
-            <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">Remove</button>
-            }
-        </div>
-        <div id="hevy-status" class="key-status">{{ hevyStatus() }}</div>
-    </div>
-</section>
-
-<!-- ──────────── AI Provider ──────────── -->
-<section class="card" id="settings-ai">
-    <div class="card-head">
-        <h2>🤖 AI Provider</h2>
-        @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
-        <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
-        } @else {
-        <span class="status off">No key</span>
+      <div class="input-row">
+        <input
+          type="password"
+          id="hevy-key-input"
+          class="key-input"
+          [placeholder]="data.user_keys?.hevy?.masked || 'Paste your Hevy API key'"
+          autocomplete="off"
+          aria-label="Hevy API key"
+          [(ngModel)]="hevyKeyInput"
+        />
+        <button class="btn btn-sm" (click)="saveKey('hevy')" id="hevy-save-btn">
+          {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
+        </button>
+        @if (data.user_keys?.hevy?.has_key) {
+          <button class="btn btn-ghost btn-sm" (click)="verifyHevy()">Verify</button>
+          <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
+          <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">
+            Remove
+          </button>
         }
+      </div>
+      <div id="hevy-status" class="key-status" role="status">{{ hevyStatus() }}</div>
     </div>
-    <p class="muted">
-        Choose which AI powers your coaching. You bring your own API key.
-    </p>
+  </section>
+
+  <!-- ──────────── AI Provider ──────────── -->
+  <section class="card" id="settings-ai" [hidden]="section() !== 'ai'">
+    <div class="card-head">
+      <h2>AI Provider</h2>
+      @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
+        <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
+      } @else {
+        <span class="status off">No key</span>
+      }
+    </div>
+    <p class="muted">Choose which AI powers your coaching. You bring your own API key.</p>
 
     <div class="ai-provider-select">
-        <div class="provider-tabs" id="provider-tabs">
-            @for (p of data.ai_providers; track p.id) {
-            <button
-                class="provider-tab"
-                [class.active]="p.id === selectedAiProvider()"
-                (click)="selectProvider(p.id)"
-            >
-                {{ p.id === 'gemini' ? '✦' : (p.id === 'claude' ? '⬡' : '◉') }}
-                {{ p.name }}
-            </button>
-            }
-        </div>
-
+      <div class="provider-tabs" id="provider-tabs">
         @for (p of data.ai_providers; track p.id) {
-        <div class="provider-config" [class.hidden]="p.id !== selectedAiProvider()" id="config-{{ p.id }}">
-            <div class="input-row">
-                <input
-                    type="password"
-                    id="{{ p.id }}-key-input"
-                    class="key-input"
-                    [placeholder]="data.user_keys?.[p.id]?.masked || 'Paste your ' + p.name + ' API key'"
-                    autocomplete="off"
-                    aria-label="{{ p.name }} API key"
-                    [(ngModel)]="aiKeyInputs[p.id]"
-                >
-                <button class="btn btn-sm" (click)="saveKey(p.id)">
-                    {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
-                </button>
-                @if (data.user_keys?.[p.id]?.has_key) {
-                <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey(p.id)">Remove</button>
-                }
-            </div>
-            <div class="model-row">
-                <label class="muted" for="{{ p.id }}-model">Model:</label>
-                <input
-                    type="text"
-                    id="{{ p.id }}-model"
-                    class="model-input"
-                    [(ngModel)]="aiModelInputs[p.id]"
-                    [placeholder]="p.default_model"
-                >
-            </div>
-        </div>
+          <button
+            class="provider-tab"
+            [class.active]="p.id === selectedAiProvider()"
+            [attr.aria-pressed]="p.id === selectedAiProvider()"
+            (click)="selectProvider(p.id)"
+          >
+            {{ p.id === 'gemini' ? '✦' : p.id === 'claude' ? '⬡' : '◉' }}
+            {{ p.name }}
+          </button>
         }
-        <div id="ai-status" class="key-status">{{ aiStatus() }}</div>
-    </div>
-</section>
+      </div>
 
-<!-- ──────────── Health & Wearable Connectors ──────────── -->
-<section class="card" id="settings-connectors">
-    <div class="card-head">
-        <h2>📊 Health & Wearables</h2>
+      @for (p of data.ai_providers; track p.id) {
+        <div
+          class="provider-config"
+          [class.hidden]="p.id !== selectedAiProvider()"
+          id="config-{{ p.id }}"
+        >
+          <div class="input-row">
+            <input
+              type="password"
+              id="{{ p.id }}-key-input"
+              class="key-input"
+              [placeholder]="data.user_keys?.[p.id]?.masked || 'Paste your ' + p.name + ' API key'"
+              autocomplete="off"
+              aria-label="{{ p.name }} API key"
+              [(ngModel)]="aiKeyInputs[p.id]"
+            />
+            <button class="btn btn-sm" (click)="saveKey(p.id)">
+              {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
+            </button>
+            @if (data.user_keys?.[p.id]?.has_key) {
+              <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey(p.id)">
+                Remove
+              </button>
+            }
+          </div>
+          <div class="model-row">
+            <label class="muted" for="{{ p.id }}-model">Model:</label>
+            <input
+              type="text"
+              id="{{ p.id }}-model"
+              class="model-input"
+              [(ngModel)]="aiModelInputs[p.id]"
+              [placeholder]="p.default_model"
+            />
+          </div>
+        </div>
+      }
+      <button type="button" class="btn" (click)="savePreferences()">Save AI preferences</button>
+      <p role="status">{{ prefStatus() }}</p>
+      <div id="ai-status" class="key-status" role="status">{{ aiStatus() }}</div>
     </div>
-    <p class="muted">
-        Sync data automatically from Google Health and Garmin.
-    </p>
+  </section>
+
+  <!-- ──────────── Health & Wearable Connectors ──────────── -->
+  <section class="card" id="settings-connectors" [hidden]="section() !== 'connections'">
+    <div class="card-head">
+      <h2>Health & Wearables</h2>
+    </div>
+    <p class="muted">Sync data automatically from Google Health and Garmin.</p>
 
     <!-- Legacy Google Health -->
-    <div class="provider-config" style="margin-bottom: 1.5rem;">
-        <div class="card-head" style="margin-bottom: 0.5rem;">
-            <h3>Google Health</h3>
-            @if (data.gh_connected) {
-            <span class="status on">Connected</span>
-            } @else {
-            <span class="status off">Not connected</span>
-            }
-        </div>
-        @if (data.gh_configured) {
-            @if (data.gh_connected) {
-            <form method="post" action="/google-health/disconnect">
-                <button class="btn btn-ghost btn-danger btn-sm" type="submit">Disconnect</button>
-            </form>
-            } @else {
-            <a href="/google-health/connect" class="btn btn-sm">Connect</a>
-            }
+    <div class="provider-config" style="margin-bottom: 1.5rem">
+      <div class="card-head" style="margin-bottom: 0.5rem">
+        <h3>Google Health</h3>
+        @if (data.gh_connected) {
+          <span class="status on">Connected</span>
         } @else {
-            <p class="muted" style="font-size:0.85rem;">Google Health OAuth credentials are not set on the server.</p>
+          <span class="status off">Not connected</span>
         }
+      </div>
+      @if (data.gh_configured) {
+        @if (data.gh_connected) {
+          <button
+            class="btn btn-ghost btn-danger btn-sm"
+            type="button"
+            [disabled]="disconnectingHealth()"
+            (click)="disconnectGoogleHealth()"
+          >
+            Disconnect
+          </button>
+        } @else {
+          <a href="/google-health/connect" class="btn btn-sm">Connect</a>
+        }
+      } @else {
+        <p class="muted" style="font-size: 0.85rem">
+          Google Health OAuth credentials are not set on the server.
+        </p>
+      }
     </div>
+
+    <p role="status">{{ healthStatus() }}</p>
 
     <!-- New Platform Connectors -->
     @for (connector of data.connectors_info; track connector.provider) {
-    <div class="provider-config" style="margin-bottom: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border);">
-        <div class="card-head" style="margin-bottom: 0.5rem;">
-            <h3>{{ connector.name }}</h3>
-            @if (connector.state === 'connected') {
+      <div
+        class="provider-config"
+        style="margin-bottom: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border)"
+      >
+        <div class="card-head" style="margin-bottom: 0.5rem">
+          <h3>{{ connector.name }}</h3>
+          @if (connector.state === 'connected') {
             <span class="status on">Connected</span>
-            } @else {
+          } @else {
             <span class="status off">Not connected</span>
-            }
+          }
         </div>
-        
-        <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem;">
-            {{ connector.message || 'Status: ' + connector.state }}
+
+        <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem">
+          {{ connector.message || 'Status: ' + connector.state }}
         </p>
-    </div>
+      </div>
     }
-</section>
+  </section>
 
-<!-- ──────────── Push Notifications ──────────── -->
-@if (data.vapid_public_key) {
-<section class="card" id="settings-push">
-    <div class="card-head">
-        <h2>🔔 Web Push Notifications</h2>
+  <!-- ──────────── Push Notifications ──────────── -->
+  @if (data.vapid_public_key) {
+    <section class="card" id="settings-push" [hidden]="section() !== 'notifications'">
+      <div class="card-head">
+        <h2>Web Push Notifications</h2>
         @if (pushSubscribed()) {
-        <span class="status on">Subscribed</span>
+          <span class="status on">Subscribed</span>
         } @else {
-        <span class="status off">Not Subscribed</span>
+          <span class="status off">Not Subscribed</span>
         }
-    </div>
-    <p class="muted">
+      </div>
+      <p class="muted">
         Get today's workout plan and recovery tips delivered directly to your device.
-    </p>
-    @if (!pushSubscribed()) {
-    <button class="btn btn-sm" (click)="subscribeToPush()">Enable Push Notifications</button>
-    } @else {
-    <button class="btn btn-ghost btn-sm" (click)="unsubscribeFromPush()">Disable Push Notifications</button>
-    }
-</section>
-}
+      </p>
+      @if (!pushSubscribed()) {
+        <button class="btn btn-sm" [disabled]="pushBusy()" (click)="subscribeToPush()">
+          Enable Push Notifications
+        </button>
+      } @else {
+        <button
+          class="btn btn-ghost btn-sm"
+          [disabled]="pushBusy()"
+          (click)="unsubscribeFromPush()"
+        >
+          Disable Push Notifications
+        </button>
+      }
+    </section>
+  }
 
-<!-- ──────────── Profile & Goals ──────────── -->
-<section class="card" id="settings-profile">
+  @if (section() === 'notifications') {
+    <p role="status">{{ pushStatus() }}</p>
+    @if (!data.vapid_public_key) {
+      <p class="panel muted">Push notifications are not available on this server.</p>
+    }
+  }
+  <!-- ──────────── Profile & Goals ──────────── -->
+  <section class="card" id="settings-profile" [hidden]="section() !== 'profile'">
     <div class="card-head">
-        <h2>👤 Coaching Profile</h2>
+      <h2>Coaching Profile</h2>
     </div>
     <p class="muted">
-        Tell Coach about your goals and constraints so it can personalise daily advice.
+      Tell Coach about your goals and constraints so it can personalise daily advice.
     </p>
 
     <div class="pref-form">
-        <div class="pref-group">
-            <label class="pref-label">Primary Goals</label>
-            <div class="chip-select">
-                @for (goal of availableGoals; track goal) {
-                <button
-                    class="chip-option"
-                    [class.selected]="selectedGoals().includes(goal)"
-                    (click)="toggleGoal(goal)"
-                >{{ goal | titlecase }}</button>
-                }
-            </div>
+      <div class="pref-group">
+        <label class="pref-label">Primary Goals</label>
+        <div class="chip-select">
+          @for (goal of availableGoals; track goal) {
+            <button
+              class="chip-option"
+              [class.selected]="selectedGoals().includes(goal)"
+              [attr.aria-pressed]="selectedGoals().includes(goal)"
+              (click)="toggleGoal(goal)"
+            >
+              {{ goal | titlecase }}
+            </button>
+          }
         </div>
+      </div>
 
-        <div class="pref-group">
-            <label class="pref-label">Experience Level</label>
-            <div class="chip-select">
-                @for (level of ['beginner', 'intermediate', 'advanced']; track level) {
-                <button
-                    class="chip-option"
-                    [class.selected]="selectedExperience() === level"
-                    (click)="selectedExperience.set(level)"
-                >{{ level | titlecase }}</button>
-                }
-            </div>
+      <div class="pref-group">
+        <label class="pref-label">Experience Level</label>
+        <div class="chip-select">
+          @for (level of ['beginner', 'intermediate', 'advanced']; track level) {
+            <button
+              class="chip-option"
+              [class.selected]="selectedExperience() === level"
+              [attr.aria-pressed]="selectedExperience() === level"
+              (click)="selectedExperience.set(level)"
+            >
+              {{ level | titlecase }}
+            </button>
+          }
         </div>
+      </div>
 
-        <div class="pref-group">
-            <label class="pref-label">Constraints <span class="muted">(optional)</span></label>
-            <textarea
-                class="pref-textarea"
-                [(ngModel)]="constraintsInput"
-                placeholder="e.g. Bad knees — no jumping. Shoulder rehab — no overhead pressing."
-                rows="2"
-            ></textarea>
-        </div>
+      <div class="pref-group">
+        <label for="profile-constraints" class="pref-label"
+          >Constraints <span class="muted">(optional)</span></label
+        >
+        <textarea
+          id="profile-constraints"
+          class="pref-textarea"
+          [(ngModel)]="constraintsInput"
+          placeholder="e.g. Bad knees — no jumping. Shoulder rehab — no overhead pressing."
+          rows="2"
+        ></textarea>
+      </div>
 
-        <div class="btn-row">
-            <button class="btn" (click)="savePreferences()">Save Profile</button>
-        </div>
-        <div id="pref-status" class="key-status">{{ prefStatus() }}</div>
+      <div class="btn-row">
+        <button class="btn" (click)="savePreferences()">Save Profile</button>
+      </div>
+      <div id="pref-status" class="key-status" role="status">{{ prefStatus() }}</div>
     </div>
-</section>
+  </section>
 }

@@ -1,30 +1,41 @@
 @if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem;">Loading...</div>
+  <div class="loading-state muted" role="status">Loading...</div>
 }
 
 @if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem;">
+  <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
+    <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
+      Try again
+    </button>
   </div>
 }
 
 @if (data(); as data) {
-<h1>Check-ins</h1>
-@if (!data.checkins || data.checkins.length === 0) {
-<section class="panel">
-    <p class="muted" style="margin-top: 0;">No check-ins yet. The agent reviews your logged data against the plan every four to six weeks and the summary will appear here.</p>
-    @if (data.loading_svg) {
+  <h1>Check-ins</h1>
+  @if (!data.checkins || data.checkins.length === 0) {
+    <section class="panel">
+      <p class="muted" style="margin-top: 0">
+        No check-ins yet. The agent reviews your logged data against the plan every four to six
+        weeks and the summary will appear here.
+      </p>
+      @if (data.loading_svg) {
         <div [innerHTML]="safeHtml(data.loading_svg)"></div>
+      }
+    </section>
+  }
+  <app-list-controls [list]="entries" id="checkins" label="check-ins">
+    @for (item of entries.visible(); track item.number) {
+      <details class="checkin">
+        <summary class="checkin-head">
+          <span class="checkin-num">Check-in {{ item.number }}</span>
+          <span class="muted"
+            >{{ item.date | date: 'shortDate' }} | {{ item.workouts_done }} sessions |
+            {{ item.weeks }} weeks</span
+          >
+        </summary>
+        <pre class="checkin-body">{{ item.message }}</pre>
+      </details>
     }
-</section>
-}
-@for (item of data.checkins; track item.number) {
-<section class="checkin">
-    <div class="checkin-head">
-        <span class="checkin-num">Check-in {{ item.number }}</span>
-        <span class="muted">{{ item.date | date:'shortDate' }} | {{ item.workouts_done }} sessions | {{ item.weeks }} weeks</span>
-    </div>
-    <pre class="checkin-body">{{ item.message }}</pre>
-</section>
-}
+  </app-list-controls>
 }
