@@ -24,6 +24,13 @@ class AutoReleaseChecks(unittest.TestCase):
             check['conclusion'] = conclusion
             self.assertEqual(evaluate(rule, [check], [])[0], 'failed')
 
+    def test_ci_without_an_explicit_app_cannot_use_legacy_statuses(self) -> None:
+        status = {'id': 1, 'context': 'CI / required', 'state': 'success'}
+        check = {'id': 2, 'name': 'CI / required', 'status': 'completed', 'conclusion': 'success', 'app': {'id': 15368}}
+        for value in [None, 0, -1, True, '15368']:
+            self.assertEqual(evaluate([{'context': 'CI / required', 'integration_id': value}], [check], [status])[0], 'failed')
+        self.assertEqual(evaluate([{'context': 'CI / required'}], [check], [status])[0], 'failed')
+
     def test_latest_independent_review_status_is_required(self) -> None:
         rule = [{'context': 'factory/independent-review'}]
         good = {'id': 1, 'context': 'factory/independent-review', 'state': 'success'}

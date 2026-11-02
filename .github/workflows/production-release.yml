@@ -462,13 +462,11 @@ jobs:
       - name: Back up server database and trigger scoped Arcane deployment
         env:
           DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
-          DEPLOY_WEBHOOK_TOKEN: ${{ secrets.DEPLOY_WEBHOOK_TOKEN }}
           DEPLOY_RESOLVE: ${{ vars.DEPLOY_RESOLVE }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
           test -n "$DEPLOY_WEBHOOK_URL"
-          test -n "$DEPLOY_WEBHOOK_TOKEN"
           set -a
           . ./promoted-images.env
           set +a
@@ -478,16 +476,15 @@ jobs:
           from pathlib import Path
 
           Path("deployment-request.json").write_text(json.dumps({
-              "commit_sha": os.environ["HEAD_SHA"],
+              "head_sha": os.environ["HEAD_SHA"],
               "images": {"agent": os.environ["AGENT_IMAGE"], "web": os.environ["WEB_IMAGE"]},
           }, sort_keys=True) + "\n", encoding="utf-8")
           PY
           curl --fail-with-body --silent --show-error --output deployment-response.json \
             --max-time 120 --resolve "$DEPLOY_RESOLVE" --request POST \
-            --header "Authorization: Bearer $DEPLOY_WEBHOOK_TOKEN" \
             --header 'Content-Type: application/json' \
             --data-binary @deployment-request.json "$DEPLOY_WEBHOOK_URL"
-          python3 -m tools.deployment_gateway record-response \
+          python3 -m tools.deployment_receipt \
             --response deployment-response.json \
             --release-evidence auto-release-evidence.json \
             --expected-sha "$HEAD_SHA"

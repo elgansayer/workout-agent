@@ -19,6 +19,8 @@ def evaluate(required: list[dict[str, Any]], checks: list[dict[str, Any]], statu
         return 'failed', 'No required checks are configured'
     for rule in required:
         name = rule['context']
+        if name != 'factory/independent-review' and (type(rule.get('integration_id')) is not int or rule['integration_id'] <= 0):
+            return 'failed', 'Required CI is not bound to a configured GitHub App: ' + name
         matches = [c for c in checks if c['name'] == name and (not rule.get('integration_id') or c.get('app', {}).get('id') == rule['integration_id'])]
         status_matches = [s for s in statuses if s['context'] == name] if not rule.get('integration_id') else []
         if matches:
