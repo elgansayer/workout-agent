@@ -40,7 +40,7 @@
 #   LIFESTYLE_ENABLED  SELF_REVIEW_ENABLED  SELF_REVIEW_WEEKDAY  TELEGRAM_PARSE_MODE
 services:
   agent:
-    image: ghcr.io/elgansayer/workout-agent:latest
+    image: ghcr.io/elgansayer/workout-agent:production
     container_name: workout-agent
     environment:
       MODE: schedule
@@ -71,7 +71,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: ghcr.io/elgansayer/workout-agent-web:latest
+    image: ghcr.io/elgansayer/workout-agent-web:production
     container_name: workout-agent-web
     environment:
       DATABASE_PATH: /data/workout_agent.db
