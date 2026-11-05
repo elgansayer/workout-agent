@@ -161,6 +161,25 @@ Work is tracked in GitHub Issues. Before implementation:
 5. Run applicable verification before merging.
 6. Keep public docs and fixtures synthetic.
 
+### Autonomous implementation
+
+The OpenHands Agent Canvas on the VPS is the single autonomous scheduler for this
+repository. It selects eligible GitHub issues, claims them under a lease, and opens
+branches and pull requests. GitHub Actions remain deterministic verification and
+never select implementation work.
+
+The queue contract — eligible labels, claim lease and heartbeat, cancellation,
+branch naming, pull-request creation and review handling — is documented in
+[docs/AUTONOMOUS_QUEUE_CONTRACT.md](docs/AUTONOMOUS_QUEUE_CONTRACT.md) and
+implemented in `tools/agent_queue.py`. The ownership boundary is enforced by
+`tools/check_scheduler_ownership.py`, which fails when a workflow could select work
+or when the document and the executable contract drift apart:
+
+```bash
+python -m unittest tools.test_agent_queue tools.test_scheduler_ownership -v
+python tools/check_scheduler_ownership.py --root .
+```
+
 ## Security reporting and history hygiene
 
 Removing sensitive material from the current tree does not remove it from Git history. If personal or secret data is discovered in committed history, follow `docs/PUBLIC_DATA_HISTORY_REVIEW.md` before rewriting history. History rewriting is disruptive and must be coordinated with branch protection, open pull requests, deployments, forks, and local clones.
