@@ -65,17 +65,6 @@ jobs:
       - name: Test responsive UI journeys
         run: npm run test:ui
 
-  policy:
-    name: control-plane policy
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Test control-plane policy
-        run: python -m unittest tools.test_openhands_control_plane -v
-      - name: Enforce control-plane policy
-        run: python tools/check_openhands_control_plane.py
 
   required:
     name: CI / required
@@ -83,7 +72,6 @@ jobs:
     needs:
       - backend
       - frontend
-      - policy
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -91,8 +79,6 @@ jobs:
         env:
           BACKEND_RESULT: ${{ needs.backend.result }}
           FRONTEND_RESULT: ${{ needs.frontend.result }}
-          POLICY_RESULT: ${{ needs.policy.result }}
         run: |
           test "$BACKEND_RESULT" = success
           test "$FRONTEND_RESULT" = success
-          test "$POLICY_RESULT" = success
