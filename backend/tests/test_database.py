@@ -1625,3 +1625,81 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
                 (table,),
             ).fetchall()
             assert ("users", "user_id") in foreign_keys, table
+
+
+def test_account_policy_schema_is_added_idempotently_to_a_pre_existing_users_table(
+    tmp_path: Any,
+) -> None:
+    """Issue #753: status/epoch columns and invitations arrive additively.
+
+    A database created before the account access policy has a ``users`` table
+    without the new columns. Initialisation must add them with safe defaults,
+    keep every existing account (active, epoch 0), and be repeatable.
+    """
+    import sqlite3
+
+    db = _db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                created_at TEXT NOT NULL,
+                timezone TEXT DEFAULT 'UTC',
+                units TEXT DEFAULT 'metric'
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (id, email, created_at) VALUES ('u-old', 'old@example.com', 'x')"
+        )
+
+    init_db(db)
+    init_db(db)  # repeatable
+
+    with sqlite3.connect(db) as conn:
+        columns = {row[1]: row for row in conn.execute("PRAGMA table_info(users)")}
+        assert {"status", "status_changed_at", "session_epoch"} <= set(columns)
+        # NOT NULL with a default, so no existing row can be left without a state.
+        assert columns["status"][3] == 1 and columns["status"][4] == "'active'"
+        assert columns["session_epoch"][3] == 1 and columns["session_epoch"][4] == "0"
+        old = conn.execute(
+            "SELECT status, session_epoch, status_changed_at FROM users WHERE id = 'u-old'"
+        ).fetchone()
+        assert old == ("active", 0, None)
+        assert conn.execute("SELECT COUNT(*) FROM users WHERE email = 'old@example.com'").fetchone() == (1,)
+
+        # Invitations are operator-owned access records, not tenant data: no
+        # owning user_id, a single FK to the account that accepted them, and at
+        # most one pending invitation per address.
+        invitation_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_invitations)")}
+        assert "user_id" not in invitation_columns and "accepted_user_id" in invitation_columns
+        foreign_keys = {
+            (row[2], row[3], row[4])
+            for row in conn.execute("PRAGMA foreign_key_list(account_invitations)")
+        }
+        assert foreign_keys == {("users", "accepted_user_id", "id")}
+        indexes = {row[1]: row[2] for row in conn.execute("PRAGMA index_list(account_invitations)")}
+        assert indexes["idx_account_invitations_pending_email"] == 1  # unique
+        assert "idx_account_invitations_email_status" in indexes
+
+
+def test_account_policy_epoch_survives_repeated_initialisation(tmp_path: Any) -> None:
+    """Restarting the service must never reset a revocation."""
+    from database import revoke_account_sessions
+
+    db = _db(tmp_path)
+    init_db(db)
+    user = get_or_create_user("epoch@example.com", db_path=db)
+    revoked = revoke_account_sessions(user["id"], db)
+    assert revoked is not None and revoked["session_epoch"] == 1
+
+    init_db(db)
+    init_db(db)
+
+    from database import get_account_state
+
+    state = get_account_state(user["id"], db)
+    assert state is not None and state["session_epoch"] == 1

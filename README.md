@@ -109,12 +109,15 @@ Authentication and integration credentials are configured through environment va
 - `WEB_AUTH_SECRET`
 - `WEB_GOOGLE_CLIENT_ID`
 - `WEB_GOOGLE_CLIENT_SECRET`
+- `ALLOWED_EMAILS` and `INVITE_ONLY` (who may sign in; see below)
 - `HEVY_API_KEY`
 - AI-provider credentials
 - health-provider OAuth credentials
 - notification-provider credentials
 
 Use `.env.example` for the current supported inventory. Never paste real values into documentation, issues, fixtures, tests, screenshots, or commits.
+
+Who may sign in to a deployment is decided by the server, not by the UI: `ALLOWED_EMAILS` restricts sign-in to a list of addresses, `INVITE_ONLY=1` requires an invitation before a new account is created, and a suspended or deleted account cannot sign in or keep using an existing session. See [Account access policy](docs/ACCOUNT_ACCESS_POLICY.md).
 
 ## Health and workout examples
 

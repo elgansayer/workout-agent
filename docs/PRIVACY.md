@@ -11,6 +11,7 @@ Workout Agent is a self-hosted training and coaching application. This notice ex
 Depending on the features a user enables, Workout Agent can process:
 
 - account and identity data such as email address, display name, account identifiers, session metadata, locale and preferences;
+- account access-control data such as an operator's invitation for an address, the account's status (active, suspended or deleted) and the session-revocation counter used to end sessions;
 - workout and programme data such as exercises, sets, repetitions, loads, routines, programme blocks, check-ins and training history;
 - health and wellness data such as body metrics, sleep, recovery, readiness, activity and other records imported from an enabled health connector;
 - coaching data such as goals, constraints, chat messages, prompts, generated recommendations, reasoning records and feedback;
@@ -24,6 +25,8 @@ The application should not require unrelated personal information. Do not put se
 ## Why we use the data
 
 Workout Agent uses these data to authenticate users, import and normalise training or health records, build and adapt programmes, calculate progress and recovery signals, provide AI-assisted coaching, deliver user-requested notifications, support exports/deletion workflows, diagnose connector failures, and secure the service.
+
+Who may sign in to a deployment is decided on the server: an address allowlist, an invitation requirement for new accounts, and the account's own status are all enforced by the application, and a change to any of them ends the affected sessions. Refusals are logged without the address, token or any other secret. See `docs/ACCOUNT_ACCESS_POLICY.md`.
 
 AI processing is optional and provider-dependent. When a user selects an AI provider, the prompt and the minimum context needed for the requested coaching feature can be sent to that provider. Users should avoid putting unnecessary identifying information in free-text coaching fields.
 
