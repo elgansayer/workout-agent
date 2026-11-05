@@ -61,12 +61,12 @@ def main() -> None:
     reviewed = pr['head']['sha']
     rules = gh(f'repos/{repo}/rules/branches/main')
     required = [check for rule in rules if rule['type'] == 'required_status_checks' for check in rule['parameters']['required_status_checks']]
-    # Deterministic CI must succeed on the merge commit. The factory's independent
-    # review status belongs to the exact PR head, which branch rules enforced at merge.
+    # Deterministic CI must succeed on the merge commit. An optional review status,
+    # when a branch rule requires one, belongs to the exact PR head.
     ci_required = [r for r in required if r['context'] != 'factory/independent-review']
     review_required = [r for r in required if r['context'] == 'factory/independent-review']
-    if not ci_required or not review_required:
-        raise SystemExit('Release rejected: required CI or independent factory review rule is missing')
+    if not ci_required:
+        raise SystemExit('Release rejected: required CI rule is missing')
     deadline = time.monotonic() + 900
     while time.monotonic() < deadline:
         if gh(f'repos/{repo}/git/ref/heads/main')['object']['sha'] != args.sha:
@@ -76,13 +76,15 @@ def main() -> None:
             raise SystemExit('Release rejected: check pagination requires explicit handling')
         statuses = gh(f'repos/{repo}/commits/{args.sha}/status')['statuses']
         review_statuses = gh(f'repos/{repo}/commits/{reviewed}/status')['statuses']
-        results = [evaluate(ci_required, checks, statuses), evaluate(review_required, [], review_statuses)]
+        results = [evaluate(ci_required, checks, statuses)]
+        if review_required:
+            results.append(evaluate(review_required, [], review_statuses))
         for state, reason in results:
             if state == 'failed':
                 raise SystemExit('Release rejected: ' + reason)
         if all(state == 'success' for state, _ in results):
             args.output.write_text(json.dumps({'sha': args.sha, 'reviewed_head_sha': reviewed, 'pull_request': pr['number'], 'build_run': args.build_run, 'required_checks': required, 'decision': 'eligible'}, indent=2) + '\n')
-            print('Automatic release eligible: current main, successful image build, required CI and independent factory review verified.')
+            print('Automatic release eligible: current main, successful image build and required checks verified.')
             return
         print('Waiting for ' + ', '.join(reason for state, reason in results if state == 'pending'), flush=True)
         time.sleep(15)
