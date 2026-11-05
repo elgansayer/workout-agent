@@ -423,7 +423,7 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
-      - name: Verify required CI, merged PR and independent factory review
+      - name: Verify required CI and merged PR
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

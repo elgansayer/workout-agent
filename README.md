@@ -163,8 +163,6 @@ Work is tracked in GitHub Issues. Before implementation:
 5. Run applicable verification before merging.
 6. Keep public docs and fixtures synthetic.
 
-Automated implementation uses the current OpenHands-based workflow described by the repository engineering guidance. Do not revive retired agent/swarm implementations.
-
 ## Security reporting and history hygiene
 
 Removing sensitive material from the current tree does not remove it from Git history. If personal or secret data is discovered in committed history, follow `docs/PUBLIC_DATA_HISTORY_REVIEW.md` before rewriting history. History rewriting is disruptive and must be coordinated with branch protection, open pull requests, deployments, forks, and local clones.

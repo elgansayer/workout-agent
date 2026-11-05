@@ -106,8 +106,7 @@ If a production smoke test fails, stop further promotion and run the recorded ro
 Website operations now requests automatic updates after main changes. Image builds
 run on every main push. Production release remains the sole promotion workflow:
 its automatic path requires a successful canonical image build, the exact current
-main merge commit, all required CI from the configured GitHub App, and a successful
-`factory/independent-review` status on the exact merged PR head. Missing, pending,
+main merge commit and all required CI from the configured GitHub App. Missing, pending,
 failed, skipped or neutral required evidence blocks promotion. The existing manual
 release evidence gate remains available unchanged.
 
