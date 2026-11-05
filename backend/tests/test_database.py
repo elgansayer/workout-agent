@@ -1427,7 +1427,12 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             assert conn.execute(query).fetchall() == [(legacy_user_id,)], table
             assert _user_id_is_indexed_first(conn, table), table
 
-        for table in ("user_api_keys", "user_preferences", "programmes"):
+        for table in (
+            "user_api_keys",
+            "user_preferences",
+            "programmes",
+            "hevy_connections",
+        ):
             assert _user_id_is_indexed_first(conn, table), table
 
         index_names = {
@@ -1447,6 +1452,7 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             "idx_check_ins_user",
             "idx_programmes_user_active",
             "idx_hevy_routines_user",
+            "idx_hevy_connections_user",
         } <= index_names
 
         routine = conn.execute(
@@ -1617,6 +1623,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "notifications",
         "user_preferences",
         "programmes",
+        "hevy_connections",
     )
     with sqlite3.connect(db, timeout=10) as conn:
         for table in user_owned_tables:

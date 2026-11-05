@@ -36,8 +36,10 @@
   <section class="card" id="settings-hevy" [hidden]="section() !== 'connections'">
     <div class="card-head">
       <h2>Hevy Integration</h2>
-      @if (data.user_keys?.hevy?.has_key) {
-        <span class="status on">Connected</span>
+      @if (data.user_keys?.hevy?.has_key && hevyConnection()?.state === 'connected') {
+        <span class="status on">{{ hevyConnectionLabel() }}</span>
+      } @else if (data.user_keys?.hevy?.has_key) {
+        <span class="status off">{{ hevyConnectionLabel() }}</span>
       } @else {
         <span class="status off">Not connected</span>
       }
@@ -51,7 +53,7 @@
         rel="noopener"
         style="color: var(--accent-2)"
         >hevy.com/settings</a
-      >.
+      >. The key is checked against Hevy before it is saved.
     </p>
 
     <div class="key-form" id="hevy-form">
@@ -68,14 +70,42 @@
         <button class="btn btn-sm" (click)="saveKey('hevy')" id="hevy-save-btn">
           {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
         </button>
+        @if (hevyKeyInput.trim()) {
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            id="hevy-test-btn"
+            (click)="verifyHevy()"
+          >
+            Test
+          </button>
+        }
         @if (data.user_keys?.hevy?.has_key) {
-          <button class="btn btn-ghost btn-sm" (click)="verifyHevy()">Verify</button>
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            id="hevy-verify-btn"
+            (click)="verifyHevy()"
+          >
+            Verify
+          </button>
           <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
           <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">
             Remove
           </button>
         }
       </div>
+      @if (data.user_keys?.hevy?.has_key) {
+        @if (hevyConnection()?.state === 'connected') {
+          <p class="muted" id="hevy-connection">
+            Connected{{ hevyConnection()?.account_username ? ' as ' + hevyConnection()?.account_username : '' }}
+            · API {{ hevyConnection()?.api_version || 'unknown' }} · verified
+            {{ hevyConnection()?.tested_at }}
+          </p>
+        } @else {
+          <p class="muted" id="hevy-connection">{{ hevyConnectionDetail() }}</p>
+        }
+      }
       <div id="hevy-status" class="key-status" role="status">{{ hevyStatus() }}</div>
     </div>
   </section>

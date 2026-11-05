@@ -5,9 +5,12 @@ All network calls are mocked; no test may hit a real external API.
 
 from __future__ import annotations
 
+import logging
+from typing import Any
 from unittest.mock import patch
 
 import hevy_client
+import pytest
 
 # ---------------------------------------------------------------------------
 # _headers
@@ -195,6 +198,174 @@ def test_get_exercise_templates_success() -> None:
         # verify page_size=100 is used
         call_args = mock_get.call_args
         assert call_args[1]["params"]["pageSize"] == 100
+
+
+# ---------------------------------------------------------------------------
+# probe
+# ---------------------------------------------------------------------------
+
+
+class _FakeResponse:
+    """Minimal stand-in for ``requests.Response``."""
+
+    def __init__(
+        self,
+        status_code: int,
+        payload: Any = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.headers = headers or {}
+
+    def json(self) -> Any:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+def test_probe_returns_payload_and_status() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(200, {"username": "lifter42"})
+        result = hevy_client.probe("fake-key", "user/info")
+        assert result.ok is True
+        assert result.status_code == 200
+        assert result.payload == {"username": "lifter42"}
+        assert result.api_version == "v1"
+
+
+def test_probe_sends_the_key_as_a_header_only() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(200, {})
+        hevy_client.probe("fake-key", "workouts", params={"page": 1, "pageSize": 1})
+        call_args = mock_get.call_args
+        assert call_args[1]["headers"]["api-key"] == "fake-key"
+        assert "fake-key" not in call_args[0][0]
+        assert call_args[1]["params"] == {"page": 1, "pageSize": 1}
+        assert call_args[1]["timeout"] == hevy_client.CREDENTIAL_TEST_TIMEOUT
+
+
+def test_probe_reports_a_refused_credential() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(401, {"error": "unauthorized"})
+        result = hevy_client.probe("fake-key", "user/info")
+        assert result.ok is False
+        assert result.rejected is True
+        assert result.status_code == 401
+        assert result.payload is None
+
+
+def test_probe_never_follows_a_redirect() -> None:
+    # The transport keeps custom headers such as ``api-key`` when it follows
+    # a redirect to another host, so a redirect answer must not be followed.
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(
+            302,
+            {"username": "lifter42"},
+            headers={"location": "https://example.invalid/collect"},
+        )
+        result = hevy_client.probe("fake-key", "user/info")
+
+        assert mock_get.call_args[1]["allow_redirects"] is False
+
+    assert result.ok is False
+    assert result.rejected is False
+    assert result.status_code == 302
+    assert result.payload is None
+
+
+def test_probe_reports_a_transport_failure_without_a_status() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.side_effect = hevy_client.requests.RequestException("timeout")
+        result = hevy_client.probe("fake-key", "user/info")
+        assert result.status_code is None
+        assert result.ok is False
+        assert result.rejected is False
+        assert result.payload is None
+
+
+def test_probe_rejects_a_non_object_body() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(200, [1, 2, 3])
+        result = hevy_client.probe("fake-key", "user/info")
+        assert result.status_code == 200
+        assert result.payload is None
+
+
+def test_probe_reports_the_api_version_header() -> None:
+    with patch("hevy_client.requests.get") as mock_get:
+        mock_get.return_value = _FakeResponse(
+            200,
+            {},
+            headers={"x-api-version": "2024-11"},
+        )
+        result = hevy_client.probe("fake-key", "user/info")
+        assert result.api_version == "2024-11"
+
+
+def test_probe_never_logs_the_credential_from_a_transport_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "synthetic-secret-hevy-key"
+    # The transport quotes the offending header value back in its message.
+    error = hevy_client.requests.exceptions.InvalidHeader(
+        f"Invalid leading whitespace, reserved character(s), or return "
+        f"character(s) in header value: {secret!r}"
+    )
+    with (
+        patch("hevy_client.requests.get", side_effect=error),
+        caplog.at_level(logging.DEBUG),
+    ):
+        result = hevy_client.probe(secret, "user/info")
+
+    assert result.status_code is None
+    assert result.ok is False
+    assert secret not in caplog.text
+    assert secret not in repr(result)
+
+
+def test_probe_survives_a_non_request_exception_from_the_transport(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Header encoding failures are plain ValueError subclasses, not
+    # RequestException instances.
+    secret = "synthetic-secret-hevy-key"
+    with (
+        patch(
+            "hevy_client.requests.get",
+            side_effect=UnicodeEncodeError("latin-1", secret, 0, 1, "not latin-1"),
+        ),
+        caplog.at_level(logging.DEBUG),
+    ):
+        result = hevy_client.probe(secret, "user/info")
+
+    assert result.status_code is None
+    assert result.ok is False
+    assert secret not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "with-newline\nkey",
+        "with-carriage-return\rkey",
+        "with-tab\tkey",
+        "with-null\x00key",
+        "non-ascii-\u20ac",
+        "",
+        "x" * (hevy_client.MAX_CREDENTIAL_LENGTH + 1),
+    ],
+)
+def test_is_transmittable_credential_rejects_unusable_values(value: str) -> None:
+    assert hevy_client.is_transmittable_credential(value) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["a", "synthetic-hevy-key", "with space", "0123456789abcdef" * 8],
+)
+def test_is_transmittable_credential_accepts_usable_values(value: str) -> None:
+    assert hevy_client.is_transmittable_credential(value) is True
 
 
 # ---------------------------------------------------------------------------

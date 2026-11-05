@@ -362,6 +362,32 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON programmes (user_id, active)"
         )
 
+        # Verified Hevy connection metadata. Holds no credential material,
+        # only the connected account identity, the last test time, the API
+        # version and the capabilities the credential was proven to have.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hevy_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                provider TEXT NOT NULL DEFAULT 'hevy',
+                state TEXT NOT NULL,
+                account_username TEXT,
+                account_id TEXT,
+                api_version TEXT,
+                capabilities_json TEXT NOT NULL DEFAULT '{}',
+                tested_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, provider)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hevy_connections_user "
+            "ON hevy_connections (user_id)"
+        )
+
         # ---- Multi-tenant migration: Add user_id to domain tables ----
         cursor.execute("PRAGMA table_info(daily_log)")
         dl_columns = {col[1] for col in cursor.fetchall()}
@@ -2065,6 +2091,107 @@ def delete_user_api_key(
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, provider.lower()),
+        )
+
+
+# ---- Verified Hevy connection metadata ----
+
+
+def save_hevy_connection(
+    user_id: str,
+    *,
+    state: str,
+    api_version: str,
+    capabilities: dict[str, Any],
+    tested_at: str,
+    account_username: str | None = None,
+    account_id: str | None = None,
+    provider: str = "hevy",
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Record the outcome of a Hevy credential verification for one user.
+
+    Only safe metadata is stored: the connected account identity, the test
+    time, the API version and the verified capability map. Credential material
+    is never written here.
+    """
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO hevy_connections
+                (user_id, provider, state, account_username, account_id,
+                 api_version, capabilities_json, tested_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                state = excluded.state,
+                account_username = excluded.account_username,
+                account_id = excluded.account_id,
+                api_version = excluded.api_version,
+                capabilities_json = excluded.capabilities_json,
+                tested_at = excluded.tested_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                provider.lower(),
+                state,
+                account_username,
+                account_id,
+                api_version,
+                json.dumps(capabilities),
+                tested_at,
+                now,
+                now,
+            ),
+        )
+
+
+def get_hevy_connection(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    provider: str = "hevy",
+) -> dict[str, Any] | None:
+    """Return the stored Hevy connection metadata for one user, or None."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT state, account_username, account_id, api_version,
+                   capabilities_json, tested_at, updated_at
+            FROM hevy_connections
+            WHERE user_id = ? AND provider = ?
+            """,
+            (user_id, provider.lower()),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        capabilities = json.loads(row[4]) if row[4] else {}
+    except json.JSONDecodeError:
+        capabilities = {}
+    if not isinstance(capabilities, dict):
+        capabilities = {}
+    return {
+        "state": row[0],
+        "account_username": row[1],
+        "account_id": row[2],
+        "api_version": row[3],
+        "capabilities": capabilities,
+        "tested_at": row[5],
+        "updated_at": row[6],
+    }
+
+
+def delete_hevy_connection(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    provider: str = "hevy",
+) -> None:
+    """Remove the stored Hevy connection metadata for one user."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM hevy_connections WHERE user_id = ? AND provider = ?",
             (user_id, provider.lower()),
         )
 

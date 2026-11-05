@@ -1,7 +1,35 @@
 import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import {
+  HevyConnection,
+  HevyVerificationResult,
+  SaveKeyResult,
+  SettingsResponse,
+  SyncHistoryResult,
+} from './settings.types';
+
+/**
+ * Read the human readable reason out of a failed request.
+ *
+ * The API answers with `{"detail": "..."}`. Anything else (a proxy error page,
+ * a dropped connection, a non-JSON body) must not be shown as if it were a
+ * product message.
+ */
+function errorDetail(err: unknown): string | null {
+  if (!(err instanceof HttpErrorResponse)) {
+    return null;
+  }
+  const body: unknown = err.error;
+  if (body !== null && typeof body === 'object') {
+    const detail: unknown = (body as { detail?: unknown }).detail;
+    if (typeof detail === 'string') {
+      return detail.trim() || null;
+    }
+  }
+  return null;
+}
 
 @Component({
   selector: 'app-settings',
@@ -13,7 +41,7 @@ import { FormsModule } from '@angular/forms';
 export class Settings implements OnInit {
   private http = inject(HttpClient);
 
-  data = signal<any>(null);
+  data = signal<SettingsResponse | null>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
@@ -24,6 +52,7 @@ export class Settings implements OnInit {
   pushBusy = signal(false);
   hevyKeyInput = '';
   hevyStatus = signal<string>('');
+  hevyConnection = signal<HevyConnection | null>(null);
   aiStatus = signal<string>('');
   prefStatus = signal<string>('');
   pushSubscribed = signal<boolean>(false);
@@ -43,22 +72,23 @@ export class Settings implements OnInit {
 
   loadSettings(populateForm = true) {
     this.error.set(null);
-    this.http.get('/api/settings').subscribe({
-      next: (res: any) => {
+    this.http.get<SettingsResponse>('/api/settings').subscribe({
+      next: (res) => {
         this.data.set(res);
+        this.hevyConnection.set(res.hevy_connection ?? null);
         if (populateForm) {
-          const prefs = res.user_prefs || {};
-          const selectedProvider = prefs.preferred_ai || 'gemini';
+          const prefs = res.user_prefs;
+          const selectedProvider = prefs?.preferred_ai || 'gemini';
           this.selectedAiProvider.set(selectedProvider);
-          for (const provider of res.ai_providers || []) {
-            this.aiModelInputs[provider.id] = res.user_keys?.[provider.id]?.model || '';
+          for (const provider of res.ai_providers ?? []) {
+            this.aiModelInputs[provider.id] = res.user_keys?.[provider.id]?.model ?? '';
           }
-          if (prefs.ai_model) {
+          if (prefs?.ai_model) {
             this.aiModelInputs[selectedProvider] = prefs.ai_model;
           }
-          this.selectedGoals.set(prefs.goals || []);
-          this.selectedExperience.set(prefs.experience_level || 'intermediate');
-          this.constraintsInput = (prefs.constraints || []).join('. ');
+          this.selectedGoals.set([...(prefs?.goals ?? [])]);
+          this.selectedExperience.set(prefs?.experience_level || 'intermediate');
+          this.constraintsInput = (prefs?.constraints ?? []).join('. ');
         }
         void this.checkPushSubscription();
         this.loading.set(false);
@@ -97,68 +127,111 @@ export class Settings implements OnInit {
       return;
     }
 
-    this.http
-      .post('/api/settings/key', { provider, api_key: key, model: model || undefined })
-      .subscribe({
-        next: () => {
-          if (provider === 'hevy') {
-            this.hevyStatus.set('Hevy key saved!');
-            this.hevyKeyInput = '';
-          } else {
-            this.aiStatus.set(`${provider} key saved!`);
-            this.aiKeyInputs[provider] = '';
-          }
-          this.loadSettings(false);
-        },
-        error: (err: any) => {
-          const msg = err.error?.detail || 'Error saving key.';
-          if (provider === 'hevy') this.hevyStatus.set(msg);
-          else this.aiStatus.set(msg);
-        },
-      });
-  }
-
-  deleteKey(provider: string) {
-    if (!confirm(`Remove your ${provider} API key?`)) return;
-    this.http.post('/api/settings/key/delete', { provider }).subscribe({
-      next: () => {
+    this.http.post<SaveKeyResult>('/api/settings/key', { provider, api_key: key, model: model || undefined }).subscribe({
+      next: (res) => {
+        if (provider === 'hevy') {
+          const connection = res.connection;
+          this.hevyStatus.set(
+            connection ? this.describeHevyConnection(connection) : 'Hevy key saved.',
+          );
+          this.hevyKeyInput = '';
+        } else {
+          this.aiStatus.set(`${provider} key saved!`);
+          this.aiKeyInputs[provider] = '';
+        }
         this.loadSettings(false);
       },
-      error: (err: any) => {
-        alert(err.error?.detail || 'Could not delete key.');
+      error: (err: unknown) => {
+        const msg = errorDetail(err) ?? 'Error saving key.';
+        if (provider === 'hevy') this.hevyStatus.set(msg);
+        else this.aiStatus.set(msg);
       },
     });
   }
 
+  deleteKey(provider: string) {
+    if (!confirm(`Remove your ${provider} API key?`)) return;
+    this.http.post<{ status: string; provider: string }>('/api/settings/key/delete', { provider }).subscribe({
+      next: () => {
+        this.loadSettings(false);
+      },
+      error: (err: unknown) => {
+        alert(errorDetail(err) ?? 'Could not delete key.');
+      },
+    });
+  }
+
+  /**
+   * Test a Hevy credential without activating it.
+   *
+   * With a key typed into the form the candidate is tested and the form keeps
+   * the key so it can be saved without retyping. Without one the stored key
+   * of the authenticated user is tested and the stored connection metadata is
+   * refreshed.
+   */
   verifyHevy() {
-    this.hevyStatus.set('Verifying...');
-    this.http
-      .post('/api/settings/verify-hevy', { api_key: this.hevyKeyInput.trim() || '__stored__' })
-      .subscribe({
-        next: (res: any) => {
-          if (res.status === 'ok') {
-            this.hevyStatus.set(`✓ Connected! ${res.workout_count} workouts found.`);
-          } else {
-            this.hevyStatus.set(res.detail || 'Verification failed.');
-          }
-        },
-        error: (err: any) => {
-          this.hevyStatus.set(err.error?.detail || 'Verification failed.');
-        },
-      });
+    const candidate = this.hevyKeyInput.trim();
+    this.hevyStatus.set('Verifying the Hevy API key...');
+    this.http.post<HevyVerificationResult>('/api/settings/verify-hevy', candidate ? { api_key: candidate } : {}).subscribe({
+      next: (res) => {
+        this.hevyStatus.set(this.describeHevyConnection(res));
+        if (!candidate) {
+          // Only the stored credential can change the stored connection.
+          this.loadSettings(false);
+        }
+      },
+      error: (err: unknown) => {
+        this.hevyStatus.set(errorDetail(err) ?? 'Could not verify the Hevy API key.');
+      },
+    });
+  }
+
+  describeHevyConnection(res: HevyConnection): string {
+    if (res.state !== 'connected') {
+      // Never claim a connection the API did not confirm.
+      return `✗ Not connected (${res.state.replace(/_/g, ' ')}).`;
+    }
+    const account = res.account_username ? ` as ${res.account_username}` : '';
+    const version = res.api_version ? ` · API ${res.api_version}` : '';
+    const capabilities = Object.entries(res.capabilities ?? {})
+      .filter(([, enabled]) => enabled === true)
+      .map(([name]) => name.replace(/_/g, ' '));
+    const capabilityText = capabilities.length ? ` · ${capabilities.join(', ')}` : '';
+    return `✓ Connected${account}${version}${capabilityText}.`;
+  }
+
+  hevyConnectionLabel(): string {
+    const state = this.hevyConnection()?.state;
+    if (state === 'connected') return 'Connected';
+    if (state === 'invalid' || state === 'insufficient_scope') return 'Needs attention';
+    return 'Not verified';
+  }
+
+  hevyConnectionDetail(): string {
+    const state = this.hevyConnection()?.state;
+    if (state === 'invalid') {
+      return 'Hevy rejected the stored API key. Use Verify to test a new key.';
+    }
+    if (state === 'insufficient_scope') {
+      return 'The stored API key cannot read your Hevy workouts. Use Verify to test a new key.';
+    }
+    if (state === 'unverified') {
+      return 'The stored API key could not be verified. Use Verify to try again.';
+    }
+    return 'The stored Hevy key has not been verified yet. Use Verify to test it.';
   }
 
   syncHistory() {
     if (!confirm('This will rebuild your workout history from Hevy. Continue?')) return;
-    this.hevyStatus.set('Syncing history from Hevy...');
-    this.http.post('/api/settings/sync-history', {}).subscribe({
-      next: (res: any) => {
+    this.hevyStatus.set('Syncing workout history from Hevy...');
+    this.http.post<SyncHistoryResult>('/api/settings/sync-history', {}).subscribe({
+      next: (res) => {
         this.hevyStatus.set(
           `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
       },
-      error: (err: any) => {
-        this.hevyStatus.set(err.error?.detail || 'Sync failed.');
+      error: (err: unknown) => {
+        this.hevyStatus.set(errorDetail(err) ?? 'Sync failed.');
       },
     });
   }
@@ -179,13 +252,13 @@ export class Settings implements OnInit {
       ai_model: (this.aiModelInputs[this.selectedAiProvider()] || '').trim() || undefined,
     };
 
-    this.http.post('/api/settings/preferences', payload).subscribe({
+    this.http.post<{ status: string }>('/api/settings/preferences', payload).subscribe({
       next: () => {
         this.prefStatus.set('Profile saved!');
         setTimeout(() => this.prefStatus.set(''), 4000);
       },
-      error: (err: any) => {
-        this.prefStatus.set(err.error?.detail || 'Could not save preferences.');
+      error: (err: unknown) => {
+        this.prefStatus.set(errorDetail(err) ?? 'Could not save preferences.');
       },
     });
   }
@@ -264,7 +337,7 @@ export class Settings implements OnInit {
       }
       this.pushSubscribed.set(false);
       this.pushBusy.set(false);
-      this.pushStatus.set('Notifications disabled.');
+      this.pushStatus.set('Push notifications disabled.');
     } catch {
       this.pushBusy.set(false);
       this.pushStatus.set(
