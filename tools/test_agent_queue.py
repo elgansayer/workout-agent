@@ -618,6 +618,12 @@ class CommandLineTests(unittest.TestCase):
         self.addCleanup(self._tempdir.cleanup)
         self._environ = dict(os.environ)
         self.addCleanup(self._restore_environ)
+        # GitHub Actions sets GITHUB_ACTIONS for every job, and the queue
+        # refuses to change state while it is set. The harness must therefore
+        # drop the inherited flag so the commands under test run the way the
+        # OpenHands VPS scheduler runs them. The guard itself is exercised
+        # explicitly by the tests that opt into it.
+        os.environ.pop("GITHUB_ACTIONS", None)
 
     def _restore_environ(self) -> None:
         os.environ.clear()
@@ -644,6 +650,24 @@ class CommandLineTests(unittest.TestCase):
         claim = ledger.claim("worker-a")
         assert claim is not None
         ledger.mark_review(846, "worker-a", claim.lease_token, pull_request_number)
+
+    def test_the_harness_runs_the_scheduler_outside_github_actions(self) -> None:
+        """The suite must not inherit a CI runner that disables the scheduler.
+
+        GitHub Actions sets ``GITHUB_ACTIONS`` for every job and the queue then
+        fails closed, so the harness drops the inherited flag. Without that, the
+        suite could only ever pass outside CI.
+        """
+
+        self.assertNotIn("GITHUB_ACTIONS", os.environ)
+        QueueLedger(self.path).register(846, "Contract work")
+
+        code, payload = self._run("claim", "--worker", "worker-a")
+
+        self.assertEqual(code, 0)
+        claimed = payload["claimed"]
+        assert isinstance(claimed, dict)
+        self.assertEqual(claimed["issue_number"], 846)
 
     def test_claim_command_reports_the_claim(self) -> None:
         QueueLedger(self.path).register(846, "Contract work")
