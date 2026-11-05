@@ -31,6 +31,8 @@ The classification helper does **not** replace encryption, ownership checks, con
 
 Sensitive database fields must have an explicit or pattern-derived non-Internal classification. In particular, `user_api_keys` credentials, push-subscription auth material, user identifiers, Hevy payloads, body metrics, chat content, reasoning, and derived insights must remain classified.
 
+`user_sessions.session_token_hash` is classified as a Credential: it holds only a one-way SHA-256 digest of a 256-bit random session identifier (never the identifier), so a database leak cannot be replayed as a session. Revoked and expired rows are purged after seven days.
+
 Any migration that adds a credential, identifier, health, workout, prompt, or analytics column should update `FIELD_CLASSES` in the same pull request. The focused tests assert the current high-value database boundary so accidental reclassification fails review.
 
 ## Public source and synthetic-data rule
