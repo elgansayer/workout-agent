@@ -43,6 +43,7 @@ from connectors.builtin import build_builtin_registry
 from database import (
     clear_all_notifications,
     clear_chat_messages,
+    delete_hevy_connection,
     delete_notification,
     delete_user_api_key,
     get_active_programme,
@@ -52,6 +53,7 @@ from database import (
     get_daily_logs,
     get_dashboard_insight,
     get_exercise_volumes,
+    get_hevy_connection,
     get_meta,
     get_notifications,
     get_personal_records,
@@ -62,6 +64,7 @@ from database import (
     get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
+    get_user_api_key,
     get_user_api_keys,
     get_user_by_id,
     get_user_preferences,
@@ -69,6 +72,7 @@ from database import (
     mark_all_notifications_read,
     mark_notification_read,
     save_chat_message,
+    save_hevy_connection,
     save_notification,
     save_push_subscription,
     save_reasoning_log,
@@ -97,6 +101,7 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from hevy_connection import HevyCredentialState, verify_hevy_credentials
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
 from program import (
@@ -1206,17 +1211,29 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
+def _hevy_verification_status(state: HevyCredentialState) -> int:
+    """Map a verification outcome to an HTTP status code."""
+    if state is HevyCredentialState.UNVERIFIED:
+        # Hevy could not be reached; the credential was not disproved.
+        return 502
+    return 400
+
+
 @app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, str]:
-    """Save or update an API key for the current user."""
+async def save_api_key(request: Request) -> dict[str, Any]:
+    """Save or update an API key for the current user.
+
+    A Hevy credential is verified before it is stored: an unusable key is
+    rejected and never activated.
+    """
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    provider_value = body.get("provider")
-    api_key_value = body.get("api_key")
+    provider_value = body.get("provider") if isinstance(body, dict) else None
+    api_key_value = body.get("api_key") if isinstance(body, dict) else None
     provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
     api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
 
@@ -1243,6 +1260,32 @@ async def save_api_key(request: Request) -> dict[str, str]:
     model = model_value.strip() if isinstance(model_value, str) else ""
     if len(model) > 200:
         raise HTTPException(status_code=400, detail="Model is too long")
+
+    if provider == "hevy":
+        # The verification performs a bounded set of outbound requests; run it
+        # off the event loop so a slow provider cannot stall other tenants.
+        verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+        if not verification.connected:
+            raise HTTPException(
+                status_code=_hevy_verification_status(verification.state),
+                detail=verification.detail,
+            )
+        save_user_api_key(user_id, provider, api_key, db_path=DB_PATH)
+        save_hevy_connection(
+            user_id,
+            state=verification.state.value,
+            api_version=verification.api_version,
+            capabilities=dict(verification.capabilities),
+            tested_at=verification.tested_at.isoformat(),
+            account_username=verification.account_username,
+            account_id=verification.account_id,
+            db_path=DB_PATH,
+        )
+        return {
+            "status": "ok",
+            "provider": provider,
+            "connection": verification.as_public_metadata(),
+        }
 
     save_user_api_key(
         user_id,
@@ -1276,31 +1319,71 @@ async def remove_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Provider is required")
 
     delete_user_api_key(user_id, provider, db_path=DB_PATH)
+    if provider == "hevy":
+        delete_hevy_connection(user_id, db_path=DB_PATH)
     return {"status": "ok", "provider": provider}
 
 
 @app.post("/api/settings/verify-hevy")
 async def verify_hevy_key(request: Request) -> dict[str, Any]:
-    """Test a Hevy API key by calling /v1/workouts/count."""
+    """Verify a Hevy API key and record the resulting connection metadata.
+
+    Without an ``api_key`` in the body the stored key of the authenticated
+    user is verified. A credential is only ever activated when the check
+    succeeds, and the plaintext key is never echoed in the response.
+    """
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    api_key = body.get("api_key", "").strip()
+    candidate = body.get("api_key") if isinstance(body, dict) else None
+    api_key = candidate.strip() if isinstance(candidate, str) else ""
+    verifies_stored_key = not api_key
+    if verifies_stored_key:
+        stored = get_user_api_key(user_id, "hevy", DB_PATH)
+        api_key = (stored or {}).get("api_key", "").strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(
+            status_code=400,
+            detail="No Hevy API key is stored for this account.",
+        )
 
-    from hevy_client import get_workout_count
+    verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+    if verification.connected:
+        if verifies_stored_key:
+            save_hevy_connection(
+                user_id,
+                state=verification.state.value,
+                api_version=verification.api_version,
+                capabilities=dict(verification.capabilities),
+                tested_at=verification.tested_at.isoformat(),
+                account_username=verification.account_username,
+                account_id=verification.account_id,
+                db_path=DB_PATH,
+            )
+        return {
+            "status": "ok",
+            **verification.as_public_metadata(),
+            "workout_count": verification.workout_count,
+        }
 
-    count = get_workout_count(api_key)
-    if count is not None:
-        return {"status": "ok", "workout_count": count}
-    return {
-        "status": "error",
-        "detail": "Could not connect to Hevy. Check the API key.",
-    }
+    if verifies_stored_key:
+        # The stored credential stopped working: record the truthful state
+        # instead of leaving a stale "connected" record behind.
+        save_hevy_connection(
+            user_id,
+            state=verification.state.value,
+            api_version=verification.api_version,
+            capabilities=dict(verification.capabilities),
+            tested_at=verification.tested_at.isoformat(),
+            db_path=DB_PATH,
+        )
+    raise HTTPException(
+        status_code=_hevy_verification_status(verification.state),
+        detail=verification.detail,
+    )
 
 
 @app.post("/api/settings/preferences")
@@ -1787,6 +1870,25 @@ def api_settings(request: Request):
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
+    hevy_connection = get_hevy_connection(user_id, DB_PATH)
+    hevy_connection_payload: dict[str, Any] = {
+        "state": "not_connected",
+        "account_username": None,
+        "account_id": None,
+        "api_version": None,
+        "capabilities": {},
+        "tested_at": None,
+    }
+    if hevy_connection:
+        hevy_connection_payload = {
+            "state": hevy_connection.get("state") or "unverified",
+            "account_username": hevy_connection.get("account_username"),
+            "account_id": hevy_connection.get("account_id"),
+            "api_version": hevy_connection.get("api_version"),
+            "capabilities": hevy_connection.get("capabilities") or {},
+            "tested_at": hevy_connection.get("tested_at"),
+        }
+
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
     connectors_info = []
@@ -1814,6 +1916,7 @@ def api_settings(request: Request):
             {
                 "user_prefs": prefs,
                 "user_keys": user_keys,
+                "hevy_connection": hevy_connection_payload,
                 "ai_providers": ai_providers,
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
