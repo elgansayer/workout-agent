@@ -12,6 +12,7 @@ from hevy_reader import (
     Routine,
     RoutineExercise,
 )
+from secret_vault import ResolvedCredential, SecretValue
 from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
@@ -104,8 +105,12 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     monkeypatch.setattr(app_module, "ALLOW_ANONYMOUS_WEB", True)
     monkeypatch.setattr(
         app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {"hevy": {"api_key": "fixture-hevy-key"}},
+        "_vault_credential",
+        lambda *args, **kwargs: ResolvedCredential(
+            provider="hevy",
+            version=1,
+            api_key=SecretValue("fixture-hevy-key"),
+        ),
     )
     monkeypatch.setattr(
         app_module,
@@ -242,8 +247,8 @@ def test_disconnected_builder_does_not_return_static_fallback(
     client, app_module, _db_file = _client(tmp_path, monkeypatch)
     monkeypatch.setattr(
         app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {},
+        "_vault_credential",
+        lambda *args, **kwargs: None,
     )
 
     response = client.get("/api/programmes")

@@ -149,6 +149,38 @@ export class Settings implements OnInit {
     });
   }
 
+  private setProviderStatus(provider: string, message: string) {
+    if (provider === 'hevy') this.hevyStatus.set(message);
+    else this.aiStatus.set(message);
+  }
+
+  testKey(provider: string) {
+    const key =
+      provider === 'hevy' ? this.hevyKeyInput.trim() : (this.aiKeyInputs[provider] || '').trim();
+    const model = (this.aiModelInputs[provider] || '').trim();
+    this.setProviderStatus(provider, 'Testing credential...');
+    this.http
+      .post('/api/settings/key/test', {
+        provider,
+        api_key: key || '__stored__',
+        model: model || undefined,
+      })
+      .subscribe({
+        next: (res: any) => {
+          if (res.status === 'ok') {
+            const count = typeof res.workout_count === 'number' ? ` ${res.workout_count} workouts found.` : '';
+            this.setProviderStatus(provider, `✓ Connected.${count}`);
+            this.loadSettings(false);
+          } else {
+            this.setProviderStatus(provider, res.detail || 'Verification failed.');
+          }
+        },
+        error: (err: unknown) => {
+          this.setProviderStatus(provider, errorDetail(err) ?? 'Verification failed.');
+        },
+      });
+  }
+
   deleteKey(provider: string) {
     if (!confirm(`Remove your ${provider} API key?`)) return;
     this.http.post<{ status: string; provider: string }>('/api/settings/key/delete', { provider }).subscribe({
@@ -219,6 +251,19 @@ export class Settings implements OnInit {
       return 'The stored API key could not be verified. Use Verify to try again.';
     }
     return 'The stored Hevy key has not been verified yet. Use Verify to test it.';
+  }
+
+  revokeKey(provider: string) {
+    if (!confirm(`Revoke your ${provider} credential? Background jobs will stop using it.`)) return;
+    this.http.post('/api/settings/key/revoke', { provider }).subscribe({
+      next: () => {
+        this.setProviderStatus(provider, 'Credential revoked.');
+        this.loadSettings(false);
+      },
+      error: (err: unknown) => {
+        this.setProviderStatus(provider, errorDetail(err) ?? 'Could not revoke credential.');
+      },
+    });
   }
 
   syncHistory() {

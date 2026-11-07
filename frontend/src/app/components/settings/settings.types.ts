@@ -45,6 +45,25 @@ export interface SyncHistoryResult {
   readonly workouts_found: number;
 }
 
+/** Whether credential storage is usable on this server. */
+export interface CredentialVaultAvailability {
+  readonly available: boolean;
+  readonly reason: string | null;
+}
+
+/** One audited credential lifecycle event. Carries no secret material. */
+export interface CredentialAuditEvent {
+  readonly id: number;
+  readonly provider: string;
+  readonly action: string;
+  readonly outcome: string;
+  readonly detail: string | null;
+  readonly actor: string;
+  readonly source: string;
+  readonly version: number | null;
+  readonly created_at: string;
+}
+
 /** One AI provider advertised by the provider registry. */
 export interface AiProviderInfo {
   readonly id: string;
@@ -57,6 +76,7 @@ export interface StoredKeyInfo {
   readonly has_key: boolean;
   readonly masked: string | null;
   readonly model: string | null;
+  readonly status?: string;
 }
 
 /**
@@ -94,6 +114,8 @@ export interface SettingsResponse {
   readonly user_prefs: UserPreferences;
   readonly user_keys: StoredKeys;
   readonly hevy_connection: HevyConnection;
+  readonly credential_vault: CredentialVaultAvailability;
+  readonly credential_events: readonly CredentialAuditEvent[];
   readonly ai_providers: readonly AiProviderInfo[];
   readonly gh_connected: boolean;
   readonly gh_configured: boolean;

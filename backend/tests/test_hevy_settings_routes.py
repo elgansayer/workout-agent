@@ -18,10 +18,12 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-import database
-import hevy_client
 from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
+
+import database
+import hevy_client
+from secret_vault import CredentialUnavailableError, SecretVault
 
 _SECRET = "hevy-connection-test-secret-that-is-long-enough"
 _CANDIDATE_KEY = "synthetic-hevy-key"
@@ -120,6 +122,26 @@ def _user_id(client: Any) -> str:
     return database.get_legacy_user_id(client.hevy_db_file)
 
 
+def _store_key(
+    user_id: str, provider: str, api_key: str, db_file: str
+) -> None:
+    """Store a credential directly through the vault (bypassing the routes)."""
+    SecretVault(db_file, environ={"ENCRYPTION_KEY": _ENCRYPTION_KEY}).store(
+        user_id, provider, api_key=api_key
+    )
+
+
+def _stored_key(user_id: str, provider: str, db_file: str) -> str | None:
+    """Return a stored plaintext credential, or ``None`` when unset."""
+    try:
+        credential = SecretVault(
+            db_file, environ={"ENCRYPTION_KEY": _ENCRYPTION_KEY}
+        ).resolve(user_id, provider, purpose="credential_test")
+    except CredentialUnavailableError:
+        return None
+    return credential.api_key.reveal() if credential.api_key is not None else None
+
+
 # ---------------------------------------------------------------------------
 # Storing a credential
 # ---------------------------------------------------------------------------
@@ -142,8 +164,7 @@ def test_unverified_hevy_key_is_rejected_and_never_stored(
     assert "rejected" in response.json()["detail"].lower()
     assert _CANDIDATE_KEY not in response.text
 
-    stored = database.get_user_api_keys(_user_id(webapp_client), webapp_client.hevy_db_file)
-    assert "hevy" not in stored
+    assert _stored_key(_user_id(webapp_client), "hevy", webapp_client.hevy_db_file) is None
     assert (
         database.get_hevy_connection(_user_id(webapp_client), webapp_client.hevy_db_file)
         is None
@@ -164,8 +185,7 @@ def test_hevy_key_without_workout_access_is_not_activated(
     )
 
     assert response.status_code == 400
-    stored = database.get_user_api_keys(_user_id(webapp_client), webapp_client.hevy_db_file)
-    assert "hevy" not in stored
+    assert _stored_key(_user_id(webapp_client), "hevy", webapp_client.hevy_db_file) is None
 
 
 def test_redirect_answer_does_not_activate_a_hevy_key(
@@ -189,8 +209,7 @@ def test_redirect_answer_does_not_activate_a_hevy_key(
 
     assert response.status_code == 502
     assert _CANDIDATE_KEY not in response.text
-    stored = database.get_user_api_keys(_user_id(webapp_client), webapp_client.hevy_db_file)
-    assert "hevy" not in stored
+    assert _stored_key(_user_id(webapp_client), "hevy", webapp_client.hevy_db_file) is None
 
 
 def test_unusable_hevy_key_is_rejected_without_a_server_error(
@@ -211,8 +230,7 @@ def test_unusable_hevy_key_is_rejected_without_a_server_error(
     assert response.status_code == 400
     assert "synthetic-secret-key" not in response.text
     assert "synthetic-secret-key" not in caplog.text
-    stored = database.get_user_api_keys(_user_id(webapp_client), webapp_client.hevy_db_file)
-    assert "hevy" not in stored
+    assert _stored_key(_user_id(webapp_client), "hevy", webapp_client.hevy_db_file) is None
 
 
 def test_verified_hevy_key_is_stored_with_its_connection_metadata(
@@ -240,8 +258,7 @@ def test_verified_hevy_key_is_stored_with_its_connection_metadata(
 
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    stored = database.get_user_api_keys(user_id, db_file)
-    assert stored["hevy"]["api_key"] == _CANDIDATE_KEY
+    assert _stored_key(user_id, "hevy", db_file) == _CANDIDATE_KEY
 
     with sqlite3.connect(db_file, timeout=10) as conn:
         raw = conn.execute(
@@ -272,8 +289,10 @@ def test_ai_provider_keys_are_not_affected_by_the_hevy_gate(
     )
 
     assert response.status_code == 200
-    stored = database.get_user_api_keys(_user_id(webapp_client), webapp_client.hevy_db_file)
-    assert stored["gemini"]["api_key"] == "synthetic-gemini-key"
+    assert (
+        _stored_key(_user_id(webapp_client), "gemini", webapp_client.hevy_db_file)
+        == "synthetic-gemini-key"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +307,7 @@ def test_verify_hevy_checks_the_stored_key(
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    database.save_user_api_key(user_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(user_id, "hevy", _CANDIDATE_KEY, db_file)
 
     response = webapp_client.post("/api/settings/verify-hevy", json={})
 
@@ -327,7 +346,7 @@ def test_verify_hevy_rejects_an_invalid_candidate_without_touching_the_stored_ke
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    database.save_user_api_key(user_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(user_id, "hevy", _CANDIDATE_KEY, db_file)
 
     responses = _successful_responses()
     responses["user/info"] = _FakeResponse(401, {"error": "unauthorized"})
@@ -340,8 +359,7 @@ def test_verify_hevy_rejects_an_invalid_candidate_without_touching_the_stored_ke
 
     assert response.status_code == 400
     assert "synthetic-bad-key" not in response.text
-    stored = database.get_user_api_keys(user_id, db_file)
-    assert stored["hevy"]["api_key"] == _CANDIDATE_KEY
+    assert _stored_key(user_id, "hevy", db_file) == _CANDIDATE_KEY
 
 
 def test_verify_hevy_marks_a_rejected_stored_key_as_invalid(
@@ -351,7 +369,7 @@ def test_verify_hevy_marks_a_rejected_stored_key_as_invalid(
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    database.save_user_api_key(user_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(user_id, "hevy", _CANDIDATE_KEY, db_file)
     database.save_hevy_connection(
         user_id,
         state="connected",
@@ -386,7 +404,7 @@ def test_settings_reports_the_verified_connection_without_the_credential(
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    database.save_user_api_key(user_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(user_id, "hevy", _CANDIDATE_KEY, db_file)
     database.save_hevy_connection(
         user_id,
         state="connected",
@@ -416,7 +434,7 @@ def test_removing_the_hevy_key_clears_the_connection_metadata(
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     user_id = _user_id(webapp_client)
-    database.save_user_api_key(user_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(user_id, "hevy", _CANDIDATE_KEY, db_file)
     database.save_hevy_connection(
         user_id,
         state="connected",
@@ -429,8 +447,7 @@ def test_removing_the_hevy_key_clears_the_connection_metadata(
     response = webapp_client.post("/api/settings/key/delete", json={"provider": "hevy"})
 
     assert response.status_code == 200
-    stored = database.get_user_api_keys(user_id, db_file)
-    assert "hevy" not in stored
+    assert _stored_key(user_id, "hevy", db_file) is None
     assert database.get_hevy_connection(user_id, db_file) is None
 
 
@@ -441,7 +458,7 @@ def test_connection_metadata_is_not_visible_to_another_tenant(
     _install_hevy(monkeypatch, _successful_responses())
     db_file = webapp_client.hevy_db_file
     owner_id = _user_id(webapp_client)
-    database.save_user_api_key(owner_id, "hevy", _CANDIDATE_KEY, db_path=db_file)
+    _store_key(owner_id, "hevy", _CANDIDATE_KEY, db_file)
     database.save_hevy_connection(
         owner_id,
         state="connected",
@@ -458,4 +475,4 @@ def test_connection_metadata_is_not_visible_to_another_tenant(
         db_path=db_file,
     )
     assert database.get_hevy_connection(other["id"], db_file) is None
-    assert "hevy" not in database.get_user_api_keys(other["id"], db_file)
+    assert _stored_key(other["id"], "hevy", db_file) is None
