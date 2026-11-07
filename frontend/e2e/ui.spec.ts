@@ -176,6 +176,24 @@ const payloads: Record<string, unknown> = {
   },
   '/api/settings': settings,
   '/api/chat/history': { messages: [] },
+  '/api/coach/capability': {
+    provider_name: 'gemini',
+    provider_configured: true,
+    provider_state: 'ready',
+    can_chat: true,
+    status: 'ready',
+    sync_configured: true,
+    sync_state: 'synced',
+    programme_available: true,
+    has_training_data: true,
+    has_fresh_training_data: true,
+    sources: {
+      training_logs: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      body_metrics: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+    },
+  },
   '/api/csrf-token': { token: 'synthetic-csrf', expires_in: 60 },
 };
 

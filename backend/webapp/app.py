@@ -39,9 +39,14 @@ from accounts import (
     require_active_user,
     resolve_oauth_user,
 )
-from ai_provider import AIProvider, available_providers
+from ai_provider import PROVIDERS, AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
+from coach_capability import (
+    CoachCapabilityState,
+    capability_prompt_block,
+    derive_coach_capability,
+)
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -69,6 +74,7 @@ from database import (
     get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
+    get_user_api_keys,
     get_user_by_id,
     get_user_preferences,
     init_db,
@@ -1353,6 +1359,101 @@ def project_peak(request: Request) -> dict[str, Any]:
         return {"error": "Failed to project peak."}
 
 
+def _parse_observed_at(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _latest_observed_at(values: list[Any]) -> datetime | None:
+    parsed = [
+        observed
+        for value in values
+        if (observed := _parse_observed_at(value)) is not None
+    ]
+    return max(parsed) if parsed else None
+
+
+def _coach_capability_for_user(
+    user_id: str,
+    *,
+    logs: list[dict[str, Any]] | None = None,
+    history: dict[str, list[dict[str, Any]]] | None = None,
+    body_metrics: list[dict[str, Any]] | None = None,
+    personal_records: list[dict[str, Any]] | None = None,
+    programme_available: bool | None = None,
+) -> CoachCapabilityState:
+    """Derive Coach capability from this tenant's records and provider state."""
+
+    keys = get_user_api_keys(user_id, DB_PATH)
+    prefs = get_user_preferences(user_id, DB_PATH)
+    provider_name = str(prefs.get("preferred_ai") or "gemini").strip().lower()
+    provider_supported = provider_name in PROVIDERS
+
+    provider_configured = False
+    if provider_supported:
+        provider_key = str(
+            keys.get(provider_name, {}).get("api_key") or ""
+        ).strip()
+        if not provider_key and provider_name == "gemini":
+            provider_key = str(get_config().gemini_api_key or "").strip()
+        provider_configured = bool(provider_key)
+
+    if logs is None:
+        logs = get_daily_logs(limit=1, db_path=DB_PATH, user_id=user_id)
+    if history is None:
+        history = get_progress_history(
+            limit_per_exercise=1, db_path=DB_PATH, user_id=user_id
+        )
+    if body_metrics is None:
+        body_metrics = get_body_metrics(limit=1, db_path=DB_PATH, user_id=user_id)
+    if personal_records is None:
+        personal_records = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    if programme_available is None:
+        programme_available = get_active_programme(user_id, DB_PATH) is not None
+
+    history_dates = [
+        entry.get("date")
+        for entries in history.values()
+        for entry in entries
+    ]
+    observed_at = {
+        "training_logs": _latest_observed_at(
+            [log.get("date") for log in logs]
+        ),
+        "progress_history": _latest_observed_at(history_dates),
+        "personal_records": _latest_observed_at(
+            [record.get("date") for record in personal_records]
+        ),
+        "body_metrics": _latest_observed_at(
+            [metric.get("date") for metric in body_metrics]
+        ),
+    }
+
+    return derive_coach_capability(
+        provider_name=provider_name,
+        provider_configured=provider_configured,
+        provider_supported=provider_supported,
+        sync_configured=bool(keys.get("hevy", {}).get("api_key")),
+        observed_at=observed_at,
+        programme_available=programme_available,
+        now=datetime.now(tz=timezone.utc),
+    )
+
+
+@app.get("/api/coach/capability")
+def coach_capability(request: Request) -> JSONResponse:
+    """Return the authenticated user's truthful Coach capability state."""
+
+    user_id = _check_api_auth(request)
+    state = _coach_capability_for_user(user_id)
+    return JSONResponse(state.as_dict())
+
+
 @app.get("/api/chat/history")
 def chat_history(request: Request):
     user_id = _check_api_auth(request)
@@ -1378,6 +1479,13 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
     biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    capability = _coach_capability_for_user(
+        user_id,
+        logs=logs,
+        history=history,
+        body_metrics=biometrics,
+        personal_records=prs,
+    )
 
     context = json.dumps(
         {
@@ -1402,8 +1510,9 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
+    access_block = capability_prompt_block(capability)
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
-You have access to this user's training logs, body composition data, personal records, and programme history.
+{access_block}
 
 Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
@@ -1419,7 +1528,7 @@ Training data context (recent logs, progress history, biometrics, PRs):
 
 User's new message: {q}
 
-Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
+Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible. Never claim access to a source marked unavailable above."""
 
     def generate() -> Iterator[str]:
         collected: list[str] = []
