@@ -30,6 +30,7 @@ from secret_vault import (
     UnavailableReason,
     VaultError,
 )
+from tenant_isolation import OwnerIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -271,10 +272,12 @@ def sync_body_metrics(
     if not (client_id and client_secret):
         return None
 
-    owner = require_tenant(user_id, db_path)
+    if user_id is None:
+        user_id = require_tenant(user_id, db_path)
+    owner = OwnerIdentity(user_id)
     vault = SecretVault(db_path)
     refresh_token, credential = _resolve_refresh_token(
-        vault, owner, env_refresh_token
+        vault, owner.user_id, env_refresh_token
     )
     if not refresh_token:
         return None
@@ -286,5 +289,5 @@ def sync_body_metrics(
         return None
 
     access, new_refresh = tokens
-    _persist_refresh_token(vault, owner, credential, new_refresh)
+    _persist_refresh_token(vault, owner.user_id, credential, new_refresh)
     return fetch_body_metrics(access)

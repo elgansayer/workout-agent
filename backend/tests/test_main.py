@@ -166,6 +166,16 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
 # ---------------------------------------------------------------------------
 
 
+def _seed_run_user(monkeypatch: pytest.MonkeyPatch, db_path: str) -> str:
+    """Create a real synthetic user so run() exercises owner re-authorization."""
+    from database import get_or_create_user, init_db
+
+    init_db(db_path)
+    user = get_or_create_user("synthetic-run@example.com", "Synthetic Runner", db_path)
+    monkeypatch.setattr("main._resolve_run_user", lambda path: user["id"])
+    return user["id"]
+
+
 def _make_config(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -199,10 +209,10 @@ def _make_config(
 
     monkeypatch.setattr("main.Config.load", lambda: config)
 
-    # Patch init_db to do nothing (avoid real DB creation)
+    # Patch init_db to do nothing; the helper below creates the real schema once
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
-    # Patch _resolve_run_user to return a fixed test user_id
-    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    # run() re-authorizes its owner, so resolve to a real synthetic user
+    _seed_run_user(monkeypatch, db_path)
     monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
     # Patch _resolve_provider to avoid DB lookups in test
     monkeypatch.setattr(
@@ -850,7 +860,7 @@ def test_run_self_review_on_configured_weekday(
     )
     monkeypatch.setattr("main.Config.load", lambda: config2)
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
-    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    _seed_run_user(monkeypatch, db_path)
     monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
     monkeypatch.setattr(
         "main._resolve_provider",

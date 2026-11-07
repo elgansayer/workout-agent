@@ -8,8 +8,9 @@ import google_health_client
 import pytest
 import requests
 from cryptography.fernet import Fernet
-from database import get_legacy_user_id, init_db
-from secret_vault import SecretVault
+from database import get_legacy_user_id, get_or_create_user, init_db
+from secret_vault import CredentialUnavailableError, SecretVault
+from tenant_isolation import OwnershipError
 
 
 class _FakeResponse:
@@ -50,6 +51,28 @@ def _stored_token(db: str) -> str | None:
         "google_health",
         purpose="test_readback",
     )
+    return (
+        credential.refresh_token.reveal()
+        if credential.refresh_token is not None
+        else None
+    )
+
+
+def _user(db: str, name: str = "synthetic") -> str:
+    return get_or_create_user(f"{name}@example.com", name.title(), db)["id"]
+
+
+def _store_user_token(db: str, user_id: str, token: str) -> None:
+    SecretVault(db).store(user_id, "google_health", refresh_token=token)
+
+
+def _user_token(db: str, user_id: str) -> str | None:
+    try:
+        credential = SecretVault(db).resolve(
+            user_id, "google_health", purpose="test_readback"
+        )
+    except CredentialUnavailableError:
+        return None
     return (
         credential.refresh_token.reveal()
         if credential.refresh_token is not None
@@ -412,3 +435,60 @@ def test_fetch_body_metrics_null_datapoints(
         "a", "body-fat", "bodyFat", "percentage"
     )
     assert result is None
+
+
+def test_sync_never_borrows_another_users_stored_token(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A user without a linked account must not inherit another tenant's token."""
+    db = _db(tmp_path)
+    owner = _user(db, "linked")
+    other = _user(db, "unlinked")
+    _store_user_token(db, owner, "linked-users-token")
+
+    def forbidden(url: str, **kwargs: Any) -> _FakeResponse:
+        raise AssertionError(f"no Google request may be made: {kwargs}")
+
+    monkeypatch.setattr(requests, "post", forbidden)
+    monkeypatch.setattr(requests, "get", forbidden)
+
+    assert (
+        google_health_client.sync_body_metrics("id", "secret", None, db, user_id=other)
+        is None
+    )
+    assert _user_token(db, other) is None
+    assert _user_token(db, owner) == "linked-users-token"
+
+
+def test_sync_rotates_token_only_under_the_acting_user(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = _db(tmp_path)
+    user_a = _user(db, "alpha")
+    user_b = _user(db, "bravo")
+    _store_user_token(db, user_a, "token-a")
+    _store_user_token(db, user_b, "token-b")
+
+    seen: list[str] = []
+
+    def fake_post(url: str, **kwargs: Any) -> _FakeResponse:
+        seen.append(kwargs["data"]["refresh_token"])
+        return _FakeResponse({"access_token": "a", "refresh_token": "rotated-b"})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    monkeypatch.setattr(
+        requests, "get", lambda url, **kwargs: _FakeResponse({"dataPoints": []})
+    )
+
+    google_health_client.sync_body_metrics("id", "secret", None, db, user_id=user_b)
+
+    assert seen == ["token-b"]
+    assert _user_token(db, user_b) == "rotated-b"
+    assert _user_token(db, user_a) == "token-a"
+
+
+@pytest.mark.parametrize("owner", ["", "   ", "bad\nid"])
+def test_sync_rejects_a_missing_or_malformed_owner(tmp_path: Any, owner: str) -> None:
+    db = _db(tmp_path)
+    with pytest.raises(OwnershipError):
+        google_health_client.sync_body_metrics("id", "secret", "env", db, user_id=owner)

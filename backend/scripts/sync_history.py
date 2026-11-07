@@ -27,6 +27,7 @@ from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
 from legacy_ownership import is_deployment_owner
 from tenancy import TenantRequiredError
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -73,7 +74,8 @@ def sync_all(
     init_db(db_path)
     try:
         user_id = require_tenant(user_id, db_path)
-    except TenantRequiredError as exc:
+        user_id = authorize_owner(db_path, user_id).user_id
+    except (TenantRequiredError, OwnershipError) as exc:
         return {"error": str(exc)}
     logger.info("Fetching all workouts from Hevy (DB %s)...", db_path)
 

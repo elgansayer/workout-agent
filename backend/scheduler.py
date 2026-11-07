@@ -14,12 +14,20 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
-from database import get_all_users, init_db
+from database import UserRow, get_all_users, init_db
 from tenancy import implicit_single_user_allowed
+from tenant_isolation import (
+    JobStatus,
+    OwnedJob,
+    OwnerIdentity,
+    OwnershipError,
+    run_owned_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -152,12 +160,40 @@ def run_scheduler() -> None:
         time.sleep(30)
 
 
+def _run_per_owner(
+    config: Config,
+    kind: str,
+    users: list[UserRow],
+    work: Callable[[OwnerIdentity], int | None],
+) -> int:
+    """Run *work* once per user as an owner-scoped, re-authorized job.
+
+    Ids come from the user store and are verified again immediately before each
+    job executes, so a user removed after listing is denied instead of being
+    resurrected. One owner's failure never stops the next. Returns the worst
+    exit code (0 when every job completed or was skipped as an overlap).
+    """
+    result = 0
+    for user in users:
+        try:
+            job = OwnedJob(kind, OwnerIdentity(str(user.get("id") or "")))
+        except OwnershipError:
+            logger.warning("Skipping %s: user row without a usable id.", kind)
+            result = max(result, 1)
+            continue
+        outcome = run_owned_job(job, config.database_path, work)
+        if outcome.status is JobStatus.COMPLETED:
+            result = max(result, outcome.result or 0)
+        elif outcome.status is not JobStatus.SKIPPED:
+            result = max(result, 1)
+    return result
+
+
 def run_coaching(config: Config) -> int:
     """Run one isolated daily coaching cycle per persisted user."""
     from main import run as main_run
 
     logger.info("Running daily coaching cycles...")
-    result = 0
     users = get_all_users(config.database_path)
     if not users:
         if not implicit_single_user_allowed():
@@ -171,18 +207,12 @@ def run_coaching(config: Config) -> int:
             logger.exception("Daily coaching run failed.")
             return 1
 
-    for user in users:
-        user_id = user.get("id")
-        if not user_id:
-            logger.warning("Skipping user row without an id.")
-            result = max(result, 1)
-            continue
-        try:
-            result = max(result, main_run(preview=False, user_id=user_id))
-        except Exception:
-            logger.exception("Daily coaching run failed for user %s.", user_id)
-            result = max(result, 1)
-    return result
+    return _run_per_owner(
+        config,
+        "coaching",
+        users,
+        lambda owner: main_run(preview=False, user_id=owner.user_id),
+    )
 
 
 def run_daily_insight(config: Config) -> None:
@@ -190,12 +220,12 @@ def run_daily_insight(config: Config) -> None:
     from insight_cron import generate_daily_header
 
     logger.info("Generating daily insight headers...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        try:
-            generate_daily_header(config, user_id=user_id)
-        except Exception:
-            logger.exception("Daily insight generation failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-daily",
+        get_all_users(config.database_path),
+        lambda owner: generate_daily_header(config, user_id=owner.user_id),
+    )
 
 
 def run_weekly_correlations(config: Config) -> None:
@@ -203,12 +233,12 @@ def run_weekly_correlations(config: Config) -> None:
     from insight_cron import generate_weekly_correlations
 
     logger.info("Generating weekly deep correlations...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        try:
-            generate_weekly_correlations(config, user_id=user_id)
-        except Exception:
-            logger.exception("Weekly correlations failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-weekly",
+        get_all_users(config.database_path),
+        lambda owner: generate_weekly_correlations(config, user_id=owner.user_id),
+    )
 
 
 def run_once(config: Config) -> int:

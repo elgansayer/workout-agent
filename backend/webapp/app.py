@@ -134,6 +134,7 @@ from secret_vault import (
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from tenancy import implicit_single_user_allowed
+from tenant_isolation import OwnerIdentity, OwnershipError, owner_scoped_key
 
 from webapp import ai_widgets, charts
 from webapp.session_security import (
@@ -303,8 +304,25 @@ def get_config():
 _RATE_LIMITS: dict[str, list[float]] = {}
 
 
-def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    now = time.time()
+def _rate_limit_key(request: Request) -> str:
+    """Return the throttle bucket for *request*.
+
+    A signed-in request is throttled per owner, so one tenant's traffic (or a
+    spoofed ``X-Forwarded-For``) cannot exhaust a neighbour's quota behind the
+    same proxy or NAT. Only a request with no session identity falls back to
+    the client address.
+    """
+    session = request.session if hasattr(request, "session") else {}
+    user = session.get("user")
+    candidate = session.get("user_id") or (
+        user.get("id") if isinstance(user, dict) else None
+    )
+    if candidate:
+        try:
+            return owner_scoped_key(OwnerIdentity(str(candidate)), "rate-limit")
+        except OwnershipError:
+            logger.warning("Throttling a malformed session identity by address.")
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
@@ -312,14 +330,20 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
         ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
     else:
         ip = request.client.host if request.client else "unknown"
+    return f"rate-limit-ip:{ip}"
 
-    if ip not in _RATE_LIMITS:
-        _RATE_LIMITS[ip] = []
-    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
-    if len(_RATE_LIMITS[ip]) >= limit:
+
+def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
+    now = time.time()
+    key = _rate_limit_key(request)
+
+    if key not in _RATE_LIMITS:
+        _RATE_LIMITS[key] = []
+    _RATE_LIMITS[key] = [t for t in _RATE_LIMITS[key] if now - t < window]
+    if len(_RATE_LIMITS[key]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    _RATE_LIMITS[ip].append(now)
+    _RATE_LIMITS[key].append(now)
 
 
 WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()

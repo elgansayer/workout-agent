@@ -66,6 +66,7 @@ from secret_vault import (
     migrate_legacy_credentials,
 )
 from tenancy import TenantRequiredError, implicit_single_user_allowed
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -350,9 +351,10 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     try:
         if user_id is None:
             user_id = _resolve_run_user(config.database_path)
-        else:
-            require_active_user(user_id, config.database_path)
-    except (TenantRequiredError, AccountError) as exc:
+        owner = authorize_owner(config.database_path, user_id)
+        require_active_user(owner.user_id, config.database_path)
+        user_id = owner.user_id
+    except (TenantRequiredError, AccountError, OwnershipError) as exc:
         logger.error("Cannot start the daily cycle: %s", exc)
         return 1
     config = _scope_config_to_user(config, user_id)
@@ -504,36 +506,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _sync_history(user_id: str | None = None) -> int:
+    """Rebuild one owner's Hevy history (``--sync-history``).
+
+    ``--user-id`` only claims an owner. It is re-authorized before any connector
+    credential is read, so a mistyped or forged id cannot select another
+    tenant's Hevy key or overwrite their history.
+    """
+    from scripts.sync_history import sync_all
+
+    try:
+        config = Config.load()
+    except ConfigError as exc:
+        logger.error("%s", exc)
+        return 1
+    init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
+    try:
+        owner = authorize_owner(
+            config.database_path, user_id or _resolve_run_user(config.database_path)
+        )
+        require_active_user(owner.user_id, config.database_path)
+    except (OwnershipError, TenantRequiredError, AccountError) as exc:
+        logger.error("Refusing history rebuild: %s", exc)
+        return 1
+    config = _scope_config_to_user(config, owner.user_id)
+    if not config.hevy_api_key:
+        logger.error("No Hevy API key is configured for this user.")
+        return 1
+    result = sync_all(config.hevy_api_key, config.database_path, user_id=owner.user_id)
+    if "error" in result:
+        logger.error("%s", result["error"])
+        return 1
+    logger.info("%s", result)
+    return 0
+
+
 if __name__ == "__main__":
     args = _parse_args()
     if args.sync_history:
-        from scripts.sync_history import sync_all
-
-        config = Config.load()
-        init_db(config.database_path)
-        migrate_legacy_credentials(config.database_path)
-        try:
-            if args.user_id:
-                sync_user_id = args.user_id
-                require_active_user(sync_user_id, config.database_path)
-            else:
-                sync_user_id = _resolve_run_user(config.database_path)
-        except (TenantRequiredError, AccountError) as exc:
-            logger.error("Cannot sync history: %s", exc)
-            sys.exit(1)
-        config = _scope_config_to_user(config, sync_user_id)
-        api_key = config.hevy_api_key
-        if not api_key:
-            logger.error("No Hevy API key is configured for this user.")
-            sys.exit(1)
-        result = sync_all(
-            api_key,
-            config.database_path,
-            user_id=sync_user_id,
-        )
-        if "error" in result:
-            logger.error("%s", result["error"])
-            sys.exit(1)
-        logger.info("%s", result)
-        sys.exit(0)
+        sys.exit(_sync_history(user_id=args.user_id))
     sys.exit(run(preview=args.preview, user_id=args.user_id))
