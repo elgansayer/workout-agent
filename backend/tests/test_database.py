@@ -1427,7 +1427,12 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             assert conn.execute(query).fetchall() == [(legacy_user_id,)], table
             assert _user_id_is_indexed_first(conn, table), table
 
-        for table in ("user_api_keys", "user_preferences", "programmes"):
+        for table in (
+            "user_api_keys",
+            "user_preferences",
+            "programmes",
+            "user_sessions",
+        ):
             assert _user_id_is_indexed_first(conn, table), table
 
         index_names = {

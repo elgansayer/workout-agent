@@ -116,6 +116,8 @@ Authentication and integration credentials are configured through environment va
 
 Use `.env.example` for the current supported inventory. Never paste real values into documentation, issues, fixtures, tests, screenshots, or commits.
 
+Browser sessions use a `Secure`, `HttpOnly`, `SameSite=Lax`, host-only cookie backed by a server-side registry, so they expire after an idle and an absolute limit (`SESSION_IDLE_TIMEOUT_SECONDS`, `SESSION_ABSOLUTE_TIMEOUT_SECONDS`), rotate at every sign-in, and can be revoked per device or for all devices. See [Session security](docs/SESSION_SECURITY.md).
+
 ## Health and workout examples
 
 When documentation needs a payload, use obviously synthetic values and mark the example. For example:
