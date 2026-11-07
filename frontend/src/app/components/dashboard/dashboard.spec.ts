@@ -23,6 +23,43 @@ describe('Dashboard refresh', () => {
   });
 });
 
+describe('Dashboard onboarding', () => {
+  it('presents the next required setup action until the account is ready', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: true,
+      focus: 'Select routines from Hevy',
+      rows: [],
+      onboarding: {
+        ready: false,
+        required_completed: 1,
+        required_total: 3,
+        next_required_action: {
+          title: 'Connect Hevy',
+          description: 'Connect your Hevy account so workouts sync.',
+          action_label: 'Connect Hevy',
+          href: '/settings',
+        },
+      },
+    });
+    await fixture.whenStable();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('.onboarding-callout')?.textContent).toContain(
+      'Next: Connect Hevy',
+    );
+    expect(element.querySelector<HTMLAnchorElement>('.onboarding-callout a.btn')?.href).toContain(
+      '/settings',
+    );
+    http.verify();
+  });
+});
+
 describe('Compact dashboard', () => {
   it('starts with collapsed details and keeps large reviews searchable and paginated', async () => {
     await TestBed.configureTestingModule({

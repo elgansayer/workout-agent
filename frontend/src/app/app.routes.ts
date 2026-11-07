@@ -7,6 +7,7 @@ import { Chat } from './components/chat/chat';
 import { Checkins } from './components/checkins/checkins';
 import { History } from './components/history/history';
 import { Login } from './components/login/login';
+import { Onboarding } from './components/onboarding/onboarding';
 import { Plan } from './components/plan/plan';
 import { Programmes } from './components/programmes/programmes';
 import { Progress } from './components/progress/progress';
@@ -38,6 +39,12 @@ export const routes: Routes = [
     path: 'history',
     component: History,
     title: 'History · Workout Agent',
+    canActivate: [authGuard],
+  },
+  {
+    path: 'onboarding',
+    component: Onboarding,
+    title: 'Setup · Workout Agent',
     canActivate: [authGuard],
   },
   { path: 'plan', component: Plan, title: 'Plan · Workout Agent', canActivate: [authGuard] },

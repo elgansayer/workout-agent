@@ -22,6 +22,22 @@
   </div>
 }
 @if (data(); as data) {
+  @if (data.onboarding; as onboarding) {
+    @if (!onboarding.ready && onboarding.next_required_action; as next) {
+      <section class="panel onboarding-callout" aria-labelledby="onboarding-next-heading">
+        <p class="eyebrow">
+          Finish setup · {{ onboarding.required_completed }} of
+          {{ onboarding.required_total }} required steps complete
+        </p>
+        <h2 id="onboarding-next-heading">Next: {{ next.title }}</h2>
+        <p class="muted">{{ next.description }}</p>
+        <div class="btn-row">
+          <a class="btn" [href]="next.href">{{ next.action_label }}</a>
+          <a class="btn btn-ghost" href="/onboarding">View setup checklist</a>
+        </div>
+      </section>
+    }
+  }
   @if (data.setup_required) {
     <section class="panel">
       <h2>Build your programme from Hevy</h2>

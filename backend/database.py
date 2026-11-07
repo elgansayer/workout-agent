@@ -344,6 +344,22 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS onboarding_progress (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                step TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'skipped',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, step)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_onboarding_progress_user "
+            "ON onboarding_progress (user_id)"
+        )
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS programmes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL REFERENCES users(id),
@@ -2154,6 +2170,42 @@ def get_user_preferences(
         "ai_model": row[5],
         "custom_rules": json.loads(row[6]) if row[6] else [],
     }
+
+
+# ---- Onboarding progress ----
+
+
+def skip_onboarding_step(
+    user_id: str,
+    step: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Record that a user skipped an optional onboarding step."""
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO onboarding_progress (user_id, step, status, updated_at)
+            VALUES (?, ?, 'skipped', ?)
+            ON CONFLICT(user_id, step) DO UPDATE SET
+                status = 'skipped',
+                updated_at = excluded.updated_at
+            """,
+            (user_id, step, now),
+        )
+
+
+def get_onboarding_progress(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, str]:
+    """Return persisted onboarding decisions for one user, keyed by step."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT step, status FROM onboarding_progress WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return {str(step): str(status) for step, status in rows}
 
 
 def save_push_subscription(

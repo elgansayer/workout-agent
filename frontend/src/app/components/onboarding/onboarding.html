@@ -1,0 +1,114 @@
+<header class="page-heading">
+  <div>
+    <p class="eyebrow">First-run setup</p>
+    <h1>Get your account ready</h1>
+  </div>
+  <button class="btn btn-ghost" type="button" (click)="refresh()" [disabled]="loading()">
+    {{ loading() ? 'Refreshing…' : 'Refresh progress' }}
+  </button>
+</header>
+
+@if (loading() && !data()) {
+  <p class="loading-state muted" role="status">Loading your setup progress…</p>
+}
+
+@if (error()) {
+  <div class="panel error-panel" role="alert">
+    {{ error() }}.
+    <button class="btn btn-ghost" type="button" (click)="refresh()">Try again</button>
+  </div>
+}
+
+@if (data(); as data) {
+  <section class="panel onboarding-summary" aria-labelledby="setup-progress-heading">
+    <div class="setup-progress-head">
+      <div>
+        <p class="eyebrow">Progress from your connected accounts</p>
+        <h2 id="setup-progress-heading">
+          {{ data.required_completed }} of {{ data.required_total }} required steps complete
+        </h2>
+      </div>
+      <span class="chip">{{ data.resolved_count }} of {{ data.total_count }} resolved</span>
+    </div>
+    <progress
+      class="setup-progress"
+      [value]="data.resolved_count"
+      [max]="data.total_count"
+      [attr.aria-label]="data.resolved_count + ' of ' + data.total_count + ' setup steps resolved'"
+    >
+      {{ data.progress_percent }}%
+    </progress>
+
+    @if (data.ready) {
+      <p class="setup-complete" role="status">
+        Your account is ready. Optional steps remain available below whenever you want them.
+      </p>
+    } @else if (data.next_required_action; as next) {
+      <div class="next-action">
+        <div>
+          <p class="eyebrow">Next highest-value action</p>
+          <strong>{{ next.title }}</strong>
+          <p class="muted">{{ next.description }}</p>
+        </div>
+        <div class="btn-row">
+          <a class="btn" [href]="next.href">{{ next.action_label }}</a>
+        </div>
+      </div>
+    }
+  </section>
+
+  <ol class="onboarding-steps">
+    @for (step of data.steps; track step.id) {
+      <li
+        class="panel setup-step"
+        [attr.data-status]="step.status"
+        [attr.aria-current]="data.next_action?.id === step.id ? 'step' : null"
+      >
+        <div class="setup-step-head">
+          <span class="setup-step-number" aria-hidden="true">{{ step.order }}</span>
+          <div class="setup-step-title">
+            <h2>{{ step.title }}</h2>
+            <span class="muted">{{ step.required ? 'Required for readiness' : 'Optional' }}</span>
+          </div>
+          <span class="status" [class.on]="step.status === 'complete'" [class.off]="step.status !== 'complete'">
+            {{ statusLabel(step) }}
+          </span>
+        </div>
+
+        <p>{{ step.description }}</p>
+
+        @if (step.status === 'skipped') {
+          <p class="muted" role="status">
+            Skipped for now. {{ step.consequence }}
+          </p>
+          <div class="btn-row">
+            <a class="btn btn-ghost" [href]="step.href">{{ step.action_label }}</a>
+          </div>
+        }
+
+        @if (step.status === 'pending') {
+          @if (!step.required) {
+            <p class="muted">{{ step.consequence }}</p>
+          }
+          <div class="btn-row">
+            <a class="btn" [href]="step.href">{{ step.action_label }}</a>
+            @if (!step.required) {
+              <button
+                class="btn btn-ghost"
+                type="button"
+                [disabled]="busyStep() === step.id"
+                (click)="skip(step.id)"
+              >
+                {{ busyStep() === step.id ? 'Skipping…' : 'Skip for now' }}
+              </button>
+            }
+          </div>
+        }
+      </li>
+    }
+  </ol>
+
+  @if (skipError()) {
+    <p class="error-panel panel" role="alert">{{ skipError() }}</p>
+  }
+}

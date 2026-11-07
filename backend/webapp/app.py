@@ -75,6 +75,7 @@ from database import (
     save_user_preferences,
     set_active_programme,
     set_meta,
+    skip_onboarding_step,
 )
 from dynamic_programme import (
     MAX_DURATION_WEEKS,
@@ -98,6 +99,11 @@ from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from onboarding import (
+    OPTIONAL_STEP_IDS,
+    STEP_IDS,
+    build_onboarding_state,
+)
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
@@ -106,7 +112,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -635,6 +640,9 @@ def _dashboard_context(
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
         "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "onboarding": (
+            build_onboarding_state(user_id, DB_PATH) if user_id else None
+        ),
     }
 
 
@@ -1257,6 +1265,40 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
         user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
     return {"status": "ok"}
+
+
+@app.get("/api/onboarding")
+def api_onboarding(request: Request) -> JSONResponse:
+    """Return the current user's server-derived onboarding state."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder(build_onboarding_state(user_id, DB_PATH)),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/onboarding/skip")
+async def api_skip_onboarding_step(request: Request) -> JSONResponse:
+    """Record a deliberate skip of an optional onboarding step."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+
+    body = await request.json()
+    step = body.get("step") if isinstance(body, dict) else None
+    if not isinstance(step, str) or step.strip() not in STEP_IDS:
+        raise HTTPException(status_code=400, detail="Unknown onboarding step")
+    step = step.strip()
+    if step not in OPTIONAL_STEP_IDS:
+        raise HTTPException(
+            status_code=400,
+            detail="Required onboarding steps cannot be skipped",
+        )
+
+    skip_onboarding_step(user_id, step, db_path=DB_PATH)
+    return JSONResponse(
+        jsonable_encoder(build_onboarding_state(user_id, DB_PATH)),
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.get("/google-health/connect")
