@@ -10,26 +10,41 @@ from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
+    get_all_users,
     get_body_metrics,
     get_daily_logs,
+    get_legacy_user_id,
     get_progress_history,
     init_db,
     save_dashboard_insight,
     save_deep_correlation,
     save_notification,
 )
+from tenancy import implicit_single_user_allowed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
 
 def _resolve_insight_user(db_path: str) -> str | None:
-    from database import get_legacy_user_id
+    """Return the implicit local tenant, or None when there must be none.
 
+    Outside the explicit non-production local mode there is no shared fallback
+    user, so callers must name the account (or iterate real accounts).
+    """
+    if not implicit_single_user_allowed():
+        return None
     try:
         return get_legacy_user_id(db_path)
-    except Exception:  # noqa: BLE001
+    except RuntimeError:
         return None
+
+
+def _no_user_selected() -> None:
+    logger.error(
+        "No user selected for insight generation; refusing to use a shared "
+        "fallback user. Pass --user-id."
+    )
 
 
 def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
@@ -45,6 +60,9 @@ def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
 def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating daily insight header...")
     uid = user_id or _resolve_insight_user(config.database_path)
+    if uid is None:
+        _no_user_selected()
+        return
     provider = _resolve_provider(config, user_id=uid)
 
     # Fetch last 7 days of data
@@ -108,6 +126,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 def generate_weekly_correlations(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating weekly deep correlations...")
     uid = user_id or _resolve_insight_user(config.database_path)
+    if uid is None:
+        _no_user_selected()
+        return
     provider = _resolve_provider(config, user_id=uid)
 
     # Fetch 60-day trailing window
@@ -201,11 +222,21 @@ def main() -> None:
         logger.error("%s", exc)
         sys.exit(1)
 
-    if args.daily:
-        generate_daily_header(config, user_id=args.user_id)
+    # An explicit --user-id always wins. With none, the explicit local mode uses
+    # its single tenant; otherwise every active account is processed in turn,
+    # each strictly scoped to itself. There is no shared fallback user.
+    if args.user_id:
+        user_ids: list[str | None] = [args.user_id]
+    elif implicit_single_user_allowed():
+        user_ids = [None]
+    else:
+        user_ids = [user["id"] for user in get_all_users(config.database_path)]
 
-    if args.weekly:
-        generate_weekly_correlations(config, user_id=args.user_id)
+    for uid in user_ids:
+        if args.daily:
+            generate_daily_header(config, user_id=uid)
+        if args.weekly:
+            generate_weekly_correlations(config, user_id=uid)
 
 
 if __name__ == "__main__":
