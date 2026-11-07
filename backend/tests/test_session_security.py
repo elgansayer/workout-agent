@@ -898,7 +898,13 @@ def real_app(
     _Identity.email = "athlete-a@example.test"
 
     async def fake_token_exchange(request: Request) -> dict[str, Any]:
-        return {"userinfo": {"email": _Identity.email, "name": "Synthetic Athlete"}}
+        return {
+            "userinfo": {
+                "email": _Identity.email,
+                "email_verified": True,
+                "name": "Synthetic Athlete",
+            }
+        }
 
     monkeypatch.setattr(
         app_module.oauth.google, "authorize_access_token", fake_token_exchange

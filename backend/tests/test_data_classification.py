@@ -124,3 +124,23 @@ def test_credentials_are_never_exportable() -> None:
     assert POLICIES[DataClass.CREDENTIAL].exportable is False
     assert POLICIES[DataClass.INTERNAL].exportable is False
     assert POLICIES[DataClass.ANALYTICS].exportable is False
+
+
+def test_pseudonymise_identifier_is_stable_short_and_non_revealing() -> None:
+    from data_classification import pseudonymise_identifier
+
+    tag = pseudonymise_identifier("person@example.com")
+    assert tag == pseudonymise_identifier("person@example.com")
+    assert len(tag) == 12 and all(c in "0123456789abcdef" for c in tag)
+    assert tag != pseudonymise_identifier("other@example.com")
+    assert "person" not in tag and "example" not in tag
+
+
+def test_pseudonymise_identifier_is_domain_separated_from_plain_hashes() -> None:
+    """A plain SHA-256 of an address (e.g. from another system) must not match."""
+    import hashlib
+
+    from data_classification import pseudonymise_identifier
+
+    plain = hashlib.sha256(b"person@example.com").hexdigest()[:12]
+    assert pseudonymise_identifier("person@example.com") != plain
