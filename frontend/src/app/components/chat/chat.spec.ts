@@ -90,4 +90,74 @@ describe('Coach connection', () => {
     chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(send).toHaveBeenCalledOnce();
   });
+
+  it('disables data-grounded prompts and displays setup explanation when prerequisites fail', () => {
+    chat.capabilities.set({
+      provider_ready: true,
+      provider_name: 'gemini',
+      capabilities: {
+        workout_analysis: {
+          enabled: false,
+          status: 'missing_data',
+          explanation: 'No workout logs found. Connect Hevy in Settings and sync your workout history.',
+        },
+        recovery_analysis: {
+          enabled: false,
+          status: 'missing_source',
+          explanation: 'Connect a health source in Settings to enable recovery-aware coaching.',
+        },
+      },
+      suggested_prompts: [
+        {
+          text: 'How is my deadlift progressing?',
+          capability: 'workout_analysis',
+          icon: '📊',
+          enabled: false,
+          explanation: 'No workout logs found. Connect Hevy in Settings and sync your workout history.',
+        },
+      ],
+      overall_status: 'educational_only',
+      disclaimer: 'Coach provides general educational guidance until training and recovery sources are connected.',
+      welcome_message: 'Coach is in educational mode.',
+    });
+
+    const sendSpy = vi.spyOn(chat, 'sendMessage');
+    chat.askSuggested('How is my deadlift progressing?');
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(chat.error()).toBe('No workout logs found. Connect Hevy in Settings and sync your workout history.');
+  });
+
+  it('enables data-grounded prompts when prerequisites pass', () => {
+    chat.capabilities.set({
+      provider_ready: true,
+      provider_name: 'gemini',
+      capabilities: {
+        workout_analysis: {
+          enabled: true,
+          status: 'ready',
+          explanation: 'Workout logs and personal records are connected and current.',
+        },
+      },
+      suggested_prompts: [
+        {
+          text: 'How is my deadlift progressing?',
+          capability: 'workout_analysis',
+          icon: '📊',
+          enabled: true,
+          explanation: 'Workout logs and personal records are connected and current.',
+        },
+      ],
+      overall_status: 'partially_grounded',
+      disclaimer: 'Coach answers based on your connected training logs.',
+      welcome_message: 'Coach has access to your training logs.',
+    });
+
+    const sendSpy = vi.spyOn(chat, 'sendMessage').mockResolvedValue();
+    chat.askSuggested('How is my deadlift progressing?');
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(chat.userInput).toBe('How is my deadlift progressing?');
+    expect(chat.error()).toBeNull();
+  });
 });

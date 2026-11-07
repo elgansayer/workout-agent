@@ -5,6 +5,30 @@ import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
 
+export interface CapabilityItem {
+  enabled: boolean;
+  status: string;
+  explanation: string;
+}
+
+export interface SuggestedPromptState {
+  text: string;
+  capability: string;
+  icon: string;
+  enabled: boolean;
+  explanation: string;
+}
+
+export interface CoachingCapabilityState {
+  provider_ready: boolean;
+  provider_name: string | null;
+  capabilities: Record<string, CapabilityItem>;
+  suggested_prompts: SuggestedPromptState[];
+  overall_status: 'setup_required' | 'educational_only' | 'partially_grounded' | 'fully_grounded';
+  disclaimer: string;
+  welcome_message: string;
+}
+
 @Component({
   selector: 'app-chat',
   standalone: true,
@@ -23,14 +47,76 @@ export class Chat implements OnInit, OnDestroy {
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
   error = signal<string | null>(null);
+  capabilities = signal<CoachingCapabilityState | null>(null);
   private abortController: AbortController | null = null;
 
+  private defaultSuggestedPrompts: SuggestedPromptState[] = [
+    {
+      text: 'How is my deadlift progressing?',
+      capability: 'workout_analysis',
+      icon: '📊',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'Am I recovering well enough?',
+      capability: 'recovery_analysis',
+      icon: '💤',
+      enabled: false,
+      explanation: 'Checking recovery prerequisites...',
+    },
+    {
+      text: 'Which lifts are stalling?',
+      capability: 'workout_analysis',
+      icon: '📉',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'Should I deload this week?',
+      capability: 'workout_analysis',
+      icon: '🔄',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'How is my body composition trending?',
+      capability: 'body_composition',
+      icon: '⚖️',
+      enabled: false,
+      explanation: 'Checking body composition prerequisites...',
+    },
+    {
+      text: 'What should I focus on this block?',
+      capability: 'programme_guidance',
+      icon: '🎯',
+      enabled: false,
+      explanation: 'Checking programme prerequisites...',
+    },
+  ];
+
   ngOnInit() {
+    this.loadCapabilities();
     this.loadChatHistory();
   }
 
   ngOnDestroy(): void {
     this.stopGeneration();
+  }
+
+  loadCapabilities() {
+    this.http.get<CoachingCapabilityState>('/api/coach/capabilities').subscribe({
+      next: (caps) => {
+        this.capabilities.set(caps);
+      },
+      error: () => {
+        // Leave capabilities as fallback
+      },
+    });
+  }
+
+  suggestedPrompts(): SuggestedPromptState[] {
+    return this.capabilities()?.suggested_prompts || this.defaultSuggestedPrompts;
   }
 
   loadChatHistory() {
@@ -45,6 +131,11 @@ export class Chat implements OnInit, OnDestroy {
   }
 
   askSuggested(query: string) {
+    const prompt = this.suggestedPrompts().find((p) => p.text === query);
+    if (prompt && !prompt.enabled) {
+      this.error.set(prompt.explanation);
+      return;
+    }
     this.userInput = query;
     this.sendMessage();
   }
