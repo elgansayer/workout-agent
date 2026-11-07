@@ -1,0 +1,45 @@
+name: Autonomous scheduler ownership policy
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - 'tools/agent_queue.py'
+      - 'tools/check_scheduler_ownership.py'
+      - 'tools/test_agent_queue.py'
+      - 'tools/test_scheduler_ownership.py'
+      - 'docs/AUTONOMOUS_QUEUE_CONTRACT.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'tools/agent_queue.py'
+      - 'tools/check_scheduler_ownership.py'
+      - 'tools/test_agent_queue.py'
+      - 'tools/test_scheduler_ownership.py'
+      - 'docs/AUTONOMOUS_QUEUE_CONTRACT.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ownership:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Run queue contract tests
+        run: python -m unittest tools.test_agent_queue tools.test_scheduler_ownership -v
+
+      - name: Enforce that only the VPS scheduler selects implementation work
+        run: python tools/check_scheduler_ownership.py --root .
