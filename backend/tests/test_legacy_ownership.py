@@ -10,6 +10,7 @@ from typing import Any
 import legacy_ownership
 import pytest
 from accounts import resolve_oauth_user, set_account_status
+from cryptography.fernet import Fernet
 from database import (
     USER_OWNED_TABLES,
     advance_day,
@@ -62,6 +63,7 @@ _PRE_ACCOUNT_TABLES = (
 def production(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_ENV", "production")
     monkeypatch.setenv("ALLOW_ANONYMOUS_WEB", "0")
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 
 @pytest.fixture()

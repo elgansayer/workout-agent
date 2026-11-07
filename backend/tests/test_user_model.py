@@ -459,7 +459,10 @@ def test_ownership_registries_cannot_drift_from_the_schema(db: str) -> None:
                 "WHERE m.type = 'table' AND c.name = 'user_id'"
             ).fetchall()
         }
-        assert with_user_id == set(USER_OWNED_TABLES) | {"user_identities"}
+        assert set(USER_OWNED_TABLES) <= with_user_id
+        assert with_user_id == set(USER_OWNED_TABLES) | (
+            set(NOT_TRANSFERRED_TABLES) & with_user_id
+        )
         assert "user_identities" in NOT_TRANSFERRED_TABLES
         for table in sorted(with_user_id):
             assert _user_id_is_indexed_first(conn, table), table

@@ -11,12 +11,12 @@ import json
 import logging
 import sqlite3
 import uuid
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from encryption import decrypt, encrypt
+import encryption
 from program import SPLIT_NAME, TOTAL_DAYS
 from tenancy import (
     LEGACY_TENANT_EMAIL,
@@ -93,6 +93,7 @@ USER_OWNED_TABLES = (
     "user_api_keys",
     "push_subscriptions",
     "programmes",
+    "hevy_connections",
 )
 
 
@@ -393,6 +394,44 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """,
         )
         _migrate_user_model(cursor)
+
+        # ---- Account access policy (issue #753) ----
+        # Additive, idempotent columns. ``status`` and ``session_epoch`` are
+        # read on every authenticated request, so they stay on the primary-key
+        # row. ``session_epoch`` is bumped to revoke every signed session that
+        # was issued under an earlier value (see ``revoke_account_sessions``).
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = {col[1] for col in cursor.fetchall()}
+        if "session_epoch" not in user_columns:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0"
+            )
+        # Operator-owned access-control records, not tenant data: an invitation
+        # exists before the invited person has an account, so there is no owning
+        # user_id. ``accepted_user_id`` links the single account it created.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_invitations (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                invited_by TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                accepted_at TEXT,
+                accepted_user_id TEXT REFERENCES users(id),
+                revoked_at TEXT
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_invitations_pending_email "
+            "ON account_invitations (email) WHERE status = 'pending'"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_invitations_email_status "
+            "ON account_invitations (email, status, expires_at)"
+        )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_api_keys (
@@ -483,6 +522,32 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
             "ON programmes (user_id, active)"
+        )
+
+        # Verified Hevy connection metadata. Holds no credential material,
+        # only the connected account identity, the last test time, the API
+        # version and the capabilities the credential was proven to have.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hevy_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                provider TEXT NOT NULL DEFAULT 'hevy',
+                state TEXT NOT NULL,
+                account_username TEXT,
+                account_id TEXT,
+                api_version TEXT,
+                capabilities_json TEXT NOT NULL DEFAULT '{}',
+                tested_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(user_id, provider)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hevy_connections_user "
+            "ON hevy_connections (user_id)"
         )
 
         # ---- Multi-tenant migration: Add user_id to domain tables ----
@@ -895,12 +960,118 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
             "ON user_api_keys (user_id)"
         )
+        _init_credential_vault_schema(cursor)
+
+        # Server-side registry behind the browser session cookie (issue #752).
+        ensure_user_sessions_schema(conn)
 
         # Last, after every table rebuild above: a drop-and-rename discards the
         # table's triggers, so the guards are installed once the schema is final.
         _install_owner_guards(cursor)
         if legacy is not None and not implicit:
             _warn_if_legacy_data_unclaimed(cursor, legacy)
+
+
+def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
+    """Add the additive credential-vault lifecycle columns and audit trail.
+
+    ``secret_vault`` is the only module that reads or writes these tables; this
+    function owns only their schema so the whole database still migrates through
+    ``init_db``. Every statement is idempotent: columns are guarded by
+    ``PRAGMA table_info``, and the table, indexes and triggers use
+    ``IF NOT EXISTS``. Existing credential rows keep working unchanged and are
+    upgraded to per-user encryption by ``secret_vault.migrate_legacy_credentials``.
+    """
+    cursor.execute("PRAGMA table_info(user_api_keys)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    lifecycle_columns = (
+        ("status", "ALTER TABLE user_api_keys ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
+        ("key_hint", "ALTER TABLE user_api_keys ADD COLUMN key_hint TEXT"),
+        ("key_version", "ALTER TABLE user_api_keys ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1"),
+        ("rotated_at", "ALTER TABLE user_api_keys ADD COLUMN rotated_at TEXT"),
+        ("revoked_at", "ALTER TABLE user_api_keys ADD COLUMN revoked_at TEXT"),
+        ("last_tested_at", "ALTER TABLE user_api_keys ADD COLUMN last_tested_at TEXT"),
+        ("last_test_status", "ALTER TABLE user_api_keys ADD COLUMN last_test_status TEXT"),
+    )
+    for column, statement in lifecycle_columns:
+        if column not in existing_columns:
+            cursor.execute(statement)
+
+    # A credential can never be re-parented to another tenant.
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_user_api_keys_user_immutable
+        BEFORE UPDATE OF user_id ON user_api_keys
+        WHEN NEW.user_id IS NOT OLD.user_id
+        BEGIN
+            SELECT RAISE(ABORT, 'user_api_keys.user_id is immutable');
+        END
+        """
+    )
+
+    # Append-only audit trail of credential lifecycle operations. It records who
+    # did what to which provider credential and the outcome, never secret
+    # material or provider error text.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS credential_audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            provider TEXT NOT NULL,
+            action TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            detail TEXT,
+            actor TEXT NOT NULL,
+            source TEXT NOT NULL,
+            credential_version INTEGER,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_credential_audit_events_user "
+        "ON credential_audit_events (user_id, created_at DESC, id DESC)"
+    )
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_credential_audit_events_append_only
+        BEFORE UPDATE ON credential_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'credential audit events are append-only');
+        END
+        """
+    )
+
+
+def ensure_user_sessions_schema(conn: sqlite3.Connection) -> None:
+    """Idempotently create the tenant-scoped browser-session registry.
+
+    The registry is what makes a session cookie revocable and bounded: the
+    signed cookie only proves *who it claims to be*, while a row here proves the
+    server still honours that session. Only a SHA-256 digest of the random
+    session identifier is stored (never the identifier itself), every row is
+    owned by exactly one user, and ``user_id`` is the leading index column so
+    "revoke all of this user's sessions" never scans other tenants.
+
+    ``webapp.session_security.SessionStore`` also calls this on connect so the
+    table exists even when a request arrives before ``init_db`` has run.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            created_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            revoked_reason TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user "
+        "ON user_sessions (user_id, revoked_at)"
+    )
 
 
 def _warn_if_legacy_data_unclaimed(cursor: sqlite3.Cursor, legacy: str) -> None:
@@ -2187,6 +2358,29 @@ def get_all_users(
 # ---- API key management ----
 
 
+_CREDENTIAL_FIELDS = ("api_key", "client_secret", "refresh_token")
+
+
+def _read_credential_field(
+    master: encryption.MasterKey,
+    *,
+    user_id: str,
+    provider: str,
+    field_name: str,
+    value: str,
+) -> str:
+    """Decrypt a vaulted field, tolerating a pre-vault Fernet/plain value."""
+    if encryption.is_sealed(value):
+        return encryption.open_sealed(
+            master,
+            user_id=user_id,
+            provider=provider,
+            field_name=field_name,
+            token=value,
+        )
+    return encryption.read_legacy_value(master, value)
+
+
 def save_user_api_key(
     user_id: str,
     provider: str,
@@ -2198,13 +2392,45 @@ def save_user_api_key(
     extra: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Store (or update) an encrypted API key for a user + provider pair."""
-    from datetime import datetime, timezone
-
-    now = datetime.now(tz=timezone.utc).isoformat()
-    encrypted_key = encrypt(api_key) if api_key else ""
-    encrypted_secret = encrypt(client_secret) if client_secret else None
-    encrypted_refresh = encrypt(refresh_token) if refresh_token else None
+    """Store (or update) a per-user encrypted API key for a provider pair."""
+    provider_key = provider.lower()
+    master = encryption.load_master_key()
+    now = _now_iso()
+    sealed = {
+        "api_key": (
+            encryption.seal(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="api_key",
+                plaintext=api_key,
+            )
+            if api_key
+            else ""
+        ),
+        "client_secret": (
+            encryption.seal(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="client_secret",
+                plaintext=client_secret,
+            )
+            if client_secret
+            else None
+        ),
+        "refresh_token": (
+            encryption.seal(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="refresh_token",
+                plaintext=refresh_token,
+            )
+            if refresh_token
+            else None
+        ),
+    }
     extra_json = json.dumps(extra) if extra else None
 
     with _connect(db_path) as conn:
@@ -2224,11 +2450,11 @@ def save_user_api_key(
             """,
             (
                 user_id,
-                provider.lower(),
-                encrypted_key,
+                provider_key,
+                sealed["api_key"],
                 client_id,
-                encrypted_secret,
-                encrypted_refresh,
+                sealed["client_secret"],
+                sealed["refresh_token"],
                 extra_json,
                 now,
                 now,
@@ -2242,6 +2468,7 @@ def get_user_api_key(
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
     """Return the decrypted API key record for a user + provider, or None."""
+    provider_key = provider.lower()
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -2250,15 +2477,46 @@ def get_user_api_key(
             FROM user_api_keys
             WHERE user_id = ? AND provider = ?
             """,
-            (user_id, provider.lower()),
+            (user_id, provider_key),
         ).fetchone()
     if not row:
         return None
+    master = encryption.load_master_key()
     return {
-        "api_key": decrypt(row[0]) if row[0] else "",
+        "api_key": (
+            _read_credential_field(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="api_key",
+                value=row[0],
+            )
+            if row[0]
+            else ""
+        ),
         "client_id": row[1],
-        "client_secret": decrypt(row[2]) if row[2] else None,
-        "refresh_token": decrypt(row[3]) if row[3] else None,
+        "client_secret": (
+            _read_credential_field(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="client_secret",
+                value=row[2],
+            )
+            if row[2]
+            else None
+        ),
+        "refresh_token": (
+            _read_credential_field(
+                master,
+                user_id=user_id,
+                provider=provider_key,
+                field_name="refresh_token",
+                value=row[3],
+            )
+            if row[3]
+            else None
+        ),
         "extra": json.loads(row[4]) if row[4] else None,
         "updated_at": row[5],
     }
@@ -2268,10 +2526,7 @@ def get_user_api_keys(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
-    """Return all API key records for a user, keyed by provider name.
-
-    Keys are decrypted. Providers without a stored key are omitted.
-    """
+    """Return all decrypted API key records for a user, keyed by provider."""
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -2283,13 +2538,45 @@ def get_user_api_keys(
             (user_id,),
         ).fetchall()
 
+    master = encryption.load_master_key() if rows else None
     result: dict[str, dict[str, Any]] = {}
     for provider, key, cid, csecret, rtoken, extra, updated in rows:
+        assert master is not None
         result[provider] = {
-            "api_key": decrypt(key) if key else "",
+            "api_key": (
+                _read_credential_field(
+                    master,
+                    user_id=user_id,
+                    provider=provider,
+                    field_name="api_key",
+                    value=key,
+                )
+                if key
+                else ""
+            ),
             "client_id": cid,
-            "client_secret": decrypt(csecret) if csecret else None,
-            "refresh_token": decrypt(rtoken) if rtoken else None,
+            "client_secret": (
+                _read_credential_field(
+                    master,
+                    user_id=user_id,
+                    provider=provider,
+                    field_name="client_secret",
+                    value=csecret,
+                )
+                if csecret
+                else None
+            ),
+            "refresh_token": (
+                _read_credential_field(
+                    master,
+                    user_id=user_id,
+                    provider=provider,
+                    field_name="refresh_token",
+                    value=rtoken,
+                )
+                if rtoken
+                else None
+            ),
             "extra": json.loads(extra) if extra else None,
             "updated_at": updated,
         }
@@ -2305,6 +2592,460 @@ def delete_user_api_key(
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, provider.lower()),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Account access policy (issue #753)
+#
+# These functions are the persistence half of ``account_policy``: they read and
+# change the server-side account state that login completion and every
+# authenticated request are checked against. They never trust a client-supplied
+# identifier; callers pass an id taken from a verified session or an operator.
+# ---------------------------------------------------------------------------
+
+ACCOUNT_STATUS_ACTIVE = "active"
+ACCOUNT_STATUS_SUSPENDED = "suspended"
+ACCOUNT_STATUS_UNCLAIMED = "unclaimed"
+ACCOUNT_STATUS_RETIRED = "retired"
+ACCOUNT_STATUS_DELETED = "deleted"
+
+INVITATION_PENDING = "pending"
+INVITATION_ACCEPTED = "accepted"
+INVITATION_REVOKED = "revoked"
+
+ADMIT_EXISTING = "existing"
+ADMIT_CREATED = "created"
+ADMIT_SUSPENDED = "suspended"
+ADMIT_DELETED = "deleted"
+ADMIT_INVALID_STATUS = "invalid_status"
+ADMIT_NOT_INVITED = "not_invited"
+
+
+class AccountState(TypedDict):
+    """The minimal server-side facts an access decision is made from."""
+
+    id: str
+    email: str
+    status: str
+    session_epoch: int
+
+
+class AccountInvitation(TypedDict):
+    """One invitation record.
+
+    ``status`` and the two timestamps that always exist are plain strings; the
+    acceptance and revocation timestamps are ``None`` until they happen.
+    """
+
+    status: str
+    created_at: str
+    expires_at: str
+    accepted_at: str | None
+    revoked_at: str | None
+
+
+class AccountTransitionError(ValueError):
+    """Raised when an account status change is not permitted."""
+
+
+def _utc_seconds(moment: datetime | None) -> str:
+    """Return a timezone-aware moment as a sortable UTC ISO-8601 string."""
+    if moment is None:
+        moment = datetime.now(tz=timezone.utc)
+    if moment.tzinfo is None:
+        raise ValueError("A timezone-aware datetime is required.")
+    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _account_state(row: Any) -> AccountState:
+    return AccountState(
+        id=str(row[0]),
+        email=str(row[1]),
+        status=str(row[2]),
+        session_epoch=int(row[3]),
+    )
+
+
+def _find_account_row(conn: sqlite3.Connection, email: str) -> Any:
+    """Find an account by canonical email, tolerating legacy mixed-case rows.
+
+    An exact match wins so an existing account keeps resolving to the same
+    tenant it always did; otherwise match case-insensitively so a differently
+    cased address cannot fork a second account for the same mailbox.
+    """
+    row = conn.execute(
+        "SELECT id, email, status, session_epoch FROM users WHERE email = ?",
+        (email,),
+    ).fetchone()
+    if row is not None:
+        return row
+    return conn.execute(
+        "SELECT id, email, status, session_epoch FROM users "
+        "WHERE lower(email) = ? ORDER BY created_at, id LIMIT 1",
+        (email,),
+    ).fetchone()
+
+
+def get_account_state(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Return the access-relevant state of one account, or None if unknown."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(row) if row is not None else None
+
+
+def find_account_state(
+    email: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Return the access-relevant state for a canonical email, or None."""
+    with _connect(db_path) as conn:
+        row = _find_account_row(conn, email)
+    return _account_state(row) if row is not None else None
+
+
+def admit_account(
+    email: str,
+    *,
+    display_name: str | None,
+    require_invitation: bool,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> tuple[str, AccountState | None]:
+    """Resolve, and if permitted create, the account for a verified login.
+
+    Everything happens in one ``BEGIN IMMEDIATE`` transaction so concurrent or
+    retried callbacks cannot create two accounts or spend one invitation twice:
+
+    * an existing account is returned with its current status and is never
+      modified, whatever the status;
+    * a missing account is created only when no invitation is required, or when
+      exactly one pending, unexpired invitation for the address is consumed in
+      the same transaction.
+
+    ``email`` must already be canonical (see ``account_policy.canonical_email``).
+    """
+    moment = _utc_seconds(now)
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _find_account_row(conn, email)
+        if row is not None:
+            state = _account_state(row)
+            outcome = {
+                ACCOUNT_STATUS_ACTIVE: ADMIT_EXISTING,
+                ACCOUNT_STATUS_SUSPENDED: ADMIT_SUSPENDED,
+                ACCOUNT_STATUS_DELETED: ADMIT_DELETED,
+            }.get(state["status"], ADMIT_INVALID_STATUS)
+            return outcome, state
+
+        invitation_id: str | None = None
+        if require_invitation:
+            invitation = conn.execute(
+                "SELECT id FROM account_invitations "
+                "WHERE email = ? AND status = ? AND expires_at > ? "
+                "ORDER BY created_at DESC, id LIMIT 1",
+                (email, INVITATION_PENDING, moment),
+            ).fetchone()
+            if invitation is None:
+                return ADMIT_NOT_INVITED, None
+            invitation_id = str(invitation[0])
+
+        user_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO users "
+            "(id, email, display_name, created_at, status_changed_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, email, display_name, moment, moment, moment),
+        )
+        if invitation_id is not None:
+            consumed = conn.execute(
+                "UPDATE account_invitations "
+                "SET status = ?, accepted_at = ?, accepted_user_id = ? "
+                "WHERE id = ? AND status = ?",
+                (INVITATION_ACCEPTED, moment, user_id, invitation_id, INVITATION_PENDING),
+            )
+            if consumed.rowcount != 1:
+                # Unreachable under BEGIN IMMEDIATE; fail closed and roll back
+                # the account insert rather than admit without the invitation.
+                raise sqlite3.IntegrityError("invitation was not consumable")
+        state = AccountState(
+            id=user_id,
+            email=email,
+            status=ACCOUNT_STATUS_ACTIVE,
+            session_epoch=0,
+        )
+    return ADMIT_CREATED, state
+
+
+def set_account_status(
+    user_id: str,
+    status: str,
+    *,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> AccountState | None:
+    """Set an account's status and revoke every session issued before now.
+
+    The session epoch is bumped on *every* call, including one that re-asserts
+    the current status: a session issued before a suspension must never become
+    valid again because the account was later reactivated. ``deleted`` is
+    terminal. Returns the new state, or None if the account does not exist.
+    """
+    if status not in ACCOUNT_STATUSES:
+        raise ValueError(f"Unsupported account status: {status!r}")
+    moment = _utc_seconds(now)
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        current = _account_state(row)
+        if current["status"] == ACCOUNT_STATUS_DELETED and status != ACCOUNT_STATUS_DELETED:
+            raise AccountTransitionError("A deleted account cannot be restored.")
+        conn.execute(
+            "UPDATE users SET status = ?, status_changed_at = ?, "
+            "updated_at = ?, session_epoch = session_epoch + 1 WHERE id = ?",
+            (status, moment, moment, user_id),
+        )
+        updated = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(updated)
+
+
+def revoke_account_sessions(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Invalidate every signed session issued for an account before now."""
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+            (user_id,),
+        )
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(row) if row is not None else None
+
+
+def revoke_sessions_outside_allowlist(
+    allowed_emails: Collection[str], db_path: str = DEFAULT_DB_PATH
+) -> int:
+    """Revoke sessions of every account whose email is not allowlisted.
+
+    Called at startup when an allowlist is configured so that removing an
+    address from ``ALLOWED_EMAILS`` is a durable revocation: re-adding the
+    address later cannot resurrect a cookie issued before the removal. The
+    pre-tenant ``legacy@local`` owner is not a person and is skipped. Returns the
+    number of accounts whose epoch was advanced.
+    """
+    allowed = {email.strip().lower() for email in allowed_emails}
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute("SELECT id, email FROM users").fetchall()
+        excluded = [
+            (str(user_id),)
+            for user_id, email in rows
+            if str(email).strip().lower() not in allowed
+            and str(email).strip().lower() != LEGACY_TENANT_EMAIL
+        ]
+        conn.executemany(
+            "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+            excluded,
+        )
+    return len(excluded)
+
+
+def create_account_invitation(
+    email: str,
+    *,
+    expires_at: datetime,
+    invited_by: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> str:
+    """Create a pending invitation, superseding any earlier one for the email.
+
+    ``email`` must already be canonical. Returns the new invitation id.
+    """
+    created = _utc_seconds(now)
+    expiry = _utc_seconds(expires_at)
+    if expiry <= created:
+        raise ValueError("An invitation must expire in the future.")
+    invitation_id = str(uuid.uuid4())
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE account_invitations SET status = ?, revoked_at = ? "
+            "WHERE email = ? AND status = ?",
+            (INVITATION_REVOKED, created, email, INVITATION_PENDING),
+        )
+        conn.execute(
+            "INSERT INTO account_invitations "
+            "(id, email, status, invited_by, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (invitation_id, email, INVITATION_PENDING, invited_by, created, expiry),
+        )
+    return invitation_id
+
+
+def revoke_account_invitations(
+    email: str,
+    *,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> int:
+    """Revoke every pending invitation for a canonical email."""
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE account_invitations SET status = ?, revoked_at = ? "
+            "WHERE email = ? AND status = ?",
+            (INVITATION_REVOKED, _utc_seconds(now), email, INVITATION_PENDING),
+        )
+    return cursor.rowcount
+
+
+def list_account_invitations(
+    email: str, db_path: str = DEFAULT_DB_PATH
+) -> list[AccountInvitation]:
+    """Return the invitation history for a canonical email, newest first."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, created_at, expires_at, accepted_at, revoked_at "
+            "FROM account_invitations WHERE email = ? "
+            "ORDER BY created_at DESC, id",
+            (email,),
+        ).fetchall()
+    return [
+        {
+            "status": row[0],
+            "created_at": row[1],
+            "expires_at": row[2],
+            "accepted_at": row[3],
+            "revoked_at": row[4],
+        }
+        for row in rows
+    ]
+
+
+# ---- Credentials ----
+#
+# Per-user credentials (AI provider keys, connector API keys and OAuth tokens)
+# are stored in ``user_api_keys`` but are intentionally NOT readable or writable
+# from this module. ``secret_vault.SecretVault`` is the only supported interface:
+# it encrypts under the owning user, audits every lifecycle operation and never
+# returns plaintext to the browser. This module only owns the schema
+# (see ``_init_credential_vault_schema``).
+
+
+# ---- Verified Hevy connection metadata ----
+
+
+def save_hevy_connection(
+    user_id: str,
+    *,
+    state: str,
+    api_version: str,
+    capabilities: dict[str, Any],
+    tested_at: str,
+    account_username: str | None = None,
+    account_id: str | None = None,
+    provider: str = "hevy",
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Record the outcome of a Hevy credential verification for one user.
+
+    Only safe metadata is stored: the connected account identity, the test
+    time, the API version and the verified capability map. Credential material
+    is never written here.
+    """
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO hevy_connections
+                (user_id, provider, state, account_username, account_id,
+                 api_version, capabilities_json, tested_at, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, provider) DO UPDATE SET
+                state = excluded.state,
+                account_username = excluded.account_username,
+                account_id = excluded.account_id,
+                api_version = excluded.api_version,
+                capabilities_json = excluded.capabilities_json,
+                tested_at = excluded.tested_at,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                provider.lower(),
+                state,
+                account_username,
+                account_id,
+                api_version,
+                json.dumps(capabilities),
+                tested_at,
+                now,
+                now,
+            ),
+        )
+
+
+def get_hevy_connection(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    provider: str = "hevy",
+) -> dict[str, Any] | None:
+    """Return the stored Hevy connection metadata for one user, or None."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT state, account_username, account_id, api_version,
+                   capabilities_json, tested_at, updated_at
+            FROM hevy_connections
+            WHERE user_id = ? AND provider = ?
+            """,
+            (user_id, provider.lower()),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        capabilities = json.loads(row[4]) if row[4] else {}
+    except json.JSONDecodeError:
+        capabilities = {}
+    if not isinstance(capabilities, dict):
+        capabilities = {}
+    return {
+        "state": row[0],
+        "account_username": row[1],
+        "account_id": row[2],
+        "api_version": row[3],
+        "capabilities": capabilities,
+        "tested_at": row[5],
+        "updated_at": row[6],
+    }
+
+
+def delete_hevy_connection(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    provider: str = "hevy",
+) -> None:
+    """Remove the stored Hevy connection metadata for one user."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM hevy_connections WHERE user_id = ? AND provider = ?",
             (user_id, provider.lower()),
         )
 

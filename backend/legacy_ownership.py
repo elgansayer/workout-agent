@@ -36,6 +36,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import encryption
 from accounts import AccountStatus, has_verified_identity
 from database import (
     _USER_COLUMNS,
@@ -98,6 +99,7 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("user_api_keys", ("provider",)),
     OwnedTable("push_subscriptions", ("endpoint",)),
     OwnedTable("programmes", ("template_key",), single_active=True),
+    OwnedTable("hevy_connections", ("provider",)),
 )
 
 
@@ -111,6 +113,8 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
         "has one"
     ),
     "csrf_tokens": "ephemeral, session-bound anti-forgery tokens that expire",
+    "user_sessions": "ephemeral browser sessions never outlive the account",
+    "credential_audit_events": "append-only security audit trail, not tenant data",
 }
 
 
@@ -316,6 +320,83 @@ def plan_legacy_ownership(
         return _build_plan(conn, owner_email)
 
 
+def _transfer_credentials(
+    conn: sqlite3.Connection,
+    table: OwnedTable,
+    entry: TablePlan,
+    params: Mapping[str, str],
+) -> int:
+    """Move credential rows, re-sealing each value for the new owner.
+
+    Vault ciphertext is bound to ``(user_id, provider, field)``, so a credential
+    cannot be re-parented by updating ``user_id`` (the database enforces that
+    immutability too). Each movable row is copied under the owner with its
+    secret fields re-sealed, then the placeholder's row is deleted. Legacy
+    Fernet/plaintext values are upgraded in the same step. A value that cannot
+    be decrypted blocks the assignment instead of being carried over unreadable.
+    """
+    found = conn.execute(
+        f"SELECT t.rowid AS _transfer_rowid, t.* FROM {table.name} t WHERE {_movable_clause(table)}",
+        params,
+    )
+    columns = [description[0] for description in found.description]
+    rows = [dict(zip(columns, row, strict=True)) for row in found.fetchall()]
+    if len(rows) != entry.movable:
+        raise OwnershipPlanMismatchError(
+            f"{table.name} changed while the assignment was running."
+        )
+    if not rows:
+        return 0
+    try:
+        master = encryption.load_master_key()
+    except encryption.EncryptionUnavailableError as exc:
+        raise OwnershipError(
+            "Stored credentials cannot be re-sealed without ENCRYPTION_KEY."
+        ) from exc
+
+    for row in rows:
+        provider = str(row["provider"])
+        for field_name in ("api_key", "client_secret", "refresh_token"):
+            value = row.get(field_name)
+            if not value:
+                continue
+            try:
+                if encryption.is_sealed(value):
+                    plaintext = encryption.open_sealed(
+                        master,
+                        user_id=params["legacy"],
+                        provider=provider,
+                        field_name=field_name,
+                        token=value,
+                    )
+                else:
+                    plaintext = encryption.read_legacy_value(master, value)
+                row[field_name] = encryption.seal(
+                    master,
+                    user_id=params["owner"],
+                    provider=provider,
+                    field_name=field_name,
+                    plaintext=plaintext,
+                )
+            except encryption.DecryptionError as exc:
+                raise OwnershipError(
+                    "A stored credential could not be re-sealed for the new owner."
+                ) from exc
+        legacy_rowid = row.pop("_transfer_rowid")
+        row.pop("id", None)
+        row["user_id"] = params["owner"]
+        conn.execute(
+            f"INSERT INTO {table.name} ({', '.join(row)}) "
+            f"VALUES ({', '.join(':' + name for name in row)})",
+            row,
+        )
+        conn.execute(
+            f"DELETE FROM {table.name} WHERE rowid = :rowid",
+            {"rowid": legacy_rowid},
+        )
+    return len(rows)
+
+
 def apply_legacy_ownership(
     db_path: str = DEFAULT_DB_PATH,
     *,
@@ -373,6 +454,9 @@ def apply_legacy_ownership(
         moved: dict[str, int] = {}
         for table, entry in zip(OWNED_TABLES, plan.tables, strict=True):
             if not entry.movable:
+                continue
+            if table.name == "user_api_keys":
+                moved[table.name] = _transfer_credentials(conn, table, entry, params)
                 continue
             cursor = conn.execute(
                 f"UPDATE {table.name} SET user_id = :owner WHERE rowid IN ("

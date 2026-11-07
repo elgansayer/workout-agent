@@ -175,7 +175,8 @@ def test_an_unverified_email_is_refused_and_creates_nothing(
 ) -> None:
     response = _sign_in(monkeypatch, web, email_verified=verified)
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?error=access_denied"
     assert get_all_users(web.db, include_inactive=True) == []
     assert _identities(web.db) == []
     assert "session" not in web.client.cookies
@@ -186,7 +187,8 @@ def test_a_missing_subject_is_refused_and_creates_nothing(
 ) -> None:
     response = _sign_in(monkeypatch, web, sub=None)
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?error=access_denied"
     assert get_all_users(web.db, include_inactive=True) == []
     assert "session" not in web.client.cookies
 
@@ -203,8 +205,8 @@ def test_an_inactive_account_cannot_sign_in(
 
     response = _sign_in(monkeypatch, web)
 
-    assert response.status_code == 403
-    assert "not active" in response.text
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?error=access_denied"
     assert "session" not in web.client.cookies
 
 
@@ -216,7 +218,8 @@ def test_a_reassigned_email_cannot_take_over_a_bound_account(
 
     response = _sign_in(monkeypatch, web, sub="a-different-synthetic-subject")
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?error=access_denied"
     assert len(get_all_users(web.db)) == 1
     assert len(_identities(web.db)) == 1
     assert "session" not in web.client.cookies
@@ -236,7 +239,7 @@ def test_refusals_never_echo_the_email_or_the_subject(
     set_account_status(_account_id(web.db), "suspended", web.db)
     refusals.append(_sign_in(monkeypatch, web))
 
-    assert [response.status_code for response in refusals] == [403] * 4
+    assert [response.status_code for response in refusals] == [303] * 4
     leaked = " ".join([response.text for response in refusals] + [caplog.text])
     assert _EMAIL not in leaked.lower()
     assert _SUBJECT not in leaked
@@ -263,6 +266,10 @@ def test_a_suspension_takes_effect_on_the_very_next_request(
 
     set_account_status(account, "active", web.db)
 
+    # Reactivation does not resurrect a session issued before the suspension.
+    assert web.client.get("/api/notifications").status_code == 401
+    web.client.cookies.clear()
+    _sign_in(monkeypatch, web)
     assert web.client.get("/api/notifications").status_code == 200
 
 
@@ -276,14 +283,13 @@ def test_a_validly_signed_session_for_an_unknown_account_is_unauthorized(
 
 
 def test_a_session_cannot_read_another_accounts_notifications(
-    web: Web,
+    web: Web, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from database import save_notification
 
-    mine = get_or_create_user(_EMAIL, db_path=web.db)["id"]
+    _sign_in(monkeypatch, web)
     theirs = get_or_create_user("other@example.com", db_path=web.db)["id"]
     save_notification(theirs, "Private", "Not yours", db_path=web.db)
-    web.client.cookies.set("session", _session_cookie(mine))
 
     response = web.client.get("/api/notifications", params={"user_id": theirs})
 

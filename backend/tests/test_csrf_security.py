@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -22,7 +24,13 @@ def _session_cookie(user_id: str = "user-1") -> str:
     return TimestampSigner(_SECRET).sign(payload).decode()
 
 
-def _client(tmp_path: Path, *, trusted_origins: tuple[str, ...] = ()) -> TestClient:
+def _client(
+    tmp_path: Path,
+    *,
+    trusted_origins: tuple[str, ...] = (),
+    cookie_name: str = "session",
+    **middleware_options: Any,
+) -> TestClient:
     app = FastAPI()
 
     @app.post("/mutate")
@@ -39,9 +47,11 @@ def _client(tmp_path: Path, *, trusted_origins: tuple[str, ...] = ()) -> TestCli
         session_secret=_SECRET,
         trusted_origins=trusted_origins,
         ttl_seconds=60,
+        session_cookie_name=cookie_name,
+        **middleware_options,
     )
     client = TestClient(app, base_url="https://workout.example")
-    client.cookies.set("session", _session_cookie())
+    client.cookies.set(cookie_name, _session_cookie())
     return client
 
 
@@ -141,6 +151,52 @@ def test_invalid_signed_session_cannot_mint_or_spend_tokens(tmp_path: Path) -> N
     )
 
 
+def test_session_validator_can_revoke_a_correctly_signed_cookie(tmp_path: Path) -> None:
+    honoured = {"value": True}
+    seen: list[dict[str, Any]] = []
+
+    def validator(payload: Any) -> bool:
+        seen.append(dict(payload))
+        return honoured["value"]
+
+    client = _client(tmp_path, session_validator=validator)
+    token = _token(client)
+    assert seen and seen[0]["user_id"] == "user-1"  # given the decoded payload
+
+    honoured["value"] = False  # the session registry no longer honours the cookie
+
+    assert client.get("/api/csrf-token").status_code == 401
+    assert client.post("/mutate", headers={CSRF_HEADER_NAME: token}).status_code == 401
+
+
+def test_hardened_cookie_name_is_the_one_that_authenticates(tmp_path: Path) -> None:
+    client = _client(tmp_path, cookie_name="__Host-session")
+
+    assert client.get("/api/csrf-token").status_code == 200
+    client.cookies.clear()
+    client.cookies.set("session", _session_cookie())  # the legacy name is ignored
+    assert client.get("/api/csrf-token").status_code == 401
+
+
+def test_configured_session_max_age_bounds_the_cookie_signature(tmp_path: Path) -> None:
+    class _AgedSigner(TimestampSigner):
+        def get_timestamp(self) -> int:
+            return int(time.time()) - 120  # signed two minutes ago
+
+    payload = base64.b64encode(
+        json.dumps({"user": "athlete@example.test", "user_id": "user-1"}).encode()
+    )
+    aged = _AgedSigner(_SECRET).sign(payload).decode()
+
+    lenient = _client(tmp_path / "lenient", session_max_age_seconds=3600)
+    lenient.cookies.set("session", aged)
+    assert lenient.get("/api/csrf-token").status_code == 200
+
+    strict = _client(tmp_path / "strict", session_max_age_seconds=60)
+    strict.cookies.set("session", aged)
+    assert strict.get("/api/csrf-token").status_code == 401
+
+
 def test_production_and_spa_wiring_keep_csrf_boundary_enabled() -> None:
     root = Path(__file__).resolve().parents[2]
     secure_entrypoint = (root / "backend/webapp/secure_app.py").read_text(encoding="utf-8")
@@ -151,6 +207,11 @@ def test_production_and_spa_wiring_keep_csrf_boundary_enabled() -> None:
     assert "CSRFMiddleware" in secure_entrypoint
     assert "session_secret=_session_secret" in secure_entrypoint
     assert "trusted_origins=_trusted_browser_origins()" in secure_entrypoint
+    # The CSRF layer must read the hardened cookie and defer to the session
+    # registry, otherwise a revoked cookie could still mint CSRF tokens.
+    assert "session_cookie_name=SESSION_SECURITY.cookie.name" in secure_entrypoint
+    assert "session_max_age_seconds=SESSION_SECURITY.cookie.max_age" in secure_entrypoint
+    assert "session_validator=SESSION_STORE.is_active_payload" in secure_entrypoint
     assert "app = SecurityHeadersMiddleware(" in secure_entrypoint
     assert "ProxySecurityMiddleware(secured_application" in secure_entrypoint
 

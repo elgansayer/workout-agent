@@ -19,4 +19,24 @@
       </button>
     </div>
   </div>
+
+  <section class="card" aria-labelledby="sessions-heading">
+    <h2 id="sessions-heading">Sessions</h2>
+    <p id="logout-all-help" class="muted">
+      Signed in somewhere you no longer use, or lost a device? This ends every session for your
+      account on every browser and device, including this one. You will need to sign in again.
+    </p>
+    <button
+      type="button"
+      class="btn btn-ghost btn-danger"
+      aria-describedby="logout-all-help"
+      [disabled]="signingOutEverywhere()"
+      (click)="logoutAllDevices()"
+    >
+      Sign out of all devices
+    </button>
+    @if (error()) {
+      <p class="panel error-panel" role="alert">{{ error() }}</p>
+    }
+  </section>
 </div>

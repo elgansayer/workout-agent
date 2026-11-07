@@ -267,8 +267,8 @@ def set_account_status(
             )
         now = _now_iso()
         conn.execute(
-            "UPDATE users SET status = ?, status_changed_at = ?, updated_at = ? "
-            "WHERE id = ?",
+            "UPDATE users SET status = ?, status_changed_at = ?, updated_at = ?, "
+            "session_epoch = session_epoch + 1 WHERE id = ?",
             (target.value, now, now, user_id),
         )
         return _load(conn, user_id)

@@ -18,10 +18,10 @@ first refresh token. This script walks through that one-time flow:
   3. Run:  python google_health_auth.py [--user-id <account id>]
        - It prints an authorise URL. Open it, approve the weight scope.
        - Google redirects back to this script, which captures the code, swaps it
-         for tokens, prints the refresh token, and (with --user-id) stores it in
-         the database for that one account. Without --user-id nothing is stored
-         in the database, because there is no shared account to attach it to.
-  4. Paste the printed GOOGLE_HEALTH_REFRESH_TOKEN into your .env.
+         for tokens, and seals the refresh token in the credential vault for
+         --user-id. Without --user-id nothing is stored outside the explicit
+         non-production local mode, because there is no shared account to attach
+         it to. The token is never printed or written to .env.
 
 Uses the Authorization Code Grant. Only stdlib + requests are needed.
 """
@@ -231,12 +231,13 @@ def main(argv: list[str] | None = None) -> int:
 
     refresh_token = tokens["refresh_token"]
 
-    # Store it so the very next agent run is already authorised.
+    # Seal it in the credential vault so the very next agent run is authorised.
+    # The token is never printed or written to the environment.
     stored = _store_refresh_token(refresh_token, args.user_id)
+    if "not saved" in stored:
+        return 1
 
-    print("\nSuccess! Add this line to your .env:\n")
-    print(f"GOOGLE_HEALTH_REFRESH_TOKEN={refresh_token}")
-    print(f"\nThe token is now valid{stored}.")
+    print(f"\nSuccess! The Google Health token is sealed in the credential vault{stored}.")
     return 0
 
 

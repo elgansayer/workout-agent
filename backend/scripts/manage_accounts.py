@@ -1,10 +1,17 @@
-"""Operator tool for the production user model.
+"""Operator CLI for accounts, access policy and legacy data ownership.
 
 Run inside the application container (or any environment configured exactly like
 it) so ``APP_ENV`` and ``DATABASE_PATH`` match production::
 
     python scripts/manage_accounts.py list
-    python scripts/manage_accounts.py set-status --email owner@example.com --status suspended
+    python scripts/manage_accounts.py status person@example.com
+    python scripts/manage_accounts.py invite person@example.com --days 7
+    python scripts/manage_accounts.py revoke-invite person@example.com
+    python scripts/manage_accounts.py set-status --email person@example.com --status suspended
+    python scripts/manage_accounts.py suspend person@example.com
+    python scripts/manage_accounts.py reactivate person@example.com
+    python scripts/manage_accounts.py revoke-sessions person@example.com
+    python scripts/manage_accounts.py delete person@example.com --yes
     python scripts/manage_accounts.py plan-legacy-assignment --owner-email owner@example.com
     python scripts/manage_accounts.py assign-legacy-data --owner-email owner@example.com \\
         --confirm-plan <digest from the plan> --backup-verified
@@ -12,7 +19,16 @@ it) so ``APP_ENV`` and ``DATABASE_PATH`` match production::
 ``plan-legacy-assignment`` is read-only. ``assign-legacy-data`` changes data and
 only proceeds for a verified owner, for the exact plan the operator confirmed,
 after the operator attests that a verified backup exists. See
-``docs/USER_MODEL.md`` for the full runbook.
+``docs/USER_MODEL.md`` and ``docs/ACCOUNT_ACCESS_POLICY.md`` for the runbooks.
+
+Every access state change takes effect on the account's very next web request:
+the server re-reads this state on each request and every status change also
+advances the account's session epoch, ending all of its signed sessions. Nothing
+here prints a secret; accounts are identified by opaque id and pseudonymous tag.
+
+``delete`` is an *access* tombstone. It permanently blocks sign-in and ends
+sessions but does not erase the account's data or stop background jobs; that
+belongs to the account-deletion and suspension-lifecycle work.
 """
 
 from __future__ import annotations
@@ -21,7 +37,10 @@ import argparse
 import getpass
 import json
 import os
+import sqlite3
 import sys
+from collections.abc import Sequence
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Allow ``python scripts/manage_accounts.py`` to find sibling modules.
@@ -29,15 +48,32 @@ _BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
+from account_policy import canonical_email
 from accounts import (
     AccountError,
     has_verified_identity,
-    set_account_status,
 )
+from accounts import (
+    set_account_status as set_operator_status,
+)
+from data_classification import pseudonymise_identifier
 from database import (
+    ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_STATUS_DELETED,
+    ACCOUNT_STATUS_SUSPENDED,
+    AccountState,
+    AccountTransitionError,
+    create_account_invitation,
+    find_account_state,
     get_all_users,
     init_db,
+    list_account_invitations,
+    revoke_account_invitations,
+    revoke_account_sessions,
     transaction,
+)
+from database import (
+    set_account_status as set_policy_status,
 )
 from legacy_ownership import (
     OwnershipError,
@@ -45,7 +81,14 @@ from legacy_ownership import (
     apply_legacy_ownership,
     plan_legacy_ownership,
 )
-from tenancy import normalise_email
+from tenancy import LEGACY_TENANT_EMAIL, normalise_email
+
+DEFAULT_INVITE_DAYS = 7
+MAX_INVITE_DAYS = 90
+
+EXIT_OK = 0
+EXIT_FAILED = 1
+EXIT_USAGE = 2
 
 _BLOCKER_HELP = {
     "owner_not_found": "no account has that email; the owner must sign in once first",
@@ -75,6 +118,37 @@ def _database_path(override: str | None) -> str:
     return (
         override or os.environ.get("DATABASE_PATH", "workout_agent.db")
     ).strip()
+
+
+def _describe(state: AccountState) -> str:
+    return (
+        f"account={state['id']} status={state['status']} "
+        f"session_epoch={state['session_epoch']}"
+    )
+
+
+def _require_account(email: str, db_path: str) -> AccountState | None:
+    state = find_account_state(email, db_path)
+    if state is None:
+        print("No account exists for that address.", file=sys.stderr)
+    return state
+
+
+def _change_policy_status(email: str, db_path: str, status: str) -> int:
+    state = find_account_state(email, db_path)
+    if state is None:
+        print("No account exists for that address.", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        updated = set_policy_status(state["id"], status, db_path=db_path)
+    except (AccountTransitionError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_FAILED
+    if updated is None:  # removed between the lookup and the update
+        print("No account exists for that address.", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"{_describe(updated)}; all earlier sessions are revoked.")
+    return EXIT_OK
 
 
 def _print_plan(plan: OwnershipPlan) -> None:
@@ -116,7 +190,45 @@ def _command_list(db_path: str) -> int:
                 f"{user['status']:<11}{verified:<10}"
                 f"{user['created_at'][:19]:<22}{user['email']:<34}{user['id']}"
             )
-    return 0
+    return EXIT_OK
+
+
+def _command_status(db_path: str, email: str) -> int:
+    print(f"identity={pseudonymise_identifier(email)}")
+    state = find_account_state(email, db_path)
+    print(_describe(state) if state else "account=none")
+    for invitation in list_account_invitations(email, db_path):
+        print(
+            "invitation "
+            f"status={invitation['status']} created={invitation['created_at']} "
+            f"expires={invitation['expires_at']}"
+        )
+    return EXIT_OK
+
+
+def _command_invite(db_path: str, email: str, days: int, by: str) -> int:
+    if not 1 <= days <= MAX_INVITE_DAYS:
+        print(f"--days must be between 1 and {MAX_INVITE_DAYS}.", file=sys.stderr)
+        return EXIT_USAGE
+    now = datetime.now(tz=timezone.utc)
+    create_account_invitation(
+        email,
+        expires_at=now + timedelta(days=days),
+        invited_by=by,
+        db_path=db_path,
+        now=now,
+    )
+    print(
+        f"Invitation created for identity={pseudonymise_identifier(email)}; "
+        f"valid for {days} day(s). Any earlier pending invitation was revoked."
+    )
+    return EXIT_OK
+
+
+def _command_revoke_invite(db_path: str, email: str) -> int:
+    revoked = revoke_account_invitations(email, db_path=db_path)
+    print(f"Revoked {revoked} pending invitation(s).")
+    return EXIT_OK
 
 
 def _command_set_status(db_path: str, email: str, status: str) -> int:
@@ -129,14 +241,45 @@ def _command_set_status(db_path: str, email: str, status: str) -> int:
     ]
     if not users:
         print("No account has that email.", file=sys.stderr)
-        return 1
+        return EXIT_FAILED
     try:
-        updated = set_account_status(users[0]["id"], status, db_path)
+        updated = set_operator_status(users[0]["id"], status, db_path)
     except AccountError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILED
     print(f"Account is now {updated['status']}.")
-    return 0
+    return EXIT_OK
+
+
+def _command_suspend(db_path: str, email: str) -> int:
+    return _change_policy_status(email, db_path, ACCOUNT_STATUS_SUSPENDED)
+
+
+def _command_reactivate(db_path: str, email: str) -> int:
+    return _change_policy_status(email, db_path, ACCOUNT_STATUS_ACTIVE)
+
+
+def _command_delete(db_path: str, email: str, confirmed: bool) -> int:
+    if not confirmed:
+        print(
+            "Deleting an account is permanent and cannot be undone. "
+            "Re-run with --yes to confirm.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    return _change_policy_status(email, db_path, ACCOUNT_STATUS_DELETED)
+
+
+def _command_revoke_sessions(db_path: str, email: str) -> int:
+    state = _require_account(email, db_path)
+    if state is None:
+        return EXIT_FAILED
+    updated = revoke_account_sessions(state["id"], db_path)
+    if updated is None:
+        print("No account exists for that address.", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"{_describe(updated)}; all earlier sessions are revoked.")
+    return EXIT_OK
 
 
 def _command_plan(db_path: str, owner_email: str, as_json: bool) -> int:
@@ -146,7 +289,7 @@ def _command_plan(db_path: str, owner_email: str, as_json: bool) -> int:
         print(json.dumps(plan.as_dict(), indent=2, sort_keys=True))
     else:
         _print_plan(plan)
-    return 1 if plan.blockers else 0
+    return EXIT_FAILED if plan.blockers else EXIT_OK
 
 
 def _command_assign(
@@ -167,7 +310,7 @@ def _command_assign(
         )
     except OwnershipError as exc:
         print(f"Refused: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_FAILED
     if result.status == "assigned":
         total = sum(result.moved.values())
         print(f"Assigned {total} rows to the verified owner.")
@@ -181,24 +324,69 @@ def _command_assign(
         print("Left on the retired placeholder (the owner already had a conflicting row):")
         for table, count in sorted(result.left_behind.items()):
             print(f"  {table}: {count}")
-    return 0
+    return EXIT_OK
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Inspect and administer accounts and legacy data ownership."
+        description="Inspect and administer accounts, access policy and legacy ownership."
     )
     parser.add_argument(
+        "--db",
         "--database",
-        help="SQLite database path (defaults to $DATABASE_PATH).",
+        dest="db",
+        default=None,
+        help="SQLite database path (default: $DATABASE_PATH or workout_agent.db).",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
     commands.add_parser("list", help="List accounts and their status.")
 
-    status = commands.add_parser("set-status", help="Suspend or reactivate an account.")
-    status.add_argument("--email", required=True)
-    status.add_argument("--status", required=True, choices=("active", "suspended"))
+    status = commands.add_parser(
+        "status", help="Show an address's account state and invitations."
+    )
+    status.add_argument("email", help="The person's email address.")
+
+    invite = commands.add_parser(
+        "invite",
+        help="Invite an address (replaces any earlier pending invitation).",
+    )
+    invite.add_argument("email", help="The person's email address.")
+    invite.add_argument("--days", type=int, default=DEFAULT_INVITE_DAYS)
+    invite.add_argument("--by", default="operator-cli", help="Free-text label.")
+
+    revoke_invite = commands.add_parser(
+        "revoke-invite", help="Revoke pending invitations."
+    )
+    revoke_invite.add_argument("email", help="The person's email address.")
+
+    set_status = commands.add_parser(
+        "set-status", help="Suspend or reactivate an account."
+    )
+    set_status.add_argument("--email", required=True)
+    set_status.add_argument("--status", required=True, choices=("active", "suspended"))
+
+    suspend = commands.add_parser(
+        "suspend", help="Suspend an account and end its sessions."
+    )
+    suspend.add_argument("email", help="The person's email address.")
+
+    reactivate = commands.add_parser(
+        "reactivate", help="Reactivate a suspended account."
+    )
+    reactivate.add_argument("email", help="The person's email address.")
+
+    revoke_sessions = commands.add_parser(
+        "revoke-sessions", help="Sign an account out everywhere."
+    )
+    revoke_sessions.add_argument("email", help="The person's email address.")
+
+    delete = commands.add_parser(
+        "delete",
+        help="Permanently block an account (access tombstone; data is not erased).",
+    )
+    delete.add_argument("email", help="The person's email address.")
+    delete.add_argument("--yes", action="store_true", help="Confirm the deletion.")
 
     plan = commands.add_parser(
         "plan-legacy-assignment",
@@ -230,24 +418,69 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
-    db_path = _database_path(args.database)
+def _dispatch(args: argparse.Namespace, db_path: str) -> int:
     if args.command == "list":
         return _command_list(db_path)
     if args.command == "set-status":
         return _command_set_status(db_path, args.email, args.status)
     if args.command == "plan-legacy-assignment":
         return _command_plan(db_path, args.owner_email, args.as_json)
-    operator = args.operator or getpass.getuser()
-    return _command_assign(
-        db_path,
-        args.owner_email,
-        args.confirm_plan,
-        args.backup_verified,
-        operator,
-    )
+    if args.command == "assign-legacy-data":
+        operator = args.operator or getpass.getuser()
+        return _command_assign(
+            db_path,
+            args.owner_email,
+            args.confirm_plan,
+            args.backup_verified,
+            operator,
+        )
+
+    canonical = canonical_email(args.email)
+    if canonical is None or canonical == LEGACY_TENANT_EMAIL:
+        print("That is not an acceptable email address.", file=sys.stderr)
+        return EXIT_USAGE
+
+    if args.command == "status":
+        return _command_status(db_path, canonical)
+    if args.command == "invite":
+        return _command_invite(db_path, canonical, args.days, args.by)
+    if args.command == "revoke-invite":
+        return _command_revoke_invite(db_path, canonical)
+    if args.command == "suspend":
+        return _command_suspend(db_path, canonical)
+    if args.command == "reactivate":
+        return _command_reactivate(db_path, canonical)
+    if args.command == "revoke-sessions":
+        return _command_revoke_sessions(db_path, canonical)
+    if args.command == "delete":
+        return _command_delete(db_path, canonical, args.yes)
+    raise AssertionError(f"unhandled command: {args.command}")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    db_path = _database_path(args.db)
+    try:
+        # Validate email-shaped commands before creating or opening the database.
+        if args.command in {
+            "status",
+            "invite",
+            "revoke-invite",
+            "suspend",
+            "reactivate",
+            "revoke-sessions",
+            "delete",
+        }:
+            canonical = canonical_email(args.email)
+            if canonical is None or canonical == LEGACY_TENANT_EMAIL:
+                print("That is not an acceptable email address.", file=sys.stderr)
+                return EXIT_USAGE
+        init_db(db_path)
+        return int(_dispatch(args, db_path))
+    except sqlite3.Error as exc:
+        print(f"Database error: {type(exc).__name__}", file=sys.stderr)
+        return EXIT_FAILED
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
