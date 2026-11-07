@@ -7,7 +7,6 @@ leak is detected regardless of how an endpoint shapes its response.
 
 from __future__ import annotations
 
-import base64
 import importlib
 import json
 import sqlite3
@@ -17,7 +16,7 @@ from typing import Any
 import database
 import pytest
 from cryptography.fernet import Fernet
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 from tools.backup_restore import Keyring
@@ -36,11 +35,21 @@ _ENDPOINTS = (
 )
 
 
-def _cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
+def _login_client(app_module: Any, user_id: str) -> TestClient:
+    """A client authenticated exactly as production login does: a session
+    registered server-side in ``user_sessions`` whose identifier travels in the
+    signed cookie. A merely-signed cookie is deliberately rejected."""
+    client = TestClient(app_module.app)
+    client.cookies.set(
+        "session",
+        signed_session_cookie(
+            _SECRET,
+            user="athlete@example.test",
+            user_id=user_id,
+            session_id=app_module.SESSION_STORE.create(user_id),
+        ),
     )
-    return TimestampSigner(_SECRET).sign(payload).decode()
+    return client
 
 
 def _seed_legacy_records(db_file: Path, legacy_id: str) -> None:
@@ -150,8 +159,7 @@ def test_target_account_reads_the_adopted_records(
     adopted: tuple[Any, dict[str, str]],
 ) -> None:
     app_module, ids = adopted
-    client = TestClient(app_module.app)
-    client.cookies.set("session", _cookie(ids["target"]))
+    client = _login_client(app_module, ids["target"])
 
     bodies = _responses(client)
 
@@ -165,8 +173,7 @@ def test_other_accounts_and_the_legacy_tenant_see_none_of_it(
     adopted: tuple[Any, dict[str, str]], account: str
 ) -> None:
     app_module, ids = adopted
-    client = TestClient(app_module.app)
-    client.cookies.set("session", _cookie(ids[account]))
+    client = _login_client(app_module, ids[account])
 
     bodies = _responses(client)
 

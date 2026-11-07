@@ -49,6 +49,12 @@ from typing import Any
 if __package__ in (None, ""):  # ``python tools/legacy_data_migration.py``
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+_BACKEND_DIR = Path(__file__).resolve().parents[1] / "backend"
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+
+import encryption
+
 from tools.backup_restore import (
     BackupError,
     Keyring,
@@ -81,6 +87,7 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "dashboard_insights",
     "deep_correlations",
     "hevy_meta",
+    "hevy_connections",
 )
 
 # Tables that carry ``user_id`` but hold transient session-security state, not
@@ -88,7 +95,15 @@ USER_OWNED_TABLES: tuple[str, ...] = (
 # database on first use. Its single-use rows expire within minutes and are bound
 # to one signed session, so they are never re-owned, counted as ownership
 # evidence or deleted. Every other unlisted ``user_id`` table still refuses.
-EPHEMERAL_TABLES: tuple[str, ...] = ("csrf_tokens",)
+# Authentication and audit tables are bound to real accounts (sessions,
+# identities, credential audit trail) and never existed for the single-user
+# deployment, so there is nothing to adopt; they are left untouched.
+EPHEMERAL_TABLES: tuple[str, ...] = (
+    "csrf_tokens",
+    "user_sessions",
+    "user_identities",
+    "credential_audit_events",
+)
 
 # ``database.init_db()`` re-creates these two defaults for the legacy tenant on
 # every start, so they reappear after a migration. When the target already owns
@@ -344,6 +359,76 @@ def _require_healthy(
         )
 
 
+_SEALED_FIELDS = ("api_key", "client_secret", "refresh_token")
+
+
+def _reseal_credentials(
+    conn: sqlite3.Connection,
+    legacy_id: str | None,
+    target_user_id: str,
+    skipped: list[int],
+) -> None:
+    """Re-seal stored credentials for the target; ciphertext is bound to its owner.
+
+    Plaintext only lives in memory and is never logged. A value that cannot be
+    opened for its current owner (including any sealed value on an unowned row)
+    refuses the migration, which rolls back.
+    """
+    condition, params = _scope_condition(legacy_id)
+    exclusion = (
+        f" AND rowid NOT IN ({', '.join('?' for _ in skipped)})" if skipped else ""
+    )
+    rows = conn.execute(
+        f"SELECT rowid AS rid, user_id, provider, {', '.join(_SEALED_FIELDS)} "
+        f"FROM user_api_keys WHERE {condition}{exclusion}",
+        (*params, *skipped),
+    ).fetchall()
+    if not rows:
+        return
+    master = None
+    prefix = f"{encryption.SEALED_PREFIX}."
+    for row in rows:
+        updates: dict[str, str] = {}
+        for field in _SEALED_FIELDS:
+            value = row[field]
+            if not isinstance(value, str) or not value.startswith(prefix):
+                continue
+            if master is None:
+                try:
+                    master = encryption.load_master_key()
+                except (encryption.EncryptionUnavailableError, ValueError) as exc:
+                    raise MigrationError(
+                        "Cannot re-seal stored credentials without a valid "
+                        "ENCRYPTION_KEY"
+                    ) from exc
+            try:
+                plain = encryption.open_sealed(
+                    master,
+                    user_id=row["user_id"] or "",
+                    provider=row["provider"],
+                    field_name=field,
+                    token=value,
+                )
+            except encryption.DecryptionError as exc:
+                raise MigrationError(
+                    f"Cannot re-seal user_api_keys credential {row['rid']}: "
+                    "it cannot be opened for its current owner"
+                ) from exc
+            updates[field] = encryption.seal(
+                master,
+                user_id=target_user_id,
+                provider=row["provider"],
+                field_name=field,
+                plaintext=plain,
+            )
+        if updates:
+            assignments = ", ".join(f"{field} = ?" for field in updates)
+            conn.execute(
+                f"UPDATE user_api_keys SET {assignments} WHERE rowid = ?",
+                (*updates.values(), row["rid"]),
+            )
+
+
 def _reassign(
     conn: sqlite3.Connection,
     legacy_id: str | None,
@@ -357,6 +442,21 @@ def _reassign(
         exclusion = (
             f" AND rowid NOT IN ({', '.join('?' for _ in skipped)})" if skipped else ""
         )
+        if table == "user_api_keys":
+            _reseal_credentials(conn, legacy_id, target_user_id, skipped)
+        # The schema forbids re-parenting some rows (credentials). This audited
+        # one-time adoption lifts that guard for its own transaction only; the
+        # DDL rolls back with it and the guard is recreated before the commit.
+        guards = [
+            (name, sql)
+            for name, sql in conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
+                "AND tbl_name = ? AND name LIKE '%\\_user\\_immutable' ESCAPE '\\'",
+                (table,),
+            ).fetchall()
+        ]
+        for name, _sql in guards:
+            conn.execute(f"DROP TRIGGER {_quote(name)}")
         try:
             cursor = conn.execute(
                 f"UPDATE {_quote(table)} SET user_id = ? WHERE {condition}{exclusion}",
@@ -366,6 +466,8 @@ def _reassign(
             raise MigrationError(
                 f"Ownership conflict while adopting {table}: {exc}"
             ) from exc
+        for _name, sql in guards:
+            conn.execute(sql)
         moved[table] = max(cursor.rowcount, 0)
     return moved
 

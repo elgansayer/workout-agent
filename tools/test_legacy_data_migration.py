@@ -22,7 +22,12 @@ from cryptography.fernet import Fernet
 
 from tools import legacy_data_migration as migration
 from tools.backup_restore import BackupError, Keyring, restore_backup, verify_backup
-from tools.legacy_data_migration import USER_OWNED_TABLES, MigrationError, migrate
+from tools.legacy_data_migration import (
+    EPHEMERAL_TABLES,
+    USER_OWNED_TABLES,
+    MigrationError,
+    migrate,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BACKEND_DIR = REPO_ROOT / "backend"
@@ -95,6 +100,22 @@ def _snapshot(path: Path) -> Snapshot:
         }
 
 
+def _legacy_id(path: Path) -> str:
+    with _db(path) as conn:
+        return conn.execute(
+            "SELECT id FROM users WHERE email = ?", (migration.LEGACY_EMAIL,)
+        ).fetchone()[0]
+
+
+def _insert_unowned(conn: sqlite3.Connection, table: str, **overrides: Any) -> bool:
+    """Insert a pre-launch unowned row, which the owner guard now forbids."""
+    conn.execute(f"DROP TRIGGER IF EXISTS trg_{table}_owner_required_insert")
+    try:
+        return _insert_row(conn, table, None, **overrides)
+    finally:
+        database._install_owner_guards(conn.cursor())
+
+
 def _owners(path: Path, table: str) -> set[str | None]:
     with _db(path) as conn:
         return {row[0] for row in conn.execute(f'SELECT user_id FROM "{table}"')}
@@ -154,6 +175,14 @@ def _visible_records(path: Path, user_id: str) -> dict[str, bool]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _pre_launch_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build the pre-launch schema: ``init_db`` seeds the legacy tenant only here."""
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("ALLOW_ANONYMOUS_WEB", "true")
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+
 @pytest.fixture()
 def keyring() -> Keyring:
     return Keyring(keys={"test": Fernet.generate_key()}, active_key_id="test")
@@ -164,12 +193,12 @@ def legacy_db(tmp_path: Path) -> tuple[Path, str, str]:
     """A tenant-schema database with legacy rows in every user-owned table."""
     path = tmp_path / "workout_agent.db"
     database.init_db(str(path))
-    legacy_id = database.get_legacy_user_id(str(path))
+    legacy_id = _legacy_id(path)
     target_id = _new_account(path, "owner@example.invalid")
     with _db(path) as conn:
         for table in USER_OWNED_TABLES:
             _insert_row(conn, table, legacy_id)
-        _insert_row(conn, "daily_log", None, date="2030-01-02")  # unowned row
+        _insert_unowned(conn, "daily_log", date="2030-01-02")  # unowned row
         conn.execute("UPDATE programmes SET active = 1 WHERE user_id = ?", (legacy_id,))
     return path, legacy_id, target_id
 
@@ -209,13 +238,15 @@ def test_user_owned_tables_cover_every_tenant_scoped_table(tmp_path: Path) -> No
                 for column in conn.execute(f'PRAGMA table_info("{name}")')
             )
         }
-    assert tenant_tables == set(USER_OWNED_TABLES)
+    assert tenant_tables == set(USER_OWNED_TABLES) | set(EPHEMERAL_TABLES) - {
+        "csrf_tokens"
+    }
 
 
 def test_init_db_reseeds_only_the_defaults_the_tool_knows_about(tmp_path: Path) -> None:
     path = tmp_path / "fresh.db"
     database.init_db(str(path))
-    legacy_id = database.get_legacy_user_id(str(path))
+    legacy_id = _legacy_id(path)
     seeded = {table: n for table, n in _legacy_rows(path, legacy_id).items() if n}
     assert seeded == {"programme_state": 1, "hevy_meta": 1}
     with _db(path) as conn:
@@ -317,7 +348,7 @@ def test_adopts_unowned_rows_when_no_legacy_tenant_exists(
         conn.execute("DELETE FROM programme_state")
         conn.execute("DELETE FROM hevy_meta")
         conn.execute("DELETE FROM users WHERE email = 'legacy@local'")
-        assert _insert_row(conn, "daily_log", None)
+        assert _insert_unowned(conn, "daily_log")
 
     evidence = _run(path, target_id, tmp_path / "pre.wab", keyring)
 
