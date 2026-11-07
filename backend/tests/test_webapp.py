@@ -693,4 +693,102 @@ def test_chat_clear_returns_ok(client: Any) -> None:
     assert resp.json() == {"status": "ok"}
 
 
+def test_coach_capability_is_derived_from_tenant_records(
+    client: Any, monkeypatch: Any
+) -> None:
+    """The capability endpoint reports the seeded user's real source state."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    resp = client.get("/api/coach/capability")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["provider_configured"] is False
+    assert payload["provider_state"] == "missing_key"
+    assert payload["can_chat"] is False
+    assert payload["has_training_data"] is True
+    assert payload["sources"]["training_logs"]["available"] is True
+    assert payload["sources"]["progress_history"]["available"] is True
+    assert payload["sources"]["body_metrics"]["available"] is True
+    assert payload["status"] == "provider_missing"
+    assert "api_key" not in resp.text.lower()
+    assert "full access" not in resp.text.lower()
+
+
+def test_coach_capability_becomes_ready_for_a_configured_provider(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-server-fallback")
+
+    payload = client.get("/api/coach/capability").json()
+
+    assert payload["provider_configured"] is True
+    assert payload["provider_state"] == "ready"
+    assert payload["can_chat"] is True
+    assert payload["has_training_data"] is True
+    assert payload["status"] in {"ready", "stale_data"}
+
+
+def test_coach_capability_is_isolated_between_users(client: Any) -> None:
+    import webapp.app as app_module
+    from database import get_legacy_user_id, get_or_create_user
+
+    db_path = app_module.DB_PATH
+    populated_user = get_legacy_user_id(db_path)
+    empty_user = get_or_create_user("other@example.test", db_path=db_path)["id"]
+
+    populated = app_module._coach_capability_for_user(populated_user)
+    empty = app_module._coach_capability_for_user(empty_user)
+
+    assert populated.has_training_data is True
+    assert empty.has_training_data is False
+    assert all(not source.available for source in empty.sources.values())
+
+
+def test_coach_capability_claims_no_data_for_an_empty_tenant(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    db_path = str(tmp_path / "empty.db")
+    init_db(db_path)
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    import webapp.app as app_module
+
+    importlib.reload(app_module)
+    with TestClient(app_module.app) as test_client:
+        payload = test_client.get("/api/coach/capability").json()
+
+    assert payload["status"] == "unconfigured"
+    assert payload["provider_configured"] is False
+    assert payload["has_training_data"] is False
+    assert payload["has_fresh_training_data"] is False
+    assert payload["programme_available"] is False
+    assert all(
+        not source["available"] for source in payload["sources"].values()
+    )
+
+
+def test_rag_prompt_only_claims_server_verified_sources(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-server-fallback")
+    prompts: list[str] = []
+
+    class _FakeProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            prompts.append(prompt)
+            return iter(["ok"]) if stream else "ok"
+
+    monkeypatch.setattr(
+        "webapp.app.resolve_provider", lambda user_id=None, **kw: _FakeProvider()
+    )
+
+    resp = client.get("/api/rag_search?q=How+is+my+training+going")
+
+    assert resp.status_code == 200
+    assert prompts
+    assert "Server-verified data access for this user" in prompts[0]
+    assert "You have access to this user's" not in prompts[0]
+
+
 # -- settings API-key CRUD ---------------------------------------------
