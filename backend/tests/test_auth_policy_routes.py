@@ -101,7 +101,12 @@ class Harness:
             yield client
 
     def sign_in(self, client: TestClient, email: str, **claims: Any) -> Any:
-        info: dict[str, Any] = {"email": email, "email_verified": True, "name": "Test Person"}
+        info: dict[str, Any] = {
+            "sub": f"google-{email.strip().lower()}",
+            "email": email,
+            "email_verified": True,
+            "name": "Test Person",
+        }
         info.update(claims)
         self.identity = info
         return client.get("/auth")

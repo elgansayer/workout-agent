@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-from database import get_legacy_user_id
+from database import require_tenant
 from secret_vault import (
     CredentialExistsError,
     CredentialUnavailableError,
@@ -263,11 +263,15 @@ def sync_body_metrics(
     Resolves the refresh token for the exact owning user through the secret
     vault and persists any rotation back under that same user. The environment
     token is only a legacy fallback when no vault credential is configured.
+
+    The owner is resolved with :func:`database.require_tenant`, so outside the
+    explicit non-production local mode a call without a user is refused rather
+    than silently acting as a shared tenant.
     """
     if not (client_id and client_secret):
         return None
 
-    owner = user_id or get_legacy_user_id(db_path)
+    owner = require_tenant(user_id, db_path)
     vault = SecretVault(db_path)
     refresh_token, credential = _resolve_refresh_token(
         vault, owner, env_refresh_token

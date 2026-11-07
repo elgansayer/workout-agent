@@ -390,6 +390,8 @@ def test_deleted_account_is_a_permanent_tombstone_for_login(db: str) -> None:
 def test_unknown_stored_status_fails_closed(db: str) -> None:
     created = _policy(db).admit_login(_userinfo("alice@example.com"), now=NOW)
     with sqlite3.connect(db) as conn:
+        # Simulate a row written by an older release that predated the CHECK.
+        conn.execute("PRAGMA ignore_check_constraints = ON")
         conn.execute("UPDATE users SET status = 'banana' WHERE id = ?", (created.user_id,))
     decision = _policy(db).admit_login(_userinfo("alice@example.com"), now=NOW)
     assert decision.reason is DenialReason.ACCOUNT_STATE_INVALID

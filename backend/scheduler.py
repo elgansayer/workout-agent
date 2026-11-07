@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
 from database import get_all_users, init_db
+from tenancy import implicit_single_user_allowed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -159,6 +160,11 @@ def run_coaching(config: Config) -> int:
     result = 0
     users = get_all_users(config.database_path)
     if not users:
+        if not implicit_single_user_allowed():
+            # No shared fallback user outside the explicit local mode: with no
+            # active account there is nobody to coach.
+            logger.warning("No active users; skipping the daily coaching cycle.")
+            return 0
         try:
             return main_run(preview=False)
         except Exception:

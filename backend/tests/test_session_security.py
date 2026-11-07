@@ -900,6 +900,7 @@ def real_app(
     async def fake_token_exchange(request: Request) -> dict[str, Any]:
         return {
             "userinfo": {
+                "sub": f"google-{_Identity.email.strip().lower()}",
                 "email": _Identity.email,
                 "email_verified": True,
                 "name": "Synthetic Athlete",

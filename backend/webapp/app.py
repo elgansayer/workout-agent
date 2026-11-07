@@ -34,6 +34,11 @@ import analytics
 import insights
 import lifestyle
 from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
+from accounts import (
+    AccountError,
+    require_active_user,
+    resolve_oauth_user,
+)
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -53,6 +58,7 @@ from database import (
     get_dashboard_insight,
     get_exercise_volumes,
     get_hevy_connection,
+    get_legacy_user_id,
     get_meta,
     get_notifications,
     get_personal_records,
@@ -127,6 +133,7 @@ from secret_vault import (
 )
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
+from tenancy import implicit_single_user_allowed
 
 from webapp import ai_widgets, charts
 from webapp.session_security import (
@@ -363,15 +370,24 @@ def _identity_allowed(email: object) -> bool:
 
 
 def _check_api_auth(request: Request) -> str:
-    user = request.session.get("user") if hasattr(request, "session") else None
-    uid = request.session.get("user_id") if hasattr(request, "session") else None
-    if uid:
-        return uid
-    if user and isinstance(user, dict) and user.get("id"):
-        return user["id"]
-    if ALLOW_ANONYMOUS_WEB:
-        from database import get_legacy_user_id
+    """Return the authenticated, active account id for this request.
 
+    A signed session is not enough on its own: the account it names must still
+    exist and be ``active``, so suspending or removing an account takes effect on
+    its very next request. The only unauthenticated path is the explicit
+    non-production local mode; production has no shared fallback user.
+    """
+    session = request.session if hasattr(request, "session") else {}
+    user = session.get("user")
+    uid = session.get("user_id")
+    if not uid and isinstance(user, dict) and user.get("id"):
+        uid = user["id"]
+    if uid:
+        try:
+            return require_active_user(str(uid), DB_PATH)["id"]
+        except AccountError as exc:
+            raise HTTPException(status_code=401, detail="Unauthorized") from exc
+    if ALLOW_ANONYMOUS_WEB and implicit_single_user_allowed():
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -585,7 +601,17 @@ async def get_current_user_api(request: Request) -> Any:
     user = request.session.get("user")
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        # A session whose account was suspended or removed is no longer a login.
+        _check_api_auth(request)
+    except HTTPException:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+def _claim_is_true(value: Any) -> bool:
+    """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
 @app.get("/auth")
@@ -597,13 +623,22 @@ async def auth(request: Request) -> Any:
     except Exception as e:  # noqa: BLE001
         logger.warning("OAuth token exchange failed: %s", e)
         return RedirectResponse("/login")
+    userinfo = token.get("userinfo")
+    claims: dict[str, Any] = userinfo if isinstance(userinfo, dict) else {}
+    # A sign-in is bound to the provider's stable subject. Refuse a missing
+    # subject before the access policy can create an account, so a failed
+    # callback never leaves an identity-less account behind.
+    subject = str(claims.get("sub") or "").strip()
+    if not subject:
+        logger.warning("Sign-in rejected: the provider supplied no stable subject.")
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
     # Authenticating with Google proves who the person is, not that this
     # deployment admits them. Allowlist, invitation, suspension and deletion
     # state are all decided here, server-side, before any session exists.
     try:
-        decision = await run_in_threadpool(
-            ACCESS_POLICY.admit_login, token.get("userinfo")
-        )
+        decision = await run_in_threadpool(ACCESS_POLICY.admit_login, claims)
     except sqlite3.Error:
         # An unreadable policy store is an outage, not a verdict on the person:
         # refuse the sign-in (fail closed) but say so, and keep no session.
@@ -614,6 +649,39 @@ async def auth(request: Request) -> Any:
     if not decision.allowed:
         # Always start from an empty session on denial too: drop leftover
         # pre-login state (OAuth correlation keys, a previous identity).
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    # Bind the canonical (provider, subject) identity to the admitted account.
+    # Email alone never selects an account; the identity cannot be re-pointed,
+    # and a subject already bound elsewhere refuses this sign-in.
+    try:
+        user_record = await run_in_threadpool(
+            lambda: resolve_oauth_user(
+                provider="google",
+                subject=subject,
+                email=str(claims.get("email") or ""),
+                email_verified=_claim_is_true(claims.get("email_verified")),
+                display_name=claims.get("name"),
+                db_path=DB_PATH,
+            )
+        )
+    except sqlite3.Error:
+        logger.exception("Identity lookup failed during login completion.")
+        request.session.clear()
+        return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+    except AccountError as exc:
+        # Unverified or missing claims, an identity conflict, or an identity
+        # whose account no longer exists: all refuse the sign-in rather than
+        # surfacing a 500. The messages never contain the email or subject.
+        logger.warning("Sign-in rejected: %s", exc)
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    if user_record["id"] != decision.user_id:
+        # The stable subject names a different account than the policy admitted:
+        # never mint a session from that mismatch (fail closed).
+        logger.warning("Sign-in rejected: identity/policy account mismatch.")
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
 
