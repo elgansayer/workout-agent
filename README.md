@@ -39,6 +39,7 @@ Workout Agent handles identifiers, health metrics, workouts, prompts, analytics,
 Core rules:
 
 - Every tenant-owned record must be scoped to the authenticated user.
+- Caches, locks, cursors and background jobs must be keyed by an immutable owner identity and re-authorize their owner when they run; see [Tenant isolation](docs/TENANT_ISOLATION.md).
 - Raw credentials must never be logged or committed.
 - Raw health, workout, or prompt payloads must not be written to logs.
 - Public source documentation and test fixtures must use synthetic data only.

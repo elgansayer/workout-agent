@@ -21,24 +21,25 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from config import Config
-from database import init_db, save_progress, save_workout
+from database import get_legacy_user_id, init_db, save_progress, save_workout
 from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def _rebuild_tables(db_path: str, user_id: str | None = None) -> None:
-    """Clear workout_history and exercise_progress so we can repopulate them."""
+def _rebuild_tables(db_path: str, user_id: str) -> None:
+    """Clear one user's workout_history and exercise_progress for repopulation.
+
+    The rebuild is destructive, so it is always scoped to a single owner and
+    can never wipe another tenant's history.
+    """
     with sqlite3.connect(db_path, timeout=10) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
-        if user_id is not None:
-            conn.execute("DELETE FROM workout_history WHERE user_id = ?", (user_id,))
-            conn.execute("DELETE FROM exercise_progress WHERE user_id = ?", (user_id,))
-        else:
-            conn.execute("DELETE FROM workout_history")
-            conn.execute("DELETE FROM exercise_progress")
+        conn.execute("DELETE FROM workout_history WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM exercise_progress WHERE user_id = ?", (user_id,))
         conn.commit()
 
 
@@ -53,7 +54,8 @@ def sync_all(
     Args:
         api_key: Hevy API key.
         db_path: Optional database path (falls back to Config default).
-        user_id: Scopes the rebuilt rows to a specific user when provided.
+        user_id: The user whose history is rebuilt; it is re-authorized against
+            the user store first. Defaults to the legacy single-tenant user.
 
     Returns:
         A summary dict with keys ``workouts_found`` (int) and
@@ -67,6 +69,10 @@ def sync_all(
         db_path = config.database_path
 
     init_db(db_path)
+    try:
+        owner = authorize_owner(db_path, user_id or get_legacy_user_id(db_path))
+    except OwnershipError as exc:
+        return {"error": f"Refusing history rebuild: {exc}."}
     logger.info("Fetching all workouts from Hevy (DB %s)...", db_path)
 
     workouts = get_all_workouts(api_key)
@@ -76,7 +82,7 @@ def sync_all(
 
     logger.info("Found %d workouts. Rebuilding history...", len(workouts))
 
-    _rebuild_tables(db_path, user_id=user_id)
+    _rebuild_tables(db_path, owner.user_id)
 
     # Process from oldest to newest so history is built sequentially.
     workouts.reverse()
@@ -90,12 +96,12 @@ def sync_all(
         if when:
             when = when[:10]
 
-        save_workout(payload, db_path, when=when, user_id=user_id)
+        save_workout(payload, db_path, when=when, user_id=owner.user_id)
 
         # We don't have rep_targets for historical blocks, so pass empty targets.
         summary = parse_workout(payload, {})
         if summary:
-            save_progress(summary, db_path, user_id=user_id)
+            save_progress(summary, db_path, user_id=owner.user_id)
             saved_count += 1
 
     logger.info("Finished rebuilding history. Processed %d workouts.", saved_count)

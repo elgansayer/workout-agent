@@ -23,6 +23,7 @@ from typing import Any
 import requests
 
 from database import get_meta, set_meta
+from tenant_isolation import OwnerIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -181,17 +182,27 @@ def sync_body_metrics(
     client_secret: str | None,
     env_refresh_token: str | None,
     db_path: str,
+    *,
+    user_id: str,
 ) -> dict[str, Any] | None:
     """Pull the latest body composition from Google Health, or None if disabled.
 
     Persists the refresh token so subsequent runs stay authorised. The refresh
     token may come from the environment or, when the user linked Google Health
     from the web dashboard, from the database — either is sufficient.
+
+    The stored token is read and rotated only under *user_id*, the owner the
+    caller has already authorized. An unscoped lookup would return whichever
+    tenant's token happened to be stored first.
     """
+    owner = OwnerIdentity(user_id)
     if not (client_id and client_secret):
         return None
 
-    refresh_token = get_meta(_KEY_REFRESH_TOKEN, db_path) or env_refresh_token
+    refresh_token = (
+        get_meta(_KEY_REFRESH_TOKEN, db_path, user_id=owner.user_id)
+        or env_refresh_token
+    )
     if not refresh_token:
         return None
     tokens = _refresh_tokens(client_id, client_secret, refresh_token)
@@ -202,5 +213,5 @@ def sync_body_metrics(
         return None
 
     access, new_refresh = tokens
-    set_meta(_KEY_REFRESH_TOKEN, new_refresh, db_path)
+    set_meta(_KEY_REFRESH_TOKEN, new_refresh, db_path, user_id=owner.user_id)
     return fetch_body_metrics(access)

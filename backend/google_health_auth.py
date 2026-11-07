@@ -196,12 +196,16 @@ def main() -> int:
 
     refresh_token = tokens["refresh_token"]
 
-    # Store it so the very next agent run is already authorised.
+    # Store it so the very next agent run is already authorised. This operator
+    # CLI is single-tenant, so the token belongs to the legacy tenant explicitly.
     try:
-        from database import set_meta
+        from database import get_or_create_user, set_meta
 
         db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
-        set_meta("google_health_refresh_token", refresh_token, db_path)
+        legacy_id = get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+        set_meta(
+            "google_health_refresh_token", refresh_token, db_path, user_id=legacy_id
+        )
         stored = f" (also saved to {db_path})"
     except Exception:  # noqa: BLE001
         stored = ""
