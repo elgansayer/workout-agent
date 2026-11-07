@@ -115,3 +115,18 @@ Before running the migration against production data, follow
 `docs/BACKUP_RESTORE_RUNBOOK.md` and validate a current backup in an isolated
 restore drill.
 
+## One-time legacy adoption
+
+`init_db()` keeps pre-tenant rows in the `legacy@local` tenant; it never
+chooses a production owner. Moving that data into the first production account
+is a separate, explicit operator step:
+`tools/legacy_data_migration.py`, documented in
+`docs/LEGACY_DATA_MIGRATION.md`. It requires a target account id, refuses
+ambiguous ownership, writes a verified backup under the write lock before the
+first change, re-owns rows in one transaction with before/after counts, and is
+idempotent. `tools/test_legacy_data_migration.py` and
+`backend/tests/test_legacy_data_adoption_schema.py` fail when a new tenant table
+is not classified by the tool (`USER_OWNED_TABLES` or `EPHEMERAL_TABLES`), and
+`backend/tests/test_database.py` runs the adoption on a database upgraded from
+the complete pre-tenant schema.
+

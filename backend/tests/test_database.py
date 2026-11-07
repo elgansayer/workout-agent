@@ -1482,6 +1482,53 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
         assert state == (3, "Synthetic Legacy Split")
 
 
+def test_complete_legacy_schema_is_adopted_by_the_first_account_only(
+    tmp_path: Any,
+) -> None:
+    """Single-user rows reach exactly the account the operator names, via the real upgrade."""
+    from pathlib import Path
+
+    from cryptography.fernet import Fernet
+
+    from tools.backup_restore import Keyring
+    from tools.legacy_data_migration import migrate
+
+    db = _db(tmp_path)
+    _create_pre_multi_tenant_schema(db)
+    init_db(db)
+    owner = get_or_create_user("owner@example.invalid", "Owner", db_path=db)["id"]
+
+    evidence = migrate(
+        Path(db),
+        target_user_id=owner,
+        backup_output=tmp_path / "pre-migration.wab",
+        keyring=Keyring(keys={"test": Fernet.generate_key()}, active_key_id="test"),
+    )
+    new_account = get_or_create_user("new@example.invalid", "New", db_path=db)["id"]
+
+    assert evidence["status"] == "migrated"
+    assert evidence["rows_reassigned"] == 12  # one synthetic row per pre-tenant table
+    assert evidence["retained_default_rows"] == {}
+    assert get_recent_hevy_logs(db_path=db, user_id=owner) == [{"synthetic": True}]
+    assert [row["focus"] for row in get_daily_logs(db_path=db, user_id=owner)] == [
+        "Synthetic focus"
+    ]
+    assert get_current_day(db, user_id=owner) == 3
+    assert get_programme_start_date(db, user_id=owner).isoformat() == "2030-01-01"
+    assert get_routine_record("synthetic-routine", db, user_id=owner) == (
+        "routine-1",
+        "hash-1",
+    )
+    assert get_reasoning_log("synthetic-context", db, user_id=owner) is not None
+    # An account created after the migration sees none of the legacy records.
+    assert get_recent_hevy_logs(db_path=db, user_id=new_account) == []
+    assert get_daily_logs(db_path=db, user_id=new_account) == []
+    assert get_body_metrics(db_path=db, user_id=new_account) == []
+    assert get_current_day(db, user_id=new_account) == 1
+    assert get_routine_record("synthetic-routine", db, user_id=new_account) is None
+    assert get_reasoning_log("synthetic-context", db, user_id=new_account) is None
+
+
 def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
     """Partially applied tenant migrations are completed on the next init."""
     import sqlite3
