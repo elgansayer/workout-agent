@@ -822,6 +822,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         )
         _init_credential_vault_schema(cursor)
 
+        # Server-side registry behind the browser session cookie (issue #752).
+        ensure_user_sessions_schema(conn)
+
 
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
@@ -893,6 +896,36 @@ def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
         """
     )
 
+
+def ensure_user_sessions_schema(conn: sqlite3.Connection) -> None:
+    """Idempotently create the tenant-scoped browser-session registry.
+
+    The registry is what makes a session cookie revocable and bounded: the
+    signed cookie only proves *who it claims to be*, while a row here proves the
+    server still honours that session. Only a SHA-256 digest of the random
+    session identifier is stored (never the identifier itself), every row is
+    owned by exactly one user, and ``user_id`` is the leading index column so
+    "revoke all of this user's sessions" never scans other tenants.
+
+    ``webapp.session_security.SessionStore`` also calls this on connect so the
+    table exists even when a request arrives before ``init_db`` has run.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            session_token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            created_at INTEGER NOT NULL,
+            last_seen_at INTEGER NOT NULL,
+            revoked_at INTEGER,
+            revoked_reason TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user "
+        "ON user_sessions (user_id, revoked_at)"
+    )
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:

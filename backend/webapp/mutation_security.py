@@ -279,8 +279,15 @@ def _guarded_add_middleware(
     if original is None:  # pragma: no cover - defensive import-order guard
         raise RuntimeError("Mutation security guard was not initialised")
 
-    if middleware_class is SessionMiddleware and not any(
-        middleware.cls is MutationSecurityMiddleware for middleware in app.user_middleware
+    # ``issubclass`` rather than identity: the production stack mounts
+    # HardenedSessionMiddleware, which is a SessionMiddleware subclass.
+    if (
+        isinstance(middleware_class, type)
+        and issubclass(middleware_class, SessionMiddleware)
+        and not any(
+            middleware.cls is MutationSecurityMiddleware
+            for middleware in app.user_middleware
+        )
     ):
         # Starlette applies middleware in reverse registration order. Register
         # this guard first so SessionMiddleware, registered immediately after,

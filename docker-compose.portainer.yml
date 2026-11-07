@@ -36,6 +36,8 @@
 #   GOOGLE_HEALTH_CLIENT_SECRET     (run google_health_auth.py once on your
 #   GOOGLE_HEALTH_REFRESH_TOKEN      laptop to obtain the refresh token)
 #   RUN_AT (00:00,05:00)  TZ (Europe/London)  WEB_PORT (8088)
+#   SESSION_IDLE_TIMEOUT_SECONDS  SESSION_ABSOLUTE_TIMEOUT_SECONDS  (blank = 3 days
+#     idle / 14 days absolute; see docs/SESSION_SECURITY.md)
 #   GEMINI_MODEL  HEVY_SYNC_ROUTINES  HEVY_PREFILL_WEIGHTS  CHECKIN_ENABLED
 #   LIFESTYLE_ENABLED  SELF_REVIEW_ENABLED  SELF_REVIEW_WEEKDAY  TELEGRAM_PARSE_MODE
 services:
@@ -100,6 +102,10 @@ services:
       WEB_GOOGLE_CLIENT_SECRET: ${WEB_GOOGLE_CLIENT_SECRET:?WEB_GOOGLE_CLIENT_SECRET is required}
       WEB_AUTH_SECRET: ${WEB_AUTH_SECRET:?WEB_AUTH_SECRET is required}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      # Browser session limits in seconds. Blank keeps the secure defaults
+      # (3 days idle, 14 days absolute); both are enforced server-side.
+      SESSION_IDLE_TIMEOUT_SECONDS: ${SESSION_IDLE_TIMEOUT_SECONDS:-}
+      SESSION_ABSOLUTE_TIMEOUT_SECONDS: ${SESSION_ABSOLUTE_TIMEOUT_SECONDS:-}
     ports:
       - "${WEB_PORT:-8088}:8000"
     volumes:

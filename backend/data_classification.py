@@ -116,6 +116,7 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "p256dh": DataClass.CREDENTIAL,
     "vapid_private_key": DataClass.CREDENTIAL,
     "web_auth_secret": DataClass.CREDENTIAL,
+    "session_token_hash": DataClass.CREDENTIAL,
     "encryption_key": DataClass.CREDENTIAL,
     # last characters of a stored credential, kept only to render a masked hint
     "key_hint": DataClass.CREDENTIAL,
