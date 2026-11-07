@@ -23,6 +23,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from accounts import AccountError, require_active_user
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
@@ -30,7 +31,6 @@ from database import (
     get_body_metrics,
     get_daily_logs,
     get_legacy_user_id,
-    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_push_subscriptions,
@@ -48,6 +48,7 @@ from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from legacy_ownership import is_deployment_owner
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -58,6 +59,7 @@ from program import (
     week_in_cycle,
 )
 from push_notifier import send_push_notification
+from tenancy import TenantRequiredError, implicit_single_user_allowed
 
 logging.basicConfig(
     level=logging.INFO,
@@ -226,38 +228,58 @@ def _resolve_provider(
 
 
 def _resolve_run_user(db_path: str) -> str:
-    """Return the user_id the scheduled run should operate under.
+    """Return the user_id the run should operate under.
 
-    Prefers $SCHEDULER_USER_ID (set by scheduler.py when dispatching per-user).
-    Falls back to the first legacy user for single-tenant backwards compat.
+    ``$SCHEDULER_USER_ID`` (an active account chosen by the operator or the
+    scheduler) is always honoured. Without it the only fallback is the explicit
+    non-production local tenant; production has no shared fallback user, so the
+    run is refused instead.
+
+    Raises:
+        TenantRequiredError: no user was selected and no local fallback applies.
+        AccountError: the selected account does not exist or is not active.
     """
     env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
     if env_id:
+        require_active_user(env_id, db_path)
         return env_id
-    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+    if implicit_single_user_allowed():
+        return get_legacy_user_id(db_path)
+    raise TenantRequiredError(
+        "No user selected: pass --user-id or set SCHEDULER_USER_ID."
+    )
 
 
 def _scope_config_to_user(config: Config, user_id: str) -> Config:
-    """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
+    """Resolve user-owned connector secrets and fail closed on shared fallbacks.
+
+    Deployment-wide connector settings (the single-user ``HEVY_API_KEY`` and the
+    Google Health environment) are applied only for the deployment owner: the
+    verified person the pre-account data was assigned to, or the local tenant in
+    the explicit non-production mode. Every other user relies solely on their own
+    stored credentials.
+    """
     key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
     user_hevy_key = None
     if key_record:
         user_hevy_key = str(key_record.get("api_key") or "").strip() or None
 
-    is_legacy_user = user_id == get_legacy_user_id(config.database_path)
-    hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
+    owns_server_config = is_deployment_owner(user_id, config.database_path)
+    hevy_key = user_hevy_key or (config.hevy_api_key if owns_server_config else None)
     return replace(
         config,
         hevy_api_key=hevy_key,
-        health_connect_file=(config.health_connect_file if is_legacy_user else None),
+        health_connect_file=(
+            config.health_connect_file if owns_server_config else None
+        ),
         google_health_client_id=(
-            config.google_health_client_id if is_legacy_user else None
+            config.google_health_client_id if owns_server_config else None
         ),
         google_health_client_secret=(
-            config.google_health_client_secret if is_legacy_user else None
+            config.google_health_client_secret if owns_server_config else None
         ),
         google_health_refresh_token=(
-            config.google_health_refresh_token if is_legacy_user else None
+            config.google_health_refresh_token if owns_server_config else None
         ),
     )
 
@@ -271,8 +293,14 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     init_db(config.database_path)
 
-    if user_id is None:
-        user_id = _resolve_run_user(config.database_path)
+    try:
+        if user_id is None:
+            user_id = _resolve_run_user(config.database_path)
+        else:
+            require_active_user(user_id, config.database_path)
+    except (TenantRequiredError, AccountError) as exc:
+        logger.error("Cannot start the daily cycle: %s", exc)
+        return 1
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 
@@ -295,6 +323,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         config.google_health_client_secret,
         config.google_health_refresh_token,
         config.database_path,
+        user_id,
     )
     if synced:
         # Live scale readings take precedence over a stale file.
@@ -428,7 +457,15 @@ if __name__ == "__main__":
 
         config = Config.load()
         init_db(config.database_path)
-        sync_user_id = args.user_id or _resolve_run_user(config.database_path)
+        try:
+            if args.user_id:
+                sync_user_id = args.user_id
+                require_active_user(sync_user_id, config.database_path)
+            else:
+                sync_user_id = _resolve_run_user(config.database_path)
+        except (TenantRequiredError, AccountError) as exc:
+            logger.error("Cannot sync history: %s", exc)
+            sys.exit(1)
         config = _scope_config_to_user(config, sync_user_id)
         api_key = config.hevy_api_key
         if not api_key:

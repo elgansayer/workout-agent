@@ -15,10 +15,12 @@ first refresh token. This script walks through that one-time flow:
          Google account under "Test users".
   2. Put GOOGLE_HEALTH_CLIENT_ID and GOOGLE_HEALTH_CLIENT_SECRET in your .env
      (or export them).
-  3. Run:  python google_health_auth.py
+  3. Run:  python google_health_auth.py [--user-id <account id>]
        - It prints an authorise URL. Open it, approve the weight scope.
        - Google redirects back to this script, which captures the code, swaps it
-         for tokens, prints the refresh token, and stores it in the database.
+         for tokens, prints the refresh token, and (with --user-id) stores it in
+         the database for that one account. Without --user-id nothing is stored
+         in the database, because there is no shared account to attach it to.
   4. Paste the printed GOOGLE_HEALTH_REFRESH_TOKEN into your .env.
 
 Uses the Authorization Code Grant. Only stdlib + requests are needed.
@@ -35,7 +37,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import requests
-
 from google_health_client import SCOPE, TOKEN_URL
 
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/auth"
@@ -143,7 +144,41 @@ def _wait_for_code(redirect_uri: str) -> tuple[str | None, str | None]:
     return _CallbackHandler.code, _CallbackHandler.state
 
 
-def main() -> int:
+def _store_refresh_token(refresh_token: str, user_id: str | None) -> str:
+    """Persist the refresh token for one account and describe the outcome.
+
+    The token is stored under *user_id* only. With no user (and outside the
+    explicit local mode) it is not stored at all rather than being attached to a
+    shared fallback account.
+    """
+    from tenancy import TenantRequiredError
+
+    try:
+        from database import set_meta
+
+        db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
+        set_meta(
+            "google_health_refresh_token", refresh_token, db_path, user_id=user_id
+        )
+    except TenantRequiredError:
+        return " (not saved to the database: pass --user-id to store it for one account)"
+    except Exception:  # noqa: BLE001
+        return ""
+    return f" (also saved to {db_path})"
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="One-time Google Health authorisation helper."
+    )
+    parser.add_argument(
+        "--user-id",
+        help="Store the refresh token in the database for this account id.",
+    )
+    args = parser.parse_args(argv)
+
     try:
         from dotenv import load_dotenv
 
@@ -197,14 +232,7 @@ def main() -> int:
     refresh_token = tokens["refresh_token"]
 
     # Store it so the very next agent run is already authorised.
-    try:
-        from database import set_meta
-
-        db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
-        set_meta("google_health_refresh_token", refresh_token, db_path)
-        stored = f" (also saved to {db_path})"
-    except Exception:  # noqa: BLE001
-        stored = ""
+    stored = _store_refresh_token(refresh_token, args.user_id)
 
     print("\nSuccess! Add this line to your .env:\n")
     print(f"GOOGLE_HEALTH_REFRESH_TOKEN={refresh_token}")

@@ -125,6 +125,11 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "endpoint": DataClass.IDENTIFIER,
     "device_id": DataClass.IDENTIFIER,
     "external_user_id": DataClass.IDENTIFIER,
+    # ``user_identities.subject`` is the identity provider's stable per-person id
+    # and ``legacy_ownership_migrations.applied_by`` names the operator who ran
+    # an assignment. Neither may reach logs or exports unredacted.
+    "subject": DataClass.IDENTIFIER,
+    "applied_by": DataClass.IDENTIFIER,
     # health
     "weight_kg": DataClass.HEALTH,
     "body_fat_pct": DataClass.HEALTH,

@@ -32,6 +32,12 @@ from typing import Any
 import analytics
 import insights
 import lifestyle
+from accounts import (
+    AccountError,
+    AccountInactiveError,
+    require_active_user,
+    resolve_oauth_user,
+)
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -50,9 +56,9 @@ from database import (
     get_daily_logs,
     get_dashboard_insight,
     get_exercise_volumes,
+    get_legacy_user_id,
     get_meta,
     get_notifications,
-    get_or_create_user,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
@@ -104,9 +110,9 @@ from program import (
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from tenancy import implicit_single_user_allowed
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -168,15 +174,24 @@ ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
 
 
 def _check_api_auth(request: Request) -> str:
-    user = request.session.get("user") if hasattr(request, "session") else None
-    uid = request.session.get("user_id") if hasattr(request, "session") else None
-    if uid:
-        return uid
-    if user and isinstance(user, dict) and user.get("id"):
-        return user["id"]
-    if ALLOW_ANONYMOUS_WEB:
-        from database import get_legacy_user_id
+    """Return the authenticated, active account id for this request.
 
+    A signed session is not enough on its own: the account it names must still
+    exist and be ``active``, so suspending or removing an account takes effect on
+    its very next request. The only unauthenticated path is the explicit
+    non-production local mode; production has no shared fallback user.
+    """
+    session = request.session if hasattr(request, "session") else {}
+    user = session.get("user")
+    uid = session.get("user_id")
+    if not uid and isinstance(user, dict) and user.get("id"):
+        uid = user["id"]
+    if uid:
+        try:
+            return require_active_user(str(uid), DB_PATH)["id"]
+        except AccountError as exc:
+            raise HTTPException(status_code=401, detail="Unauthorized") from exc
+    if ALLOW_ANONYMOUS_WEB and implicit_single_user_allowed():
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -342,7 +357,17 @@ async def get_current_user_api(request: Request) -> Any:
     user = request.session.get("user")
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        # A session whose account was suspended or removed is no longer a login.
+        _check_api_auth(request)
+    except HTTPException:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+def _claim_is_true(value: Any) -> bool:
+    """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
 @app.get("/auth")
@@ -359,12 +384,25 @@ async def auth(request: Request) -> Any:
         email = user.get("email", "")
         if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
             return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
-        # Create or retrieve the user record on first login.
-        user_record = get_or_create_user(
-            email,
-            display_name=user.get("name"),
-            db_path=DB_PATH,
-        )
+        # Bind the sign-in to the provider's immutable subject. Email alone never
+        # selects an account, and the account must be active.
+        try:
+            user_record = resolve_oauth_user(
+                provider="google",
+                subject=str(user.get("sub") or ""),
+                email=email,
+                email_verified=_claim_is_true(user.get("email_verified")),
+                display_name=user.get("name"),
+                db_path=DB_PATH,
+            )
+        except AccountInactiveError:
+            return HTMLResponse("This account is not active.", status_code=403)
+        except AccountError as exc:
+            # Unverified or missing claims, an identity conflict, or an identity
+            # whose account no longer exists: all refuse the sign-in rather than
+            # surfacing a 500. The messages never contain the email or subject.
+            logger.warning("Sign-in rejected: %s", exc)
+            return HTMLResponse("Sign-in could not be verified.", status_code=403)
         request.session["user"] = email
         request.session["user_id"] = user_record["id"]
     return RedirectResponse("/")

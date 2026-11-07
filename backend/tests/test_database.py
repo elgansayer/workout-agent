@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from database import (
+    USER_OWNED_TABLES,
     advance_day,
     delete_routine_record,
     get_body_metrics,
@@ -765,12 +766,19 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
 
     init_db(db)
 
-    from database import get_dashboard_insight, save_dashboard_insight
+    from database import (
+        get_dashboard_insight,
+        get_legacy_user_id,
+        save_dashboard_insight,
+    )
 
-    # The old row should have been backfilled to the legacy user
-    # Without a user_id filter, we default to None which was backfilled as legacy
-    legacy_insight = get_dashboard_insight(db_path=db, user_id=None)
-    assert legacy_insight is None  # None doesn't match legacy user in new schema
+    # The old singleton row is owned by the legacy placeholder tenant and only
+    # that tenant (reached implicitly in the explicit local mode) can read it.
+    legacy_id = get_legacy_user_id(db)
+    legacy_insight = get_dashboard_insight(db_path=db, user_id=legacy_id)
+    assert legacy_insight == {"fatigue": "Green"}
+    assert get_dashboard_insight(db_path=db, user_id=None) == legacy_insight
+    assert get_dashboard_insight(db_path=db, user_id="someone-else") is None
 
     user_a = "user-a-123"
     save_dashboard_insight('{"fatigue": "Red"}', db, user_id=user_a)
@@ -1034,7 +1042,11 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
 
     init_db(db)
 
-    from database import get_deep_correlation, save_deep_correlation
+    from database import (
+        get_deep_correlation,
+        get_legacy_user_id,
+        save_deep_correlation,
+    )
 
     user_a = "user-a-123"
     save_deep_correlation("Correlation A", db, user_id=user_a)
@@ -1047,8 +1059,12 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
     # Users don't see each other's correlations
     assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
 
-    # None user_id returns None (no matching row)
-    assert get_deep_correlation(db_path=db, user_id=None) is None
+    # The migrated singleton row belongs to the legacy placeholder tenant only;
+    # the implicit local-mode default resolves to that same tenant.
+    legacy_id = get_legacy_user_id(db)
+    assert get_deep_correlation(db_path=db, user_id=legacy_id) == "Old insight"
+    assert get_deep_correlation(db_path=db, user_id=None) == "Old insight"
+    assert get_deep_correlation(db_path=db, user_id="someone-else") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1467,6 +1483,15 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
     init_db(db)
 
     with sqlite3.connect(db, timeout=10) as conn:
+        # A database written by a release from before the owner guards existed
+        # has no such triggers and may hold unowned rows. Model that state by
+        # removing the guards; the next init_db must repair the rows and then
+        # reinstall them.
+        for (guard,) in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'trigger' AND name LIKE '%owner_required%'"
+        ).fetchall():
+            conn.execute(f'DROP TRIGGER "{guard}"')
         conn.execute("DROP TABLE exercise_progress")
         conn.execute(
             """
@@ -1567,6 +1592,19 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
             "idx_daily_log_date_id",
             "idx_daily_log_user_date",
         } <= daily_log_indexes
+
+        # Repair is followed by the guards, so the table cannot regress to
+        # holding unowned rows again.
+        installed_guards = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'trigger' AND name LIKE '%owner_required%'"
+            ).fetchall()
+        }
+        for table in USER_OWNED_TABLES:
+            assert f"trg_{table}_owner_required_insert" in installed_guards
+            assert f"trg_{table}_owner_required_update" in installed_guards
 
 
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:

@@ -39,6 +39,7 @@ Workout Agent handles identifiers, health metrics, workouts, prompts, analytics,
 Core rules:
 
 - Every tenant-owned record must be scoped to the authenticated user.
+- Accounts have immutable identifiers and a lifecycle status, and production has no shared fallback user: an operation that cannot name its account fails closed. Data written before accounts existed is assigned to a verified owner through an explicit, audited plan. See [User model](docs/USER_MODEL.md).
 - Raw credentials must never be logged or committed.
 - Raw health, workout, or prompt payloads must not be written to logs.
 - Public source documentation and test fixtures must use synthetic data only.
