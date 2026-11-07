@@ -38,7 +38,6 @@ from fastapi import FastAPI
 from itsdangerous import TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.testclient import TestClient
-
 from webapp.auth_boundary import AuthenticationBoundaryMiddleware
 
 SECRET = "auth-policy-route-test-secret-long-enough-0123456789"
@@ -114,7 +113,7 @@ class Harness:
         cookie = issued_session_cookie(response)
         # A test may have pre-seeded a cookie; keep exactly one in the jar.
         client.cookies.clear()
-        client.cookies.set("session", cookie)
+        client.cookies.set("__Host-session", cookie)
         return cookie
 
     def account(self, email: str) -> database.AccountState:
@@ -157,7 +156,7 @@ def issued_session_cookie(response: Any) -> str:
     """The signed session value the server asked the browser to store."""
     for header in response.headers.get_list("set-cookie"):
         name, _, rest = header.partition("=")
-        if name.strip() == "session":
+        if name.strip() in {"session", "__Host-session"}:
             return rest.split(";", 1)[0]
     raise AssertionError("the response did not issue a session cookie")
 
@@ -190,7 +189,14 @@ def test_login_completion_admits_a_verified_identity_and_binds_the_session(harne
         payload = decode_session(cookie)
         account = harness.account(ALICE)
 
-        assert payload == {"user": ALICE, "user_id": account["id"], "session_epoch": 0}
+        # ``sid`` is the server-registered session identifier added by the
+        # hardened session registry (issue #752); everything else comes from
+        # the account policy decision (issue #753).
+        assert set(payload) == {"user", "user_id", "sid", "session_epoch"}
+        assert payload["user"] == ALICE
+        assert payload["user_id"] == account["id"]
+        assert payload["session_epoch"] == 0
+        assert isinstance(payload["sid"], str) and payload["sid"]
         me = client.get("/api/me")
         assert me.status_code == 200
         assert me.json() == {"user": ALICE}
@@ -199,11 +205,11 @@ def test_login_completion_admits_a_verified_identity_and_binds_the_session(harne
 def test_login_discards_any_pre_login_session_state(harness: Harness) -> None:
     with harness.client() as client:
         client.cookies.set(
-            "session",
+            "__Host-session",
             forge_session({"stale": "carried-over", "_state_google_x": {"nonce": "n"}, "user_id": "someone-else"}),
         )
         cookie = harness.sign_in_ok(client)
-        assert set(decode_session(cookie)) == {"user", "user_id", "session_epoch"}
+        assert set(decode_session(cookie)) == {"user", "user_id", "sid", "session_epoch"}
 
 
 def test_signing_in_as_a_different_identity_replaces_the_previous_one(harness: Harness) -> None:
@@ -217,6 +223,9 @@ def test_session_email_comes_from_the_stored_account_not_the_raw_claim(harness: 
     with harness.client() as client:
         response = harness.sign_in(client, "  ALICE@Example.COM ")
         assert response.status_code in {302, 307}
+        # The hardened cookie is ``Secure`` so a plain-http test client will not
+        # auto-store it; carry it explicitly (see ``sign_in_ok``).
+        client.cookies.set("__Host-session", issued_session_cookie(response))
         assert client.get("/api/me").json() == {"user": ALICE}
 
 
@@ -405,7 +414,7 @@ def test_reactivation_does_not_resurrect_sessions_but_a_new_login_works(harness:
         database.set_account_status(user_id, "active", db_path=harness.db)
 
         with harness.client() as stale:
-            stale.cookies.set("session", old_cookie)
+            stale.cookies.set("__Host-session", old_cookie)
             assert stale.get("/api/me").status_code == 401
 
         harness.sign_in_ok(client)
@@ -461,10 +470,19 @@ def test_mutations_with_a_revoked_session_never_reach_route_code(harness: Harnes
 
 
 def test_sessions_issued_by_the_previous_release_survive_until_revoked(harness: Harness) -> None:
-    user_id = harness.seed_account(ALICE)
-    legacy_cookie = forge_session({"user": ALICE, "user_id": user_id})  # no session_epoch
+    # Sign in through the real flow so the session is registered in the
+    # server-side registry (issue #752); an unregistered cookie is always
+    # refused, so a genuine "previous release" cookie still carries a ``sid``.
     with harness.client() as client:
-        client.cookies.set("session", legacy_cookie)
+        cookie = harness.sign_in_ok(client)
+        payload = decode_session(cookie)
+        user_id = payload["user_id"]
+        # Re-sign the same registered session without the epoch field, exactly
+        # as a cookie minted before issue #753 would look.
+        legacy_cookie = forge_session(
+            {"user": ALICE, "user_id": user_id, "sid": payload["sid"]}
+        )
+        client.cookies.set("__Host-session", legacy_cookie)
         assert client.get("/api/me").status_code == 200
         database.revoke_account_sessions(user_id, harness.db)
         assert client.get("/api/me").status_code == 401
@@ -472,7 +490,7 @@ def test_sessions_issued_by_the_previous_release_survive_until_revoked(harness: 
 
 def test_validly_signed_cookie_for_an_unknown_account_is_refused(harness: Harness) -> None:
     with harness.client() as client:
-        client.cookies.set("session", forge_session({"user": ALICE, "user_id": "no-such-account"}))
+        client.cookies.set("__Host-session", forge_session({"user": ALICE, "user_id": "no-such-account"}))
         assert client.get("/api/me").status_code == 401
 
 
@@ -480,7 +498,7 @@ def test_cookie_claims_cannot_override_server_side_state(harness: Harness) -> No
     """A cookie asserting a higher epoch than the server holds is not trusted."""
     user_id = harness.seed_account(ALICE)
     with harness.client() as client:
-        client.cookies.set("session", forge_session({"user": ALICE, "user_id": user_id, "session_epoch": 5}))
+        client.cookies.set("__Host-session", forge_session({"user": ALICE, "user_id": user_id, "session_epoch": 5}))
         assert client.get("/api/me").status_code == 401
 
 
@@ -501,15 +519,15 @@ def test_allowlist_removal_revokes_sessions_and_re_adding_does_not_resurrect_the
     # Restart with alice removed.
     removed = build_harness(tmp_path, monkeypatch, allowed=BOB)
     with removed.client() as client:
-        client.cookies.set("session", alice_cookie)
+        client.cookies.set("__Host-session", alice_cookie)
         assert client.get("/api/me").status_code == 401
-        client.cookies.set("session", bob_cookie)
+        client.cookies.set("__Host-session", bob_cookie)
         assert client.get("/api/me").status_code == 200
 
     # Restart with alice added back: her pre-removal cookie stays dead.
     restored = build_harness(tmp_path, monkeypatch, allowed=both)
     with restored.client() as client:
-        client.cookies.set("session", alice_cookie)
+        client.cookies.set("__Host-session", alice_cookie)
         assert client.get("/api/me").status_code == 401
         restored.sign_in_ok(client, ALICE)
         assert client.get("/api/me").status_code == 200
@@ -524,7 +542,7 @@ def test_enabling_an_allowlist_ends_sessions_of_accounts_it_excludes(
 
     restricted = build_harness(tmp_path, monkeypatch, allowed=ALICE)
     with restricted.client() as client:
-        client.cookies.set("session", outsider_cookie)
+        client.cookies.set("__Host-session", outsider_cookie)
         assert client.get("/api/me").status_code == 401
 
 
@@ -550,7 +568,7 @@ def test_unreadable_policy_store_refuses_requests_without_signing_users_out(
             assert "secret" not in outage.text and "set-cookie" not in outage.headers
 
         # The store recovered: the very same cookie was never discarded.
-        assert client.cookies.get("session") == cookie
+        assert client.cookies.get("__Host-session") == cookie
         assert client.get("/api/me").status_code == 200
 
 

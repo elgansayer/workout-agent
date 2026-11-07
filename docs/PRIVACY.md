@@ -44,7 +44,7 @@ Each external provider operates under its own terms and privacy policy. The depl
 
 ## Retention and deletion
 
-The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser/session data is bounded by session and browser storage behaviour. External providers may retain data under their own policies after receiving a request.
+The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser sessions are bounded by server-enforced idle and absolute limits (by default 3 and 14 days), can be revoked per device or for all devices, and are recorded only as one-way digests of the session identifier that are purged shortly after the session ends. External providers may retain data under their own policies after receiving a request.
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 

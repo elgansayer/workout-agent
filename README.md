@@ -119,6 +119,8 @@ Use `.env.example` for the current supported inventory. Never paste real values 
 
 Who may sign in to a deployment is decided by the server, not by the UI: `ALLOWED_EMAILS` restricts sign-in to a list of addresses, `INVITE_ONLY=1` requires an invitation before a new account is created, and a suspended or deleted account cannot sign in or keep using an existing session. See [Account access policy](docs/ACCOUNT_ACCESS_POLICY.md).
 
+Browser sessions use a `Secure`, `HttpOnly`, `SameSite=Lax`, host-only cookie backed by a server-side registry, so they expire after an idle and an absolute limit (`SESSION_IDLE_TIMEOUT_SECONDS`, `SESSION_ABSOLUTE_TIMEOUT_SECONDS`), rotate at every sign-in, and can be revoked per device or for all devices. See [Session security](docs/SESSION_SECURITY.md).
+
 ## Health and workout examples
 
 When documentation needs a payload, use obviously synthetic values and mark the example. For example:

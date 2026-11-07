@@ -169,6 +169,17 @@ class AuthenticationBoundaryMiddleware:
         await self.app(scope, receive, send)
 
 
+def _is_session_middleware(item: Middleware) -> bool:
+    """Whether *item* mounts SessionMiddleware or a subclass of it.
+
+    ``issubclass`` rather than identity: the production stack mounts
+    ``HardenedSessionMiddleware``, which is a ``SessionMiddleware`` subclass.
+    """
+
+    mounted = getattr(item, "cls", None)
+    return isinstance(mounted, type) and issubclass(mounted, SessionMiddleware)
+
+
 def _contains_boundary(app: FastAPI) -> bool:
     return any(
         getattr(item, "cls", None) is AuthenticationBoundaryMiddleware
@@ -191,7 +202,7 @@ def _install_on_workout_app(app: FastAPI) -> None:
         (
             index
             for index, item in enumerate(app.user_middleware)
-            if getattr(item, "cls", None) is SessionMiddleware
+            if _is_session_middleware(item)
         ),
         None,
     )

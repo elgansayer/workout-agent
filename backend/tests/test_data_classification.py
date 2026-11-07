@@ -30,6 +30,7 @@ def test_sensitive_field_registry_covers_database_security_boundaries() -> None:
         "refresh_token": DataClass.CREDENTIAL,
         "endpoint": DataClass.IDENTIFIER,
         "p256dh": DataClass.CREDENTIAL,
+        "session_token_hash": DataClass.CREDENTIAL,
         "auth": DataClass.CREDENTIAL,
         "hevy_payload": DataClass.WORKOUT,
         "weight_kg": DataClass.HEALTH,
