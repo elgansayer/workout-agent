@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import importlib
-import json
 import logging
 import sqlite3
 from typing import Any
@@ -21,7 +20,7 @@ pytest.importorskip("httpx")
 
 import database
 import hevy_client
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "hevy-connection-test-secret-that-is-long-enough"
@@ -79,13 +78,6 @@ def _install_hevy(monkeypatch: pytest.MonkeyPatch, responses: dict[str, Any]) ->
     monkeypatch.setattr(hevy_client.requests, "get", _get)
 
 
-def _session_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
-    )
-    return TimestampSigner(_SECRET).sign(payload).decode()
-
-
 @pytest.fixture()
 def webapp_client(
     tmp_path: Any,
@@ -107,11 +99,19 @@ def webapp_client(
     # The rate limiter is process-wide; keep each test independent.
     app_module._RATE_LIMITS.clear()
 
-    client = TestClient(app_module.app)
-    client.cookies.set(
-        "session",
-        _session_cookie(database.get_legacy_user_id(db_file)),
+    # Authenticate the way production login does: register a server-side
+    # session in the app's store and carry its identifier in the signed cookie.
+    user_id = database.get_legacy_user_id(db_file)
+    session_id = app_module.SESSION_STORE.create(user_id)
+    cookie = signed_session_cookie(
+        _SECRET,
+        user="athlete@example.test",
+        user_id=user_id,
+        session_id=session_id,
     )
+
+    client = TestClient(app_module.app)
+    client.cookies.set("session", cookie)
     client.hevy_db_file = db_file  # type: ignore[attr-defined]
     return client
 

@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
@@ -32,6 +33,7 @@ from typing import Any
 import analytics
 import insights
 import lifestyle
+from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -54,7 +56,6 @@ from database import (
     get_hevy_connection,
     get_meta,
     get_notifications,
-    get_or_create_user,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
@@ -109,9 +110,14 @@ from program import (
 )
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
+from webapp.session_security import (
+    HardenedSessionMiddleware,
+    SessionLifecycle,
+    SessionStore,
+    load_session_security_config,
+)
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -166,10 +172,48 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
 WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
 WEB_GOOGLE_CLIENT_SECRET = os.environ.get("WEB_GOOGLE_CLIENT_SECRET", "").strip()
 WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
-ALLOWED_EMAILS = [
-    e.strip() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()
-]
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
+
+# The one place the deployment's access policy (ALLOWED_EMAILS, INVITE_ONLY and
+# the stored account status) is composed. Login completion below and the global
+# authentication boundary both decide through this object; an invalid setting
+# raises here so the server refuses to start rather than run unrestricted.
+ACCESS_POLICY = AccessPolicy(
+    AccessPolicyConfig.from_environ(
+        {
+            "ALLOWED_EMAILS": os.environ.get("ALLOWED_EMAILS", ""),
+            "INVITE_ONLY": os.environ.get("INVITE_ONLY", ""),
+        }
+    ),
+    DB_PATH,
+)
+
+# Canonical allow-list addresses, or ``None`` when no allowlist is configured.
+# Derived from the composed policy so login and the per-request session check
+# never disagree about which addresses are admitted.
+ALLOWED_EMAILS = ACCESS_POLICY.config.allowed_emails
+
+# Fixed, content-free destinations for a refused sign-in. They are identical for
+# every denial reason so a response cannot reveal why an address was refused.
+_LOGIN_DENIED_URL = "/login?error=access_denied"
+_LOGIN_UNAVAILABLE_URL = "/login?error=unavailable"
+
+# Cookie attributes, idle/absolute lifetimes and the server-side session
+# registry. Validated at import so unsafe limits stop startup (issue #752).
+SESSION_SECURITY = load_session_security_config()
+SESSION_STORE = SessionStore(DB_PATH, SESSION_SECURITY.lifetime)
+SESSION_LIFECYCLE = SessionLifecycle(SESSION_STORE)
+
+
+def _identity_allowed(email: object) -> bool:
+    """Re-apply the e-mail allow-list to sessions that already exist.
+
+    Removing an address from ``ALLOWED_EMAILS`` therefore ends its sessions on
+    their next request instead of leaving them valid until they age out.
+    """
+    if not ALLOWED_EMAILS:
+        return True
+    return isinstance(email, str) and email in ALLOWED_EMAILS
 
 
 def _check_api_auth(request: Request) -> str:
@@ -220,6 +264,14 @@ _ASSET_VERSIONS: dict[str, str] = {}
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
+    if not ALLOW_ANONYMOUS_WEB:
+        logger.info("Account access policy: %s", ACCESS_POLICY.config.describe())
+        ended = ACCESS_POLICY.reconcile()
+        if ended:
+            logger.info(
+                "Ended sessions for %d account(s) outside the configured allowlist.",
+                ended,
+            )
     yield
 
 
@@ -233,6 +285,9 @@ else:
         _BASE_DIR.parent.parent / "frontend/dist/frontend/browser"
     )  # Local dev
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
+# Read by the authentication boundary when it builds its middleware stack, so the
+# per-request session check uses the same policy and database as login does.
+app.state.access_policy = ACCESS_POLICY
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 app.mount(
     "/assets",
@@ -315,14 +370,22 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
 
     app.add_middleware(AuthMiddleware)
 
-# Always mount SessionMiddleware so templates and routes can safely access
+# Always mount the session middleware so templates and routes can safely access
 # request.session even when web auth is disabled. Without it, any access to
 # request.session raises an AssertionError -> 500 Internal Server Error.
 # When WEB_AUTH_SECRET is unset we fall back to a per-process random key; this
 # is fine because there is nothing sensitive to protect when auth is off.
+#
+# HardenedSessionMiddleware is Starlette's SessionMiddleware with a Secure /
+# HttpOnly / SameSite / host-only cookie and a server-side registry: a session
+# is honoured only while it is unexpired (idle and absolute), unrevoked and
+# owned by the user its cookie claims. See docs/SESSION_SECURITY.md.
 app.add_middleware(
-    SessionMiddleware,
+    HardenedSessionMiddleware,
     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
+    config=SESSION_SECURITY,
+    store=SESSION_STORE,
+    identity_allowed=_identity_allowed,
 )
 
 
@@ -338,8 +401,36 @@ async def login_google(request: Request) -> Any:
 
 @app.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
-    request.session.clear()
+    # Legacy navigation endpoint, kept for bookmarks. A state change on GET must
+    # not be triggerable from another site, so only a browser-reported
+    # same-origin or user-typed navigation signs out. Cross-site and same-site
+    # (sibling subdomain) navigations are ignored; a browser that sends no
+    # Fetch Metadata is allowed. The SPA signs out with POST /api/auth/logout,
+    # which is CSRF protected.
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site and fetch_site not in {"same-origin", "none"}:
+        return RedirectResponse("/")
+    await run_in_threadpool(SESSION_LIFECYCLE.end, request.session)
     return RedirectResponse("/login")
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request) -> dict[str, str]:
+    """Revoke this browser's session server-side and delete its cookie."""
+    SESSION_LIFECYCLE.end(request.session)
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/logout-all")
+def api_logout_all(request: Request) -> dict[str, Any]:
+    """Revoke every session of the authenticated user, on every device.
+
+    The owner comes from the verified session, never from the request, so one
+    tenant can never end another tenant's sessions.
+    """
+    user_id = _check_api_auth(request)
+    revoked = SESSION_LIFECYCLE.end_all(request.session, user_id)
+    return {"status": "ok", "revoked": revoked}
 
 
 @app.get("/api/me")
@@ -359,19 +450,45 @@ async def auth(request: Request) -> Any:
     except Exception as e:  # noqa: BLE001
         logger.warning("OAuth token exchange failed: %s", e)
         return RedirectResponse("/login")
-    user = token.get("userinfo")
-    if user:
-        email = user.get("email", "")
-        if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
-            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
-        # Create or retrieve the user record on first login.
-        user_record = get_or_create_user(
-            email,
-            display_name=user.get("name"),
-            db_path=DB_PATH,
+    # Authenticating with Google proves who the person is, not that this
+    # deployment admits them. Allowlist, invitation, suspension and deletion
+    # state are all decided here, server-side, before any session exists.
+    try:
+        decision = await run_in_threadpool(
+            ACCESS_POLICY.admit_login, token.get("userinfo")
         )
-        request.session["user"] = email
-        request.session["user_id"] = user_record["id"]
+    except sqlite3.Error:
+        # An unreadable policy store is an outage, not a verdict on the person:
+        # refuse the sign-in (fail closed) but say so, and keep no session.
+        logger.exception("Account policy lookup failed during login completion.")
+        request.session.clear()
+        return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+
+    if not decision.allowed:
+        # Always start from an empty session on denial too: drop leftover
+        # pre-login state (OAuth correlation keys, a previous identity).
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    # Rotate on login: a fresh session identifier is registered, whatever
+    # identifier the browser held is revoked, and all pre-login session data
+    # (including leftover OAuth state) is discarded.
+    approved_user_id = decision.user_id
+    approved_email = decision.email
+    if approved_user_id is None or approved_email is None:  # pragma: no cover
+        # Defensive: an allowed decision always carries both, but never mint a
+        # session from a partially populated result (fail closed).
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+    await run_in_threadpool(
+        SESSION_LIFECYCLE.establish,
+        request.session,
+        user_id=approved_user_id,
+        email=approved_email,
+    )
+    # ``establish`` clears the session, so record the policy epoch (issue #753)
+    # after it; the per-request guard compares this against the stored account.
+    request.session[SESSION_EPOCH_KEY] = decision.session_epoch
     return RedirectResponse("/")
 
 
