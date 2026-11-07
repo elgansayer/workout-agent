@@ -10,7 +10,8 @@ import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import Iterator
+import uuid
+from collections.abc import Collection, Iterator
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -269,6 +270,50 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 units TEXT DEFAULT 'metric'
             )
             """,
+        )
+
+        # ---- Account access policy (issue #753) ----
+        # Additive, idempotent columns. ``status`` and ``session_epoch`` are
+        # read on every authenticated request, so they stay on the primary-key
+        # row. ``session_epoch`` is bumped to revoke every signed session that
+        # was issued under an earlier value (see ``revoke_account_sessions``).
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = {col[1] for col in cursor.fetchall()}
+        if "status" not in user_columns:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
+            )
+        if "status_changed_at" not in user_columns:
+            cursor.execute("ALTER TABLE users ADD COLUMN status_changed_at TEXT")
+        if "session_epoch" not in user_columns:
+            cursor.execute(
+                "ALTER TABLE users ADD COLUMN session_epoch INTEGER NOT NULL DEFAULT 0"
+            )
+        # Operator-owned access-control records, not tenant data: an invitation
+        # exists before the invited person has an account, so there is no owning
+        # user_id. ``accepted_user_id`` links the single account it created.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_invitations (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                invited_by TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                accepted_at TEXT,
+                accepted_user_id TEXT REFERENCES users(id),
+                revoked_at TEXT
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_invitations_pending_email "
+            "ON account_invitations (email) WHERE status = 'pending'"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_invitations_email_status "
+            "ON account_invitations (email, status, expires_at)"
         )
         cursor.execute(
             """
@@ -1973,6 +2018,354 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
             timezone=row[4],
             units=row[5],
         )
+        for row in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Account access policy (issue #753)
+#
+# These functions are the persistence half of ``account_policy``: they read and
+# change the server-side account state that login completion and every
+# authenticated request are checked against. They never trust a client-supplied
+# identifier; callers pass an id taken from a verified session or an operator.
+# ---------------------------------------------------------------------------
+
+ACCOUNT_STATUS_ACTIVE = "active"
+ACCOUNT_STATUS_SUSPENDED = "suspended"
+ACCOUNT_STATUS_DELETED = "deleted"
+ACCOUNT_STATUSES = frozenset(
+    {ACCOUNT_STATUS_ACTIVE, ACCOUNT_STATUS_SUSPENDED, ACCOUNT_STATUS_DELETED}
+)
+
+# Email of the pre-tenant data owner seeded by ``_get_or_create_legacy_user``.
+# It is an artefact of the single-user era, not a person, and holds no browser
+# session; policy bookkeeping that counts "accounts" skips it.
+LEGACY_TENANT_EMAIL = "legacy@local"
+
+INVITATION_PENDING = "pending"
+INVITATION_ACCEPTED = "accepted"
+INVITATION_REVOKED = "revoked"
+
+ADMIT_EXISTING = "existing"
+ADMIT_CREATED = "created"
+ADMIT_SUSPENDED = "suspended"
+ADMIT_DELETED = "deleted"
+ADMIT_INVALID_STATUS = "invalid_status"
+ADMIT_NOT_INVITED = "not_invited"
+
+
+class AccountState(TypedDict):
+    """The minimal server-side facts an access decision is made from."""
+
+    id: str
+    email: str
+    status: str
+    session_epoch: int
+
+
+class AccountInvitation(TypedDict):
+    """One invitation record.
+
+    ``status`` and the two timestamps that always exist are plain strings; the
+    acceptance and revocation timestamps are ``None`` until they happen.
+    """
+
+    status: str
+    created_at: str
+    expires_at: str
+    accepted_at: str | None
+    revoked_at: str | None
+
+
+class AccountTransitionError(ValueError):
+    """Raised when an account status change is not permitted."""
+
+
+def _utc_seconds(moment: datetime | None) -> str:
+    """Return a timezone-aware moment as a sortable UTC ISO-8601 string."""
+    if moment is None:
+        moment = datetime.now(tz=timezone.utc)
+    if moment.tzinfo is None:
+        raise ValueError("A timezone-aware datetime is required.")
+    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _account_state(row: Any) -> AccountState:
+    return AccountState(
+        id=str(row[0]),
+        email=str(row[1]),
+        status=str(row[2]),
+        session_epoch=int(row[3]),
+    )
+
+
+def _find_account_row(conn: sqlite3.Connection, email: str) -> Any:
+    """Find an account by canonical email, tolerating legacy mixed-case rows.
+
+    An exact match wins so an existing account keeps resolving to the same
+    tenant it always did; otherwise match case-insensitively so a differently
+    cased address cannot fork a second account for the same mailbox.
+    """
+    row = conn.execute(
+        "SELECT id, email, status, session_epoch FROM users WHERE email = ?",
+        (email,),
+    ).fetchone()
+    if row is not None:
+        return row
+    return conn.execute(
+        "SELECT id, email, status, session_epoch FROM users "
+        "WHERE lower(email) = ? ORDER BY created_at, id LIMIT 1",
+        (email,),
+    ).fetchone()
+
+
+def get_account_state(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Return the access-relevant state of one account, or None if unknown."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(row) if row is not None else None
+
+
+def find_account_state(
+    email: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Return the access-relevant state for a canonical email, or None."""
+    with _connect(db_path) as conn:
+        row = _find_account_row(conn, email)
+    return _account_state(row) if row is not None else None
+
+
+def admit_account(
+    email: str,
+    *,
+    display_name: str | None,
+    require_invitation: bool,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> tuple[str, AccountState | None]:
+    """Resolve, and if permitted create, the account for a verified login.
+
+    Everything happens in one ``BEGIN IMMEDIATE`` transaction so concurrent or
+    retried callbacks cannot create two accounts or spend one invitation twice:
+
+    * an existing account is returned with its current status and is never
+      modified, whatever the status;
+    * a missing account is created only when no invitation is required, or when
+      exactly one pending, unexpired invitation for the address is consumed in
+      the same transaction.
+
+    ``email`` must already be canonical (see ``account_policy.canonical_email``).
+    """
+    moment = _utc_seconds(now)
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = _find_account_row(conn, email)
+        if row is not None:
+            state = _account_state(row)
+            outcome = {
+                ACCOUNT_STATUS_ACTIVE: ADMIT_EXISTING,
+                ACCOUNT_STATUS_SUSPENDED: ADMIT_SUSPENDED,
+                ACCOUNT_STATUS_DELETED: ADMIT_DELETED,
+            }.get(state["status"], ADMIT_INVALID_STATUS)
+            return outcome, state
+
+        invitation_id: str | None = None
+        if require_invitation:
+            invitation = conn.execute(
+                "SELECT id FROM account_invitations "
+                "WHERE email = ? AND status = ? AND expires_at > ? "
+                "ORDER BY created_at DESC, id LIMIT 1",
+                (email, INVITATION_PENDING, moment),
+            ).fetchone()
+            if invitation is None:
+                return ADMIT_NOT_INVITED, None
+            invitation_id = str(invitation[0])
+
+        user_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO users (id, email, display_name, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, email, display_name, datetime.now(tz=timezone.utc).isoformat()),
+        )
+        if invitation_id is not None:
+            consumed = conn.execute(
+                "UPDATE account_invitations "
+                "SET status = ?, accepted_at = ?, accepted_user_id = ? "
+                "WHERE id = ? AND status = ?",
+                (INVITATION_ACCEPTED, moment, user_id, invitation_id, INVITATION_PENDING),
+            )
+            if consumed.rowcount != 1:
+                # Unreachable under BEGIN IMMEDIATE; fail closed and roll back
+                # the account insert rather than admit without the invitation.
+                raise sqlite3.IntegrityError("invitation was not consumable")
+        state = AccountState(
+            id=user_id,
+            email=email,
+            status=ACCOUNT_STATUS_ACTIVE,
+            session_epoch=0,
+        )
+    return ADMIT_CREATED, state
+
+
+def set_account_status(
+    user_id: str,
+    status: str,
+    *,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> AccountState | None:
+    """Set an account's status and revoke every session issued before now.
+
+    The session epoch is bumped on *every* call, including one that re-asserts
+    the current status: a session issued before a suspension must never become
+    valid again because the account was later reactivated. ``deleted`` is
+    terminal. Returns the new state, or None if the account does not exist.
+    """
+    if status not in ACCOUNT_STATUSES:
+        raise ValueError(f"Unsupported account status: {status!r}")
+    moment = _utc_seconds(now)
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        current = _account_state(row)
+        if current["status"] == ACCOUNT_STATUS_DELETED and status != ACCOUNT_STATUS_DELETED:
+            raise AccountTransitionError("A deleted account cannot be restored.")
+        conn.execute(
+            "UPDATE users SET status = ?, status_changed_at = ?, "
+            "session_epoch = session_epoch + 1 WHERE id = ?",
+            (status, moment, user_id),
+        )
+        updated = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(updated)
+
+
+def revoke_account_sessions(
+    user_id: str, db_path: str = DEFAULT_DB_PATH
+) -> AccountState | None:
+    """Invalidate every signed session issued for an account before now."""
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+            (user_id,),
+        )
+        row = conn.execute(
+            "SELECT id, email, status, session_epoch FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+    return _account_state(row) if row is not None else None
+
+
+def revoke_sessions_outside_allowlist(
+    allowed_emails: Collection[str], db_path: str = DEFAULT_DB_PATH
+) -> int:
+    """Revoke sessions of every account whose email is not allowlisted.
+
+    Called at startup when an allowlist is configured so that removing an
+    address from ``ALLOWED_EMAILS`` is a durable revocation: re-adding the
+    address later cannot resurrect a cookie issued before the removal. The
+    pre-tenant ``legacy@local`` owner is not a person and is skipped. Returns the
+    number of accounts whose epoch was advanced.
+    """
+    allowed = {email.strip().lower() for email in allowed_emails}
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = conn.execute("SELECT id, email FROM users").fetchall()
+        excluded = [
+            (str(user_id),)
+            for user_id, email in rows
+            if str(email).strip().lower() not in allowed
+            and str(email).strip().lower() != LEGACY_TENANT_EMAIL
+        ]
+        conn.executemany(
+            "UPDATE users SET session_epoch = session_epoch + 1 WHERE id = ?",
+            excluded,
+        )
+    return len(excluded)
+
+
+def create_account_invitation(
+    email: str,
+    *,
+    expires_at: datetime,
+    invited_by: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> str:
+    """Create a pending invitation, superseding any earlier one for the email.
+
+    ``email`` must already be canonical. Returns the new invitation id.
+    """
+    created = _utc_seconds(now)
+    expiry = _utc_seconds(expires_at)
+    if expiry <= created:
+        raise ValueError("An invitation must expire in the future.")
+    invitation_id = str(uuid.uuid4())
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            "UPDATE account_invitations SET status = ?, revoked_at = ? "
+            "WHERE email = ? AND status = ?",
+            (INVITATION_REVOKED, created, email, INVITATION_PENDING),
+        )
+        conn.execute(
+            "INSERT INTO account_invitations "
+            "(id, email, status, invited_by, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (invitation_id, email, INVITATION_PENDING, invited_by, created, expiry),
+        )
+    return invitation_id
+
+
+def revoke_account_invitations(
+    email: str,
+    *,
+    db_path: str = DEFAULT_DB_PATH,
+    now: datetime | None = None,
+) -> int:
+    """Revoke every pending invitation for a canonical email."""
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE account_invitations SET status = ?, revoked_at = ? "
+            "WHERE email = ? AND status = ?",
+            (INVITATION_REVOKED, _utc_seconds(now), email, INVITATION_PENDING),
+        )
+    return cursor.rowcount
+
+
+def list_account_invitations(
+    email: str, db_path: str = DEFAULT_DB_PATH
+) -> list[AccountInvitation]:
+    """Return the invitation history for a canonical email, newest first."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, created_at, expires_at, accepted_at, revoked_at "
+            "FROM account_invitations WHERE email = ? "
+            "ORDER BY created_at DESC, id",
+            (email,),
+        ).fetchall()
+    return [
+        {
+            "status": row[0],
+            "created_at": row[1],
+            "expires_at": row[2],
+            "accepted_at": row[3],
+            "revoked_at": row[4],
+        }
         for row in rows
     ]
 
