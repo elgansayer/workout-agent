@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Settings } from './settings';
+import { SettingsResponse } from './settings.types';
 
 const providers = [
   { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-3.8-flash' },
@@ -10,13 +11,15 @@ const providers = [
   { id: 'deepseek', name: 'DeepSeek', default_model: 'deepseek-chat' },
 ];
 
-const settingsResponse = {
+const settingsResponse: SettingsResponse = {
   user_prefs: {
     preferred_ai: 'claude',
     ai_model: 'claude-selected',
     goals: ['strength'],
     experience_level: 'advanced',
     constraints: [],
+    coaching_style: 'direct',
+    custom_rules: [],
   },
   user_keys: {
     hevy: { has_key: false, masked: null, model: null },
@@ -25,11 +28,37 @@ const settingsResponse = {
     openai: { has_key: false, masked: null, model: null },
     deepseek: { has_key: false, masked: null, model: null },
   },
+  hevy_connection: {
+    state: 'not_connected',
+    account_username: null,
+    account_id: null,
+    api_version: null,
+    capabilities: {},
+    tested_at: null,
+  },
+  credential_vault: { available: true, reason: null },
+  credential_events: [],
   ai_providers: providers,
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
   vapid_public_key: null,
+};
+
+const connectedHevyResponse: SettingsResponse = {
+  ...settingsResponse,
+  user_keys: {
+    ...settingsResponse.user_keys,
+    hevy: { has_key: true, masked: '••••••••key9', model: null },
+  },
+  hevy_connection: {
+    state: 'connected',
+    account_username: 'lifter42',
+    account_id: 'acct-1',
+    api_version: 'v1',
+    capabilities: { workouts: true, routines: false },
+    tested_at: '2026-11-05T10:00:00+00:00',
+  },
 };
 
 describe('Settings AI provider parity', () => {
@@ -45,10 +74,12 @@ describe('Settings AI provider parity', () => {
 
   afterEach(() => http.verify());
 
-  async function loadSettings(): Promise<ComponentFixture<Settings>> {
+  async function loadSettings(
+    response: SettingsResponse = settingsResponse,
+  ): Promise<ComponentFixture<Settings>> {
     const fixture = TestBed.createComponent(Settings);
     fixture.detectChanges();
-    http.expectOne('/api/settings').flush(settingsResponse);
+    http.expectOne('/api/settings').flush(response);
     await fixture.whenStable();
     fixture.detectChanges();
     return fixture;
@@ -127,5 +158,152 @@ describe('Settings AI provider parity', () => {
     request.flush('');
     http.expectOne('/api/settings').flush(settingsResponse);
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
+  });
+
+  it('verifies the stored Hevy credential without submitting a key', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({});
+    request.flush({
+      status: 'ok',
+      state: 'connected',
+      account_username: 'lifter42',
+      api_version: 'v1',
+      capabilities: { workouts: true, routines: false },
+      tested_at: '2026-11-05T10:00:00+00:00',
+      workout_count: 42,
+    });
+    http.expectOne('/api/settings').flush(connectedHevyResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.hevyStatus()).toContain('Connected as lifter42');
+    expect(component.hevyStatus()).toContain('API v1');
+  });
+
+  it('reports a rejected Hevy credential instead of a connection', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    request.flush(
+      { detail: 'Hevy rejected this API key. Generate a new key and try again.' },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    expect(component.hevyStatus()).toContain('rejected');
+    expect(component.hevyStatus()).not.toContain('Connected');
+  });
+
+  it('keeps an unverified Hevy key out of storage and reports the rejection', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.hevyKeyInput = 'synthetic-bad-key';
+
+    component.saveKey('hevy');
+
+    const request = http.expectOne('/api/settings/key');
+    expect(request.request.body.provider).toBe('hevy');
+    request.flush(
+      { detail: 'Hevy rejected this API key. Generate a new key and try again.' },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    expect(component.hevyStatus()).toContain('rejected');
+    // The rejected credential is not treated as a saved connection.
+    expect(component.hevyKeyInput).toBe('synthetic-bad-key');
+  });
+
+  it('tests a typed Hevy key without storing it', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.hevyKeyInput = 'synthetic-candidate-key';
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    expect(request.request.body.api_key).toBe('synthetic-candidate-key');
+    request.flush({
+      status: 'ok',
+      state: 'connected',
+      account_username: 'lifter42',
+      api_version: 'v1',
+      capabilities: { workouts: true },
+      tested_at: '2026-11-05T10:00:00+00:00',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.hevyStatus()).toContain('Connected as lifter42');
+    // The tested key stays in the form so it can be saved without retyping.
+    expect(component.hevyKeyInput).toBe('synthetic-candidate-key');
+    // Testing a candidate never activates it, so no connection is recorded.
+    expect(component.hevyConnection()?.state).toBe('not_connected');
+  });
+
+  it('shows the verified Hevy account returned by the settings API', async () => {
+    const fixture = await loadSettings(connectedHevyResponse);
+    const element = fixture.nativeElement as HTMLElement;
+    const connection = element.querySelector('#hevy-connection')?.textContent ?? '';
+
+    expect(connection).toContain('lifter42');
+    expect(connection).toContain('API v1');
+    expect(element.querySelector('.status.on')?.textContent).toContain('Connected');
+  });
+
+  it('flags a stored Hevy key that Hevy rejected', async () => {
+    const rejectedResponse: SettingsResponse = {
+      ...connectedHevyResponse,
+      hevy_connection: {
+        ...connectedHevyResponse.hevy_connection,
+        state: 'invalid',
+        account_username: null,
+        tested_at: '2026-11-06T09:00:00+00:00',
+      },
+    };
+    const fixture = await loadSettings(rejectedResponse);
+    const element = fixture.nativeElement as HTMLElement;
+
+    expect(element.querySelector('.status.off')?.textContent).toContain('Needs attention');
+    expect(element.querySelector('#hevy-connection')?.textContent).toContain('rejected');
+  });
+
+  it('flags a stored Hevy key that cannot read workouts', async () => {
+    const scopedResponse: SettingsResponse = {
+      ...connectedHevyResponse,
+      hevy_connection: {
+        ...connectedHevyResponse.hevy_connection,
+        state: 'insufficient_scope',
+        capabilities: { workouts: false },
+      },
+    };
+    const fixture = await loadSettings(scopedResponse);
+    const element = fixture.nativeElement as HTMLElement;
+
+    expect(element.querySelector('.status.off')?.textContent).toContain('Needs attention');
+    expect(element.querySelector('#hevy-connection')?.textContent).toContain('cannot read');
+  });
+
+  it('never describes an unconfirmed Hevy connection as connected', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    expect(
+      component.describeHevyConnection({
+        state: 'invalid',
+        account_username: 'lifter42',
+        account_id: 'acct-1',
+        api_version: 'v1',
+        capabilities: { workouts: true },
+        tested_at: '2026-11-05T10:00:00+00:00',
+      }),
+    ).toContain('Not connected');
   });
 });
