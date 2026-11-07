@@ -26,6 +26,18 @@ from urllib.parse import urlsplit
 
 from fastapi import Request
 from itsdangerous import BadSignature, SignatureExpired, TimestampSigner
+from ownership import (
+    CSRF_TOKENS_INDEX_SQL,
+    CSRF_TOKENS_TABLE_SQL,
+    USERS_TABLE_SQL,
+    AuthenticatedOwner,
+    UnauthenticatedOwnerError,
+    UnknownOwnerError,
+    install_owner_immutability_triggers,
+    owner_from_session,
+    owner_id,
+    registered_table,
+)
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
@@ -108,32 +120,30 @@ class CSRFTokenStore:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
         conn.execute("PRAGMA busy_timeout = 10000")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS csrf_tokens (
-                token_hash TEXT PRIMARY KEY,
-                session_hash TEXT NOT NULL,
-                user_id TEXT NOT NULL,
-                expires_at INTEGER NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_csrf_tokens_user_expiry "
-            "ON csrf_tokens (user_id, expires_at)"
+        # A CSRF nonce is a user-owned record, so it carries the same owner
+        # relationship as every other tenant-scoped table.
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(USERS_TABLE_SQL)
+        conn.execute(CSRF_TOKENS_TABLE_SQL)
+        conn.execute(CSRF_TOKENS_INDEX_SQL)
+        install_owner_immutability_triggers(
+            conn, tables=(registered_table("csrf_tokens"),)
         )
         return conn
 
     def issue(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         session_cookie: str,
         *,
         now: int | None = None,
     ) -> str:
+        user_id = owner_id(owner)
         issued_at = int(time.time()) if now is None else now
         token = secrets.token_urlsafe(_TOKEN_BYTES)
         with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+                raise UnknownOwnerError("The session owner does not exist")
             conn.execute("DELETE FROM csrf_tokens WHERE expires_at <= ?", (issued_at,))
             conn.execute(
                 "INSERT INTO csrf_tokens "
@@ -149,12 +159,13 @@ class CSRFTokenStore:
 
     def consume(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         session_cookie: str,
         token: str,
         *,
         now: int | None = None,
     ) -> bool:
+        user_id = owner_id(owner)
         if not token or len(token) > 512:
             return False
         checked_at = int(time.time()) if now is None else now
@@ -196,7 +207,9 @@ class SignedSessionIdentity:
         self.signer = TimestampSigner(secret_key)
         self.max_age_seconds = max_age_seconds
 
-    def user_id(self, session_cookie: str) -> str | None:
+    def owner(self, session_cookie: str) -> AuthenticatedOwner | None:
+        """Return the owner context for a validly signed, complete session."""
+
         try:
             signed_payload = self.signer.unsign(
                 session_cookie.encode("utf-8"),
@@ -213,11 +226,10 @@ class SignedSessionIdentity:
             return None
         if not isinstance(payload, dict):
             return None
-        user_id = payload.get("user_id")
-        user = payload.get("user")
-        if not isinstance(user_id, str) or not user_id or not user:
+        try:
+            return owner_from_session(payload)
+        except UnauthenticatedOwnerError:
             return None
-        return user_id
 
 
 class CSRFMiddleware(BaseHTTPMiddleware):
@@ -243,14 +255,16 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             if (origin := _normalise_origin(value)) is not None
         )
 
-    def _validated_session(self, request: Request) -> tuple[str, str] | None:
+    def _validated_session(
+        self, request: Request
+    ) -> tuple[AuthenticatedOwner, str] | None:
         session_cookie = request.cookies.get(self.session_cookie_name)
         if not session_cookie:
             return None
-        user_id = self.session_identity.user_id(session_cookie)
-        if not user_id:
+        owner = self.session_identity.owner(session_cookie)
+        if owner is None:
             return None
-        return user_id, session_cookie
+        return owner, session_cookie
 
     def _token_response(self, request: Request) -> Response:
         validated = self._validated_session(request)
@@ -259,8 +273,11 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         if not _origin_is_trusted(request, self.trusted_origins):
             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
 
-        user_id, session_cookie = validated
-        token = self.store.issue(user_id, session_cookie)
+        owner, session_cookie = validated
+        try:
+            token = self.store.issue(owner, session_cookie)
+        except UnknownOwnerError:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         response = JSONResponse(
             {"token": token, "expires_in": self.store.ttl_seconds},
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
@@ -295,14 +312,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             # path allowlist that could accidentally exempt a browser session.
             return await call_next(request)
 
-        user_id = self.session_identity.user_id(session_cookie)
-        if not user_id:
+        owner = self.session_identity.owner(session_cookie)
+        if owner is None:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         if not _origin_is_trusted(request, self.trusted_origins):
             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
 
         token = request.headers.get(CSRF_HEADER_NAME, "")
-        if not self.store.consume(user_id, session_cookie, token):
+        if not self.store.consume(owner, session_cookie, token):
             return JSONResponse(
                 {"detail": "Invalid or expired CSRF token"},
                 status_code=403,

@@ -7,11 +7,18 @@ import importlib
 import json
 
 import pytest
-from database import get_or_create_user, init_db, save_notification
+from database import init_db, save_notification
 from itsdangerous import TimestampSigner
+from ownership import owner_for_user
 from starlette.testclient import TestClient
 
 _SECRET = "notifications-test-secret-that-is-long-enough"
+
+
+def _user_id(db_file: str, email: str) -> str:
+    from database import get_or_create_user
+
+    return get_or_create_user(email, email.split("@", 1)[0], db_path=db_file)["id"]
 
 
 def _session_cookie(user_id: str) -> str:
@@ -34,18 +41,18 @@ def client_with_db(tmp_path, monkeypatch):
     import webapp.app as webapp_app
     importlib.reload(webapp_app)
 
-    u1 = get_or_create_user("user1@example.com", "User One", db_path=db_file)
-    u2 = get_or_create_user("user2@example.com", "User Two", db_path=db_file)
+    u1 = owner_for_user(db_file, _user_id(db_file, "user1@example.com"))
+    u2 = owner_for_user(db_file, _user_id(db_file, "user2@example.com"))
 
-    monkeypatch.setattr(webapp_app, "_check_api_auth", lambda request: u1["id"])
+    monkeypatch.setattr(webapp_app, "_check_api_auth", lambda request: u1)
 
     client = TestClient(webapp_app.app)
-    client.cookies.set("session", _session_cookie(u1["id"]))
-    return client, db_file, u1["id"], u2["id"]
+    client.cookies.set("session", _session_cookie(u1.user_id))
+    return client, db_file, u1, u2
 
 
 def test_get_notifications_empty(client_with_db) -> None:
-    client, db_file, u1, u2 = client_with_db
+    client, _db_file, _u1, _u2 = client_with_db
     response = client.get("/api/notifications")
     assert response.status_code == 200
     data = response.json()
@@ -83,7 +90,7 @@ def test_mark_notification_read_api(client_with_db) -> None:
 
 
 def test_mark_all_read_and_clear_api(client_with_db) -> None:
-    client, db_file, u1, u2 = client_with_db
+    client, db_file, u1, _u2 = client_with_db
     save_notification(u1, "T1", "M1", db_path=db_file)
     save_notification(u1, "T2", "M2", db_path=db_file)
 
@@ -104,7 +111,7 @@ def test_mark_all_read_and_clear_api(client_with_db) -> None:
 
 
 def test_test_coach_notification_endpoint(client_with_db) -> None:
-    client, db_file, u1, u2 = client_with_db
+    client, _db_file, _u1, _u2 = client_with_db
     resp = client.post("/api/notifications/test-coach")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"

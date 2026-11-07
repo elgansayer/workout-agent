@@ -9,6 +9,7 @@ import hevy_sync
 import pytest
 from config import Config
 from program import BLOCKS, Exercise, day_exercises
+from tenant_fixtures import synthetic_owner
 
 
 def test_every_programme_exercise_has_a_template_id() -> None:
@@ -251,29 +252,29 @@ def test_sync_routines_threads_user_id_through_persistence(
     monkeypatch.setattr(
         hevy_sync,
         "_migrate_titles",
-        lambda _config, *, user_id=None: captured.append(("migrate", user_id)),
+        lambda _config, *, owner: captured.append(("migrate", owner.user_id)),
     )
     monkeypatch.setattr(
         hevy_sync,
         "get_programme_start_date",
-        lambda _db, *, user_id=None: (
-            captured.append(("programme", user_id)) or date(2026, 9, 18)
+        lambda _db, *, owner: (
+            captured.append(("programme", owner.user_id)) or date(2026, 9, 18)
         ),
     )
     monkeypatch.setattr(
         hevy_sync,
         "_ensure_folder",
-        lambda _config, *, user_id=None: captured.append(("folder", user_id)) or None,
+        lambda _config, *, owner: captured.append(("folder", owner.user_id)) or None,
     )
     monkeypatch.setattr(
         hevy_sync,
         "_sync_session",
-        lambda _config, title, built, folder_id, notes, *, user_id=None: (
-            captured.append((title, user_id)) or f"{title}: up to date"
+        lambda _config, title, built, folder_id, notes, *, owner: (
+            captured.append((title, owner.user_id)) or f"{title}: up to date"
         ),
     )
 
-    statuses = hevy_sync.sync_routines(config, user_id="user-a")
+    statuses = hevy_sync.sync_routines(config, owner=synthetic_owner("user-a"))
 
     assert len(statuses) == 3
     assert captured

@@ -24,6 +24,7 @@ from database import (
 )
 from gemini_engine import generate_checkin_message
 from hevy_client import get_exercise_history, get_workout_count
+from ownership import AuthenticatedOwner
 from program import Block, day_exercises
 
 logger = logging.getLogger(__name__)
@@ -68,40 +69,40 @@ def _weeks_between(start: date, today: date) -> int:
     return max((today - start).days // 7, 0)
 
 
-def _last_checkin_date(config: Config, *, user_id: str | None = None) -> date:
-    value = get_meta(_KEY_LAST_DATE, config.database_path, user_id=user_id)
+def _last_checkin_date(config: Config, *, owner: AuthenticatedOwner) -> date:
+    value = get_meta(_KEY_LAST_DATE, config.database_path, owner=owner)
     if value:
         try:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return get_programme_start_date(config.database_path, user_id=user_id)
+    return get_programme_start_date(config.database_path, owner=owner)
 
 
 def _seed_baseline_if_missing(
     config: Config,
     total_count: int | None,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Initialise check-in tracking for only the acting user."""
-    if get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) is None:
-        set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
+    """Initialise check-in tracking for only the acting owner."""
+    if get_meta(_KEY_NUMBER, config.database_path, owner=owner) is None:
+        set_meta(_KEY_NUMBER, "0", config.database_path, owner=owner)
         set_meta(
             _KEY_LAST_DATE,
             datetime.now(tz=timezone.utc).date().isoformat(),
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
     if (
         total_count is not None
-        and get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id) is None
+        and get_meta(_KEY_LAST_COUNT, config.database_path, owner=owner) is None
     ):
         set_meta(
             _KEY_LAST_COUNT,
             str(total_count),
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
 
 
@@ -109,7 +110,7 @@ def due(
     config: Config,
     today: date | None = None,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> CheckinDue | None:
     """Return check-in details if one is due, otherwise None."""
     if today is None:
@@ -118,15 +119,15 @@ def due(
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
     )
-    _seed_baseline_if_missing(config, total_count, user_id=user_id)
+    _seed_baseline_if_missing(config, total_count, owner=owner)
 
-    last_date = _last_checkin_date(config, user_id=user_id)
+    last_date = _last_checkin_date(config, owner=owner)
     weeks = _weeks_between(last_date, today)
     number = (
-        int(get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) or "0") + 1
+        int(get_meta(_KEY_NUMBER, config.database_path, owner=owner) or "0") + 1
     )
 
-    last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id)
+    last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path, owner=owner)
     if total_count is not None and last_count_raw is not None:
         workouts_done = max(total_count - int(last_count_raw), 0)
         if workouts_done >= CHECKIN_WORKOUT_TARGET or weeks >= CHECKIN_MAX_WEEKS:
@@ -206,12 +207,12 @@ def _analyse(
     config: Config,
     block: Block,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[LiftReview]:
     """Compare planned targets to logged data for each lift in the block."""
     if not config.hevy_api_key:
         return []
-    start_iso = _last_checkin_date(config, user_id=user_id).isoformat()
+    start_iso = _last_checkin_date(config, owner=owner).isoformat()
     reviews: list[LiftReview] = []
     seen: set[str] = set()
     for day in (1, 2, 3):
@@ -276,13 +277,13 @@ def run_checkin(
     week: int,
     block: Block,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> str:
-    """Build the acting user's check-in with their selected AI provider."""
-    reviews = _analyse(config, block, user_id=user_id)
+    """Build the acting owner's check-in with their selected AI provider."""
+    reviews = _analyse(config, block, owner=owner)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
-        user_id=user_id,
+        owner=owner,
         server_gemini_key=config.gemini_api_key,
         server_gemini_model=config.gemini_model,
         db_path=config.database_path,
@@ -305,29 +306,29 @@ def record(
     message: str,
     today: date | None = None,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Persist the completed check-in and reset this user's tracking baseline."""
+    """Persist the completed check-in and reset this owner's tracking baseline."""
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     set_meta(
         _KEY_NUMBER,
         str(due_info.number),
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
     set_meta(
         _KEY_LAST_DATE,
         today.isoformat(),
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
     if due_info.total_count is not None:
         set_meta(
             _KEY_LAST_COUNT,
             str(due_info.total_count),
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
     save_checkin(
         due_info.number,
@@ -336,14 +337,13 @@ def record(
         due_info.weeks_elapsed,
         message,
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
-    if user_id:
-        save_notification(
-            user_id,
-            title=f"✨ Coach Check-in #{due_info.number} Ready",
-            message=f"Reviewed {due_info.workouts_done} workouts across {due_info.weeks_elapsed} weeks.",
-            type="coach",
-            link="/checkins",
-            db_path=config.database_path,
-        )
+    save_notification(
+        owner,
+        title=f"✨ Coach Check-in #{due_info.number} Ready",
+        message=f"Reviewed {due_info.workouts_done} workouts across {due_info.weeks_elapsed} weeks.",
+        type="coach",
+        link="/checkins",
+        db_path=config.database_path,
+    )

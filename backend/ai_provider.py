@@ -14,6 +14,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
+from ownership import AuthenticatedOwner
+
 logger = logging.getLogger(__name__)
 
 
@@ -260,7 +262,7 @@ _DISPLAY_NAMES = {
 
 
 def resolve_provider(
-    user_id: str | None = None,
+    owner: AuthenticatedOwner | None = None,
     *,
     server_gemini_key: str | None = None,
     server_gemini_model: str | None = None,
@@ -272,7 +274,7 @@ def resolve_provider(
     from ai_resolver import resolve_provider as resolve
 
     return resolve(
-        user_id=user_id,
+        owner=owner,
         server_gemini_key=server_gemini_key,
         server_gemini_model=server_gemini_model,
         fallback_api_key=fallback_api_key,

@@ -48,6 +48,7 @@ from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from ownership import AuthenticatedOwner, owner_for_user
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -66,25 +67,29 @@ logging.basicConfig(
 logger = logging.getLogger("workout_agent")
 
 
-def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
+def _deliver(
+    config: Config,
+    message: str,
+    preview: bool,
+    owner: AuthenticatedOwner,
+) -> int:
     """Print the message in preview mode, otherwise send it via Web Push."""
-    if user_id:
-        try:
-            first_line = (
-                message.strip().split("\n")[0]
-                if message
-                else "Today's workout plan is ready."
-            )
-            save_notification(
-                user_id,
-                title="🏋️ Today's Workout Plan Ready",
-                message=first_line,
-                type="coach",
-                link="/plan",
-                db_path=config.database_path,
-            )
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not save in-app notification: %s", e)
+    try:
+        first_line = (
+            message.strip().split("\n")[0]
+            if message
+            else "Today's workout plan is ready."
+        )
+        save_notification(
+            owner,
+            title="🏋️ Today's Workout Plan Ready",
+            message=first_line,
+            type="coach",
+            link="/plan",
+            db_path=config.database_path,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Could not save in-app notification: %s", e)
 
     if preview:
         print(message)
@@ -96,10 +101,11 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
         logger.error("VAPID_PRIVATE_KEY is not configured.")
         return 2
 
-    subscriptions = get_push_subscriptions(user_id, config.database_path)
+    subscriptions = get_push_subscriptions(owner, config.database_path)
     if not subscriptions:
         logger.warning(
-            f"No push subscriptions found for user {user_id}. Plan was not delivered."
+            f"No push subscriptions found for user {owner.user_id}. "
+            "Plan was not delivered."
         )
         return 2
 
@@ -120,13 +126,13 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
 def _sync_hevy_routines(
     config: Config,
     *,
-    user_id: str,
+    owner: AuthenticatedOwner,
 ) -> list[str]:
-    """Keep the acting user's Hevy routines ready to start."""
+    """Keep the acting owner's Hevy routines ready to start."""
     if not config.hevy_api_key or not config.hevy_sync_routines:
         return []
     try:
-        statuses = sync_routines(config, user_id=user_id)
+        statuses = sync_routines(config, owner=owner)
         for status in statuses:
             logger.info("Hevy routine %s", status)
         return statuses
@@ -153,13 +159,13 @@ def _maybe_check_in(
     block: Block,
     preview: bool,
     *,
-    user_id: str,
+    owner: AuthenticatedOwner,
 ) -> None:
     """Run a programme check-in if one is due, delivering it as its own message."""
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config, user_id=user_id)
+        due_info = checkin.due(config, owner=owner)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
@@ -171,10 +177,10 @@ def _maybe_check_in(
         due_info.workouts_done,
         due_info.weeks_elapsed,
     )
-    message = checkin.run_checkin(config, due_info, week, block, user_id=user_id)
-    _deliver(config, message, preview, user_id)
+    message = checkin.run_checkin(config, due_info, week, block, owner=owner)
+    _deliver(config, message, preview, owner)
     if not preview:
-        checkin.record(config, due_info, message, user_id=user_id)
+        checkin.record(config, due_info, message, owner=owner)
 
 
 def _maybe_self_review(
@@ -184,7 +190,7 @@ def _maybe_self_review(
     block: Block,
     preview: bool,
     *,
-    user_id: str,
+    owner: AuthenticatedOwner,
 ) -> None:
     """On the configured weekday, send a self-review of how training is going."""
     if not config.self_review_enabled:
@@ -192,15 +198,15 @@ def _maybe_self_review(
     if datetime.now(tz=timezone.utc).date().weekday() != config.self_review_weekday:
         return
     review = insights_engine.build_insights(
-        get_progress_history(db_path=config.database_path, user_id=user_id),
-        get_body_metrics(db_path=config.database_path, user_id=user_id),
+        get_progress_history(db_path=config.database_path, owner=owner),
+        get_body_metrics(db_path=config.database_path, owner=owner),
         recovery,
     )
     if not review.lifts:
         logger.info("Self-review skipped: not enough logged history yet.")
         return
     logger.info("Self-review due: %s", review.headline)
-    _deliver(config, review.as_message(week, block.name), preview, user_id)
+    _deliver(config, review.as_message(week, block.name), preview, owner)
 
 
 def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -> str:
@@ -214,37 +220,40 @@ def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -
 def _resolve_provider(
     config: Config,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner | None = None,
 ) -> AIProvider:
-    """Resolve the AI provider for a run, scoping to *user_id* when given."""
+    """Resolve the AI provider for a run, scoping to *owner* when given."""
     return resolve_provider(
-        user_id=user_id,
+        owner=owner,
         db_path=config.database_path,
         server_gemini_key=config.gemini_api_key,
         server_gemini_model=config.gemini_model,
     )
 
 
-def _resolve_run_user(db_path: str) -> str:
-    """Return the user_id the scheduled run should operate under.
+def _resolve_run_owner(db_path: str) -> AuthenticatedOwner:
+    """Return the owner context the scheduled run should operate under.
 
     Prefers $SCHEDULER_USER_ID (set by scheduler.py when dispatching per-user).
-    Falls back to the first legacy user for single-tenant backwards compat.
+    Falls back to the stable legacy tenant for single-tenant backwards compat.
+    The identifier is always resolved against the stored users table, so a run
+    can never act for a tenant that does not exist.
     """
     env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
     if env_id:
-        return env_id
-    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+        return owner_for_user(db_path, env_id)
+    legacy_id = get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+    return owner_for_user(db_path, legacy_id)
 
 
-def _scope_config_to_user(config: Config, user_id: str) -> Config:
-    """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
-    key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
+def _scope_config_to_owner(config: Config, owner: AuthenticatedOwner) -> Config:
+    """Resolve owner-owned connector secrets and fail closed on shared fallbacks."""
+    key_record = get_user_api_key(owner, "hevy", db_path=config.database_path)
     user_hevy_key = None
     if key_record:
         user_hevy_key = str(key_record.get("api_key") or "").strip() or None
 
-    is_legacy_user = user_id == get_legacy_user_id(config.database_path)
+    is_legacy_user = owner.user_id == get_legacy_user_id(config.database_path)
     hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
     return replace(
         config,
@@ -262,7 +271,7 @@ def _scope_config_to_user(config: Config, user_id: str) -> Config:
     )
 
 
-def run(preview: bool = False, user_id: str | None = None) -> int:
+def run(preview: bool = False, owner: AuthenticatedOwner | None = None) -> int:
     try:
         config = Config.load()
     except ConfigError as exc:
@@ -271,23 +280,23 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     init_db(config.database_path)
 
-    if user_id is None:
-        user_id = _resolve_run_user(config.database_path)
-    config = _scope_config_to_user(config, user_id)
-    logger.info("Running daily cycle for user %s", user_id)
+    if owner is None:
+        owner = _resolve_run_owner(config.database_path)
+    config = _scope_config_to_owner(config, owner)
+    logger.info("Running daily cycle for user %s", owner.user_id)
 
-    statuses = _sync_hevy_routines(config, user_id=user_id)
+    statuses = _sync_hevy_routines(config, owner=owner)
     footer = _changes_footer(statuses)
 
     today = datetime.now(tz=timezone.utc).date()
     when = today.isoformat()
     week = week_in_cycle(
-        get_programme_start_date(config.database_path, user_id=user_id), today
+        get_programme_start_date(config.database_path, owner=owner), today
     )
     block = block_for_week(week)
     logger.info("Week %s of 12, Block %s: %s.", week, block.number, block.name)
 
-    _maybe_check_in(config, week, block, preview, user_id=user_id)
+    _maybe_check_in(config, week, block, preview, owner=owner)
 
     recovery = read_recovery_metrics(config.health_connect_file)
     synced = google_health_client.sync_body_metrics(
@@ -295,6 +304,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         config.google_health_client_secret,
         config.google_health_refresh_token,
         config.database_path,
+        owner=owner,
     )
     if synced:
         # Live scale readings take precedence over a stale file.
@@ -304,7 +314,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             body_metrics_from_recovery(recovery),
             when,
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
 
     _maybe_self_review(
@@ -313,11 +323,11 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         week,
         block,
         preview,
-        user_id=user_id,
+        owner=owner,
     )
 
     try:
-        provider = _resolve_provider(config, user_id=user_id)
+        provider = _resolve_provider(config, owner=owner)
     except (ImportError, ValueError) as exc:
         logger.error("AI provider configuration failed: %s", exc)
         return 1
@@ -340,9 +350,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
                 message,
                 guidance.as_text() if guidance else "",
                 config.database_path,
-                user_id=user_id,
+                owner=owner,
             )
-        return _deliver(config, _compose(message, guidance, footer), preview, user_id)
+        return _deliver(config, _compose(message, guidance, footer), preview, owner)
 
     logger.info("Today is %s: day %s, %s.", today.strftime("%A"), day, day_focus(day))
 
@@ -351,19 +361,19 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     )
     summary = parse_workout(recent_workout, rep_targets(block))
     if not preview:
-        save_workout(recent_workout, config.database_path, user_id=user_id)
-        save_progress(summary, config.database_path, user_id=user_id)
+        save_workout(recent_workout, config.database_path, owner=owner)
+        save_progress(summary, config.database_path, owner=owner)
 
-    history = get_recent_bests(config.database_path, user_id=user_id)
+    history = get_recent_bests(config.database_path, owner=owner)
 
     review = insights_engine.build_insights(
-        get_progress_history(db_path=config.database_path, user_id=user_id),
-        get_body_metrics(db_path=config.database_path, user_id=user_id),
+        get_progress_history(db_path=config.database_path, owner=owner),
+        get_body_metrics(db_path=config.database_path, owner=owner),
         recovery,
     )
     logger.info("%s", review.headline)
 
-    logs = get_daily_logs(limit=5, db_path=config.database_path, user_id=user_id)
+    logs = get_daily_logs(limit=5, db_path=config.database_path, owner=owner)
     last_plan = None
     for log in logs:
         if log.get("day") is not None and log.get("plan"):
@@ -395,9 +405,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             plan,
             guidance.as_text() if guidance else "",
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
-    return _deliver(config, _compose(plan, guidance, footer), preview, user_id)
+    return _deliver(config, _compose(plan, guidance, footer), preview, owner)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -428,8 +438,12 @@ if __name__ == "__main__":
 
         config = Config.load()
         init_db(config.database_path)
-        sync_user_id = args.user_id or _resolve_run_user(config.database_path)
-        config = _scope_config_to_user(config, sync_user_id)
+        sync_owner = (
+            owner_for_user(config.database_path, args.user_id)
+            if args.user_id
+            else _resolve_run_owner(config.database_path)
+        )
+        config = _scope_config_to_owner(config, sync_owner)
         api_key = config.hevy_api_key
         if not api_key:
             logger.error("No Hevy API key is configured for this user.")
@@ -437,11 +451,16 @@ if __name__ == "__main__":
         result = sync_all(
             api_key,
             config.database_path,
-            user_id=sync_user_id,
+            owner=sync_owner,
         )
         if "error" in result:
             logger.error("%s", result["error"])
             sys.exit(1)
         logger.info("%s", result)
         sys.exit(0)
-    sys.exit(run(preview=args.preview, user_id=args.user_id))
+    owner = None
+    if args.user_id:
+        config = Config.load()
+        init_db(config.database_path)
+        owner = owner_for_user(config.database_path, args.user_id)
+    sys.exit(run(preview=args.preview, owner=owner))

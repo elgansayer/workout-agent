@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
 from database import get_all_users, init_db
+from ownership import UnknownOwnerError, owner_for_user
 
 logging.basicConfig(
     level=logging.INFO,
@@ -172,7 +173,13 @@ def run_coaching(config: Config) -> int:
             result = max(result, 1)
             continue
         try:
-            result = max(result, main_run(preview=False, user_id=user_id))
+            owner = owner_for_user(config.database_path, user_id)
+        except UnknownOwnerError:
+            logger.exception("Daily coaching skipped for unknown user %s.", user_id)
+            result = max(result, 1)
+            continue
+        try:
+            result = max(result, main_run(preview=False, owner=owner))
         except Exception:
             logger.exception("Daily coaching run failed for user %s.", user_id)
             result = max(result, 1)
@@ -187,7 +194,12 @@ def run_daily_insight(config: Config) -> None:
     for user in get_all_users(config.database_path):
         user_id = user["id"]
         try:
-            generate_daily_header(config, user_id=user_id)
+            owner = owner_for_user(config.database_path, user_id)
+        except UnknownOwnerError:
+            logger.exception("Daily insight skipped for unknown user %s.", user_id)
+            continue
+        try:
+            generate_daily_header(config, owner=owner)
         except Exception:
             logger.exception("Daily insight generation failed for user %s.", user_id)
 
@@ -200,7 +212,12 @@ def run_weekly_correlations(config: Config) -> None:
     for user in get_all_users(config.database_path):
         user_id = user["id"]
         try:
-            generate_weekly_correlations(config, user_id=user_id)
+            owner = owner_for_user(config.database_path, user_id)
+        except UnknownOwnerError:
+            logger.exception("Weekly correlations skipped for unknown user %s.", user_id)
+            continue
+        try:
+            generate_weekly_correlations(config, owner=owner)
         except Exception:
             logger.exception("Weekly correlations failed for user %s.", user_id)
 

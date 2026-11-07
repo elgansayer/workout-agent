@@ -16,6 +16,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
+from ownership import (
+    CSRF_TOKENS_INDEX_SQL,
+    CSRF_TOKENS_TABLE_SQL,
+    USERS_TABLE_SQL,
+    AuthenticatedOwner,
+    OwnershipConstraintError,
+    enforce_ownership_constraints,
+    install_owner_immutability_triggers,
+    owner_id,
+    registered_table,
+)
 from program import SPLIT_NAME, TOTAL_DAYS
 
 logger = logging.getLogger(__name__)
@@ -41,6 +52,11 @@ def _connect(db_path: str = DEFAULT_DB_PATH) -> Iterator[sqlite3.Connection]:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
+    # Foreign keys are declared on every user-owned table.  SQLite ignores them
+    # unless enforcement is switched on for the connection, so the pragma is
+    # part of the ownership contract rather than an optional hardening step.
+    conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
         conn.commit()
@@ -67,7 +83,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS programme_state (
-                user_id TEXT PRIMARY KEY REFERENCES users(id),
+                user_id TEXT NOT NULL PRIMARY KEY REFERENCES users(id),
                 current_day INTEGER NOT NULL DEFAULT 1,
                 split_name TEXT NOT NULL
             )
@@ -258,18 +274,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         )
 
         # ---- Multi-user tables (Sprint 1) ----
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                display_name TEXT,
-                created_at TEXT NOT NULL,
-                timezone TEXT DEFAULT 'UTC',
-                units TEXT DEFAULT 'metric'
-            )
-            """,
-        )
+        cursor.execute(USERS_TABLE_SQL)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_api_keys (
@@ -329,7 +334,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_preferences (
-                user_id TEXT PRIMARY KEY REFERENCES users(id),
+                user_id TEXT NOT NULL PRIMARY KEY REFERENCES users(id),
                 goals TEXT,
                 constraints TEXT,
                 experience_level TEXT DEFAULT 'intermediate',
@@ -822,6 +827,250 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # CSRF nonces are user-owned too, so they are created inside the audited
+        # schema (the token store still creates them lazily for standalone use).
+        cursor.execute(CSRF_TOKENS_TABLE_SQL)
+        cursor.execute(CSRF_TOKENS_INDEX_SQL)
+
+        # ---- Database-level ownership constraints (issue #770) ----
+        # Every user-owned table must have a non-null owner column that
+        # references users(id), an index whose first column is the owner and a
+        # trigger that makes the owner immutable.  Legacy databases are rebuilt
+        # to that contract here (a rebuild drops the old table's triggers), the
+        # triggers are then (re)installed, and the whole schema is audited so a
+        # drifted table fails closed at startup.
+        _harden_user_scoped_ownership(cursor, legacy)
+        install_owner_immutability_triggers(cursor.connection)
+        enforce_ownership_constraints(cursor.connection)
+
+
+_OWNER_COLUMN_SQL = "TEXT NOT NULL REFERENCES users(id)"
+_OWNER_PRIMARY_KEY_SQL = "TEXT NOT NULL PRIMARY KEY REFERENCES users(id)"
+_OWNER_CASCADE_COLUMN_SQL = "TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE"
+
+#: Canonical column definitions for the tables whose ownership constraint has
+#: to be (re)built.  The owner column is always last or first, so the copy
+#: statement can map source rows onto the rebuilt table deterministically.
+_OWNED_TABLE_SCHEMAS: dict[str, tuple[tuple[str, str], ...]] = {
+    "workout_history": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("date", "TEXT NOT NULL"),
+        ("hevy_payload", "TEXT NOT NULL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "exercise_progress": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("date", "TEXT NOT NULL"),
+        ("exercise_name", "TEXT NOT NULL"),
+        ("top_weight_kg", "REAL"),
+        ("top_reps", "INTEGER"),
+        ("sets", "INTEGER NOT NULL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "body_metrics": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("date", "TEXT NOT NULL"),
+        ("weight_kg", "REAL"),
+        ("body_fat_pct", "REAL"),
+        ("muscle_pct", "REAL"),
+        ("resting_hr", "INTEGER"),
+        ("hrv", "REAL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "check_ins": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("number", "INTEGER NOT NULL"),
+        ("date", "TEXT NOT NULL"),
+        ("workouts_done", "INTEGER NOT NULL"),
+        ("weeks", "INTEGER NOT NULL"),
+        ("message", "TEXT NOT NULL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "chat_messages": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("role", "TEXT NOT NULL"),
+        ("content", "TEXT NOT NULL"),
+        ("created_at", "TEXT NOT NULL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "daily_log": (
+        ("id", "INTEGER PRIMARY KEY AUTOINCREMENT"),
+        ("date", "TEXT NOT NULL"),
+        ("day", "INTEGER"),
+        ("focus", "TEXT NOT NULL"),
+        ("carb_tier", "TEXT NOT NULL"),
+        ("plan", "TEXT NOT NULL"),
+        ("lifestyle", "TEXT NOT NULL"),
+        ("user_id", _OWNER_COLUMN_SQL),
+    ),
+    "programme_state": (
+        ("user_id", _OWNER_PRIMARY_KEY_SQL),
+        ("current_day", "INTEGER NOT NULL DEFAULT 1"),
+        ("split_name", "TEXT NOT NULL"),
+    ),
+    "user_preferences": (
+        ("user_id", _OWNER_PRIMARY_KEY_SQL),
+        ("goals", "TEXT"),
+        ("constraints", "TEXT"),
+        ("experience_level", "TEXT DEFAULT 'intermediate'"),
+        ("coaching_style", "TEXT DEFAULT 'direct'"),
+        ("preferred_ai", "TEXT DEFAULT 'gemini'"),
+        ("ai_model", "TEXT"),
+        ("custom_rules", "TEXT"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ),
+    "csrf_tokens": (
+        ("token_hash", "TEXT PRIMARY KEY"),
+        ("session_hash", "TEXT NOT NULL"),
+        ("user_id", _OWNER_CASCADE_COLUMN_SQL),
+        ("expires_at", "INTEGER NOT NULL"),
+    ),
+}
+
+#: Ephemeral single-use nonces carry no durable user data.  A schema upgrade
+#: purges them instead of copying rows, which merely makes the browser request a
+#: fresh token and means an orphaned nonce can never block startup.
+_EPHEMERAL_OWNED_TABLES = frozenset({"csrf_tokens"})
+
+
+def _owned_table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
+    row = cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _expected_on_delete(table: str) -> str:
+    """Return the registered foreign-key delete policy for *table*."""
+
+    return registered_table(table).on_delete.upper()
+
+
+def _owner_constraints_satisfied(cursor: sqlite3.Cursor, table: str) -> bool:
+    """Return whether the owner column is non-null and references users(id).
+
+    The foreign key must also carry the delete policy declared in the
+    ownership registry, so an upgraded database cannot keep a weaker or
+    different policy than a fresh one.
+    """
+
+    columns = cursor.execute(f"PRAGMA table_info({table})").fetchall()
+    owner = next((row for row in columns if row[1] == "user_id"), None)
+    if owner is None or not owner[3]:
+        return False
+    expected = _expected_on_delete(table)
+    foreign_keys = cursor.execute(f"PRAGMA foreign_key_list({table})").fetchall()
+    return any(
+        row[2] == "users"
+        and row[3] == "user_id"
+        and row[4] == "id"
+        and str(row[6]).upper() == expected
+        for row in foreign_keys
+    )
+
+
+def _create_owned_table_sql(
+    table_name: str,
+    columns: tuple[tuple[str, str], ...],
+) -> str:
+    definitions = ",\n    ".join(f"{name} {definition}" for name, definition in columns)
+    return f"CREATE TABLE {table_name} (\n    {definitions}\n)"
+
+
+def _rebuild_owned_table(
+    cursor: sqlite3.Cursor,
+    table: str,
+    columns: tuple[tuple[str, str], ...],
+    legacy_user_id: str,
+) -> None:
+    """Rebuild *table* so its owner column is non-null and references users(id).
+
+    The rebuild keeps every stored row.  Rows without an owner are assigned to
+    the stable legacy tenant, which is the same backfill the earlier tenant
+    migrations use.  It fails closed, leaving the database untouched, when it
+    would otherwise lose data: rows owned by a user that does not exist are
+    never silently reassigned to another tenant, and a source column the
+    canonical schema does not know is never silently dropped.
+    """
+
+    source_columns = {
+        row[1] for row in cursor.execute(f"PRAGMA table_info({table})")
+    }
+    unexpected = source_columns - {name for name, _ in columns}
+    if unexpected:
+        raise OwnershipConstraintError(
+            f"Cannot enforce ownership on {table}: unexpected column(s) "
+            f"{sorted(unexpected)} would be dropped"
+        )
+    if table in _EPHEMERAL_OWNED_TABLES:
+        cursor.execute(f"DELETE FROM {table}")
+    elif "user_id" in source_columns:
+        orphaned = cursor.execute(
+            f"SELECT COUNT(*) FROM {table} "
+            "WHERE user_id IS NOT NULL AND user_id NOT IN (SELECT id FROM users)"
+        ).fetchone()[0]
+        if orphaned:
+            raise OwnershipConstraintError(
+                f"Cannot enforce ownership on {table}: {orphaned} row(s) belong to "
+                "a user that does not exist. Restore the missing users or remove "
+                "the orphaned rows, then restart."
+            )
+    index_statements = [
+        row[0]
+        for row in cursor.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type = 'index' AND tbl_name = ? AND sql IS NOT NULL",
+            (table,),
+        ).fetchall()
+    ]
+
+    target = f"{table}_owner"
+    cursor.execute(f"DROP TABLE IF EXISTS {target}")
+    cursor.execute(_create_owned_table_sql(target, columns))
+
+    copy_columns: list[str] = []
+    copy_values: list[str] = []
+    parameters: list[Any] = []
+    for name, _ in columns:
+        if name == "user_id":
+            copy_columns.append("user_id")
+            if "user_id" in source_columns:
+                copy_values.append("COALESCE(user_id, ?)")
+            else:
+                copy_values.append("?")
+            parameters.append(legacy_user_id)
+            continue
+        if name not in source_columns:
+            raise OwnershipConstraintError(
+                f"Cannot rebuild {table}: column {name} is missing"
+            )
+        copy_columns.append(name)
+        copy_values.append(name)
+
+    cursor.execute(
+        f"INSERT INTO {target} ({', '.join(copy_columns)}) "
+        f"SELECT {', '.join(copy_values)} FROM {table}",
+        parameters,
+    )
+    cursor.execute(f"DROP TABLE {table}")
+    cursor.execute(f"ALTER TABLE {target} RENAME TO {table}")
+    for statement in index_statements:
+        cursor.execute(statement)
+
+
+def _harden_user_scoped_ownership(
+    cursor: sqlite3.Cursor,
+    legacy_user_id: str,
+) -> None:
+    """Bring every user-owned table up to the ownership contract."""
+
+    for table, columns in _OWNED_TABLE_SCHEMAS.items():
+        if not _owned_table_exists(cursor, table):
+            continue
+        if _owner_constraints_satisfied(cursor, table):
+            continue
+        _rebuild_owned_table(cursor, table, columns, legacy_user_id)
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -855,10 +1104,10 @@ def get_legacy_user_id(db_path: str = DEFAULT_DB_PATH) -> str:
 
 
 def get_current_day(
-    db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
+    db_path: str = DEFAULT_DB_PATH, *, owner: AuthenticatedOwner
 ) -> int:
-    """Return the current day in the cycle (1-6)."""
-    uid = user_id or get_legacy_user_id(db_path)
+    """Return the current day in the cycle (1-6) for *owner*."""
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT current_day FROM programme_state WHERE user_id = ?",
@@ -867,10 +1116,12 @@ def get_current_day(
     return int(row[0]) if row else 1
 
 
-def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
-    """Move to the next day, wrapping from TOTAL_DAYS back to 1."""
-    uid = user_id or get_legacy_user_id(db_path)
-    current = get_current_day(db_path, user_id=uid)
+def advance_day(
+    db_path: str = DEFAULT_DB_PATH, *, owner: AuthenticatedOwner
+) -> int:
+    """Move the owner to the next day, wrapping from TOTAL_DAYS back to 1."""
+    uid = owner_id(owner)
+    current = get_current_day(db_path, owner=owner)
     nxt = current + 1 if current < TOTAL_DAYS else 1
     with _connect(db_path) as conn:
         conn.execute(
@@ -886,13 +1137,13 @@ def save_workout(
     db_path: str = DEFAULT_DB_PATH,
     when: str | None = None,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
     """Persist a raw Hevy payload for historical reference."""
     if payload is None:
         return
     today = when or datetime.now(tz=timezone.utc).date().isoformat()
-    uid = user_id or get_legacy_user_id(db_path)
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
@@ -902,10 +1153,13 @@ def save_workout(
 
 
 def get_recent_hevy_logs(
-    limit: int = 14, db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
+    limit: int = 14,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
     """Return recent raw Hevy payloads for autonomous analysis."""
-    uid = user_id or get_legacy_user_id(db_path)
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT hevy_payload FROM workout_history WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT ?",
@@ -934,12 +1188,9 @@ def save_progress(
     summary: WorkoutSummary | None,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Persist the per-exercise top sets from a parsed workout summary.
-
-    If *user_id* is provided, the progress is scoped to that user.
-    """
+    """Persist the per-exercise top sets from a parsed workout summary."""
     if summary is None:
         return
     today = (
@@ -947,7 +1198,7 @@ def save_progress(
         if summary.date
         else datetime.now(tz=timezone.utc).date().isoformat()
     )
-    uid = user_id or get_legacy_user_id(db_path)
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         for exercise in summary.exercises:
             conn.execute(
@@ -970,37 +1221,24 @@ def save_progress(
 def get_recent_bests(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> dict[str, dict[str, Any]]:
-    """Return the most recently logged top set for each exercise by name.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Return the most recently logged top set for each exercise by name."""
     # Performance Optimization (Bolt ⚡): Delegate the MAX(id) operation directly
     # into the main SELECT clause. SQLite guarantees un-aggregated columns correspond
     # to the MAX value, allowing direct use of idx_exercise_progress_user_name_id index
     # without slow subquery lookups.
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date, MAX(id)
-                FROM exercise_progress
-                WHERE user_id = ?
-                GROUP BY exercise_name
-                ORDER BY exercise_name
-                """,
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date, MAX(id)
-                FROM exercise_progress
-                GROUP BY exercise_name
-                ORDER BY exercise_name
-                """,
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT exercise_name, top_weight_kg, top_reps, sets, date, MAX(id)
+            FROM exercise_progress
+            WHERE user_id = ?
+            GROUP BY exercise_name
+            ORDER BY exercise_name
+            """,
+            (owner_id(owner),),
+        ).fetchall()
 
     bests: dict[str, dict[str, Any]] = {}
     for name, weight, reps, sets, when, _ in rows:
@@ -1017,45 +1255,27 @@ def get_progress_history(
     limit_per_exercise: int = 12,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> dict[str, list[dict[str, Any]]]:
-    """Return recent logged top sets per exercise, oldest first within each.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Return recent logged top sets per exercise, oldest first within each."""
     # Performance Optimization (Bolt ⚡): Use a window function to limit the
     # rows returned per exercise at the database level, preventing memory
     # exhaustion and reducing processing time as the database grows.
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
-                FROM (
-                    SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
-                           ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
-                    FROM exercise_progress
-                    WHERE user_id = ?
-                )
-                WHERE rn <= ?
-                ORDER BY exercise_name, id ASC
-                """,
-                (user_id, limit_per_exercise),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
-                FROM (
-                    SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
-                           ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
-                    FROM exercise_progress
-                )
-                WHERE rn <= ?
-                ORDER BY exercise_name, id ASC
-                """,
-                (limit_per_exercise,),
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT exercise_name, top_weight_kg, top_reps, sets, date
+            FROM (
+                SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
+                       ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
+                FROM exercise_progress
+                WHERE user_id = ?
+            )
+            WHERE rn <= ?
+            ORDER BY exercise_name, id ASC
+            """,
+            (owner_id(owner), limit_per_exercise),
+        ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
     for name, weight, reps, sets, when in rows:
@@ -1073,41 +1293,27 @@ def get_progress_history(
 def get_session_volumes(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
     """Return a per-session training-load proxy, oldest first.
 
     Only the top set of each exercise is stored, so this is an estimate of
     relative session load (sum of top_weight x top_reps x sets), useful for
     spotting volume trends rather than an exact tonnage figure.
-
-    If *user_id* is provided, results are scoped to that user.
     """
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT date,
-                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                       COUNT(*) AS exercises
-                FROM exercise_progress
-                WHERE user_id = ?
-                GROUP BY date
-                ORDER BY date ASC
-                """,
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT date,
-                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                       COUNT(*) AS exercises
-                FROM exercise_progress
-                GROUP BY date
-                ORDER BY date ASC
-                """,
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT date,
+                   SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                   COUNT(*) AS exercises
+            FROM exercise_progress
+            WHERE user_id = ?
+            GROUP BY date
+            ORDER BY date ASC
+            """,
+            (owner_id(owner),),
+        ).fetchall()
     return [
         {"date": when, "volume": float(volume or 0), "exercises": int(exercises)}
         for when, volume, exercises in rows
@@ -1117,40 +1323,26 @@ def get_session_volumes(
 def get_exercise_volumes(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
     """Return total logged training-load per exercise, biggest first.
 
     Like ``get_session_volumes`` this is a top-set proxy (weight x reps x sets),
     useful for breaking volume down by exercise or muscle group.
-
-    If *user_id* is provided, results are scoped to that user.
     """
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT exercise_name,
-                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                       COUNT(*) AS sessions
-                FROM exercise_progress
-                WHERE user_id = ?
-                GROUP BY exercise_name
-                ORDER BY volume DESC
-                """,
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT exercise_name,
-                       SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
-                       COUNT(*) AS sessions
-                FROM exercise_progress
-                GROUP BY exercise_name
-                ORDER BY volume DESC
-                """,
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT exercise_name,
+                   SUM(COALESCE(top_weight_kg, 0) * COALESCE(top_reps, 0) * sets) AS volume,
+                   COUNT(*) AS sessions
+            FROM exercise_progress
+            WHERE user_id = ?
+            GROUP BY exercise_name
+            ORDER BY volume DESC
+            """,
+            (owner_id(owner),),
+        ).fetchall()
     return [
         {"exercise": name, "volume": float(volume or 0), "sessions": int(sessions)}
         for name, volume, sessions in rows
@@ -1160,49 +1352,32 @@ def get_exercise_volumes(
 def get_personal_records(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
     """Return the all-time best estimated 1RM for each exercise.
 
     Uses the Epley estimate (weight x (1 + reps / 30)) across every logged top
     set, so personal records surface even as the rep targets change by block.
-
-    If *user_id* is provided, results are scoped to that user.
     """
     # Performance Optimization (Bolt ⚡): Delegate the O(N) iteration and PR calculation
     # to the SQLite engine to eliminate retrieving every historical record into Python
     # memory. SQLite ensures bare columns align with the row containing the MAX value.
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT exercise_name,
-                       top_weight_kg,
-                       top_reps,
-                       date,
-                       MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
-                FROM exercise_progress
-                WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
-                  AND user_id = ?
-                GROUP BY exercise_name
-                ORDER BY e1rm DESC
-                """,
-                (user_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT exercise_name,
-                       top_weight_kg,
-                       top_reps,
-                       date,
-                       MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
-                FROM exercise_progress
-                WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
-                GROUP BY exercise_name
-                ORDER BY e1rm DESC
-                """,
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT exercise_name,
+                   top_weight_kg,
+                   top_reps,
+                   date,
+                   MAX(top_weight_kg * (1.0 + top_reps / 30.0)) AS e1rm
+            FROM exercise_progress
+            WHERE top_weight_kg IS NOT NULL AND top_reps IS NOT NULL
+              AND user_id = ?
+            GROUP BY exercise_name
+            ORDER BY e1rm DESC
+            """,
+            (owner_id(owner),),
+        ).fetchall()
 
     return [
         {
@@ -1220,26 +1395,15 @@ def get_routine_record(
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> tuple[str, str] | None:
-    """Return (routine_id, content_hash) for a synced routine, or None.
-
-    If *user_id* is provided, the lookup is scoped to that user.
-    When None, returns the first matching row (backward-compatible path).
-    """
+    """Return (routine_id, content_hash) for a synced routine, or None."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            row = conn.execute(
-                "SELECT routine_id, content_hash FROM hevy_routines "
-                "WHERE user_id = ? AND routine_key = ?",
-                (user_id, routine_key),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT routine_id, content_hash FROM hevy_routines "
-                "WHERE routine_key = ? LIMIT 1",
-                (routine_key,),
-            ).fetchone()
+        row = conn.execute(
+            "SELECT routine_id, content_hash FROM hevy_routines "
+            "WHERE user_id = ? AND routine_key = ?",
+            (owner_id(owner), routine_key),
+        ).fetchone()
     return (row[0], row[1]) if row else None
 
 
@@ -1249,22 +1413,10 @@ def save_routine_record(
     content_hash: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Persist the Hevy routine id and content hash for a routine key.
-
-    If *user_id* is provided, the record is scoped to that user.
-    When None, uses the legacy user for backward compatibility.
-    """
+    """Persist the Hevy routine id and content hash for a routine key."""
     with _connect(db_path) as conn:
-        if user_id is None:
-            # Resolve the legacy user for backward-compat writes
-            row = conn.execute(
-                "SELECT id FROM users WHERE email = ?", ("legacy@local",)
-            ).fetchone()
-            user_id = row[0] if row else None
-        if user_id is None:
-            return  # no legacy user, nothing to do
         conn.execute(
             """
             INSERT INTO hevy_routines
@@ -1274,7 +1426,7 @@ def save_routine_record(
                 routine_id = excluded.routine_id,
                 content_hash = excluded.content_hash
             """,
-            (user_id, routine_key, routine_id, content_hash),
+            (owner_id(owner), routine_key, routine_id, content_hash),
         )
 
 
@@ -1282,23 +1434,14 @@ def get_meta(
     key: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> str | None:
-    """Return a stored metadata value, or None if absent.
-
-    When *user_id* is provided, the lookup is scoped to that user.
-    When None, returns a legacy match (first row found)."""
+    """Return a stored metadata value for *owner*, or None if absent."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            row = conn.execute(
-                "SELECT value FROM hevy_meta WHERE user_id = ? AND key = ?",
-                (user_id, key),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT value FROM hevy_meta WHERE key = ? LIMIT 1",
-                (key,),
-            ).fetchone()
+        row = conn.execute(
+            "SELECT value FROM hevy_meta WHERE user_id = ? AND key = ?",
+            (owner_id(owner), key),
+        ).fetchone()
     return row[0] if row else None
 
 
@@ -1307,41 +1450,16 @@ def set_meta(
     value: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Store a metadata value under the given key.
-
-    When *user_id* is provided, the value is scoped to that user.
-    When None, falls back to the legacy user."""
+    """Store a metadata value under the given key for *owner*."""
     with _connect(db_path) as conn:
-        uid = user_id
-        if uid is None:
-            row = conn.execute(
-                "SELECT id FROM users WHERE email = ?",
-                ("legacy@local",),
-            ).fetchone()
-            if row:
-                uid = row[0]
-            else:
-                from uuid import uuid4
-
-                uid = str(uuid4())
-                conn.execute(
-                    "INSERT INTO users (id, email, display_name, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (
-                        uid,
-                        "legacy@local",
-                        "Legacy Data",
-                        datetime.now(tz=timezone.utc).isoformat(),
-                    ),
-                )
         conn.execute(
             """
             INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
             ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
             """,
-            (uid, key, value),
+            (owner_id(owner), key, value),
         )
 
 
@@ -1349,36 +1467,23 @@ def delete_routine_record(
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Remove a tracked routine record (used when a routine is renamed).
-
-    If *user_id* is provided, the delete is scoped to that user.
-    When None, deletes any matching row (backward-compatible).
-    """
+    """Remove a tracked routine record (used when a routine is renamed)."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            conn.execute(
-                "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
-                (user_id, routine_key),
-            )
-        else:
-            conn.execute(
-                "DELETE FROM hevy_routines WHERE routine_key = ?",
-                (routine_key,),
-            )
+        conn.execute(
+            "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
+            (owner_id(owner), routine_key),
+        )
 
 
 def get_programme_start_date(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> date:
-    """Return the programme start date, defaulting to today if unset.
-
-    When *user_id* is provided, the lookup is scoped to that user.
-    """
-    value = get_meta("programme_start_date", db_path, user_id=user_id)
+    """Return the programme start date for *owner*, defaulting to today."""
+    value = get_meta("programme_start_date", db_path, owner=owner)
     if value:
         try:
             return date.fromisoformat(value)
@@ -1395,19 +1500,16 @@ def save_checkin(
     message: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Persist a completed programme check-in for later review.
-
-    If *user_id* is provided, the check-in is scoped to that user.
-    """
+    """Persist a completed programme check-in for later review."""
     with _connect(db_path) as conn:
         conn.execute(
             """
             INSERT INTO check_ins (number, date, workouts_done, weeks, message, user_id)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (number, when, workouts_done, weeks, message, user_id),
+            (number, when, workouts_done, weeks, message, owner_id(owner)),
         )
 
 
@@ -1415,34 +1517,20 @@ def get_checkins(
     limit: int = 20,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
-    """Return recent check-ins, most recent first.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Return recent check-ins for *owner*, most recent first."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT number, date, workouts_done, weeks, message
-                FROM check_ins
-                WHERE user_id = ?
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT number, date, workouts_done, weeks, message
-                FROM check_ins
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT number, date, workouts_done, weeks, message
+            FROM check_ins
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (owner_id(owner), limit),
+        ).fetchall()
     return [
         {
             "number": number,
@@ -1463,16 +1551,15 @@ def save_daily_log(
     plan: str,
     lifestyle: str,
     db_path: str = DEFAULT_DB_PATH,
-    user_id: str | None = None,
+    *,
+    owner: AuthenticatedOwner,
 ) -> None:
     """Log the full plan and lifestyle guidance issued for a day.
 
     One row per date per user: a re-run on the same day replaces the earlier
     entry so the log always holds the latest guidance that was sent.
-
-    If *user_id* is provided, the log is scoped to that user.
     """
-    uid = user_id or get_legacy_user_id(db_path)
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM daily_log WHERE date = ? AND user_id = ?", (when, uid)
@@ -1489,10 +1576,11 @@ def save_daily_log(
 def get_daily_logs(
     limit: int = 30,
     db_path: str = DEFAULT_DB_PATH,
-    user_id: str | None = None,
+    *,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
-    """Return recent daily logs, most recent first."""
-    uid = user_id or get_legacy_user_id(db_path)
+    """Return recent daily logs for *owner*, most recent first."""
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -1522,27 +1610,23 @@ def save_body_metrics(
     when: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
     """Persist a body-composition reading (weight, body fat, muscle, resting HR).
 
     Accepts the dict produced by `health_connect.body_metrics_from_recovery`, or
     None (a no-op). One row per date per user: a later reading on the same day
     replaces the earlier one, so the morning weigh-in is what gets stored.
-
-    If *user_id* is provided, the metrics are scoped to that user.
     """
     if not metrics:
         return
     when = when or datetime.now(tz=timezone.utc).date().isoformat()
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
-        if user_id is not None:
-            conn.execute(
-                "DELETE FROM body_metrics WHERE date = ? AND user_id = ?",
-                (when, user_id),
-            )
-        else:
-            conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
+        conn.execute(
+            "DELETE FROM body_metrics WHERE date = ? AND user_id = ?",
+            (when, uid),
+        )
         conn.execute(
             """
             INSERT INTO body_metrics
@@ -1556,7 +1640,7 @@ def save_body_metrics(
                 metrics.get("muscle_pct"),
                 metrics.get("resting_hr"),
                 metrics.get("hrv"),
-                user_id,
+                uid,
             ),
         )
 
@@ -1565,42 +1649,24 @@ def get_body_metrics(
     limit: int = 60,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
-    """Return recent body-composition readings, oldest first for charting.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Return recent body-composition readings, oldest first for charting."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-                FROM (
-                    SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-                    FROM body_metrics
-                    WHERE user_id = ?
-                    ORDER BY date DESC, id DESC
-                    LIMIT ?
-                )
-                ORDER BY date ASC, id ASC
-                """,
-                (user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-                FROM (
-                    SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
-                    FROM body_metrics
-                    ORDER BY date DESC, id DESC
-                    LIMIT ?
-                )
-                ORDER BY date ASC, id ASC
-                """,
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+            FROM (
+                SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                FROM body_metrics
+                WHERE user_id = ?
+                ORDER BY date DESC, id DESC
+                LIMIT ?
+            )
+            ORDER BY date ASC, id ASC
+            """,
+            (owner_id(owner), limit),
+        ).fetchall()
     return [
         {
             "date": when,
@@ -1618,15 +1684,10 @@ def save_dashboard_insight(
     insight_json: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Save the daily dashboard insight JSON.
-
-    If *user_id* is provided, the insight is scoped to that user.
-    """
+    """Save the daily dashboard insight JSON for *owner*."""
     with _connect(db_path) as conn:
-        cursor = conn.cursor()
-        uid = user_id or _get_or_create_legacy_user(cursor)
         conn.execute(
             """
             INSERT INTO dashboard_insights (user_id, date, insight_json)
@@ -1635,35 +1696,25 @@ def save_dashboard_insight(
                 date = excluded.date,
                 insight_json = excluded.insight_json
             """,
-            (uid, datetime.now(tz=timezone.utc).date().isoformat(), insight_json),
+            (
+                owner_id(owner),
+                datetime.now(tz=timezone.utc).date().isoformat(),
+                insight_json,
+            ),
         )
 
 
 def get_dashboard_insight(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> dict[str, Any] | None:
-    """Get the latest dashboard insight JSON as a dict.
-
-    If *user_id* is provided, returns only that user's insight.
-    """
+    """Get the latest dashboard insight JSON for *owner* as a dict."""
     with _connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(dashboard_insights)")
-        cols = {r[1] for r in cursor.fetchall()}
-        if "user_id" in cols:
-            if user_id is not None:
-                row = conn.execute(
-                    "SELECT insight_json FROM dashboard_insights WHERE user_id = ?",
-                    (user_id,),
-                ).fetchone()
-            else:
-                row = None
-        else:
-            row = conn.execute(
-                "SELECT insight_json FROM dashboard_insights WHERE id = 1"
-            ).fetchone()
+        row = conn.execute(
+            "SELECT insight_json FROM dashboard_insights WHERE user_id = ?",
+            (owner_id(owner),),
+        ).fetchone()
     if row:
         try:
             result = json.loads(row[0])
@@ -1681,16 +1732,11 @@ def save_reasoning_log(
     reasoning: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Save an AI reasoning log for an exercise change.
-
-    If *user_id* is provided, the log is scoped to that user.
-    """
+    """Save an AI reasoning log for an exercise change."""
     with _connect(db_path) as conn:
-        cursor = conn.cursor()
-        uid = user_id or _get_or_create_legacy_user(cursor)
-        cursor.execute(
+        conn.execute(
             """
             INSERT INTO reasoning_logs (user_id, context_id, date, exercise_name, reasoning)
             VALUES (?, ?, ?, ?, ?)
@@ -1698,7 +1744,7 @@ def save_reasoning_log(
                 reasoning = excluded.reasoning
             """,
             (
-                uid,
+                owner_id(owner),
                 context_id,
                 datetime.now(tz=timezone.utc).date().isoformat(),
                 exercise_name,
@@ -1711,26 +1757,17 @@ def get_reasoning_log(
     context_id: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> str | None:
-    """Get the reasoning log by context_id.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Get the reasoning log for *owner* by context_id."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            row = conn.execute(
-                """
-                SELECT reasoning FROM reasoning_logs
-                WHERE context_id = ? AND user_id = ?
-                """,
-                (context_id, user_id),
-            ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT reasoning FROM reasoning_logs WHERE context_id = ?",
-                (context_id,),
-            ).fetchone()
+        row = conn.execute(
+            """
+            SELECT reasoning FROM reasoning_logs
+            WHERE context_id = ? AND user_id = ?
+            """,
+            (context_id, owner_id(owner)),
+        ).fetchone()
     return row[0] if row else None
 
 
@@ -1738,11 +1775,10 @@ def save_deep_correlation(
     insight_markdown: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
+    """Store the latest deep correlation narrative for *owner*."""
     with _connect(db_path) as conn:
-        cursor = conn.cursor()
-        uid = user_id or _get_or_create_legacy_user(cursor)
         conn.execute(
             """
             INSERT INTO deep_correlations (user_id, date, insight_markdown)
@@ -1751,32 +1787,25 @@ def save_deep_correlation(
                 date = excluded.date,
                 insight_markdown = excluded.insight_markdown
             """,
-            (uid, datetime.now(tz=timezone.utc).date().isoformat(), insight_markdown),
+            (
+                owner_id(owner),
+                datetime.now(tz=timezone.utc).date().isoformat(),
+                insight_markdown,
+            ),
         )
 
 
 def get_deep_correlation(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> str | None:
-    """Return the latest deep correlation for *user_id*."""
+    """Return the latest deep correlation for *owner*."""
     with _connect(db_path) as conn:
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA table_info(deep_correlations)")
-        cols = {r[1] for r in cursor.fetchall()}
-        if "user_id" in cols:
-            if user_id is not None:
-                row = conn.execute(
-                    "SELECT insight_markdown FROM deep_correlations WHERE user_id = ?",
-                    (user_id,),
-                ).fetchone()
-            else:
-                row = None
-        else:
-            row = conn.execute(
-                "SELECT insight_markdown FROM deep_correlations WHERE id = 1"
-            ).fetchone()
+        row = conn.execute(
+            "SELECT insight_markdown FROM deep_correlations WHERE user_id = ?",
+            (owner_id(owner),),
+        ).fetchone()
     return row[0] if row else None
 
 
@@ -1785,12 +1814,10 @@ def save_chat_message(
     content: str,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
     """Persist a chat message (role is 'user' or 'assistant')."""
-    from datetime import datetime, timezone
-
-    uid = user_id or get_legacy_user_id(db_path)
+    uid = owner_id(owner)
     with _connect(db_path) as conn:
         conn.execute(
             """
@@ -1805,38 +1832,22 @@ def get_chat_messages(
     limit: int = 50,
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> list[dict[str, Any]]:
-    """Return chat messages, oldest first.
-
-    If *user_id* is provided, results are scoped to that user.
-    """
+    """Return chat messages for *owner*, oldest first."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            rows = conn.execute(
-                """
-                SELECT role, content, created_at FROM (
-                    SELECT role, content, created_at, id
-                    FROM chat_messages
-                    WHERE user_id = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                ) ORDER BY id ASC
-                """,
-                (user_id, limit),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT role, content, created_at FROM (
-                    SELECT role, content, created_at, id
-                    FROM chat_messages
-                    ORDER BY id DESC
-                    LIMIT ?
-                ) ORDER BY id ASC
-                """,
-                (limit,),
-            ).fetchall()
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at FROM (
+                SELECT role, content, created_at, id
+                FROM chat_messages
+                WHERE user_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+            ) ORDER BY id ASC
+            """,
+            (owner_id(owner), limit),
+        ).fetchall()
     return [
         {"role": role, "content": content, "created_at": created_at}
         for role, content, created_at in rows
@@ -1846,14 +1857,11 @@ def get_chat_messages(
 def clear_chat_messages(
     db_path: str = DEFAULT_DB_PATH,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Delete all chat messages for *user_id*."""
+    """Delete all chat messages for *owner*."""
     with _connect(db_path) as conn:
-        if user_id is not None:
-            conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (user_id,))
-        else:
-            conn.execute("DELETE FROM chat_messages")
+        conn.execute("DELETE FROM chat_messages WHERE user_id = ?", (owner_id(owner),))
 
 
 # ---------------------------------------------------------------------------
@@ -1905,13 +1913,15 @@ def get_or_create_user(
         )
 
 
-def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | None:
-    """Return the user row for a user_id, or None."""
+def get_user_by_id(
+    owner: AuthenticatedOwner, db_path: str = DEFAULT_DB_PATH
+) -> UserRow | None:
+    """Return the user row for the authenticated owner, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT id, email, display_name, created_at, timezone, units "
             "FROM users WHERE id = ?",
-            (user_id,),
+            (owner_id(owner),),
         ).fetchone()
     if not row:
         return None
@@ -1948,7 +1958,7 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
 
 
 def save_user_api_key(
-    user_id: str,
+    owner: AuthenticatedOwner,
     provider: str,
     api_key: str,
     *,
@@ -1958,7 +1968,7 @@ def save_user_api_key(
     extra: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Store (or update) an encrypted API key for a user + provider pair."""
+    """Store (or update) an encrypted API key for an owner + provider pair."""
     from datetime import datetime, timezone
 
     now = datetime.now(tz=timezone.utc).isoformat()
@@ -1983,7 +1993,7 @@ def save_user_api_key(
                 updated_at = excluded.updated_at
             """,
             (
-                user_id,
+                owner_id(owner),
                 provider.lower(),
                 encrypted_key,
                 client_id,
@@ -1997,11 +2007,11 @@ def save_user_api_key(
 
 
 def get_user_api_key(
-    user_id: str,
+    owner: AuthenticatedOwner,
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Return the decrypted API key record for a user + provider, or None."""
+    """Return the decrypted API key record for an owner + provider, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -2010,7 +2020,7 @@ def get_user_api_key(
             FROM user_api_keys
             WHERE user_id = ? AND provider = ?
             """,
-            (user_id, provider.lower()),
+            (owner_id(owner), provider.lower()),
         ).fetchone()
     if not row:
         return None
@@ -2025,10 +2035,10 @@ def get_user_api_key(
 
 
 def get_user_api_keys(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
-    """Return all API key records for a user, keyed by provider name.
+    """Return all API key records for an owner, keyed by provider name.
 
     Keys are decrypted. Providers without a stored key are omitted.
     """
@@ -2040,7 +2050,7 @@ def get_user_api_keys(
             FROM user_api_keys
             WHERE user_id = ?
             """,
-            (user_id,),
+            (owner_id(owner),),
         ).fetchall()
 
     result: dict[str, dict[str, Any]] = {}
@@ -2057,15 +2067,15 @@ def get_user_api_keys(
 
 
 def delete_user_api_key(
-    user_id: str,
+    owner: AuthenticatedOwner,
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Remove a stored API key for a user + provider."""
+    """Remove a stored API key for an owner + provider."""
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
-            (user_id, provider.lower()),
+            (owner_id(owner), provider.lower()),
         )
 
 
@@ -2073,7 +2083,7 @@ def delete_user_api_key(
 
 
 def save_user_preferences(
-    user_id: str,
+    owner: AuthenticatedOwner,
     *,
     goals: list[str] | None = None,
     constraints: list[str] | None = None,
@@ -2106,7 +2116,7 @@ def save_user_preferences(
                 updated_at = excluded.updated_at
             """,
             (
-                user_id,
+                owner_id(owner),
                 json.dumps(goals) if goals is not None else None,
                 json.dumps(constraints) if constraints is not None else None,
                 experience_level,
@@ -2120,7 +2130,7 @@ def save_user_preferences(
 
 
 def get_user_preferences(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
@@ -2141,7 +2151,7 @@ def get_user_preferences(
             FROM user_preferences
             WHERE user_id = ?
             """,
-            (user_id,),
+            (owner_id(owner),),
         ).fetchone()
     if not row:
         return defaults
@@ -2157,32 +2167,36 @@ def get_user_preferences(
 
 
 def save_push_subscription(
-    user_id: str, endpoint: str, p256dh: str, auth: str, db_path: str = DEFAULT_DB_PATH
+    owner: AuthenticatedOwner,
+    endpoint: str,
+    p256dh: str,
+    auth: str,
+    db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Save a push subscription for a user."""
+    """Save a push subscription for an owner."""
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
-        # Avoid duplicate endpoints for the same user
+        # Avoid duplicate endpoints for the same owner
         conn.execute(
             """
             DELETE FROM push_subscriptions
             WHERE user_id = ? AND endpoint = ?
             """,
-            (user_id, endpoint),
+            (owner_id(owner), endpoint),
         )
         conn.execute(
             """
             INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, endpoint, p256dh, auth, now),
+            (owner_id(owner), endpoint, p256dh, auth, now),
         )
 
 
 def get_push_subscriptions(
-    user_id: str, db_path: str = DEFAULT_DB_PATH
+    owner: AuthenticatedOwner, db_path: str = DEFAULT_DB_PATH
 ) -> list[dict[str, Any]]:
-    """Get all push subscriptions for a user."""
+    """Get all push subscriptions for an owner."""
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -2190,7 +2204,7 @@ def get_push_subscriptions(
             FROM push_subscriptions
             WHERE user_id = ?
             """,
-            (user_id,),
+            (owner_id(owner),),
         ).fetchall()
     return [
         {"endpoint": row[0], "keys": {"p256dh": row[1], "auth": row[2]}} for row in rows
@@ -2198,13 +2212,13 @@ def get_push_subscriptions(
 
 
 def delete_push_subscription(
-    user_id: str, endpoint: str, db_path: str = DEFAULT_DB_PATH
+    owner: AuthenticatedOwner, endpoint: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
     """Delete a specific push subscription."""
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
-            (user_id, endpoint),
+            (owner_id(owner), endpoint),
         )
 
 
@@ -2225,10 +2239,10 @@ def get_programme_templates() -> list[dict[str, Any]]:
 
 
 def get_active_programme(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Return the currently active programme for a user, or None."""
+    """Return the currently active programme for an owner, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
             """
@@ -2237,7 +2251,7 @@ def get_active_programme(
             FROM programmes
             WHERE user_id = ? AND active = 1
             """,
-            (user_id,),
+            (owner_id(owner),),
         ).fetchone()
     if not row:
         return None
@@ -2254,13 +2268,13 @@ def get_active_programme(
 
 
 def set_active_programme(
-    user_id: str,
+    owner: AuthenticatedOwner,
     source: str,
     template_key: str,
     definition: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Activate a programme for a user, deactivating any previous active one."""
+    """Activate a programme for an owner, deactivating any previous active one."""
     now = datetime.now(tz=timezone.utc).isoformat()
     if source == "template":
         raise ValueError(
@@ -2272,7 +2286,7 @@ def set_active_programme(
     with _connect(db_path) as conn:
         conn.execute(
             "UPDATE programmes SET active = 0 WHERE user_id = ?",
-            (user_id,),
+            (owner_id(owner),),
         )
         conn.execute(
             """
@@ -2287,7 +2301,7 @@ def set_active_programme(
                 updated_at = excluded.updated_at
             """,
             (
-                user_id,
+                owner_id(owner),
                 source,
                 template_key,
                 json.dumps(definition, default=str),
@@ -2298,14 +2312,14 @@ def set_active_programme(
 
 
 def save_notification(
-    user_id: str,
+    owner: AuthenticatedOwner,
     title: str,
     message: str,
     type: str = "system",
     link: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> int:
-    """Save an in-app notification for a user.
+    """Save an in-app notification for an owner.
 
     Returns the inserted notification id.
     """
@@ -2317,7 +2331,7 @@ def save_notification(
             INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
             VALUES (?, ?, ?, ?, ?, 0, ?)
             """,
-            (user_id, type, title, message, link, now),
+            (owner_id(owner), type, title, message, link, now),
         )
         notification_id = cursor.lastrowid
         if notification_id is None:
@@ -2326,12 +2340,12 @@ def save_notification(
 
 
 def get_notifications(
-    user_id: str,
+    owner: AuthenticatedOwner,
     limit: int = 50,
     unread_only: bool = False,
     db_path: str = DEFAULT_DB_PATH,
 ) -> list[dict[str, Any]]:
-    """Retrieve notifications for a user, ordered from newest to oldest."""
+    """Retrieve notifications for an owner, ordered from newest to oldest."""
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         if unread_only:
@@ -2343,7 +2357,7 @@ def get_notifications(
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                (user_id, limit),
+                (owner_id(owner), limit),
             )
         else:
             cursor.execute(
@@ -2354,7 +2368,7 @@ def get_notifications(
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                (user_id, limit),
+                (owner_id(owner), limit),
             )
         rows = cursor.fetchall()
         return [
@@ -2374,7 +2388,7 @@ def get_notifications(
 
 def mark_notification_read(
     notification_id: int,
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> bool:
     """Mark a specific notification as read."""
@@ -2382,28 +2396,28 @@ def mark_notification_read(
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
-            (notification_id, user_id),
+            (notification_id, owner_id(owner)),
         )
         return cursor.rowcount > 0
 
 
 def mark_all_notifications_read(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> int:
-    """Mark all notifications as read for a given user. Returns count updated."""
+    """Mark all notifications as read for an owner. Returns count updated."""
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0",
-            (user_id,),
+            (owner_id(owner),),
         )
         return cursor.rowcount
 
 
 def delete_notification(
     notification_id: int,
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> bool:
     """Delete a single notification."""
@@ -2411,35 +2425,35 @@ def delete_notification(
         cursor = conn.cursor()
         cursor.execute(
             "DELETE FROM notifications WHERE id = ? AND user_id = ?",
-            (notification_id, user_id),
+            (notification_id, owner_id(owner)),
         )
         return cursor.rowcount > 0
 
 
 def clear_all_notifications(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> int:
-    """Delete all notifications for a user. Returns count deleted."""
+    """Delete all notifications for an owner. Returns count deleted."""
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "DELETE FROM notifications WHERE user_id = ?",
-            (user_id,),
+            (owner_id(owner),),
         )
         return cursor.rowcount
 
 
 def get_unread_notification_count(
-    user_id: str,
+    owner: AuthenticatedOwner,
     db_path: str = DEFAULT_DB_PATH,
 ) -> int:
-    """Count unread notifications for a user."""
+    """Count unread notifications for an owner."""
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute(
             "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
-            (user_id,),
+            (owner_id(owner),),
         )
         row = cursor.fetchone()
         return int(row[0]) if row else 0

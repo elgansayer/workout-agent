@@ -7,10 +7,11 @@ This is the single place every feature call site goes through to obtain an
 from __future__ import annotations
 
 from ai_provider import PROVIDERS, AIProvider, get_provider
+from ownership import AuthenticatedOwner
 
 
 def resolve_provider(
-    user_id: str | None = None,
+    owner: AuthenticatedOwner | None = None,
     *,
     server_gemini_key: str | None = None,
     server_gemini_model: str | None = None,
@@ -18,16 +19,16 @@ def resolve_provider(
     fallback_model: str | None = None,
     db_path: str = "workout_agent.db",
 ) -> AIProvider:
-    """Return the provider selected by *user_id*.
+    """Return the provider selected by *owner*.
 
     Resolution order:
-    1. Read the user's ``preferred_ai`` and legacy ``ai_model`` preference.
-    2. Read that user's encrypted key record and provider-specific model.
+    1. Read the owner's ``preferred_ai`` and legacy ``ai_model`` preference.
+    2. Read that owner's encrypted key record and provider-specific model.
     3. Construct the provider exclusively through
        :func:`ai_provider.get_provider`.
 
     The optional server key is a backwards-compatible Gemini fallback only.
-    It is never used for another provider or another user's credential.
+    It is never used for another provider or another owner's credential.
     """
     server_gemini_key = server_gemini_key or fallback_api_key
     server_gemini_model = server_gemini_model or fallback_model
@@ -36,10 +37,10 @@ def resolve_provider(
     model: str | None = None
     api_key: str | None = None
 
-    if user_id is not None:
+    if owner is not None:
         from database import get_user_api_key, get_user_preferences
 
-        prefs = get_user_preferences(user_id, db_path=db_path)
+        prefs = get_user_preferences(owner, db_path=db_path)
         provider_name = str(prefs.get("preferred_ai") or "gemini").lower().strip()
         if provider_name not in PROVIDERS:
             raise ValueError(
@@ -51,7 +52,7 @@ def resolve_provider(
         if isinstance(preferred_model, str) and preferred_model.strip():
             model = preferred_model.strip()
 
-        key_record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        key_record = get_user_api_key(owner, provider_name, db_path=db_path)
         if key_record:
             api_key = str(key_record.get("api_key") or "").strip() or None
             if model is None:

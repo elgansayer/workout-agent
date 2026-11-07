@@ -35,7 +35,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import requests
-
 from google_health_client import SCOPE, TOKEN_URL
 
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/auth"
@@ -196,12 +195,16 @@ def main() -> int:
 
     refresh_token = tokens["refresh_token"]
 
-    # Store it so the very next agent run is already authorised.
+    # Store it so the very next agent run is already authorised. The token is
+    # stored for the stable legacy tenant so it stays bound to one owner.
     try:
-        from database import set_meta
+        from database import init_db, set_meta
+        from ownership import owner_for_legacy_tenant
 
         db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
-        set_meta("google_health_refresh_token", refresh_token, db_path)
+        init_db(db_path)
+        owner = owner_for_legacy_tenant(db_path)
+        set_meta("google_health_refresh_token", refresh_token, db_path, owner=owner)
         stored = f" (also saved to {db_path})"
     except Exception:  # noqa: BLE001
         stored = ""

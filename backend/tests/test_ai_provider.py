@@ -20,6 +20,8 @@ from ai_provider import (
     get_provider,
 )
 from ai_resolver import resolve_provider
+from ownership import owner_for_user
+from tenant_fixtures import synthetic_owner
 
 
 def test_get_provider_gemini_default_model():
@@ -262,7 +264,7 @@ def test_resolve_provider_no_user_id_falls_back_to_gemini():
     """Without a user_id, uses the fallback key and model with Gemini."""
     with patch("ai_provider.PROVIDERS", _register_fake_providers()):
         provider = resolve_provider(
-            user_id=None,
+            owner=None,
             fallback_api_key="server-key-123",
             fallback_model="gemini-2.5-pro",
         )
@@ -272,7 +274,7 @@ def test_resolve_provider_no_user_id_falls_back_to_gemini():
 
 def test_resolve_provider_no_user_id_missing_key_raises():
     with pytest.raises(ValueError, match="No AI provider key"):
-        resolve_provider(user_id=None, fallback_api_key=None, fallback_model=None)
+        resolve_provider(owner=None, fallback_api_key=None, fallback_model=None)
 
 
 def test_resolve_provider_user_prefers_gemini_no_user_key_falls_back(
@@ -288,12 +290,15 @@ def test_resolve_provider_user_prefers_gemini_no_user_key_falls_back(
     database.get_or_create_user("test@example.com", db_path=db)
     user = database.get_or_create_user("test@example.com", db_path=db)
     database.save_user_preferences(
-        user["id"], preferred_ai="gemini", ai_model=None, db_path=db
+        owner_for_user(db, user["id"]),
+        preferred_ai="gemini",
+        ai_model=None,
+        db_path=db,
     )
 
     with patch("ai_provider.PROVIDERS", _register_fake_providers()):
         provider = resolve_provider(
-            user_id=user["id"],
+            owner=owner_for_user(db, user["id"]),
             fallback_api_key="server-key-abc",
             fallback_model="gemini-3.8-flash",
             db_path=db,
@@ -315,7 +320,7 @@ def test_resolve_provider_user_prefers_claude_with_key():
         ),
     ):
         provider = resolve_provider(
-            user_id="user-1",
+            owner=synthetic_owner("user-1"),
             fallback_api_key="server-key",
         )
     assert "claude" in provider.name().lower()
@@ -336,7 +341,7 @@ def test_resolve_provider_user_prefers_claude_no_key_raises():
         pytest.raises(ValueError, match="No claude key"),
     ):
         resolve_provider(
-            user_id="user-1",
+            owner=synthetic_owner("user-1"),
             fallback_api_key="server-key",
         )
 
@@ -355,7 +360,7 @@ def test_resolve_provider_user_prefers_deepseek_with_model():
         ),
     ):
         provider = resolve_provider(
-            user_id="user-1",
+            owner=synthetic_owner("user-1"),
             fallback_api_key="server-key",
         )
     assert "deepseek" in provider.name().lower()
@@ -376,7 +381,7 @@ def test_resolve_provider_user_no_prefs_defaults_to_gemini():
         ),
     ):
         provider = resolve_provider(
-            user_id="user-1",
+            owner=synthetic_owner("user-1"),
             fallback_api_key="server-key",
             fallback_model="gemini-2.5-pro",
         )
@@ -400,7 +405,7 @@ def test_resolve_provider_uses_model_stored_with_provider_key():
             },
         ),
     ):
-        provider = resolve_provider(user_id="user-1")
+        provider = resolve_provider(owner=synthetic_owner("user-1"))
 
     assert "claude-custom" in provider.name()
 
@@ -420,7 +425,7 @@ def test_resolve_provider_preference_model_wins_over_stale_key_metadata():
             },
         ),
     ):
-        provider = resolve_provider(user_id="user-1")
+        provider = resolve_provider(owner=synthetic_owner("user-1"))
 
     assert "gpt-current" in provider.name()
     assert "gpt-stale" not in provider.name()
@@ -434,7 +439,7 @@ def test_non_gemini_provider_does_not_inherit_server_gemini_model(provider_name:
         patch("ai_resolver.get_provider") as factory,
     ):
         resolve_provider(
-            user_id="synthetic-user",
+            owner=synthetic_owner("synthetic-user"),
             server_gemini_key="synthetic-server-key",
             server_gemini_model="gemini-server-model",
         )

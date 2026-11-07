@@ -29,15 +29,23 @@ from database import (
 )
 from fastapi.testclient import TestClient
 from hevy_parser import ExerciseSummary, WorkoutSummary
+from tenant_fixtures import legacy_owner
 
 
 @pytest.fixture()
 def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
     db_path = str(tmp_path / "web.db")
     init_db(db_path)
-    save_checkin(1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path)
-    save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path)
-    save_body_metrics({"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path)
+    owner = legacy_owner(db_path)
+    save_checkin(
+        1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path, owner=owner
+    )
+    save_body_metrics(
+        {"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path, owner=owner
+    )
+    save_body_metrics(
+        {"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path, owner=owner
+    )
     save_daily_log(
         "2026-03-02",
         1,
@@ -46,6 +54,7 @@ def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
         "plan",
         "life",
         db_path,
+        owner=owner,
     )
     summary = WorkoutSummary(
         title="Day 1",
@@ -54,7 +63,7 @@ def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
         total_volume_kg=2800.0,
         exercises=[ExerciseSummary("Deadlift (Barbell)", 140.0, 5, 4)],
     )
-    save_progress(summary, db_path)
+    save_progress(summary, db_path, owner=owner)
     monkeypatch.setenv("DATABASE_PATH", db_path)
     # Isolate from any real .env (loaded by config.py via load_dotenv) so the
     # dashboard starts in a known "Google Health not configured" state.
@@ -180,11 +189,12 @@ def test_google_health_disconnect_clears_token(client: Any) -> None:
     from database import get_meta, set_meta
 
     db_path = os.environ["DATABASE_PATH"]
-    set_meta("google_health_refresh_token", "tok", db_path)
+    owner = legacy_owner(db_path)
+    set_meta("google_health_refresh_token", "tok", db_path, owner=owner)
     resp = client.post("/google-health/disconnect", follow_redirects=False)
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=disconnected"
-    assert not get_meta("google_health_refresh_token", db_path)
+    assert not get_meta("google_health_refresh_token", db_path, owner=owner)
 
 
 def _configured_app(tmp_path: Any, monkeypatch: Any) -> tuple[Any, str]:
@@ -226,7 +236,8 @@ def test_google_health_callback_stores_refresh_token(
         "exchange_code",
         lambda *a, **k: {"refresh_token": "rt-123"},
     )
-    set_meta("google_health_oauth_state", "st-1", db_path)
+    owner = legacy_owner(db_path)
+    set_meta("google_health_oauth_state", "st-1", db_path, owner=owner)
     with TestClient(app_module.app) as c:
         resp = c.get(
             "/google-health/callback?code=abc&state=st-1",
@@ -234,7 +245,7 @@ def test_google_health_callback_stores_refresh_token(
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=connected"
-    assert get_meta("google_health_refresh_token", db_path) == "rt-123"
+    assert get_meta("google_health_refresh_token", db_path, owner=owner) == "rt-123"
 
 
 @pytest.mark.skip(reason="Angular migration")
@@ -245,7 +256,8 @@ def test_google_health_callback_rejects_bad_state(
     from database import get_meta, set_meta
 
     app_module, db_path = _configured_app(tmp_path, monkeypatch)
-    set_meta("google_health_oauth_state", "real-state", db_path)
+    owner = legacy_owner(db_path)
+    set_meta("google_health_oauth_state", "real-state", db_path, owner=owner)
     with TestClient(app_module.app) as c:
         resp = c.get(
             "/google-health/callback?code=abc&state=forged",
@@ -253,7 +265,7 @@ def test_google_health_callback_rejects_bad_state(
         )
     assert resp.status_code == 303
     assert resp.headers["location"] == "/settings?gh=error"
-    assert not get_meta("google_health_refresh_token", db_path)
+    assert not get_meta("google_health_refresh_token", db_path, owner=owner)
 
 
 @pytest.mark.skip(reason="Angular migration")
@@ -324,7 +336,7 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
             return "Causal explanation from fake provider."
 
     def _fake_resolve(
-        user_id: Any = None,
+        owner: Any = None,
         *,
         server_gemini_key: Any = None,
         server_gemini_model: Any = None,
@@ -332,7 +344,7 @@ def test_xai_reasoning_uses_resolve_provider(client: Any, monkeypatch: Any) -> N
     ) -> Any:
         captured.append(
             {
-                "user_id": user_id,
+                "owner": owner,
                 "server_gemini_key": server_gemini_key,
                 "server_gemini_model": server_gemini_model,
                 "db_path": db_path,
@@ -368,7 +380,7 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
             return '{"Deadlift_Projected": 200, "Pullups_Projected": 25, "Validation": "ok"}'
 
     def _fake_resolve(
-        user_id: Any = None,
+        owner: Any = None,
         *,
         server_gemini_key: Any = None,
         server_gemini_model: Any = None,
@@ -376,7 +388,7 @@ def test_project_peak_uses_resolve_provider(client: Any, monkeypatch: Any) -> No
     ) -> Any:
         captured.append(
             {
-                "user_id": user_id,
+                "owner": owner,
                 "server_gemini_key": server_gemini_key,
             },
         )
@@ -405,7 +417,7 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
             return "Response from fake provider."
 
     def _fake_resolve(
-        user_id: Any = None,
+        owner: Any = None,
         *,
         server_gemini_key: Any = None,
         server_gemini_model: Any = None,
@@ -413,7 +425,7 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
     ) -> Any:
         captured.append(
             {
-                "user_id": user_id,
+                "owner": owner,
                 "server_gemini_key": server_gemini_key,
             },
         )
@@ -439,7 +451,7 @@ def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
 
     monkeypatch.setattr(
         "webapp.app.resolve_provider",
-        lambda user_id=None, **kw: _StubProvider(),
+        lambda owner=None, **kw: _StubProvider(),
     )
     from config import Config
 
@@ -482,15 +494,14 @@ def test_selecting_provider_without_override_uses_registry_default(
     import webapp.app as app_module
     from ai_provider import PROVIDERS
     from database import (
-        get_legacy_user_id,
         get_user_preferences,
         save_user_preferences,
     )
     from starlette.requests import Request
 
-    user_id = get_legacy_user_id(app_module.DB_PATH)
+    owner = legacy_owner(app_module.DB_PATH)
     save_user_preferences(
-        user_id,
+        owner,
         preferred_ai="openai",
         ai_model="gpt-old-provider",
         db_path=app_module.DB_PATH,
@@ -510,14 +521,14 @@ def test_selecting_provider_without_override_uses_registry_default(
             "client": ("testclient", 50000),
             "server": ("testserver", 80),
             "scheme": "http",
-            "session": {"user_id": user_id},
+            "session": {"user": "legacy@local", "user_id": owner.user_id},
         },
         receive,
     )
     result = asyncio.run(app_module.save_preferences(request))
 
     assert result == {"status": "ok"}
-    preferences = get_user_preferences(user_id, app_module.DB_PATH)
+    preferences = get_user_preferences(owner, app_module.DB_PATH)
     assert preferences["preferred_ai"] == "claude"
     assert preferences["ai_model"] == PROVIDERS["claude"]["default_model"]
 
@@ -531,23 +542,23 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     import webapp.app as app_module
     from cryptography.fernet import Fernet
     from database import (
-        get_legacy_user_id,
         save_user_api_key,
         save_user_preferences,
     )
 
     db_path = app_module.DB_PATH
-    user_id = get_legacy_user_id(db_path)
+    owner = legacy_owner(db_path)
+    user_id = owner.user_id
     synthetic_key = "synthetic-claude-key"
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     save_user_preferences(
-        user_id,
+        owner,
         preferred_ai="claude",
         ai_model="claude-synthetic-model",
         db_path=db_path,
     )
     save_user_api_key(
-        user_id,
+        owner,
         "claude",
         synthetic_key,
         extra={"model": "stale-model-metadata"},
@@ -563,7 +574,7 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     assert row[0] != synthetic_key
 
     constructed: list[tuple[str, str]] = []
-    scoped_users: list[str | None] = []
+    scoped_owners: list[Any] = []
 
     class _FakeClaude:
         def generate(self, prompt: str, *, stream: bool = False) -> Any:
@@ -584,8 +595,8 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         },
     )
 
-    def _personal_records(*, db_path: str, user_id: str | None = None) -> list[Any]:
-        scoped_users.append(user_id)
+    def _personal_records(*, db_path: str, owner: Any = None) -> list[Any]:
+        scoped_owners.append(owner)
         return []
 
     monkeypatch.setattr(app_module, "get_personal_records", _personal_records)
@@ -595,7 +606,7 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     assert response.status_code == 200
     assert response.text == "Claude response"
     assert constructed == [(synthetic_key, "claude-synthetic-model")]
-    assert scoped_users == [user_id]
+    assert scoped_owners == [owner]
 
 
 # ---------------------------------------------------------------------------

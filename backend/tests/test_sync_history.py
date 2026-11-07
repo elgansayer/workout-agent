@@ -7,6 +7,7 @@ import sqlite3
 from unittest.mock import patch
 
 from scripts import sync_history
+from tenant_fixtures import create_owner
 
 
 def _new_temp_db(tmp_path: pathlib.Path) -> str:
@@ -15,6 +16,10 @@ def _new_temp_db(tmp_path: pathlib.Path) -> str:
     db_path = str(tmp_path / "sync_test.db")
     init_db(db_path)
     return db_path
+
+
+def _owner(db_path: str, email: str = "sync@example.com"):
+    return create_owner(db_path, email)
 
 
 _SAMPLE_WORKOUTS: list[dict[str, object]] = [
@@ -52,29 +57,30 @@ _SAMPLE_WORKOUTS: list[dict[str, object]] = [
 ]
 
 
-def test_no_api_key_returns_error() -> None:
-    result = sync_history.sync_all("")
+def test_no_api_key_returns_error(tmp_path: pathlib.Path) -> None:
+    db_path = _new_temp_db(tmp_path)
+    result = sync_history.sync_all("", db_path, owner=_owner(db_path))
     assert result == {"error": "No Hevy API key configured."}
 
 
 def test_get_all_workouts_returns_none(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("scripts.sync_history.get_all_workouts", return_value=None):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 0, "processed": 0}
 
 
 def test_get_all_workouts_returns_empty_list(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("scripts.sync_history.get_all_workouts", return_value=[]):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 0, "processed": 0}
 
 
 def test_sync_all_rebuilds_and_saves_workouts(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
     with patch("scripts.sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 2, "processed": 2}
     conn = sqlite3.connect(db_path, timeout=10)
     assert conn.execute("SELECT COUNT(*) FROM workout_history").fetchone()[0] == 2
@@ -82,15 +88,16 @@ def test_sync_all_rebuilds_and_saves_workouts(tmp_path: pathlib.Path) -> None:
     conn.close()
 
 
-def test_sync_all_respects_user_id(tmp_path: pathlib.Path) -> None:
+def test_sync_all_respects_the_owner_context(tmp_path: pathlib.Path) -> None:
     db_path = _new_temp_db(tmp_path)
+    owner = _owner(db_path, "user-1@example.com")
     with patch("scripts.sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
-        result = sync_history.sync_all("fake-key", db_path, user_id="user-1")
+        result = sync_history.sync_all("fake-key", db_path, owner=owner)
     assert result == {"workouts_found": 2, "processed": 2}
     conn = sqlite3.connect(db_path, timeout=10)
     user_ids = conn.execute("SELECT DISTINCT user_id FROM workout_history").fetchall()
     conn.close()
-    assert user_ids == [("user-1",)]
+    assert user_ids == [(owner.user_id,)]
 
 
 def test_sync_all_workout_missing_start_time(tmp_path: pathlib.Path) -> None:
@@ -106,7 +113,7 @@ def test_sync_all_workout_missing_start_time(tmp_path: pathlib.Path) -> None:
         },
     ]
     with patch("scripts.sync_history.get_all_workouts", return_value=workouts):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 1, "processed": 1}
 
 
@@ -122,7 +129,7 @@ def test_sync_all_parse_failure_skips_progress(tmp_path: pathlib.Path) -> None:
         },
     ]
     with patch("scripts.sync_history.get_all_workouts", return_value=workouts):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 1, "processed": 0}
 
 
@@ -138,7 +145,7 @@ def test_sync_all_no_date_uses_none(tmp_path: pathlib.Path) -> None:
         },
     ]
     with patch("scripts.sync_history.get_all_workouts", return_value=workouts):
-        result = sync_history.sync_all("fake-key", db_path)
+        result = sync_history.sync_all("fake-key", db_path, owner=_owner(db_path))
     assert result == {"workouts_found": 1, "processed": 1}
 
 
@@ -147,15 +154,17 @@ def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
 
     db_path = _new_temp_db(tmp_path)
     payload = {"workouts": [{"id": "W1", "title": "Test"}]}
-    save_workout(payload, db_path, when="2026-03-01")
-    save_workout(payload, db_path, when="2026-03-02")
+    owner = _owner(db_path)
+    save_workout(payload, db_path, when="2026-03-01", owner=owner)
+    save_workout(payload, db_path, when="2026-03-02", owner=owner)
 
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute(
-        "INSERT INTO exercise_progress (date, exercise_name, top_weight_kg, top_reps, sets) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ("2026-03-01", "Squat", 100.0, 5, 3),
+        "INSERT INTO exercise_progress "
+        "(date, exercise_name, top_weight_kg, top_reps, sets, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("2026-03-01", "Squat", 100.0, 5, 3, owner.user_id),
     )
     conn.commit()
     conn.close()
@@ -165,7 +174,7 @@ def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
     assert conn.execute("SELECT COUNT(*) FROM exercise_progress").fetchone()[0] == 1
     conn.close()
 
-    sync_history._rebuild_tables(db_path)
+    sync_history._rebuild_tables(db_path, owner=_owner(db_path))
 
     conn = sqlite3.connect(db_path, timeout=10)
     assert conn.execute("SELECT COUNT(*) FROM workout_history").fetchone()[0] == 0

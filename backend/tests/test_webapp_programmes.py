@@ -15,7 +15,9 @@ from hevy_reader import (
     RoutineExercise,
 )
 from itsdangerous import TimestampSigner
+from ownership import owner_for_user
 from starlette.testclient import TestClient
+from tenant_fixtures import legacy_owner
 
 _SECRET = "programmes-test-secret-that-is-long-enough"
 
@@ -184,8 +186,7 @@ def test_preview_activation_and_plan_round_trip(
     )
     assert activation_response.status_code == 200
 
-    legacy_uid = database.get_legacy_user_id(db_file)
-    active = database.get_active_programme(legacy_uid, db_path=db_file)
+    active = database.get_active_programme(legacy_owner(db_file), db_path=db_file)
     assert active is not None
     assert active["source"] == "hevy"
     assert active["definition"]["preview_token"] == preview["preview_token"]
@@ -264,13 +265,13 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     from dynamic_programme import ProgrammePreviewRequest, build_programme_preview
 
     client, _app_module, db_file = _client(tmp_path, monkeypatch)
-    user_id = database.get_legacy_user_id(db_file)
+    owner = legacy_owner(db_file)
     definition = build_programme_preview(
         _training_data(),
         ProgrammePreviewRequest(**_payload()),
     )
     database.set_active_programme(
-        user_id, "hevy", "synthetic-rotation", definition, db_file
+        owner, "hevy", "synthetic-rotation", definition, db_file
     )
     second_block = definition["blocks"][1]
     today = date(2026, 9, 1) + timedelta(weeks=second_block["start_week"] - 1)
@@ -282,7 +283,7 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
             "end_time": f"{today.isoformat()}T08:00:00Z",
         },
         db_file,
-        user_id=user_id,
+        owner=owner,
     )
     other = database.get_or_create_user("other@example.test", db_path=db_file)
     database.save_workout(
@@ -292,7 +293,7 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
             "end_time": f"{today.isoformat()}T09:00:00Z",
         },
         db_file,
-        user_id=other["id"],
+        owner=owner_for_user(db_file, other["id"]),
     )
 
     dashboard = client.get("/api/dashboard").json()
@@ -313,6 +314,6 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     )
     assert plan["days"][position]["exercises"][0]["sets"] == expected["sets"]
     assert plan["week"] == dashboard["week"] == second_block["start_week"]
-    stored = database.get_active_programme(user_id, db_file)
+    stored = database.get_active_programme(owner, db_file)
     assert stored is not None
     assert stored["definition"] == definition

@@ -163,7 +163,7 @@ Store safe error categories, request correlation IDs, provider incident/audit ID
 
 **Owner:** Privacy/security owner leads scope and notification decisions; incident commander coordinates containment; operations owner supplies evidence and technical remediation.
 
-**Prerequisites:** Data-flow inventory, tenant-isolation model, authentication/session architecture, log/cache/backup retention locations, provider/notification destination mappings, and access to revoke sessions/tokens and disable affected routes/jobs.
+**Prerequisites:** Data-flow inventory, tenant-isolation model (`docs/TENANT_OWNERSHIP.md`), authentication/session architecture, log/cache/backup retention locations, provider/notification destination mappings, and access to revoke sessions/tokens and disable affected routes/jobs.
 
 ### Detection
 

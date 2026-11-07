@@ -18,46 +18,54 @@ from database import (
     save_deep_correlation,
     save_notification,
 )
+from ownership import AuthenticatedOwner, owner_for_legacy_tenant, owner_for_user
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
 
-def _resolve_insight_user(db_path: str) -> str | None:
-    from database import get_legacy_user_id
-
+def _resolve_insight_owner(db_path: str) -> AuthenticatedOwner | None:
     try:
-        return get_legacy_user_id(db_path)
+        return owner_for_legacy_tenant(db_path)
     except Exception:  # noqa: BLE001
         return None
 
 
-def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
-    uid = user_id or _resolve_insight_user(config.database_path)
+def _resolve_provider(
+    config: Config,
+    owner: AuthenticatedOwner | None = None,
+) -> AIProvider:
     return resolve_provider(
-        user_id=uid,
+        owner=owner,
         db_path=config.database_path,
         server_gemini_key=config.gemini_api_key,
         server_gemini_model=config.gemini_model,
     )
 
 
-def generate_daily_header(config: Config, user_id: str | None = None) -> None:
+def generate_daily_header(
+    config: Config,
+    owner: AuthenticatedOwner | None = None,
+) -> None:
     logger.info("Generating daily insight header...")
-    uid = user_id or _resolve_insight_user(config.database_path)
-    provider = _resolve_provider(config, user_id=uid)
+    resolved = owner or _resolve_insight_owner(config.database_path)
+    if resolved is None:
+        logger.error("No insight owner could be resolved for this run.")
+        return
+    owner = resolved
+    provider = _resolve_provider(config, owner=owner)
 
     # Fetch last 7 days of data
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
 
     metrics = [
         m
-        for m in get_body_metrics(limit=14, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(limit=14, db_path=config.database_path, owner=owner)
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=14, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(limit=14, db_path=config.database_path, owner=owner)
         if log["date"] >= cutoff
     ]
 
@@ -85,19 +93,18 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
             save_dashboard_insight(
-                json.dumps(parsed), db_path=config.database_path, user_id=uid
+                json.dumps(parsed), db_path=config.database_path, owner=owner
             )
-            if uid:
-                fatigue = parsed.get("fatigue", "Normal")
-                advice = parsed.get("advice", "")
-                save_notification(
-                    uid,
-                    title="✨ Coach Status Update",
-                    message=f"Fatigue: {fatigue}. {advice}",
-                    type="coach",
-                    link="/dashboard",
-                    db_path=config.database_path,
-                )
+            fatigue = parsed.get("fatigue", "Normal")
+            advice = parsed.get("advice", "")
+            save_notification(
+                owner,
+                title="✨ Coach Status Update",
+                message=f"Fatigue: {fatigue}. {advice}",
+                type="coach",
+                link="/dashboard",
+                db_path=config.database_path,
+            )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
@@ -105,22 +112,29 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         logger.error("Failed to generate daily insight: %s", e)
 
 
-def generate_weekly_correlations(config: Config, user_id: str | None = None) -> None:
+def generate_weekly_correlations(
+    config: Config,
+    owner: AuthenticatedOwner | None = None,
+) -> None:
     logger.info("Generating weekly deep correlations...")
-    uid = user_id or _resolve_insight_user(config.database_path)
-    provider = _resolve_provider(config, user_id=uid)
+    resolved = owner or _resolve_insight_owner(config.database_path)
+    if resolved is None:
+        logger.error("No insight owner could be resolved for this run.")
+        return
+    owner = resolved
+    provider = _resolve_provider(config, owner=owner)
 
     # Fetch 60-day trailing window
     cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
 
     metrics = [
         m
-        for m in get_body_metrics(limit=120, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(limit=120, db_path=config.database_path, owner=owner)
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=120, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(limit=120, db_path=config.database_path, owner=owner)
         if log["date"] >= cutoff
     ]
 
@@ -128,7 +142,7 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     all_history = get_progress_history(
         limit_per_exercise=60,
         db_path=config.database_path,
-        user_id=uid,
+        owner=owner,
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -158,16 +172,15 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path, user_id=uid)
-            if uid:
-                save_notification(
-                    uid,
-                    title="✨ Weekly Intelligence Report",
-                    message="New 60-day recovery and workout correlations analysis is ready.",
-                    type="coach",
-                    link="/stats",
-                    db_path=config.database_path,
-                )
+            save_deep_correlation(text, db_path=config.database_path, owner=owner)
+            save_notification(
+                owner,
+                title="✨ Weekly Intelligence Report",
+                message="New 60-day recovery and workout correlations analysis is ready.",
+                type="coach",
+                link="/stats",
+                db_path=config.database_path,
+            )
             logger.info(
                 "Weekly deep correlation generated successfully via %s.",
                 provider.name(),
@@ -201,11 +214,15 @@ def main() -> None:
         logger.error("%s", exc)
         sys.exit(1)
 
+    owner = None
+    if args.user_id:
+        owner = owner_for_user(config.database_path, args.user_id)
+
     if args.daily:
-        generate_daily_header(config, user_id=args.user_id)
+        generate_daily_header(config, owner=owner)
 
     if args.weekly:
-        generate_weekly_correlations(config, user_id=args.user_id)
+        generate_weekly_correlations(config, owner=owner)
 
 
 if __name__ == "__main__":

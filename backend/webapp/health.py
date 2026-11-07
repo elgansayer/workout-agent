@@ -13,10 +13,15 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from connectors.builtin import build_builtin_registry
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
-from connectors.builtin import build_builtin_registry
+from ownership import (
+    AuthenticatedOwner,
+    UnauthenticatedOwnerError,
+    owner_from_session,
+    owner_id,
+)
 
 Receive = Callable[[], Awaitable[dict[str, Any]]]
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -94,9 +99,12 @@ def readiness_status(db_path: str) -> tuple[int, dict[str, str]]:
     return 503, {"status": "not_ready"}
 
 
-def _safe_user_dependency_state(db_path: str, user_id: str) -> dict[str, Any]:
-    """Read non-secret per-user dependency configuration for diagnostics."""
+def _safe_user_dependency_state(
+    db_path: str, owner: AuthenticatedOwner
+) -> dict[str, Any]:
+    """Read non-secret per-owner dependency configuration for diagnostics."""
 
+    user_id = owner_id(owner)
     with _open_readonly(db_path) as conn:
         preferred_row = conn.execute(
             "SELECT preferred_ai FROM user_preferences WHERE user_id = ?",
@@ -135,8 +143,10 @@ def _safe_user_dependency_state(db_path: str, user_id: str) -> dict[str, Any]:
     }
 
 
-def authenticated_diagnostics(db_path: str, user_id: str) -> tuple[int, dict[str, Any]]:
-    """Return safe aggregate dependency health for one authenticated user."""
+def authenticated_diagnostics(
+    db_path: str, owner: AuthenticatedOwner
+) -> tuple[int, dict[str, Any]]:
+    """Return safe aggregate dependency health for one authenticated owner."""
 
     db_ready, db_reason = database_readiness(db_path)
     payload: dict[str, Any] = {
@@ -156,7 +166,7 @@ def authenticated_diagnostics(db_path: str, user_id: str) -> tuple[int, dict[str
 
     if db_ready:
         try:
-            payload["components"].update(_safe_user_dependency_state(db_path, user_id))
+            payload["components"].update(_safe_user_dependency_state(db_path, owner))
         except (OSError, sqlite3.Error, ValueError):
             payload["status"] = "degraded"
             payload["components"]["dependencies"] = {"status": "error"}
@@ -210,11 +220,11 @@ def install_authenticated_diagnostics(app: FastAPI, *, db_path: str) -> None:
         # Require the same complete signed-session identity as the global
         # mutation boundary. Dependency details are never available in legacy
         # anonymous mode or from an incomplete session.
-        user = request.session.get("user")
-        user_id = request.session.get("user_id")
-        if not user or not isinstance(user_id, str) or not user_id.strip():
+        try:
+            owner = owner_from_session(request.session)
+        except UnauthenticatedOwnerError:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-        status_code, payload = authenticated_diagnostics(db_path, user_id.strip())
+        status_code, payload = authenticated_diagnostics(db_path, owner)
         return JSONResponse(
             payload,
             status_code=status_code,

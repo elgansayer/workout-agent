@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 import scheduler
+from tenant_fixtures import synthetic_owner
 
 # ---------------------------------------------------------------------------
 # _parse_run_at
@@ -247,8 +248,13 @@ def test_active_scheduler_runs_coaching_for_each_user(
         lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
     )
     monkeypatch.setattr(
+        scheduler,
+        "owner_for_user",
+        lambda _db, user_id: synthetic_owner(user_id),
+    )
+    monkeypatch.setattr(
         "main.run",
-        lambda *, preview, user_id=None: calls.append(user_id) or 0,
+        lambda *, preview, owner: calls.append(owner.user_id) or 0,
     )
 
     assert scheduler.run_coaching(config) == 0
@@ -267,12 +273,17 @@ def test_active_scheduler_scopes_each_insight_job_to_user(
         lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
     )
     monkeypatch.setattr(
+        scheduler,
+        "owner_for_user",
+        lambda _db, user_id: synthetic_owner(user_id),
+    )
+    monkeypatch.setattr(
         "insight_cron.generate_daily_header",
-        lambda _config, *, user_id=None: daily_calls.append(user_id),
+        lambda _config, *, owner: daily_calls.append(owner.user_id),
     )
     monkeypatch.setattr(
         "insight_cron.generate_weekly_correlations",
-        lambda _config, *, user_id=None: weekly_calls.append(user_id),
+        lambda _config, *, owner: weekly_calls.append(owner.user_id),
     )
 
     scheduler.run_daily_insight(config)

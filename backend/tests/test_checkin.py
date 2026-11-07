@@ -9,7 +9,9 @@ import checkin
 from _pytest.monkeypatch import MonkeyPatch
 from config import Config
 from database import get_checkins, get_meta, get_or_create_user, init_db, set_meta
+from ownership import owner_for_user
 from program import BLOCKS
+from tenant_fixtures import legacy_owner, synthetic_owner
 
 
 def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
@@ -73,9 +75,10 @@ def test_due_seeds_baseline_then_not_due(
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
     # First ever call seeds the baseline at the current total and is not due.
-    assert checkin.due(config) is None
-    assert get_meta("last_checkin_workout_count", config.database_path) == "40"
-    assert get_meta("checkin_number", config.database_path) == "0"
+    owner = legacy_owner(config.database_path)
+    assert checkin.due(config, owner=owner) is None
+    assert get_meta("last_checkin_workout_count", config.database_path, owner=owner) == "40"
+    assert get_meta("checkin_number", config.database_path, owner=owner) == "0"
 
 
 def test_due_fires_after_target_workouts(
@@ -83,10 +86,10 @@ def test_due_fires_after_target_workouts(
 ) -> None:
     config = _config(tmp_path)
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
-    checkin.due(config)  # seed at 40
+    checkin.due(config, owner=legacy_owner(config.database_path))  # seed at 40
     # 24 more sessions logged -> due.
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 64)
-    due_info = checkin.due(config)
+    due_info = checkin.due(config, owner=legacy_owner(config.database_path))
     assert due_info is not None
     assert due_info.number == 1
     assert due_info.workouts_done == 24
@@ -95,13 +98,19 @@ def test_due_fires_after_target_workouts(
 
 def test_due_calendar_fallback_without_hevy(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
-    checkin.due(config)  # seeds number=0, last date today
+    # seeds number=0, last date today
+    checkin.due(config, owner=legacy_owner(config.database_path))
     # Pretend five weeks have passed since the last check-in.
     five_weeks_ago = (
         datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)
     ).isoformat()
-    set_meta("last_checkin_date", five_weeks_ago, config.database_path)
-    due_info = checkin.due(config)
+    set_meta(
+        "last_checkin_date",
+        five_weeks_ago,
+        config.database_path,
+        owner=legacy_owner(config.database_path),
+    )
+    due_info = checkin.due(config, owner=legacy_owner(config.database_path))
     assert due_info is not None
     assert due_info.weeks_elapsed >= 4
     assert due_info.total_count is None
@@ -115,16 +124,20 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
         weeks_elapsed=4,
         total_count=64,
     )
+    owner = legacy_owner(config.database_path)
     checkin.record(
         config,
         due_info,
         "Check-in 2: looking strong.",
         today=date(2026, 3, 1),
+        owner=owner,
     )
-    assert get_meta("checkin_number", config.database_path) == "2"
-    assert get_meta("last_checkin_date", config.database_path) == "2026-03-01"
-    assert get_meta("last_checkin_workout_count", config.database_path) == "64"
-    saved = get_checkins(db_path=config.database_path)
+    assert get_meta("checkin_number", config.database_path, owner=owner) == "2"
+    assert get_meta("last_checkin_date", config.database_path, owner=owner) == "2026-03-01"
+    assert (
+        get_meta("last_checkin_workout_count", config.database_path, owner=owner) == "64"
+    )
+    saved = get_checkins(db_path=config.database_path, owner=owner)
     assert len(saved) == 1
     assert saved[0]["number"] == 2
     assert saved[0]["workouts_done"] == 24
@@ -132,7 +145,14 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
 
 def test_analyse_without_hevy_returns_empty(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
-    assert checkin._analyse(config, BLOCKS[1]) == []
+    assert (
+        checkin._analyse(
+            config,
+            BLOCKS[1],
+            owner=legacy_owner(config.database_path),
+        )
+        == []
+    )
 
 
 def test_run_checkin_resolves_the_acting_users_provider(
@@ -166,42 +186,48 @@ def test_run_checkin_resolves_the_acting_users_provider(
         due_info,
         week=4,
         block=BLOCKS[1],
-        user_id="user-a",
+        owner=synthetic_owner("user-a"),
     )
 
     assert message == "Selected provider check-in."
-    assert captured["user_id"] == "user-a"
+    assert captured["owner"].user_id == "user-a"
     assert captured["db_path"] == config.database_path
     assert captured["provider"] is provider
 
 
 def test_record_keeps_checkin_metadata_tenant_scoped(tmp_path: Any) -> None:
     config = _config(tmp_path)
-    user_a = get_or_create_user("a@example.test", db_path=config.database_path)["id"]
-    user_b = get_or_create_user("b@example.test", db_path=config.database_path)["id"]
+    user_a = owner_for_user(
+        config.database_path,
+        get_or_create_user("a@example.test", db_path=config.database_path)["id"],
+    )
+    user_b = owner_for_user(
+        config.database_path,
+        get_or_create_user("b@example.test", db_path=config.database_path)["id"],
+    )
 
     checkin.record(
         config,
         checkin.CheckinDue(1, 12, 4, 12),
         "User A check-in",
         today=date(2026, 9, 1),
-        user_id=user_a,
+        owner=user_a,
     )
     checkin.record(
         config,
         checkin.CheckinDue(3, 18, 5, 18),
         "User B check-in",
         today=date(2026, 9, 2),
-        user_id=user_b,
+        owner=user_b,
     )
 
-    assert get_meta("checkin_number", config.database_path, user_id=user_a) == "1"
+    assert get_meta("checkin_number", config.database_path, owner=user_a) == "1"
     assert (
-        get_meta("last_checkin_date", config.database_path, user_id=user_a)
+        get_meta("last_checkin_date", config.database_path, owner=user_a)
         == "2026-09-01"
     )
-    assert get_meta("checkin_number", config.database_path, user_id=user_b) == "3"
+    assert get_meta("checkin_number", config.database_path, owner=user_b) == "3"
     assert (
-        get_meta("last_checkin_date", config.database_path, user_id=user_b)
+        get_meta("last_checkin_date", config.database_path, owner=user_b)
         == "2026-09-02"
     )

@@ -12,9 +12,11 @@ from main import (
     _changes_footer,
     _compose,
     _parse_args,
-    _scope_config_to_user,
+    _scope_config_to_owner,
     run,
 )
+from ownership import owner_for_legacy_tenant
+from tenant_fixtures import legacy_owner
 
 if TYPE_CHECKING:
     from config import Config
@@ -97,22 +99,22 @@ def test_parse_args_unknown_raises() -> None:
         _parse_args(["--nonexistent"])
 
 
-def test_scope_config_to_user_uses_only_that_users_connector_key(
+def test_scope_config_to_owner_uses_only_that_owners_connector_key(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     from config import Config
     from cryptography.fernet import Fernet
     from database import (
-        get_legacy_user_id,
         get_or_create_user,
         init_db,
         save_user_api_key,
     )
+    from ownership import owner_for_user
 
     db_path = str(tmp_path / "tenant-config.db")
     init_db(db_path)
-    legacy_user_id = get_legacy_user_id(db_path)
+    legacy_owner = owner_for_legacy_tenant(db_path)
     user = get_or_create_user(
         "synthetic-user@example.com",
         "Synthetic User",
@@ -125,7 +127,7 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
     )
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     save_user_api_key(
-        user["id"],
+        owner_for_user(db_path, user["id"]),
         "hevy",
         "synthetic-user-hevy-key",
         db_path=db_path,
@@ -147,20 +149,22 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
         self_review_weekday=6,
     )
 
-    scoped = _scope_config_to_user(config, user["id"])
+    scoped = _scope_config_to_owner(config, owner_for_user(db_path, user["id"]))
     assert scoped.hevy_api_key == "synthetic-user-hevy-key"
     assert scoped.health_connect_file is None
     assert scoped.google_health_client_id is None
     assert scoped.google_health_client_secret is None
     assert scoped.google_health_refresh_token is None
 
-    unconfigured = _scope_config_to_user(config, user_without_key["id"])
+    unconfigured = _scope_config_to_owner(
+        config, owner_for_user(db_path, user_without_key["id"])
+    )
     assert unconfigured.hevy_api_key is None
     assert unconfigured.google_health_client_id is None
     assert unconfigured.google_health_client_secret is None
     assert unconfigured.google_health_refresh_token is None
 
-    legacy = _scope_config_to_user(config, legacy_user_id)
+    legacy = _scope_config_to_owner(config, legacy_owner)
     assert legacy.hevy_api_key == "synthetic-server-hevy-key"
     assert legacy.health_connect_file == "/synthetic/legacy-health.json"
     assert legacy.google_health_refresh_token == "synthetic-legacy-refresh-token"
@@ -204,11 +208,9 @@ def _make_config(
 
     monkeypatch.setattr("main.Config.load", lambda: config)
 
-    # Patch init_db to do nothing (avoid real DB creation)
-    monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
-    # Patch _resolve_run_user to return a fixed test user_id
-    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
-    monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
+    # The scheduled run resolves its owner against the stored users table.
+    monkeypatch.setattr("main._resolve_run_owner", lambda path: legacy_owner(path))
+    monkeypatch.setattr("main._scope_config_to_owner", lambda config, owner: config)
     # Patch _resolve_provider to avoid DB lookups in test
     monkeypatch.setattr(
         "main._resolve_provider",
@@ -239,7 +241,7 @@ def test_run_preview_training_day(
     # Mock Google Health
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
 
     # Mock health connect
@@ -359,7 +361,7 @@ def test_run_preview_rest_day(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -431,7 +433,7 @@ def test_run_preview_with_sync_statuses(
     )
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -477,7 +479,7 @@ def test_run_preview_with_lifestyle(
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -540,7 +542,7 @@ def test_run_preview_training_day_with_checkin(
 
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr(
         "main.read_recovery_metrics",
@@ -654,7 +656,7 @@ def test_run_deliver_sends_push(
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -706,7 +708,7 @@ def test_run_deliver_returns_2_when_push_fails(
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -754,7 +756,7 @@ def test_run_hevy_sync_failure_does_not_block(
     )
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -803,7 +805,7 @@ def test_run_checkin_due_failure_does_not_block(
     )
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
@@ -854,9 +856,8 @@ def test_run_self_review_on_configured_weekday(
         self_review_weekday=6,  # Sunday
     )
     monkeypatch.setattr("main.Config.load", lambda: config2)
-    monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
-    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
-    monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
+    monkeypatch.setattr("main._resolve_run_owner", lambda path: legacy_owner(path))
+    monkeypatch.setattr("main._scope_config_to_owner", lambda config, owner: config)
     monkeypatch.setattr(
         "main._resolve_provider",
         lambda config, **kw: MagicMock(name="test-provider"),
@@ -874,7 +875,7 @@ def test_run_self_review_on_configured_weekday(
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
     monkeypatch.setattr(
         "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
+        lambda *args, **kw: None,
     )
     monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
     monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)

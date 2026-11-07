@@ -21,6 +21,13 @@ Every domain table in the workout agent must be strictly isolated per user (`use
 3. **Query Filtering:**
    - All ORM queries and SQL statements must explicitly filter on `user_id == current_user_id`.
 
-4. **Testing:**
+4. **Owner Context:**
+   - Repository and service functions take `owner: AuthenticatedOwner` (`backend/ownership.py`) and bind it with `owner_id(owner)`. Never accept a bare user identifier; mint contexts only through `owner_from_session`, `owner_for_user`, `owner_for_email` or `owner_for_legacy_tenant`.
+
+5. **Database Constraints:**
+   - Register every new user-owned table in `ownership.USER_SCOPED_TABLES`. It must have `user_id TEXT NOT NULL REFERENCES users(id)`, an index that starts with `user_id`, and the immutable-owner trigger that `init_db()` installs and audits. See `docs/TENANT_OWNERSHIP.md`.
+
+6. **Testing:**
    - Verify in `backend/tests/test_database.py` that two separate users querying the same tables receive only their own records.
+   - Extend `backend/tests/test_idor_matrix.py` and `backend/tests/test_idor_http_matrix.py` with a read, write and delete case for the new data.
 

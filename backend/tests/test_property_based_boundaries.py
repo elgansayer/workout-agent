@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from pathlib import Path
@@ -11,9 +11,6 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
-from hypothesis import example, given, settings, strategies as st
-from pydantic import ValidationError
-
 from database import get_recent_hevy_logs, init_db, save_workout
 from dynamic_programme import (
     MAX_DURATION_WEEKS,
@@ -31,6 +28,10 @@ from hevy_reader import (
     _parse_routine,
     _parse_workout,
 )
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
+from pydantic import ValidationError
+from tenant_fixtures import create_owner
 
 GOALS = (
     "general_fitness",
@@ -391,28 +392,31 @@ def test_workout_imports_remain_tenant_isolated(
         db_path = str(Path(directory) / "property.db")
         init_db(db_path)
 
+        owner_a = create_owner(db_path, "property-user-a@example.com")
+        owner_b = create_owner(db_path, "property-user-b@example.com")
+
         for value in values_a:
             save_workout(
                 {"tenant_marker": "a", "value": value},
                 db_path,
-                user_id="property-user-a",
+                owner=owner_a,
             )
         for value in values_b:
             save_workout(
                 {"tenant_marker": "b", "value": value},
                 db_path,
-                user_id="property-user-b",
+                owner=owner_b,
             )
 
         rows_a = get_recent_hevy_logs(
             limit=20,
             db_path=db_path,
-            user_id="property-user-a",
+            owner=owner_a,
         )
         rows_b = get_recent_hevy_logs(
             limit=20,
             db_path=db_path,
-            user_id="property-user-b",
+            owner=owner_b,
         )
 
     assert len(rows_a) == len(values_a)

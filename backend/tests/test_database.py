@@ -31,6 +31,8 @@ from database import (
     set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
+from ownership import owner_for_user
+from tenant_fixtures import create_owner, legacy_owner
 
 
 def _db(tmp_path: Any) -> str:
@@ -40,41 +42,47 @@ def _db(tmp_path: Any) -> str:
 def test_init_seeds_day_one(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    assert get_current_day(db) == 1
+    owner = legacy_owner(db)
+    assert get_current_day(db, owner=owner) == 1
 
 
 def test_init_is_idempotent(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    advance_day(db)
+    owner = legacy_owner(db)
+    advance_day(db, owner=owner)
     init_db(db)  # must not reset the stored day
-    assert get_current_day(db) == 2
+    assert get_current_day(db, owner=owner) == 2
 
 
 def test_advance_increments(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    assert advance_day(db) == 2
-    assert advance_day(db) == 3
-    assert get_current_day(db) == 3
+    owner = legacy_owner(db)
+    assert advance_day(db, owner=owner) == 2
+    assert advance_day(db, owner=owner) == 3
+    assert get_current_day(db, owner=owner) == 3
 
 
 def test_advance_wraps_at_six(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    days = [advance_day(db) for _ in range(6)]
+    owner = legacy_owner(db)
+    days = [advance_day(db, owner=owner) for _ in range(6)]
     assert days == [2, 3, 4, 5, 6, 1]
 
 
 def test_save_workout_ignores_none(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    save_workout(None, db)  # should not raise
+    owner = legacy_owner(db)
+    save_workout(None, db, owner=owner)  # should not raise
 
 
 def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     summary = WorkoutSummary(
         title="Legs & Abs",
         date="2026-06-17",
@@ -85,9 +93,9 @@ def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
             ExerciseSummary("Leg Extensions", 60.0, 15, 4, True),
         ],
     )
-    save_progress(summary, db)
+    save_progress(summary, db, owner=owner)
 
-    bests = get_recent_bests(db)
+    bests = get_recent_bests(db, owner=owner)
     assert bests["Leg Press"]["top_weight_kg"] == 120.0
     assert bests["Leg Press"]["top_reps"] == 12
     assert bests["Leg Extensions"]["sets"] == 4
@@ -96,6 +104,7 @@ def test_save_progress_and_get_recent_bests(tmp_path: Any) -> None:
 def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     save_progress(
         WorkoutSummary(
             "S1",
@@ -105,7 +114,7 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
             exercises=[ExerciseSummary("Leg Press", 100.0, 10, 3)],
         ),
         db,
-    )
+     owner=owner)
     save_progress(
         WorkoutSummary(
             "S2",
@@ -115,8 +124,8 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
             exercises=[ExerciseSummary("Leg Press", 110.0, 12, 3)],
         ),
         db,
-    )
-    bests = get_recent_bests(db)
+     owner=owner)
+    bests = get_recent_bests(db, owner=owner)
     assert bests["Leg Press"]["top_weight_kg"] == 110.0
     assert bests["Leg Press"]["top_reps"] == 12
 
@@ -124,13 +133,15 @@ def test_get_recent_bests_returns_latest_per_exercise(tmp_path: Any) -> None:
 def test_save_progress_ignores_none(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    save_progress(None, db)
-    assert get_recent_bests(db) == {}
+    owner = legacy_owner(db)
+    save_progress(None, db, owner=owner)
+    assert get_recent_bests(db, owner=owner) == {}
 
 
 def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     save_daily_log(
         "2026-06-17",
         1,
@@ -139,7 +150,7 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
         "plan A",
         "life A",
         db,
-    )
+     owner=owner)
     # A re-run on the same day replaces the earlier entry.
     save_daily_log(
         "2026-06-17",
@@ -149,10 +160,10 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
         "plan B",
         "life B",
         db,
-    )
-    save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db)
+     owner=owner)
+    save_daily_log("2026-06-18", 2, "Shoulders & Arms", "low", "plan C", "life C", db, owner=owner)
 
-    logs = get_daily_logs(db_path=db)
+    logs = get_daily_logs(db_path=db, owner=owner)
     assert len(logs) == 2
     assert logs[0]["date"] == "2026-06-18"  # most recent first
     assert logs[1]["plan"] == "plan B"
@@ -162,11 +173,12 @@ def test_daily_log_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
 def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db)
-    save_body_metrics({"weight_kg": 81.5, "body_fat_pct": 14.6}, "2026-06-17", db)
-    save_body_metrics({"weight_kg": 81.0, "body_fat_pct": 14.2}, "2026-06-18", db)
+    owner = legacy_owner(db)
+    save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 15.0}, "2026-06-17", db, owner=owner)
+    save_body_metrics({"weight_kg": 81.5, "body_fat_pct": 14.6}, "2026-06-17", db, owner=owner)
+    save_body_metrics({"weight_kg": 81.0, "body_fat_pct": 14.2}, "2026-06-18", db, owner=owner)
 
-    readings = get_body_metrics(db_path=db)
+    readings = get_body_metrics(db_path=db, owner=owner)
     assert len(readings) == 2  # one per date
     assert readings[0]["date"] == "2026-06-17"  # oldest first
     assert readings[0]["weight_kg"] == 81.5  # latest reading for the day wins
@@ -176,13 +188,15 @@ def test_body_metrics_roundtrip_and_dedupes_by_date(tmp_path: Any) -> None:
 def test_save_body_metrics_ignores_none(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    save_body_metrics(None, "2026-06-17", db)
-    assert get_body_metrics(db_path=db) == []
+    owner = legacy_owner(db)
+    save_body_metrics(None, "2026-06-17", db, owner=owner)
+    assert get_body_metrics(db_path=db, owner=owner) == []
 
 
 def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     save_progress(
         WorkoutSummary(
             "S1",
@@ -195,8 +209,8 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
             ],
         ),
         db,
-    )
-    volumes = get_session_volumes(db)
+     owner=owner)
+    volumes = get_session_volumes(db, owner=owner)
     assert len(volumes) == 1
     assert volumes[0]["date"] == "2026-06-10"
     assert volumes[0]["volume"] == 2000.0
@@ -206,6 +220,7 @@ def test_get_session_volumes_aggregates_by_date(tmp_path: Any) -> None:
 def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     save_progress(
         WorkoutSummary(
             "S1",
@@ -215,7 +230,7 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
             [ExerciseSummary("Deadlift", 100.0, 5, 4)],
         ),
         db,
-    )
+     owner=owner)
     save_progress(
         WorkoutSummary(
             "S2",
@@ -225,8 +240,8 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
             [ExerciseSummary("Deadlift", 120.0, 3, 5)],
         ),
         db,
-    )
-    prs = get_personal_records(db)
+     owner=owner)
+    prs = get_personal_records(db, owner=owner)
     assert len(prs) == 1
     pr = prs[0]
     assert pr["exercise"] == "Deadlift"
@@ -238,12 +253,14 @@ def test_get_personal_records_uses_best_epley_1rm(tmp_path: Any) -> None:
 def test_get_personal_records_empty_without_data(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    assert get_personal_records(db) == []
+    owner = legacy_owner(db)
+    assert get_personal_records(db, owner=owner) == []
 
 
 def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     save_progress(
         WorkoutSummary(
             "S1",
@@ -256,7 +273,7 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
             ],
         ),
         db,
-    )
+     owner=owner)
     save_progress(
         WorkoutSummary(
             "S2",
@@ -266,8 +283,8 @@ def test_get_exercise_volumes_sums_per_exercise(tmp_path: Any) -> None:
             exercises=[ExerciseSummary("Leg Press", 110.0, 10, 3)],
         ),  # 3300
         db,
-    )
-    volumes = {row["exercise"]: row for row in get_exercise_volumes(db)}
+     owner=owner)
+    volumes = {row["exercise"]: row for row in get_exercise_volumes(db, owner=owner)}
     assert volumes["Leg Press"]["volume"] == 6300.0
     assert volumes["Leg Press"]["sessions"] == 2
     assert volumes["Pull-Ups"]["volume"] == 0.0
@@ -322,14 +339,14 @@ def test_workout_history_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_workout({"user": "a", "exercise": "Squat"}, db, user_id=user_a)
-    save_workout({"user": "b", "exercise": "Bench"}, db, user_id=user_b)
+    save_workout({"user": "a", "exercise": "Squat"}, db, owner=owner_a)
+    save_workout({"user": "b", "exercise": "Bench"}, db, owner=owner_b)
 
-    logs_a = get_recent_hevy_logs(limit=10, db_path=db, user_id=user_a)
-    logs_b = get_recent_hevy_logs(limit=10, db_path=db, user_id=user_b)
+    logs_a = get_recent_hevy_logs(limit=10, db_path=db, owner=owner_a)
+    logs_b = get_recent_hevy_logs(limit=10, db_path=db, owner=owner_b)
 
     assert len(logs_a) == 1
     assert logs_a[0]["user"] == "a"
@@ -342,15 +359,15 @@ def test_workout_history_user_isolation_same_payload(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
     for i in range(3):
-        save_workout({"count": i}, db, user_id=user_a)
-        save_workout({"count": i + 100}, db, user_id=user_b)
+        save_workout({"count": i}, db, owner=owner_a)
+        save_workout({"count": i + 100}, db, owner=owner_b)
 
-    logs_a = get_recent_hevy_logs(limit=20, db_path=db, user_id=user_a)
-    logs_b = get_recent_hevy_logs(limit=20, db_path=db, user_id=user_b)
+    logs_a = get_recent_hevy_logs(limit=20, db_path=db, owner=owner_a)
+    logs_b = get_recent_hevy_logs(limit=20, db_path=db, owner=owner_b)
 
     assert len(logs_a) == 3
     assert {w["count"] for w in logs_a} == {0, 1, 2}
@@ -362,9 +379,10 @@ def test_workout_history_null_user_id_backward_compat(tmp_path: Any) -> None:
     """Calling save_workout/get_recent_hevy_logs without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
-    save_workout({"exercise": "Deadlift"}, db)
-    logs = get_recent_hevy_logs(db_path=db)
+    save_workout({"exercise": "Deadlift"}, db, owner=owner)
+    logs = get_recent_hevy_logs(db_path=db, owner=owner)
 
     assert len(logs) == 1
     assert logs[0]["exercise"] == "Deadlift"
@@ -451,14 +469,14 @@ def test_exercise_progress_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_progress(_exercise_summary("Squat", 100.0, 10), db, user_id=user_a)
-    save_progress(_exercise_summary("Squat", 120.0, 8), db, user_id=user_b)
+    save_progress(_exercise_summary("Squat", 100.0, 10), db, owner=owner_a)
+    save_progress(_exercise_summary("Squat", 120.0, 8), db, owner=owner_b)
 
-    bests_a = get_recent_bests(db, user_id=user_a)
-    bests_b = get_recent_bests(db, user_id=user_b)
+    bests_a = get_recent_bests(db, owner=owner_a)
+    bests_b = get_recent_bests(db, owner=owner_b)
 
     assert bests_a["Squat"]["top_weight_kg"] == 100.0
     assert bests_b["Squat"]["top_weight_kg"] == 120.0
@@ -469,14 +487,14 @@ def test_progress_history_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_progress(_exercise_summary("Bench Press", 80.0, 10), db, user_id=user_a)
-    save_progress(_exercise_summary("Bench Press", 90.0, 8), db, user_id=user_b)
+    save_progress(_exercise_summary("Bench Press", 80.0, 10), db, owner=owner_a)
+    save_progress(_exercise_summary("Bench Press", 90.0, 8), db, owner=owner_b)
 
-    history_a = get_progress_history(db_path=db, user_id=user_a)
-    history_b = get_progress_history(db_path=db, user_id=user_b)
+    history_a = get_progress_history(db_path=db, owner=owner_a)
+    history_b = get_progress_history(db_path=db, owner=owner_b)
 
     assert "Bench Press" in history_a
     assert history_a["Bench Press"][0]["top_weight_kg"] == 80.0
@@ -488,14 +506,14 @@ def test_session_volumes_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_progress(_exercise_summary("Deadlift", 100.0, 5, 4), db, user_id=user_a)
-    save_progress(_exercise_summary("Deadlift", 140.0, 3, 5), db, user_id=user_b)
+    save_progress(_exercise_summary("Deadlift", 100.0, 5, 4), db, owner=owner_a)
+    save_progress(_exercise_summary("Deadlift", 140.0, 3, 5), db, owner=owner_b)
 
-    vols_a = get_session_volumes(db, user_id=user_a)
-    vols_b = get_session_volumes(db, user_id=user_b)
+    vols_a = get_session_volumes(db, owner=owner_a)
+    vols_b = get_session_volumes(db, owner=owner_b)
 
     assert vols_a[0]["volume"] == 2000.0  # 100*5*4
     assert vols_b[0]["volume"] == 2100.0  # 140*3*5
@@ -506,14 +524,14 @@ def test_exercise_volumes_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_progress(_exercise_summary("Leg Press", 100.0, 10, 3), db, user_id=user_a)
-    save_progress(_exercise_summary("Leg Press", 200.0, 8, 3), db, user_id=user_b)
+    save_progress(_exercise_summary("Leg Press", 100.0, 10, 3), db, owner=owner_a)
+    save_progress(_exercise_summary("Leg Press", 200.0, 8, 3), db, owner=owner_b)
 
-    vols_a = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_a)}
-    vols_b = {r["exercise"]: r for r in get_exercise_volumes(db, user_id=user_b)}
+    vols_a = {r["exercise"]: r for r in get_exercise_volumes(db, owner=owner_a)}
+    vols_b = {r["exercise"]: r for r in get_exercise_volumes(db, owner=owner_b)}
 
     assert vols_a["Leg Press"]["volume"] == 3000.0
     assert vols_b["Leg Press"]["volume"] == 4800.0
@@ -524,14 +542,14 @@ def test_personal_records_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_progress(_exercise_summary("Squat", 100.0, 5), db, user_id=user_a)
-    save_progress(_exercise_summary("Squat", 150.0, 3), db, user_id=user_b)
+    save_progress(_exercise_summary("Squat", 100.0, 5), db, owner=owner_a)
+    save_progress(_exercise_summary("Squat", 150.0, 3), db, owner=owner_b)
 
-    prs_a = get_personal_records(db, user_id=user_a)
-    prs_b = get_personal_records(db, user_id=user_b)
+    prs_a = get_personal_records(db, owner=owner_a)
+    prs_b = get_personal_records(db, owner=owner_b)
 
     assert prs_a[0]["weight_kg"] == 100.0
     assert prs_b[0]["weight_kg"] == 150.0
@@ -541,9 +559,10 @@ def test_exercise_progress_null_user_id_backward_compat(tmp_path: Any) -> None:
     """Calling save_progress without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
-    save_progress(_exercise_summary("Curls", 20.0, 12), db)
-    bests = get_recent_bests(db)
+    save_progress(_exercise_summary("Curls", 20.0, 12), db, owner=owner)
+    bests = get_recent_bests(db, owner=owner)
     assert bests["Curls"]["top_weight_kg"] == 20.0
 
 
@@ -598,14 +617,14 @@ def test_body_metrics_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
-    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
+    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, owner=owner_a)
+    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, owner=owner_b)
 
-    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
-    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
+    metrics_a = get_body_metrics(db_path=db, owner=owner_a)
+    metrics_b = get_body_metrics(db_path=db, owner=owner_b)
 
     assert len(metrics_a) == 1
     assert metrics_a[0]["weight_kg"] == 80.0
@@ -618,16 +637,16 @@ def test_body_metrics_same_date_different_users_preserved(tmp_path: Any) -> None
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, user_id=user_a)
-    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, user_id=user_b)
+    save_body_metrics({"weight_kg": 80.0}, "2026-08-01", db, owner=owner_a)
+    save_body_metrics({"weight_kg": 90.0}, "2026-08-01", db, owner=owner_b)
     # A second reading from user A on the same day should replace theirs
-    save_body_metrics({"weight_kg": 80.5}, "2026-08-01", db, user_id=user_a)
+    save_body_metrics({"weight_kg": 80.5}, "2026-08-01", db, owner=owner_a)
 
-    metrics_a = get_body_metrics(db_path=db, user_id=user_a)
-    metrics_b = get_body_metrics(db_path=db, user_id=user_b)
+    metrics_a = get_body_metrics(db_path=db, owner=owner_a)
+    metrics_b = get_body_metrics(db_path=db, owner=owner_b)
 
     assert len(metrics_a) == 1
     assert metrics_a[0]["weight_kg"] == 80.5
@@ -639,9 +658,10 @@ def test_body_metrics_null_user_id_backward_compat(tmp_path: Any) -> None:
     """Calling save_body_metrics/get_body_metrics without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
-    save_body_metrics({"weight_kg": 75.0}, "2026-08-01", db)
-    readings = get_body_metrics(db_path=db)
+    save_body_metrics({"weight_kg": 75.0}, "2026-08-01", db, owner=owner)
+    readings = get_body_metrics(db_path=db, owner=owner)
     assert len(readings) == 1
     assert readings[0]["weight_kg"] == 75.0
 
@@ -697,15 +717,15 @@ def test_chat_messages_user_isolation(tmp_path: Any) -> None:
 
     from database import clear_chat_messages, get_chat_messages, save_chat_message
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    save_chat_message("user", "msg A1", db, user_id=user_a)
-    save_chat_message("user", "msg A2", db, user_id=user_a)
-    save_chat_message("user", "msg B1", db, user_id=user_b)
+    save_chat_message("user", "msg A1", db, owner=owner_a)
+    save_chat_message("user", "msg A2", db, owner=owner_a)
+    save_chat_message("user", "msg B1", db, owner=owner_b)
 
-    msgs_a = get_chat_messages(limit=50, db_path=db, user_id=user_a)
-    msgs_b = get_chat_messages(limit=50, db_path=db, user_id=user_b)
+    msgs_a = get_chat_messages(limit=50, db_path=db, owner=owner_a)
+    msgs_b = get_chat_messages(limit=50, db_path=db, owner=owner_b)
 
     assert len(msgs_a) == 2
     assert all(m["content"] in ("msg A1", "msg A2") for m in msgs_a)
@@ -713,25 +733,26 @@ def test_chat_messages_user_isolation(tmp_path: Any) -> None:
     assert msgs_b[0]["content"] == "msg B1"
 
     # clear should only affect the target user
-    clear_chat_messages(db_path=db, user_id=user_a)
-    assert get_chat_messages(limit=50, db_path=db, user_id=user_a) == []
-    assert len(get_chat_messages(limit=50, db_path=db, user_id=user_b)) == 1
+    clear_chat_messages(db_path=db, owner=owner_a)
+    assert get_chat_messages(limit=50, db_path=db, owner=owner_a) == []
+    assert len(get_chat_messages(limit=50, db_path=db, owner=owner_b)) == 1
 
 
 def test_chat_messages_backward_compat(tmp_path: Any) -> None:
     """Calling save/get/clear without user_id still works."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
     from database import clear_chat_messages, get_chat_messages, save_chat_message
 
-    save_chat_message("user", "test", db)
-    msgs = get_chat_messages(db_path=db)
+    save_chat_message("user", "test", db, owner=owner)
+    msgs = get_chat_messages(db_path=db, owner=owner)
     assert len(msgs) == 1
     assert msgs[0]["content"] == "test"
 
-    clear_chat_messages(db_path=db)
-    assert get_chat_messages(db_path=db) == []
+    clear_chat_messages(db_path=db, owner=owner)
+    assert get_chat_messages(db_path=db, owner=owner) == []
 
 
 # ---------------------------------------------------------------------------
@@ -767,25 +788,26 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
 
     from database import get_dashboard_insight, save_dashboard_insight
 
-    # The old row should have been backfilled to the legacy user
-    # Without a user_id filter, we default to None which was backfilled as legacy
-    legacy_insight = get_dashboard_insight(db_path=db, user_id=None)
-    assert legacy_insight is None  # None doesn't match legacy user in new schema
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
-    user_a = "user-a-123"
-    save_dashboard_insight('{"fatigue": "Red"}', db, user_id=user_a)
-    insight_a = get_dashboard_insight(db_path=db, user_id=user_a)
+    # The old singleton row was backfilled to the legacy tenant, so it is not
+    # visible through either user's owner context.
+    legacy_insight = get_dashboard_insight(db_path=db, owner=owner_b)
+    assert legacy_insight is None
+
+    save_dashboard_insight('{"fatigue": "Red"}', db, owner=owner_a)
+    insight_a = get_dashboard_insight(db_path=db, owner=owner_a)
     assert insight_a is not None
     assert insight_a["fatigue"] == "Red"
 
-    user_b = "user-b-456"
-    save_dashboard_insight('{"fatigue": "Green"}', db, user_id=user_b)
-    insight_b = get_dashboard_insight(db_path=db, user_id=user_b)
+    save_dashboard_insight('{"fatigue": "Green"}', db, owner=owner_b)
+    insight_b = get_dashboard_insight(db_path=db, owner=owner_b)
     assert insight_b is not None
     assert insight_b["fatigue"] == "Green"
 
     # Users don't see each other's insights
-    insight_a2 = get_dashboard_insight(db_path=db, user_id=user_a)
+    insight_a2 = get_dashboard_insight(db_path=db, owner=owner_a)
     assert insight_a2 is not None
     assert insight_a2["fatigue"] == "Red"
 
@@ -823,20 +845,24 @@ def test_daily_log_migration_adds_user_id_column(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    owner = legacy_owner(db)
 
     from database import get_daily_logs
 
-    logs = get_daily_logs(limit=10, db_path=db)
+    logs = get_daily_logs(limit=10, db_path=db, owner=owner)
     assert len(logs) == 1
     assert logs[0]["focus"] == "Deadlift"
 
 
 def test_daily_log_user_isolation(tmp_path: Any) -> None:
-    """Two different user_ids don't see each other's daily_log rows."""
+    """Two different owners don't see each other's daily_log rows."""
     db = _db(tmp_path)
     init_db(db)
 
     from database import get_daily_logs, save_daily_log
+
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
     save_daily_log(
         "2026-08-01",
@@ -846,7 +872,7 @@ def test_daily_log_user_isolation(tmp_path: Any) -> None:
         "Plan A",
         "Walk",
         db_path=db,
-        user_id="user-a",
+        owner=owner_a,
     )
     save_daily_log(
         "2026-08-01",
@@ -856,15 +882,15 @@ def test_daily_log_user_isolation(tmp_path: Any) -> None:
         "Plan B",
         "Run",
         db_path=db,
-        user_id="user-b",
+        owner=owner_b,
     )
 
-    logs_a = get_daily_logs(limit=10, db_path=db, user_id="user-a")
+    logs_a = get_daily_logs(limit=10, db_path=db, owner=owner_a)
     assert len(logs_a) == 1
     assert logs_a[0]["day"] == 1
     assert logs_a[0]["focus"] == "Deadlift"
 
-    logs_b = get_daily_logs(limit=10, db_path=db, user_id="user-b")
+    logs_b = get_daily_logs(limit=10, db_path=db, owner=owner_b)
     assert len(logs_b) == 1
     assert logs_b[0]["day"] == 2
     assert logs_b[0]["focus"] == "Pull-ups"
@@ -874,6 +900,7 @@ def test_daily_log_backward_compat(tmp_path: Any) -> None:
     """Callers not passing user_id still work (backward compat)."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
     from database import get_daily_logs, save_daily_log
 
@@ -885,17 +912,20 @@ def test_daily_log_backward_compat(tmp_path: Any) -> None:
         "Plan",
         "Lifestyle",
         db_path=db,
-    )
-    logs = get_daily_logs(limit=10, db_path=db)
+     owner=owner)
+    logs = get_daily_logs(limit=10, db_path=db, owner=owner)
     assert len(logs) == 1
 
 
 def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
-    """Same user/date writes replace the prior entry; different users don't clash."""
+    """Same owner/date writes replace the prior entry; different owners don't clash."""
     db = _db(tmp_path)
     init_db(db)
 
     from database import get_daily_logs, save_daily_log
+
+    owner_u1 = create_owner(db, "u1@example.com")
+    owner_u2 = create_owner(db, "u2@example.com")
 
     save_daily_log(
         "2026-08-01",
@@ -905,7 +935,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
         "Plan1",
         "L1",
         db_path=db,
-        user_id="u1",
+        owner=owner_u1,
     )
     save_daily_log(
         "2026-08-01",
@@ -915,7 +945,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
         "Plan1b",
         "L1b",
         db_path=db,
-        user_id="u1",
+        owner=owner_u1,
     )
     save_daily_log(
         "2026-08-01",
@@ -925,14 +955,14 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
         "Plan2",
         "L2",
         db_path=db,
-        user_id="u2",
+        owner=owner_u2,
     )
 
-    logs_u1 = get_daily_logs(limit=10, db_path=db, user_id="u1")
+    logs_u1 = get_daily_logs(limit=10, db_path=db, owner=owner_u1)
     assert len(logs_u1) == 1
     assert logs_u1[0]["focus"] == "A-v2"
 
-    logs_u2 = get_daily_logs(limit=10, db_path=db, user_id="u2")
+    logs_u2 = get_daily_logs(limit=10, db_path=db, owner=owner_u2)
     assert len(logs_u2) == 1
     assert logs_u2[0]["focus"] == "B"
 
@@ -969,29 +999,33 @@ def test_check_ins_migration_adds_user_id_column(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    owner = legacy_owner(db)
 
     from database import get_checkins
 
-    cks = get_checkins(limit=10, db_path=db)
+    cks = get_checkins(limit=10, db_path=db, owner=owner)
     assert len(cks) == 1
     assert cks[0]["number"] == 1
 
 
 def test_check_ins_user_isolation(tmp_path: Any) -> None:
-    """Two different user_ids don't see each other's check_ins rows."""
+    """Two different owners don't see each other's check_ins rows."""
     db = _db(tmp_path)
     init_db(db)
 
     from database import get_checkins, save_checkin
 
-    save_checkin(1, "2026-08-01", 5, 2, "Message A", db_path=db, user_id="u1")
-    save_checkin(1, "2026-08-02", 3, 1, "Message B", db_path=db, user_id="u2")
+    owner_u1 = create_owner(db, "u1@example.com")
+    owner_u2 = create_owner(db, "u2@example.com")
 
-    cks_a = get_checkins(limit=10, db_path=db, user_id="u1")
+    save_checkin(1, "2026-08-01", 5, 2, "Message A", db_path=db, owner=owner_u1)
+    save_checkin(1, "2026-08-02", 3, 1, "Message B", db_path=db, owner=owner_u2)
+
+    cks_a = get_checkins(limit=10, db_path=db, owner=owner_u1)
     assert len(cks_a) == 1
     assert cks_a[0]["message"] == "Message A"
 
-    cks_b = get_checkins(limit=10, db_path=db, user_id="u2")
+    cks_b = get_checkins(limit=10, db_path=db, owner=owner_u2)
     assert len(cks_b) == 1
     assert cks_b[0]["message"] == "Message B"
 
@@ -1000,11 +1034,12 @@ def test_check_ins_backward_compat(tmp_path: Any) -> None:
     """Callers not passing user_id still work."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
     from database import get_checkins, save_checkin
 
-    save_checkin(1, "2026-08-01", 5, 2, "Legacy checkin", db_path=db)
-    cks = get_checkins(limit=10, db_path=db)
+    save_checkin(1, "2026-08-01", 5, 2, "Legacy checkin", db_path=db, owner=owner)
+    cks = get_checkins(limit=10, db_path=db, owner=owner)
     assert len(cks) == 1
 
 
@@ -1036,19 +1071,20 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
 
     from database import get_deep_correlation, save_deep_correlation
 
-    user_a = "user-a-123"
-    save_deep_correlation("Correlation A", db, user_id=user_a)
-    assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
+    owner_a = create_owner(db, "a@example.com")
+    save_deep_correlation("Correlation A", db, owner=owner_a)
+    assert get_deep_correlation(db_path=db, owner=owner_a) == "Correlation A"
 
-    user_b = "user-b-456"
-    save_deep_correlation("Correlation B", db, user_id=user_b)
-    assert get_deep_correlation(db_path=db, user_id=user_b) == "Correlation B"
+    owner_b = create_owner(db, "b@example.com")
+    save_deep_correlation("Correlation B", db, owner=owner_b)
+    assert get_deep_correlation(db_path=db, owner=owner_b) == "Correlation B"
 
-    # Users don't see each other's correlations
-    assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
+    # Owners don't see each other's correlations
+    assert get_deep_correlation(db_path=db, owner=owner_a) == "Correlation A"
 
-    # None user_id returns None (no matching row)
-    assert get_deep_correlation(db_path=db, user_id=None) is None
+    # An owner without a correlation gets None
+    owner_c = create_owner(db, "c@example.com")
+    assert get_deep_correlation(db_path=db, owner=owner_c) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1103,8 +1139,8 @@ def test_programme_state_user_isolation(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    user_a = "user-a-123"
-    user_b = "user-b-456"
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
 
     # Seed rows for both users directly
     import sqlite3
@@ -1116,37 +1152,38 @@ def test_programme_state_user_isolation(tmp_path: Any) -> None:
     conn.execute(
         "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
         "VALUES (?, 2, ?)",
-        (user_a, "Test Split"),
+        (owner_a.user_id, "Test Split"),
     )
     conn.execute(
         "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
         "VALUES (?, 5, ?)",
-        (user_b, "Test Split"),
+        (owner_b.user_id, "Test Split"),
     )
     conn.commit()
     conn.close()
 
-    assert get_current_day(db, user_id=user_a) == 2
-    assert get_current_day(db, user_id=user_b) == 5
+    assert get_current_day(db, owner=owner_a) == 2
+    assert get_current_day(db, owner=owner_b) == 5
 
     # Advancing one user does not affect the other
-    assert advance_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_b) == 5
+    assert advance_day(db, owner=owner_a) == 3
+    assert get_current_day(db, owner=owner_a) == 3
+    assert get_current_day(db, owner=owner_b) == 5
 
 
 def test_programme_state_backward_compat(tmp_path: Any) -> None:
     """get_current_day / advance_day without user_id still work."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
     # Without user_id, the legacy user's row should exist and work
-    day = get_current_day(db)
+    day = get_current_day(db, owner=owner)
     assert isinstance(day, int)
     assert 1 <= day <= 6
 
-    nxt = advance_day(db)
-    assert nxt == get_current_day(db)
+    nxt = advance_day(db, owner=owner)
+    assert nxt == get_current_day(db, owner=owner)
     assert nxt != day
 
 
@@ -1154,8 +1191,9 @@ def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
     """A brand-new database seeds a programme_state row for the legacy user."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
 
-    assert get_current_day(db) == 1
+    assert get_current_day(db, owner=owner) == 1
 
     import sqlite3
 
@@ -1178,12 +1216,13 @@ def test_hevy_meta_migration_backward_compat(tmp_path: Any) -> None:
     """Callers without user_id still work after migration (unscoped read/write)."""
     db = _db(tmp_path)
     init_db(db)
+    owner = legacy_owner(db)
     # Legacy (no user_id) still works
-    set_meta("test_key", "test_value", db)
-    assert get_meta("test_key", db) == "test_value"
+    set_meta("test_key", "test_value", db, owner=owner)
+    assert get_meta("test_key", db, owner=owner) == "test_value"
     # Second init is idempotent
     init_db(db)
-    assert get_meta("test_key", db) == "test_value"
+    assert get_meta("test_key", db, owner=owner) == "test_value"
 
 
 def test_hevy_meta_user_isolation(tmp_path: Any) -> None:
@@ -1192,10 +1231,12 @@ def test_hevy_meta_user_isolation(tmp_path: Any) -> None:
     init_db(db)
     u1 = get_or_create_user("a@example.com", "A", db)
     u2 = get_or_create_user("b@example.com", "B", db)
-    set_meta("x", "val_a", db, user_id=u1["id"])
-    set_meta("x", "val_b", db, user_id=u2["id"])
-    assert get_meta("x", db, user_id=u1["id"]) == "val_a"
-    assert get_meta("x", db, user_id=u2["id"]) == "val_b"
+    owner_u1 = owner_for_user(db, u1["id"])
+    owner_u2 = owner_for_user(db, u2["id"])
+    set_meta("x", "val_a", db, owner=owner_u1)
+    set_meta("x", "val_b", db, owner=owner_u2)
+    assert get_meta("x", db, owner=owner_u1) == "val_a"
+    assert get_meta("x", db, owner=owner_u2) == "val_b"
 
 
 def test_hevy_meta_programme_start_date_scoped(tmp_path: Any) -> None:
@@ -1204,12 +1245,14 @@ def test_hevy_meta_programme_start_date_scoped(tmp_path: Any) -> None:
     init_db(db)
     u1 = get_or_create_user("a@example.com", "A", db)
     u2 = get_or_create_user("b@example.com", "B", db)
-    set_meta("programme_start_date", "2025-01-01", db, user_id=u1["id"])
-    set_meta("programme_start_date", "2025-06-15", db, user_id=u2["id"])
+    owner_u1 = owner_for_user(db, u1["id"])
+    owner_u2 = owner_for_user(db, u2["id"])
+    set_meta("programme_start_date", "2025-01-01", db, owner=owner_u1)
+    set_meta("programme_start_date", "2025-06-15", db, owner=owner_u2)
     from datetime import date
 
-    assert get_programme_start_date(db, user_id=u1["id"]) == date(2025, 1, 1)
-    assert get_programme_start_date(db, user_id=u2["id"]) == date(2025, 6, 15)
+    assert get_programme_start_date(db, owner=owner_u1) == date(2025, 1, 1)
+    assert get_programme_start_date(db, owner=owner_u2) == date(2025, 6, 15)
 
 
 # ---------- hevy_routines migration tests ----------
@@ -1219,14 +1262,15 @@ def test_hevy_routines_backward_compat(tmp_path: Any) -> None:
     """Callers without user_id still work for reading/writing routines."""
     db = _db(tmp_path)
     init_db(db)
-    save_routine_record("push", "rid1", "hash1", db)
-    result = get_routine_record("push", db)
+    owner = legacy_owner(db)
+    save_routine_record("push", "rid1", "hash1", db, owner=owner)
+    result = get_routine_record("push", db, owner=owner)
     assert result is not None
     assert result[0] == "rid1"
     assert result[1] == "hash1"
     # Idempotent re-init
     init_db(db)
-    result2 = get_routine_record("push", db)
+    result2 = get_routine_record("push", db, owner=owner)
     assert result2 is not None
 
 
@@ -1236,10 +1280,12 @@ def test_hevy_routines_user_isolation(tmp_path: Any) -> None:
     init_db(db)
     u1 = get_or_create_user("a@example.com", "A", db)
     u2 = get_or_create_user("b@example.com", "B", db)
-    save_routine_record("push", "rid1", "hash1", db, user_id=u1["id"])
-    save_routine_record("push", "rid2", "hash2", db, user_id=u2["id"])
-    r1 = get_routine_record("push", db, user_id=u1["id"])
-    r2 = get_routine_record("push", db, user_id=u2["id"])
+    owner_u1 = owner_for_user(db, u1["id"])
+    owner_u2 = owner_for_user(db, u2["id"])
+    save_routine_record("push", "rid1", "hash1", db, owner=owner_u1)
+    save_routine_record("push", "rid2", "hash2", db, owner=owner_u2)
+    r1 = get_routine_record("push", db, owner=owner_u1)
+    r2 = get_routine_record("push", db, owner=owner_u2)
     assert r1 == ("rid1", "hash1")
     assert r2 == ("rid2", "hash2")
 
@@ -1250,11 +1296,13 @@ def test_hevy_routines_delete_scoped(tmp_path: Any) -> None:
     init_db(db)
     u1 = get_or_create_user("a@example.com", "A", db)
     u2 = get_or_create_user("b@example.com", "B", db)
-    save_routine_record("push", "rid1", "h1", db, user_id=u1["id"])
-    save_routine_record("push", "rid2", "h2", db, user_id=u2["id"])
-    delete_routine_record("push", db, user_id=u1["id"])
-    assert get_routine_record("push", db, user_id=u1["id"]) is None
-    assert get_routine_record("push", db, user_id=u2["id"]) == ("rid2", "h2")
+    owner_u1 = owner_for_user(db, u1["id"])
+    owner_u2 = owner_for_user(db, u2["id"])
+    save_routine_record("push", "rid1", "h1", db, owner=owner_u1)
+    save_routine_record("push", "rid2", "h2", db, owner=owner_u2)
+    delete_routine_record("push", db, owner=owner_u1)
+    assert get_routine_record("push", db, owner=owner_u1) is None
+    assert get_routine_record("push", db, owner=owner_u2) == ("rid2", "h2")
 
 
 def _create_pre_multi_tenant_schema(db: str) -> None:
@@ -1510,18 +1558,72 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
                 ('2030-01-02', 1, 'Synthetic', 'medium', 'Plan', 'Walk', NULL)
             """,
         )
+        # The remaining tables are recreated in the state left behind by the
+        # first tenant migration: a nullable owner column without a foreign key.
+        conn.execute("DROP TABLE workout_history")
+        conn.execute(
+            """
+            CREATE TABLE workout_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                hevy_payload TEXT NOT NULL,
+                user_id TEXT
+            )
+            """,
+        )
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
             "VALUES ('2030-01-02', '{}', NULL)",
+        )
+        conn.execute("DROP TABLE body_metrics")
+        conn.execute(
+            """
+            CREATE TABLE body_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                weight_kg REAL,
+                body_fat_pct REAL,
+                muscle_pct REAL,
+                resting_hr INTEGER,
+                hrv REAL,
+                user_id TEXT
+            )
+            """,
         )
         conn.execute(
             "INSERT INTO body_metrics (date, weight_kg, user_id) "
             "VALUES ('2030-01-02', 75.0, NULL)",
         )
+        conn.execute("DROP TABLE check_ins")
+        conn.execute(
+            """
+            CREATE TABLE check_ins (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                number INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                workouts_done INTEGER NOT NULL,
+                weeks INTEGER NOT NULL,
+                message TEXT NOT NULL,
+                user_id TEXT
+            )
+            """,
+        )
         conn.execute(
             "INSERT INTO check_ins "
             "(number, date, workouts_done, weeks, message, user_id) "
             "VALUES (2, '2030-01-02', 4, 1, 'Synthetic', NULL)",
+        )
+        conn.execute("DROP TABLE chat_messages")
+        conn.execute(
+            """
+            CREATE TABLE chat_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                user_id TEXT
+            )
+            """,
         )
         conn.execute(
             "INSERT INTO chat_messages (role, content, created_at, user_id) "
@@ -1573,23 +1675,26 @@ def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
+    owner_a = create_owner(db, "a@example.com")
+    owner_b = create_owner(db, "b@example.com")
+
     save_reasoning_log(
         "shared-context",
         "Synthetic Squat",
         "Reason A",
         db,
-        user_id="user-a",
+        owner=owner_a,
     )
     save_reasoning_log(
         "shared-context",
         "Synthetic Squat",
         "Reason B",
         db,
-        user_id="user-b",
+        owner=owner_b,
     )
 
-    assert get_reasoning_log("shared-context", db, user_id="user-a") == "Reason A"
-    assert get_reasoning_log("shared-context", db, user_id="user-b") == "Reason B"
+    assert get_reasoning_log("shared-context", db, owner=owner_a) == "Reason A"
+    assert get_reasoning_log("shared-context", db, owner=owner_b) == "Reason B"
 
 
 def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:

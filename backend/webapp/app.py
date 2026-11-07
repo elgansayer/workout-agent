@@ -98,6 +98,14 @@ from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from ownership import (
+    AuthenticatedOwner,
+    UnauthenticatedOwnerError,
+    UnknownOwnerError,
+    owner_for_legacy_tenant,
+    owner_for_user,
+    owner_from_session,
+)
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
@@ -107,17 +115,16 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
 
-
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     """Resolve the authenticated user's provider without caching credentials."""
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     try:
         return resolve_provider(
-            user_id=user_id,
+            owner=owner,
             server_gemini_key=config.gemini_api_key,
             server_gemini_model=config.gemini_model,
             db_path=DB_PATH,
@@ -167,17 +174,32 @@ ALLOWED_EMAILS = [
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
 
 
-def _check_api_auth(request: Request) -> str:
-    user = request.session.get("user") if hasattr(request, "session") else None
-    uid = request.session.get("user_id") if hasattr(request, "session") else None
-    if uid:
-        return uid
-    if user and isinstance(user, dict) and user.get("id"):
-        return user["id"]
-    if ALLOW_ANONYMOUS_WEB:
-        from database import get_legacy_user_id
+def _check_api_auth(request: Request) -> AuthenticatedOwner:
+    """Return the authenticated owner context for the request.
 
-        return get_legacy_user_id(DB_PATH)
+    Ownership is never taken from a client-supplied identifier.  It is derived
+    from the signed session, or from the stable legacy tenant when the
+    deliberate single-user anonymous mode is enabled.  A signed session proves
+    who signed in, not that the account still exists (a restored or reset
+    database leaves older cookies valid), so the identity is re-verified against
+    the stored users and a stale session fails closed with 401 instead of
+    reaching the owner foreign key.
+    """
+    session = request.session if hasattr(request, "session") else None
+    try:
+        session_owner = owner_from_session(session)
+    except UnauthenticatedOwnerError:
+        session_owner = None
+    if session_owner is not None:
+        try:
+            return owner_for_user(DB_PATH, session_owner.user_id)
+        except UnknownOwnerError as exc:
+            raise HTTPException(status_code=401, detail="Unauthorized") from exc
+    if ALLOW_ANONYMOUS_WEB:
+        try:
+            return owner_for_legacy_tenant(DB_PATH)
+        except UnknownOwnerError as exc:
+            raise HTTPException(status_code=401, detail="Unauthorized") from exc
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -456,13 +478,13 @@ def _format_best(best: dict[str, Any] | None) -> str:
     return "No data yet"
 
 
-def _training_levels(user_id: str | None = None) -> dict[str, int]:
+def _training_levels(owner: AuthenticatedOwner) -> dict[str, int]:
     """Map ISO dates to a calendar-heatmap intensity (0-4)."""
     levels: dict[str, int] = {}
-    for log in get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id):
+    for log in get_daily_logs(limit=400, db_path=DB_PATH, owner=owner):
         levels[log["date"]] = 2 if log["day"] is not None else 1
     # A session with logged sets is the strongest signal of a completed workout.
-    for session in get_session_volumes(db_path=DB_PATH, user_id=user_id):
+    for session in get_session_volumes(db_path=DB_PATH, owner=owner):
         levels[session["date"]] = 4
     return levels
 
@@ -482,23 +504,23 @@ def _current_streak(levels: dict[str, int]) -> int:
 
 def _dashboard_context(
     today: date | None = None,
-    user_id: str | None = None,
+    *,
+    owner: AuthenticatedOwner,
 ) -> dict[str, Any]:
     """Build a dashboard from the active Hevy programme, or a setup state."""
     from programme_runtime import local_today, resolve_programme_runtime
 
-    user = get_user_by_id(user_id, DB_PATH) if user_id else None
+    user = get_user_by_id(owner, DB_PATH)
     timezone_name = (user.get("timezone") if user else None) or "UTC"
     today = today or local_today(timezone_name)
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
+    active = get_active_programme(owner, db_path=DB_PATH)
     definition = active.get("definition") if active else None
-    bests = get_recent_bests(DB_PATH, user_id=user_id)
+    bests = get_recent_bests(DB_PATH, owner=owner)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
     runtime = resolve_programme_runtime(
         active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id)
-        if user_id else [],
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, owner=owner),
         today=today,
         timezone_name=timezone_name,
     )
@@ -557,7 +579,7 @@ def _dashboard_context(
                 else runtime.status.replace("_", " ").capitalize()
             )
 
-    metrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    metrics = get_body_metrics(db_path=DB_PATH, owner=owner)
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(
@@ -566,7 +588,7 @@ def _dashboard_context(
         recovery_like,
     )
 
-    levels = _training_levels(user_id=user_id)
+    levels = _training_levels(owner=owner)
     streak = _current_streak(levels)
     weight_spark = charts.sparkline(
         [metric["weight_kg"] for metric in metrics if metric["weight_kg"]]
@@ -584,7 +606,7 @@ def _dashboard_context(
         None,
     )
     review = insights.build_insights(
-        get_progress_history(db_path=DB_PATH, user_id=user_id),
+        get_progress_history(db_path=DB_PATH, owner=owner),
         metrics,
         None,
     )
@@ -634,7 +656,7 @@ def _dashboard_context(
         "review_headline": review.headline,
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
-        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, owner=owner),
     }
 
 
@@ -645,8 +667,8 @@ def dashboard(request: Request):
 
 @app.get("/api/checkins")
 def api_checkins(request: Request):
-    user_id = _check_api_auth(request)
-    checkins = get_checkins(db_path=DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    checkins = get_checkins(db_path=DB_PATH, owner=owner)
     return JSONResponse(
         jsonable_encoder(
             {
@@ -663,16 +685,16 @@ def api_checkins(request: Request):
 
 @app.get("/api/dashboard")
 def api_dashboard(request: Request) -> JSONResponse:
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
 
     from fastapi.encoders import jsonable_encoder
 
-    ctx = _dashboard_context(user_id=user_id)
+    ctx = _dashboard_context(owner=owner)
     return JSONResponse(content=jsonable_encoder(ctx))
 
 
-def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
-    readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+def _body_charts(*, owner: AuthenticatedOwner) -> dict[str, str | None]:
+    readings = get_body_metrics(db_path=DB_PATH, owner=owner)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
         points = [
@@ -747,8 +769,8 @@ def preview_programme(
     """Generate a deterministic preview from selected Hevy routines."""
 
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    training_data = _load_hevy_training_for_user(user_id)
+    owner = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(owner)
     try:
         preview = build_programme_preview(training_data, payload)
     except ValueError as exc:
@@ -765,8 +787,8 @@ def activate_programme(
     """Reconfirm Hevy source data and activate the generated programme."""
 
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    training_data = _load_hevy_training_for_user(user_id)
+    owner = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(owner)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
@@ -785,7 +807,7 @@ def activate_programme(
         )
 
     set_active_programme(
-        user_id,
+        owner,
         source="hevy",
         template_key=f"hevy:{preview['preview_token'][:20]}",
         definition=preview,
@@ -795,10 +817,10 @@ def activate_programme(
         "programme_start_date",
         str(preview["programme_spec"]["start_date"]),
         DB_PATH,
-        user_id=user_id,
+        owner=owner,
     )
     save_notification(
-        user_id,
+        owner,
         title="Hevy programme activated",
         message=(
             f"{preview['name']} is active for "
@@ -815,7 +837,7 @@ def activate_programme(
             {
                 "status": "ok",
                 "active_programme": get_active_programme(
-                    user_id,
+                    owner,
                     db_path=DB_PATH,
                 ),
             }
@@ -828,7 +850,7 @@ async def select_programme(request: Request) -> JSONResponse:
     """Compatibility adapter for clients using the retired template endpoint."""
 
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     try:
         body = await request.json()
     except (json.JSONDecodeError, TypeError):
@@ -852,7 +874,7 @@ async def select_programme(request: Request) -> JSONResponse:
             ),
         )
 
-    training_data = _load_hevy_training_for_user(user_id)
+    training_data = _load_hevy_training_for_user(owner)
     if not training_data.routines:
         raise HTTPException(
             status_code=422,
@@ -877,7 +899,7 @@ async def select_programme(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     set_active_programme(
-        user_id,
+        owner,
         source="hevy",
         template_key=f"hevy:{preview['preview_token'][:20]}",
         definition=preview,
@@ -887,7 +909,7 @@ async def select_programme(request: Request) -> JSONResponse:
         "programme_start_date",
         str(preview["programme_spec"]["start_date"]),
         DB_PATH,
-        user_id=user_id,
+        owner=owner,
     )
     return JSONResponse(
         jsonable_encoder(
@@ -901,13 +923,13 @@ async def select_programme(request: Request) -> JSONResponse:
 
 
 def _load_hevy_training_for_user(
-    user_id: str,
+    owner: AuthenticatedOwner,
     *,
     workout_limit: int = 56,
 ) -> HevyTrainingData:
     """Fetch the current user's Hevy source data or raise a useful API error."""
 
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
+    keys = get_user_api_keys(owner, db_path=DB_PATH)
     hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
     if not hevy_key:
         raise HTTPException(
@@ -925,7 +947,7 @@ def _load_hevy_training_for_user(
     except Exception as exc:
         logger.exception(
             "Could not fetch Hevy source data for user %s.",
-            user_id,
+            owner.user_id,
         )
         raise HTTPException(
             status_code=502,
@@ -936,9 +958,9 @@ def _load_hevy_training_for_user(
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     _check_rate_limit(request)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
 
-    existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
+    existing = get_reasoning_log(context_id, db_path=DB_PATH, owner=owner)
     if existing:
         return {"reasoning": existing}
 
@@ -951,7 +973,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    history = get_progress_history(db_path=DB_PATH, owner=owner).get(ex_name, [])
 
     prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
     try:
@@ -962,18 +984,18 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         logger.exception("AI reasoning generation failed.")
         reasoning = "Could not determine reasoning."
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
+    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, owner=owner)
     return {"reasoning": reasoning}
 
 
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    series = get_progress_history(db_path=DB_PATH, owner=owner)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
 
@@ -990,29 +1012,29 @@ def project_peak(request: Request) -> dict[str, Any]:
 
 @app.get("/api/chat/history")
 def chat_history(request: Request):
-    user_id = _check_api_auth(request)
-    return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    return get_chat_messages(limit=50, db_path=DB_PATH, owner=owner)
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request):
-    user_id = _check_api_auth(request)
-    clear_chat_messages(db_path=DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    clear_chat_messages(db_path=DB_PATH, owner=owner)
     return {"status": "ok"}
 
 
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
     # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, owner=owner)
+    history = get_progress_history(db_path=DB_PATH, owner=owner)
+    biometrics = get_body_metrics(db_path=DB_PATH, owner=owner)
+    prs = get_personal_records(db_path=DB_PATH, owner=owner)
 
     context = json.dumps(
         {
@@ -1025,7 +1047,7 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     )
 
     # Build multi-turn conversation from chat history
-    chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
+    chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, owner=owner)
     conversation_lines = []
     for msg in chat_history_msgs:
         role_label = "User" if msg["role"] == "user" else "Coach"
@@ -1035,7 +1057,7 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     )
 
     # Save user message
-    save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
+    save_chat_message("user", q, db_path=DB_PATH, owner=owner)
 
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
 You have access to this user's training logs, body composition data, personal records, and programme history.
@@ -1078,7 +1100,7 @@ Respond naturally as Coach. If the question is about their training data, refere
             full_response = "".join(collected)
             if full_response:
                 save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
+                    "assistant", full_response, db_path=DB_PATH, owner=owner
                 )
 
     return StreamingResponse(generate(), media_type="text/plain")
@@ -1093,9 +1115,7 @@ def _gh_redirect_uri(request: Request) -> str:
 async def save_api_key(request: Request) -> dict[str, str]:
     """Save or update an API key for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    owner = _check_api_auth(request)
 
     body = await request.json()
     provider_value = body.get("provider")
@@ -1128,17 +1148,17 @@ async def save_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Model is too long")
 
     save_user_api_key(
-        user_id,
+        owner,
         provider,
         api_key,
         extra={"model": model} if model else None,
         db_path=DB_PATH,
     )
     if provider in ai_provider_ids:
-        preferences = get_user_preferences(user_id, DB_PATH)
+        preferences = get_user_preferences(owner, DB_PATH)
         if preferences.get("preferred_ai") == provider:
             save_user_preferences(
-                user_id,
+                owner,
                 ai_model=model or ai_provider_defaults[provider],
                 db_path=DB_PATH,
             )
@@ -1149,16 +1169,14 @@ async def save_api_key(request: Request) -> dict[str, str]:
 async def remove_api_key(request: Request) -> dict[str, str]:
     """Remove a stored API key for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    owner = _check_api_auth(request)
 
     body = await request.json()
     provider = body.get("provider", "").strip().lower()
     if not provider:
         raise HTTPException(status_code=400, detail="Provider is required")
 
-    delete_user_api_key(user_id, provider, db_path=DB_PATH)
+    delete_user_api_key(owner, provider, db_path=DB_PATH)
     return {"status": "ok", "provider": provider}
 
 
@@ -1166,9 +1184,7 @@ async def remove_api_key(request: Request) -> dict[str, str]:
 async def verify_hevy_key(request: Request) -> dict[str, Any]:
     """Test a Hevy API key by calling /v1/workouts/count."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_api_auth(request)
 
     body = await request.json()
     api_key = body.get("api_key", "").strip()
@@ -1190,9 +1206,7 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
 async def save_preferences(request: Request) -> dict[str, str]:
     """Save user training preferences."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    owner = _check_api_auth(request)
 
     body = await request.json()
     preferred_ai_value = body.get("preferred_ai")
@@ -1223,7 +1237,7 @@ async def save_preferences(request: Request) -> dict[str, str]:
         ai_model = ai_provider_defaults[preferred_ai]
 
     save_user_preferences(
-        user_id,
+        owner,
         goals=body.get("goals"),
         constraints=body.get("constraints"),
         experience_level=body.get("experience_level"),
@@ -1240,9 +1254,7 @@ async def save_preferences(request: Request) -> dict[str, str]:
 async def save_push_subscription_route(request: Request) -> dict[str, str]:
     """Save a push subscription for the current user."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+    owner = _check_api_auth(request)
 
     body = await request.json()
     endpoint = body.get("endpoint")
@@ -1254,7 +1266,7 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Invalid push subscription data")
 
     save_push_subscription(
-        user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
+        owner, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
     return {"status": "ok"}
 
@@ -1265,9 +1277,9 @@ def google_health_connect(request: Request) -> RedirectResponse:
     _check_rate_limit(request, limit=5)
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
+    set_meta(_GH_STATE_KEY, state, DB_PATH, owner=owner)
     url = build_authorize_url(
         GH_CLIENT_ID,
         state,
@@ -1283,11 +1295,11 @@ def google_health_callback(request: Request) -> RedirectResponse:
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
-    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
+    expected = get_meta(_GH_STATE_KEY, DB_PATH, owner=owner)
+    set_meta(_GH_STATE_KEY, "", DB_PATH, owner=owner)  # one-time use
     if not code or not state or not expected or state != expected:
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
@@ -1298,7 +1310,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
+    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, owner=owner)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
@@ -1306,8 +1318,8 @@ def google_health_callback(request: Request) -> RedirectResponse:
 def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    set_meta(_GH_TOKEN_KEY, "", DB_PATH, owner=owner)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
@@ -1331,8 +1343,8 @@ from fastapi.encoders import jsonable_encoder
 
 @app.get("/api/progress")
 def api_progress(request: Request):
-    user_id = _check_api_auth(request)
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    series = get_progress_history(db_path=DB_PATH, owner=owner)
     charts_data = []
     for name in sorted(series):
         entries = series[name]
@@ -1356,18 +1368,18 @@ def api_progress(request: Request):
             }
         )
     return JSONResponse(
-        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+        jsonable_encoder({"charts": charts_data, "body": _body_charts(owner=owner)})
     )
 
 
 @app.get("/api/stats")
 def api_stats(request: Request):
-    user_id = _check_api_auth(request)
-    volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
-    logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    owner = _check_api_auth(request)
+    volumes = get_session_volumes(db_path=DB_PATH, owner=owner)
+    prs = get_personal_records(db_path=DB_PATH, owner=owner)
+    logs = get_daily_logs(limit=400, db_path=DB_PATH, owner=owner)
+    start = get_programme_start_date(db_path=DB_PATH, owner=owner)
+    series = get_progress_history(db_path=DB_PATH, owner=owner)
     today = datetime.now(tz=timezone.utc).date()
     week = week_in_cycle(start, today)
 
@@ -1390,7 +1402,7 @@ def api_stats(request: Request):
     )
 
     groups = analytics.group_volumes(
-        get_exercise_volumes(db_path=DB_PATH, user_id=user_id),
+        get_exercise_volumes(db_path=DB_PATH, owner=owner),
     )
     muscle_donut = (
         charts.donut(
@@ -1416,7 +1428,7 @@ def api_stats(request: Request):
         else None
     )
 
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    biometrics = get_body_metrics(db_path=DB_PATH, owner=owner)
     block_phase_svg = ai_widgets.block_phase_tracker(volumes)
     recovery_grid_svg = ai_widgets.systemic_recovery_correlation(biometrics, volumes)
     vol_dist_svg = ai_widgets.volume_distribution(groups)
@@ -1496,9 +1508,9 @@ def api_stats(request: Request):
 
 @app.get("/api/history")
 def api_history(request: Request):
-    user_id = _check_api_auth(request)
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    levels = _training_levels(user_id=user_id)
+    owner = _check_api_auth(request)
+    logs = get_daily_logs(limit=30, db_path=DB_PATH, owner=owner)
+    levels = _training_levels(owner=owner)
     return JSONResponse(jsonable_encoder({"logs": logs, "calendar": charts.calendar_heatmap(levels)}))
 
 
@@ -1507,8 +1519,8 @@ def api_plan(request: Request) -> JSONResponse:
     """Render only an activated Hevy-native programme; never a static fallback."""
     from programme_runtime import local_today, resolve_programme_runtime
 
-    user_id = _check_api_auth(request)
-    active = get_active_programme(user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    active = get_active_programme(owner, db_path=DB_PATH)
     raw_definition = active.get("definition") if active else None
     definition: dict[str, Any] = (
         raw_definition if isinstance(raw_definition, dict) else {}
@@ -1538,11 +1550,11 @@ def api_plan(request: Request) -> JSONResponse:
         )
 
     spec = definition.get("programme_spec") or {}
-    user = get_user_by_id(user_id, DB_PATH)
+    user = get_user_by_id(owner, DB_PATH)
     timezone_name = (user.get("timezone") if user else None) or "UTC"
     runtime = resolve_programme_runtime(
         active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, owner=owner),
         today=local_today(timezone_name),
         timezone_name=timezone_name,
     )
@@ -1584,9 +1596,9 @@ def api_plan(request: Request) -> JSONResponse:
 def api_programmes(request: Request) -> JSONResponse:
     """Return the user's live Hevy routine library and active programme."""
 
-    user_id = _check_api_auth(request)
-    active = get_active_programme(user_id, db_path=DB_PATH)
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    active = get_active_programme(owner, db_path=DB_PATH)
+    keys = get_user_api_keys(owner, db_path=DB_PATH)
     hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
 
     empty_source: dict[str, Any] = {
@@ -1608,7 +1620,7 @@ def api_programmes(request: Request) -> JSONResponse:
         }
     else:
         try:
-            training_data = _load_hevy_training_for_user(user_id)
+            training_data = _load_hevy_training_for_user(owner)
             source = serialise_hevy_source(training_data)
             connection = {
                 "state": "connected",
@@ -1643,10 +1655,10 @@ def api_programmes(request: Request) -> JSONResponse:
 
 @app.get("/api/settings")
 def api_settings(request: Request):
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
 
-    prefs = get_user_preferences(user_id, DB_PATH)
-    keys = get_user_api_keys(user_id, DB_PATH)
+    prefs = get_user_preferences(owner, DB_PATH)
+    keys = get_user_api_keys(owner, DB_PATH)
     ai_providers = available_providers()
 
     user_keys: dict[str, dict[str, Any]] = {}
@@ -1666,12 +1678,12 @@ def api_settings(request: Request):
             "model": configured_model,
         }
 
-    gh_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id))
+    gh_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, owner=owner))
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
     registry = build_builtin_registry()
-    ctx = ConnectorContext(user_id=user_id)
+    ctx = ConnectorContext(user_id=owner.user_id)
     connectors_info = []
     for connector in registry.all():
         try:
@@ -1714,9 +1726,9 @@ def api_settings(request: Request):
 async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     """Rebuild user's workout history from Hevy."""
     _check_rate_limit(request, limit=2)
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
 
-    keys = get_user_api_keys(user_id, DB_PATH)
+    keys = get_user_api_keys(owner, DB_PATH)
     hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
     if not hevy_key:
         raise HTTPException(
@@ -1726,11 +1738,11 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
 
     from scripts.sync_history import sync_all
 
-    result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+    result = sync_all(hevy_key, DB_PATH, owner=owner)
     if "error" in result:
         err_msg = str(result["error"])
         save_notification(
-            user_id,
+            owner,
             title="⚠️ Hevy Sync Failed",
             message=f"Could not sync history: {err_msg}",
             type="sync",
@@ -1742,7 +1754,7 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     workouts_found = int(result.get("workouts_found", 0))
     processed = int(result.get("processed", 0))
     save_notification(
-        user_id,
+        owner,
         title="✓ Hevy History Synced",
         message=f"Successfully synced and rebuilt {processed} of {workouts_found} workouts from Hevy.",
         type="sync",
@@ -1758,11 +1770,11 @@ def api_get_notifications(
     limit: int = Query(50, ge=1, le=100),
     unread_only: bool = Query(False),
 ):
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     notifs = get_notifications(
-        user_id, limit=limit, unread_only=unread_only, db_path=DB_PATH
+        owner, limit=limit, unread_only=unread_only, db_path=DB_PATH
     )
-    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    unread_count = get_unread_notification_count(owner, db_path=DB_PATH)
     return JSONResponse(
         jsonable_encoder(
             {
@@ -1775,60 +1787,60 @@ def api_get_notifications(
 
 @app.post("/api/notifications/{notification_id}/read")
 def api_mark_notification_read(notification_id: int, request: Request):
-    user_id = _check_api_auth(request)
-    success = mark_notification_read(notification_id, user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    success = mark_notification_read(notification_id, owner, db_path=DB_PATH)
     if not success:
         raise HTTPException(status_code=404, detail="Notification not found")
-    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    unread_count = get_unread_notification_count(owner, db_path=DB_PATH)
     return {"status": "ok", "unread_count": unread_count}
 
 
 @app.post("/api/notifications/read-all")
 def api_mark_all_notifications_read(request: Request):
-    user_id = _check_api_auth(request)
-    updated = mark_all_notifications_read(user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    updated = mark_all_notifications_read(owner, db_path=DB_PATH)
     return {"status": "ok", "updated": updated, "unread_count": 0}
 
 
 @app.delete("/api/notifications/{notification_id}")
 def api_delete_notification(notification_id: int, request: Request):
-    user_id = _check_api_auth(request)
-    success = delete_notification(notification_id, user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    success = delete_notification(notification_id, owner, db_path=DB_PATH)
     if not success:
         raise HTTPException(status_code=404, detail="Notification not found")
-    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    unread_count = get_unread_notification_count(owner, db_path=DB_PATH)
     return {"status": "ok", "unread_count": unread_count}
 
 
 @app.post("/api/notifications/clear")
 @app.delete("/api/notifications")
 def api_clear_notifications(request: Request):
-    user_id = _check_api_auth(request)
-    cleared = clear_all_notifications(user_id, db_path=DB_PATH)
+    owner = _check_api_auth(request)
+    cleared = clear_all_notifications(owner, db_path=DB_PATH)
     return {"status": "ok", "cleared": cleared, "unread_count": 0}
 
 
 @app.post("/api/notifications/test-coach")
 def api_test_coach_notification(request: Request):
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     nid = save_notification(
-        user_id,
+        owner,
         title="✨ Coach Status Update",
         message="Coach analysis active: Keep recovery high and log your sets accurately today!",
         type="coach",
         link="/dashboard",
         db_path=DB_PATH,
     )
-    unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+    unread_count = get_unread_notification_count(owner, db_path=DB_PATH)
     return {"status": "ok", "id": nid, "unread_count": unread_count}
 
 
 @app.get("/api/chat-history")
 def api_chat_history(request: Request):
-    user_id = _check_api_auth(request)
+    owner = _check_api_auth(request)
     return JSONResponse(
         jsonable_encoder(
-            {"messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)}
+            {"messages": get_chat_messages(db_path=DB_PATH, owner=owner)}
         )
     )
 

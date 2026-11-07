@@ -7,25 +7,28 @@ from database import (
     clear_all_notifications,
     delete_notification,
     get_notifications,
-    get_or_create_user,
     get_unread_notification_count,
     init_db,
     mark_all_notifications_read,
     mark_notification_read,
     save_notification,
 )
+from ownership import AuthenticatedOwner
+from tenant_fixtures import create_owner
+
+_Tenants = tuple[str, AuthenticatedOwner, AuthenticatedOwner]
 
 
 @pytest.fixture
-def db_with_user(tmp_path):
+def db_with_user(tmp_path) -> _Tenants:
     db_file = str(tmp_path / "test_notifications.db")
     init_db(db_file)
-    u1 = get_or_create_user("user1@example.com", "User One", db_path=db_file)
-    u2 = get_or_create_user("user2@example.com", "User Two", db_path=db_file)
-    return db_file, u1["id"], u2["id"]
+    u1 = create_owner(db_file, "user1@example.com")
+    u2 = create_owner(db_file, "user2@example.com")
+    return db_file, u1, u2
 
 
-def test_save_and_get_notifications(db_with_user: tuple[str, str, str]) -> None:
+def test_save_and_get_notifications(db_with_user: _Tenants) -> None:
     db, u1, u2 = db_with_user
     nid1 = save_notification(
         u1,
@@ -65,7 +68,7 @@ def test_save_and_get_notifications(db_with_user: tuple[str, str, str]) -> None:
     assert get_unread_notification_count(u2, db_path=db) == 1
 
 
-def test_mark_notification_read(db_with_user: tuple[str, str, str]) -> None:
+def test_mark_notification_read(db_with_user: _Tenants) -> None:
     db, u1, u2 = db_with_user
     nid = save_notification(u1, "Title", "Message", db_path=db)
     assert get_unread_notification_count(u1, db_path=db) == 1
@@ -82,8 +85,8 @@ def test_mark_notification_read(db_with_user: tuple[str, str, str]) -> None:
     assert len(unread) == 0
 
 
-def test_mark_all_read_and_delete(db_with_user: tuple[str, str, str]) -> None:
-    db, u1, u2 = db_with_user
+def test_mark_all_read_and_delete(db_with_user: _Tenants) -> None:
+    db, u1, _u2 = db_with_user
     nid1 = save_notification(u1, "N1", "M1", db_path=db)
     nid2 = save_notification(u1, "N2", "M2", db_path=db)
 

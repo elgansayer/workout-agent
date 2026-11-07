@@ -4,15 +4,34 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from pathlib import Path
 
+import pytest
+from database import init_db
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from itsdangerous import TimestampSigner
-
+from ownership import InvalidOwnerContextError, UnknownOwnerError, owner_for_user
+from tenant_fixtures import synthetic_owner
 from webapp.csrf_security import CSRF_HEADER_NAME, CSRFMiddleware, CSRFTokenStore
 
 _SECRET = "s" * 32
+
+
+def _seed_owner(
+    db_path: str,
+    user_id: str = "user-1",
+    email: str = "athlete@example.test",
+) -> str:
+    """Store the owner a CSRF nonce may be issued for."""
+    init_db(db_path)
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO users (id, email, created_at) VALUES (?, ?, ?)",
+            (user_id, email, "2026-01-01T00:00:00+00:00"),
+        )
+    return user_id
 
 
 def _session_cookie(user_id: str = "user-1") -> str:
@@ -33,9 +52,12 @@ def _client(tmp_path: Path, *, trusted_origins: tuple[str, ...] = ()) -> TestCli
     def webhook() -> dict[str, str]:
         return {"status": "accepted"}
 
+    db_path = str(tmp_path / "csrf.db")
+    _seed_owner(db_path)
+
     app.add_middleware(
         CSRFMiddleware,
-        db_path=str(tmp_path / "csrf.db"),
+        db_path=db_path,
         session_secret=_SECRET,
         trusted_origins=trusted_origins,
         ttl_seconds=60,
@@ -56,16 +78,39 @@ def _token(client: TestClient, **headers: str) -> str:
 
 
 def test_token_store_is_user_session_bound_single_use_and_expiring(tmp_path: Path) -> None:
-    store = CSRFTokenStore(str(tmp_path / "tokens.db"), ttl_seconds=10)
-    token = store.issue("user-1", "session-a", now=100)
+    db_path = str(tmp_path / "tokens.db")
+    _seed_owner(db_path)
+    _seed_owner(db_path, "user-2", "other@example.test")
+    first = owner_for_user(db_path, "user-1")
+    second = owner_for_user(db_path, "user-2")
+    store = CSRFTokenStore(db_path, ttl_seconds=10)
+    token = store.issue(first, "session-a", now=100)
 
-    assert store.consume("user-2", "session-a", token, now=101) is False
-    assert store.consume("user-1", "session-b", token, now=101) is False
-    assert store.consume("user-1", "session-a", token, now=101) is True
-    assert store.consume("user-1", "session-a", token, now=101) is False
+    assert store.consume(second, "session-a", token, now=101) is False
+    assert store.consume(first, "session-b", token, now=101) is False
+    assert store.consume(first, "session-a", token, now=101) is True
+    assert store.consume(first, "session-a", token, now=101) is False
 
-    expired = store.issue("user-1", "session-a", now=200)
-    assert store.consume("user-1", "session-a", expired, now=210) is False
+    expired = store.issue(first, "session-a", now=200)
+    assert store.consume(first, "session-a", expired, now=210) is False
+
+
+def test_token_store_rejects_raw_identifiers_and_unknown_owners(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "raw.db")
+    _seed_owner(db_path)
+    store = CSRFTokenStore(db_path, ttl_seconds=10)
+
+    # A bare identifier is not an authenticated owner context, even when it
+    # names a stored user, and neither issuing nor spending accepts one.
+    for raw in ("user-1", None, object()):
+        with pytest.raises(InvalidOwnerContextError):
+            store.issue(raw, "session-a", now=100)  # type: ignore[arg-type]
+        with pytest.raises(InvalidOwnerContextError):
+            store.consume(raw, "session-a", "token", now=101)  # type: ignore[arg-type]
+
+    # A well-formed context for a user that does not exist cannot mint a nonce.
+    with pytest.raises(UnknownOwnerError):
+        store.issue(synthetic_owner("ghost-user"), "session-a", now=100)
 
 
 def test_missing_invalid_and_replayed_tokens_fail_closed(tmp_path: Path) -> None:

@@ -31,6 +31,7 @@ from hevy_client import (
     get_routines,
     update_routine,
 )
+from ownership import AuthenticatedOwner
 from program import (
     Block,
     Exercise,
@@ -187,13 +188,13 @@ def _routine_id_from_response(result: dict[str, Any] | None) -> str | None:
 def _ensure_folder(
     config: Config,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> int | None:
-    """Return this user's Hevy folder id, creating it if needed."""
+    """Return this owner's Hevy folder id, creating it if needed."""
     api_key = config.hevy_api_key
     if api_key is None:
         return None
-    stored = get_meta(FOLDER_META_KEY, config.database_path, user_id=user_id)
+    stored = get_meta(FOLDER_META_KEY, config.database_path, owner=owner)
     if stored is not None:
         return int(stored)
 
@@ -206,7 +207,7 @@ def _ensure_folder(
                     FOLDER_META_KEY,
                     str(folder_id),
                     config.database_path,
-                    user_id=user_id,
+                    owner=owner,
                 )
                 return folder_id
 
@@ -220,7 +221,7 @@ def _ensure_folder(
         FOLDER_META_KEY,
         str(folder_id),
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
     return folder_id
 
@@ -239,14 +240,14 @@ def _find_existing_routine_id(api_key: str, title: str) -> str | None:
 def _migrate_titles(
     config: Config,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> None:
-    """Carry only this user's tracked records across renamed routine titles."""
+    """Carry only this owner's tracked records across renamed routine titles."""
     for old_title, new_title in _TITLE_MIGRATIONS.items():
         old_record = get_routine_record(
             old_title,
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
         if old_record is None:
             continue
@@ -254,7 +255,7 @@ def _migrate_titles(
             get_routine_record(
                 new_title,
                 config.database_path,
-                user_id=user_id,
+                owner=owner,
             )
             is None
         ):
@@ -264,12 +265,12 @@ def _migrate_titles(
                 routine_id,
                 "",
                 config.database_path,
-                user_id=user_id,
+                owner=owner,
             )
         delete_routine_record(
             old_title,
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
 
 
@@ -280,7 +281,7 @@ def _sync_session(
     folder_id: int | None,
     notes: str,
     *,
-    user_id: str | None = None,
+    owner: AuthenticatedOwner,
 ) -> str:
     """Create or update one tenant-scoped routine."""
     api_key = config.hevy_api_key
@@ -291,7 +292,7 @@ def _sync_session(
     record = get_routine_record(
         title,
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
     if record is None:
         existing_id = _find_existing_routine_id(api_key, title)
@@ -313,7 +314,7 @@ def _sync_session(
             routine_id,
             content_hash,
             config.database_path,
-            user_id=user_id,
+            owner=owner,
         )
         return f"{title}: updated"
 
@@ -338,7 +339,7 @@ def _sync_session(
         new_routine_id,
         content_hash,
         config.database_path,
-        user_id=user_id,
+        owner=owner,
     )
     return f"{title}: created"
 
@@ -346,11 +347,11 @@ def _sync_session(
 def sync_routines(
     config: Config,
     *,
-    user_id: str,
+    owner: AuthenticatedOwner,
 ) -> list[str]:
-    """Sync deterministic routine payloads for only the acting user."""
-    _migrate_titles(config, user_id=user_id)
-    start = get_programme_start_date(config.database_path, user_id=user_id)
+    """Sync deterministic routine payloads for only the acting owner."""
+    _migrate_titles(config, owner=owner)
+    start = get_programme_start_date(config.database_path, owner=owner)
     week = week_in_cycle(start)
     block = block_for_week(week)
     notes = (
@@ -358,7 +359,7 @@ def sync_routines(
         f"(weeks {block.weeks}). {block.focus} "
         "Built and kept in sync by your workout agent."
     )
-    folder_id = _ensure_folder(config, user_id=user_id)
+    folder_id = _ensure_folder(config, owner=owner)
     weights = (
         _compute_target_weights(config, block) if config.hevy_prefill_weights else {}
     )
@@ -380,7 +381,7 @@ def sync_routines(
                 built,
                 folder_id,
                 notes,
-                user_id=user_id,
+                owner=owner,
             ),
         )
     return statuses
