@@ -32,7 +32,6 @@ from database import (
     get_daily_logs,
     get_dashboard_insight,
     get_deep_correlation,
-    get_meta,
     get_notifications,
     get_or_create_user,
     init_db,
@@ -41,8 +40,8 @@ from database import (
     save_push_subscription,
     save_user_api_key,
     save_user_preferences,
-    set_meta,
 )
+from secret_vault import CredentialUnavailableError, SecretVault
 from tenant_isolation import (
     JobStatus,
     OwnedJob,
@@ -458,17 +457,30 @@ class _Response:
         return self._payload
 
 
+def _user_token(db: str, user_id: str) -> str | None:
+    try:
+        credential = SecretVault(db).resolve(
+            user_id, "google_health", purpose="test_readback"
+        )
+    except CredentialUnavailableError:
+        return None
+    return (
+        credential.refresh_token.reveal()
+        if credential.refresh_token is not None
+        else None
+    )
+
+
 def test_concurrent_google_health_syncs_use_only_each_users_token(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     gate = threading.Barrier(len(world.tenants), timeout=WAIT_SECONDS)
     presented: list[str] = []
     for tenant in world.tenants:
-        set_meta(
-            "google_health_refresh_token",
-            f"gh-refresh-{tenant.index}",
-            world.db,
-            user_id=tenant.user_id,
+        SecretVault(world.db).store(
+            tenant.user_id,
+            "google_health",
+            refresh_token=f"gh-refresh-{tenant.index}",
         )
 
     def fake_post(url: str, **kwargs: Any) -> _Response:
@@ -504,15 +516,12 @@ def test_concurrent_google_health_syncs_use_only_each_users_token(
     for tenant, result in zip(world.tenants, results):
         assert result == {"weight_kg": tenant.weight}
         assert (
-            get_meta("google_health_refresh_token", world.db, user_id=tenant.user_id)
+            _user_token(world.db, tenant.user_id)
             == f"rotated:gh-refresh-{tenant.index}"
         )
     # A user who never linked an account does not inherit anyone's token.
     assert results[-1] is None
-    assert (
-        get_meta("google_health_refresh_token", world.db, user_id=unlinked.user_id)
-        is None
-    )
+    assert _user_token(world.db, unlinked.user_id) is None
 
 
 # ---------------------------------------------------------------------------

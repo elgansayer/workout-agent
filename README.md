@@ -40,6 +40,7 @@ Core rules:
 
 - Every tenant-owned record must be scoped to the authenticated user.
 - Caches, locks, cursors and background jobs must be keyed by an immutable owner identity and re-authorize their owner when they run; see [Tenant isolation](docs/TENANT_ISOLATION.md).
+- Accounts have immutable identifiers and a lifecycle status, and production has no shared fallback user: an operation that cannot name its account fails closed. Data written before accounts existed is assigned to a verified owner through an explicit, audited plan. See [User model](docs/USER_MODEL.md).
 - Raw credentials must never be logged or committed.
 - Raw health, workout, or prompt payloads must not be written to logs.
 - Public source documentation and test fixtures must use synthetic data only.
@@ -110,12 +111,17 @@ Authentication and integration credentials are configured through environment va
 - `WEB_AUTH_SECRET`
 - `WEB_GOOGLE_CLIENT_ID`
 - `WEB_GOOGLE_CLIENT_SECRET`
+- `ALLOWED_EMAILS` and `INVITE_ONLY` (who may sign in; see below)
 - `HEVY_API_KEY`
 - AI-provider credentials
 - health-provider OAuth credentials
 - notification-provider credentials
 
 Use `.env.example` for the current supported inventory. Never paste real values into documentation, issues, fixtures, tests, screenshots, or commits.
+
+Who may sign in to a deployment is decided by the server, not by the UI: `ALLOWED_EMAILS` restricts sign-in to a list of addresses, `INVITE_ONLY=1` requires an invitation before a new account is created, and a suspended or deleted account cannot sign in or keep using an existing session. See [Account access policy](docs/ACCOUNT_ACCESS_POLICY.md).
+
+Browser sessions use a `Secure`, `HttpOnly`, `SameSite=Lax`, host-only cookie backed by a server-side registry, so they expire after an idle and an absolute limit (`SESSION_IDLE_TIMEOUT_SECONDS`, `SESSION_ABSOLUTE_TIMEOUT_SECONDS`), rotate at every sign-in, and can be revoked per device or for all devices. See [Session security](docs/SESSION_SECURITY.md).
 
 ## Health and workout examples
 
@@ -161,6 +167,25 @@ Work is tracked in GitHub Issues. Before implementation:
 4. Add deterministic tests for new behaviour and relevant failure paths.
 5. Run applicable verification before merging.
 6. Keep public docs and fixtures synthetic.
+
+### Autonomous implementation
+
+The OpenHands Agent Canvas on the VPS is the single autonomous scheduler for this
+repository. It selects eligible GitHub issues, claims them under a lease, and opens
+branches and pull requests. GitHub Actions remain deterministic verification and
+never select implementation work.
+
+The queue contract — eligible labels, claim lease and heartbeat, cancellation,
+branch naming, pull-request creation and review handling — is documented in
+[docs/AUTONOMOUS_QUEUE_CONTRACT.md](docs/AUTONOMOUS_QUEUE_CONTRACT.md) and
+implemented in `tools/agent_queue.py`. The ownership boundary is enforced by
+`tools/check_scheduler_ownership.py`, which fails when a workflow could select work
+or when the document and the executable contract drift apart:
+
+```bash
+python -m unittest tools.test_agent_queue tools.test_scheduler_ownership -v
+python tools/check_scheduler_ownership.py --root .
+```
 
 ## Security reporting and history hygiene
 

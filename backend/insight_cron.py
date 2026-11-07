@@ -10,14 +10,17 @@ from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
+    get_all_users,
     get_body_metrics,
     get_daily_logs,
+    get_legacy_user_id,
     get_progress_history,
     init_db,
     save_dashboard_insight,
     save_deep_correlation,
     save_notification,
 )
+from tenancy import implicit_single_user_allowed
 from tenant_isolation import (
     OwnedContext,
     OwnerIdentity,
@@ -30,11 +33,16 @@ logger = logging.getLogger("insight_cron")
 
 
 def _resolve_insight_user(db_path: str) -> str | None:
-    from database import get_legacy_user_id
+    """Return the implicit local tenant, or None when there must be none.
 
+    Outside the explicit non-production local mode there is no shared fallback
+    user, so callers must name the account (or iterate real accounts).
+    """
+    if not implicit_single_user_allowed():
+        return None
     try:
         return get_legacy_user_id(db_path)
-    except Exception:  # noqa: BLE001
+    except RuntimeError:
         return None
 
 
@@ -231,12 +239,22 @@ def main() -> None:
         logger.error("%s", exc)
         sys.exit(1)
 
-    try:
-        if args.daily:
-            generate_daily_header(config, user_id=args.user_id)
+    # An explicit --user-id always wins. With none, the explicit local mode uses
+    # its single tenant; otherwise every active account is processed in turn,
+    # each strictly scoped to itself. There is no shared fallback user.
+    if args.user_id:
+        user_ids: list[str | None] = [args.user_id]
+    elif implicit_single_user_allowed():
+        user_ids = [None]
+    else:
+        user_ids = [user["id"] for user in get_all_users(config.database_path)]
 
-        if args.weekly:
-            generate_weekly_correlations(config, user_id=args.user_id)
+    try:
+        for uid in user_ids:
+            if args.daily:
+                generate_daily_header(config, user_id=uid)
+            if args.weekly:
+                generate_weekly_correlations(config, user_id=uid)
     except OwnershipError as exc:
         logger.error("Refusing insight job: %s", exc)
         sys.exit(1)
