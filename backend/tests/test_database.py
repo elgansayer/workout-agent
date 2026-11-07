@@ -1617,6 +1617,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "notifications",
         "user_preferences",
         "programmes",
+        "credential_audit_events",
     )
     with sqlite3.connect(db, timeout=10) as conn:
         for table in user_owned_tables:

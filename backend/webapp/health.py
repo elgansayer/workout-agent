@@ -13,10 +13,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from connectors.builtin import build_builtin_registry
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
-from connectors.builtin import build_builtin_registry
+from secret_vault import configured_provider_ids
 
 Receive = Callable[[], Awaitable[dict[str, Any]]]
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -107,12 +107,7 @@ def _safe_user_dependency_state(db_path: str, user_id: str) -> dict[str, Any]:
             if preferred_row and preferred_row[0]
             else "gemini"
         )
-        key_rows = conn.execute(
-            "SELECT provider FROM user_api_keys "
-            "WHERE user_id = ? AND api_key IS NOT NULL AND api_key <> ''",
-            (user_id,),
-        ).fetchall()
-        configured = {str(row[0]).strip().lower() for row in key_rows if row[0]}
+        configured = set(configured_provider_ids(conn, user_id))
 
     registry = build_builtin_registry()
     connector_providers = set(registry.providers())

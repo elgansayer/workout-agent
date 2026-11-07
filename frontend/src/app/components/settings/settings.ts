@@ -3,6 +3,10 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
+interface ApiError {
+  error?: { detail?: string };
+}
+
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -110,7 +114,7 @@ export class Settings implements OnInit {
           }
           this.loadSettings(false);
         },
-        error: (err: any) => {
+        error: (err: ApiError) => {
           const msg = err.error?.detail || 'Error saving key.';
           if (provider === 'hevy') this.hevyStatus.set(msg);
           else this.aiStatus.set(msg);
@@ -124,28 +128,59 @@ export class Settings implements OnInit {
       next: () => {
         this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: ApiError) => {
         alert(err.error?.detail || 'Could not delete key.');
       },
     });
   }
 
-  verifyHevy() {
-    this.hevyStatus.set('Verifying...');
+  private setProviderStatus(provider: string, message: string) {
+    if (provider === 'hevy') this.hevyStatus.set(message);
+    else this.aiStatus.set(message);
+  }
+
+  testKey(provider: string) {
+    const key =
+      provider === 'hevy' ? this.hevyKeyInput.trim() : (this.aiKeyInputs[provider] || '').trim();
+    const model = (this.aiModelInputs[provider] || '').trim();
+    this.setProviderStatus(provider, 'Testing credential...');
     this.http
-      .post('/api/settings/verify-hevy', { api_key: this.hevyKeyInput.trim() || '__stored__' })
+      .post('/api/settings/key/test', {
+        provider,
+        api_key: key || '__stored__',
+        model: model || undefined,
+      })
       .subscribe({
         next: (res: any) => {
           if (res.status === 'ok') {
-            this.hevyStatus.set(`✓ Connected! ${res.workout_count} workouts found.`);
+            const count = typeof res.workout_count === 'number' ? ` ${res.workout_count} workouts found.` : '';
+            this.setProviderStatus(provider, `✓ Connected.${count}`);
+            this.loadSettings(false);
           } else {
-            this.hevyStatus.set(res.detail || 'Verification failed.');
+            this.setProviderStatus(provider, res.detail || 'Verification failed.');
           }
         },
-        error: (err: any) => {
-          this.hevyStatus.set(err.error?.detail || 'Verification failed.');
+        error: (err: ApiError) => {
+          this.setProviderStatus(provider, err.error?.detail || 'Verification failed.');
         },
       });
+  }
+
+  verifyHevy() {
+    this.testKey('hevy');
+  }
+
+  revokeKey(provider: string) {
+    if (!confirm(`Revoke your ${provider} credential? Background jobs will stop using it.`)) return;
+    this.http.post('/api/settings/key/revoke', { provider }).subscribe({
+      next: () => {
+        this.setProviderStatus(provider, 'Credential revoked.');
+        this.loadSettings(false);
+      },
+      error: (err: ApiError) => {
+        this.setProviderStatus(provider, err.error?.detail || 'Could not revoke credential.');
+      },
+    });
   }
 
   syncHistory() {
@@ -157,7 +192,7 @@ export class Settings implements OnInit {
           `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
       },
-      error: (err: any) => {
+      error: (err: ApiError) => {
         this.hevyStatus.set(err.error?.detail || 'Sync failed.');
       },
     });
@@ -184,7 +219,7 @@ export class Settings implements OnInit {
         this.prefStatus.set('Profile saved!');
         setTimeout(() => this.prefStatus.set(''), 4000);
       },
-      error: (err: any) => {
+      error: (err: ApiError) => {
         this.prefStatus.set(err.error?.detail || 'Could not save preferences.');
       },
     });

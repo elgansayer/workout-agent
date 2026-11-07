@@ -96,6 +96,20 @@ describe('Settings AI provider parity', () => {
     expect(component.hevyKeyInput).toBe('');
   });
 
+
+  it('tests a stored credential through the vault endpoint and refreshes status', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.testKey('hevy');
+
+    const request = http.expectOne('/api/settings/key/test');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.provider).toBe('hevy');
+    request.flush({ status: 'ok', provider: 'hevy', detail: 'Connected.' });
+    http.expectOne('/api/settings').flush(settingsResponse);
+    expect(component.hevyStatus()).toContain('Connected');
+  });
+
   it('explains unsupported notifications instead of silently failing', async () => {
     const fixture = await loadSettings();
     await fixture.componentInstance.subscribeToPush();

@@ -530,11 +530,8 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     import ai_provider
     import webapp.app as app_module
     from cryptography.fernet import Fernet
-    from database import (
-        get_legacy_user_id,
-        save_user_api_key,
-        save_user_preferences,
-    )
+    from database import get_legacy_user_id, save_user_preferences
+    from secret_vault import SecretVault
 
     db_path = app_module.DB_PATH
     user_id = get_legacy_user_id(db_path)
@@ -546,12 +543,11 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         ai_model="claude-synthetic-model",
         db_path=db_path,
     )
-    save_user_api_key(
+    SecretVault(db_path).store(
         user_id,
         "claude",
-        synthetic_key,
-        extra={"model": "stale-model-metadata"},
-        db_path=db_path,
+        api_key=synthetic_key,
+        model="stale-model-metadata",
     )
 
     with sqlite3.connect(db_path) as connection:
@@ -694,3 +690,158 @@ def test_chat_clear_returns_ok(client: Any) -> None:
 
 
 # -- settings API-key CRUD ---------------------------------------------
+
+
+def _call_json_route(
+    app_module: Any,
+    handler: Any,
+    payload: dict[str, Any],
+    user_id: str,
+) -> Any:
+    from starlette.requests import Request
+
+    app_module._RATE_LIMITS.clear()
+    body = json.dumps(payload).encode()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/api/settings/{handler.__name__}",
+            "headers": [],
+            "query_string": b"",
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "session": {"user_id": user_id},
+        },
+        receive,
+    )
+    return asyncio.run(handler(request))
+
+
+def test_settings_credential_lifecycle_is_masked_and_audited(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """Save/test/rotate/revoke/delete never echo the submitted secret."""
+    import webapp.app as app_module
+    from cryptography.fernet import Fernet
+    from database import get_legacy_user_id
+    from secret_vault import CredentialUnavailableError, SecretVault, VerificationResult
+
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    original = "synthetic-claude-key-1234"
+
+    saved = _call_json_route(
+        app_module,
+        app_module.save_api_key,
+        {"provider": "claude", "api_key": original, "model": "claude-synthetic"},
+        user_id,
+    )
+    assert original not in repr(saved)
+    assert saved["credential"]["has_key"] is True
+    assert saved["credential"]["masked"].endswith("1234")
+
+    with sqlite3.connect(app_module.DB_PATH) as conn:
+        stored = conn.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, "claude"),
+        ).fetchone()
+    assert stored is not None
+    assert stored[0].startswith("wv2.")
+    assert stored[0] != original
+
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200
+    payload = settings.json()
+    assert payload["user_keys"]["claude"]["has_key"] is True
+    assert original not in settings.text
+
+    rotated = "synthetic-claude-key-5678"
+    rotated_result = _call_json_route(
+        app_module,
+        app_module.rotate_api_key,
+        {"provider": "claude", "api_key": rotated, "model": "claude-rotated"},
+        user_id,
+    )
+    assert rotated not in repr(rotated_result)
+    assert rotated_result["credential"]["version"] == 2
+
+    monkeypatch.setattr(
+        app_module,
+        "_verify_ai_credential",
+        lambda credential: VerificationResult(True, "ok", "Accepted."),
+    )
+    tested = _call_json_route(
+        app_module,
+        app_module.test_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert tested["status"] == "ok"
+    assert rotated not in repr(tested)
+
+    revoked = _call_json_route(
+        app_module,
+        app_module.revoke_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert revoked["credential"]["status"] == "revoked"
+    with pytest.raises(CredentialUnavailableError):
+        SecretVault(app_module.DB_PATH).resolve(
+            user_id, "claude", purpose="ai_generate"
+        )
+
+    replacement = "synthetic-claude-key-9012"
+    _call_json_route(
+        app_module,
+        app_module.save_api_key,
+        {"provider": "claude", "api_key": replacement},
+        user_id,
+    )
+    deleted = _call_json_route(
+        app_module,
+        app_module.remove_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert deleted["deleted"] is True
+
+    audit = client.get("/api/settings/credentials/audit")
+    assert audit.status_code == 200
+    actions = {event["action"] for event in audit.json()["events"]}
+    assert {"save", "rotate", "test", "revoke", "delete"} <= actions
+
+
+def test_settings_credential_save_fails_closed_without_encryption_key(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """No ENCRYPTION_KEY means no credential can be stored or read."""
+    import webapp.app as app_module
+    from database import get_legacy_user_id
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    secret = "synthetic-never-stored-key"
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200
+    assert settings.json()["credential_vault"]["available"] is False
+
+    with pytest.raises(HTTPException) as caught:
+        _call_json_route(
+            app_module,
+            app_module.save_api_key,
+            {"provider": "claude", "api_key": secret},
+            user_id,
+        )
+
+    assert caught.value.status_code == 503
+    assert secret not in str(caught.value.detail)

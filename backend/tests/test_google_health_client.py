@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import google_health_client
 import pytest
 import requests
-
-import google_health_client
-from database import get_meta, init_db, set_meta
+from cryptography.fernet import Fernet
+from database import get_legacy_user_id, init_db
+from secret_vault import SecretVault
 
 
 class _FakeResponse:
@@ -24,10 +25,36 @@ class _FakeResponse:
         return self._payload
 
 
+@pytest.fixture(autouse=True)
+def _encryption_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+
+
 def _db(tmp_path: Any) -> str:
     db = str(tmp_path / "test.db")
     init_db(db)
     return db
+
+
+def _store_token(db: str, token: str) -> None:
+    SecretVault(db).store(
+        get_legacy_user_id(db),
+        "google_health",
+        refresh_token=token,
+    )
+
+
+def _stored_token(db: str) -> str | None:
+    credential = SecretVault(db).resolve(
+        get_legacy_user_id(db),
+        "google_health",
+        purpose="test_readback",
+    )
+    return (
+        credential.refresh_token.reveal()
+        if credential.refresh_token is not None
+        else None
+    )
 
 
 def _points(
@@ -132,7 +159,7 @@ def test_sync_persists_refresh_token(
 
     metrics = google_health_client.sync_body_metrics("id", "secret", "env-token", db)
     assert metrics == {"weight_kg": 80.0, "body_fat_pct": 14.0}
-    assert get_meta("google_health_refresh_token", db) == "rotated-token"
+    assert _stored_token(db) == "rotated-token"
 
 
 def test_sync_keeps_refresh_token_when_not_rotated(
@@ -153,14 +180,14 @@ def test_sync_keeps_refresh_token_when_not_rotated(
     )
 
     google_health_client.sync_body_metrics("id", "secret", "env-token", db)
-    assert get_meta("google_health_refresh_token", db) == "env-token"
+    assert _stored_token(db) == "env-token"
 
 
 def test_sync_uses_stored_token_when_present(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     db = _db(tmp_path)
-    set_meta("google_health_refresh_token", "stored-token", db)
+    _store_token(db, "stored-token")
 
     seen: dict[str, str] = {}
 
@@ -177,7 +204,7 @@ def test_sync_uses_stored_token_when_present(
 
     google_health_client.sync_body_metrics("id", "secret", "env-token", db)
     assert seen["refresh_token"] == "stored-token"
-    assert get_meta("google_health_refresh_token", db) == "next-token"
+    assert _stored_token(db) == "next-token"
 
 
 def test_sync_uses_stored_token_without_env_token(
@@ -186,7 +213,7 @@ def test_sync_uses_stored_token_without_env_token(
     # When the user linked Google Health from the web dashboard, only the stored
     # token exists (no GOOGLE_HEALTH_REFRESH_TOKEN env var) and sync must work.
     db = _db(tmp_path)
-    set_meta("google_health_refresh_token", "web-linked", db)
+    _store_token(db, "web-linked")
 
     seen: dict[str, str] = {}
 
@@ -203,7 +230,7 @@ def test_sync_uses_stored_token_without_env_token(
 
     google_health_client.sync_body_metrics("id", "secret", None, db)
     assert seen["refresh_token"] == "web-linked"
-    assert get_meta("google_health_refresh_token", db) == "rotated"
+    assert _stored_token(db) == "rotated"
 
 
 def test_latest_value_handles_non_dict_sample_time(

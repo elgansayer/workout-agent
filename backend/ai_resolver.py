@@ -7,6 +7,35 @@ This is the single place every feature call site goes through to obtain an
 from __future__ import annotations
 
 from ai_provider import PROVIDERS, AIProvider, get_provider
+from secret_vault import (
+    CredentialUnavailableError,
+    ResolvedCredential,
+    SecretVault,
+    UnavailableReason,
+)
+
+
+def _user_credential(
+    user_id: str,
+    provider: str,
+    db_path: str,
+) -> ResolvedCredential | None:
+    """Return the owner's credential, or ``None`` when none is configured.
+
+    A revoked or undecryptable credential is never replaced by a shared server
+    fallback: only an absent credential may fall through to the optional Gemini
+    server key.
+    """
+    try:
+        return SecretVault(db_path).resolve(
+            user_id,
+            provider,
+            purpose="ai_generate",
+        )
+    except CredentialUnavailableError as exc:
+        if exc.reason is UnavailableReason.NOT_CONFIGURED:
+            return None
+        raise ValueError(str(exc)) from exc
 
 
 def resolve_provider(
@@ -37,7 +66,7 @@ def resolve_provider(
     api_key: str | None = None
 
     if user_id is not None:
-        from database import get_user_api_key, get_user_preferences
+        from database import get_user_preferences
 
         prefs = get_user_preferences(user_id, db_path=db_path)
         provider_name = str(prefs.get("preferred_ai") or "gemini").lower().strip()
@@ -51,15 +80,11 @@ def resolve_provider(
         if isinstance(preferred_model, str) and preferred_model.strip():
             model = preferred_model.strip()
 
-        key_record = get_user_api_key(user_id, provider_name, db_path=db_path)
-        if key_record:
-            api_key = str(key_record.get("api_key") or "").strip() or None
-            if model is None:
-                extra = key_record.get("extra")
-                if isinstance(extra, dict):
-                    stored_model = extra.get("model")
-                    if isinstance(stored_model, str) and stored_model.strip():
-                        model = stored_model.strip()
+        credential = _user_credential(user_id, provider_name, db_path)
+        if credential is not None and credential.api_key is not None:
+            api_key = credential.api_key.reveal()
+            if model is None and credential.model:
+                model = credential.model
 
     if api_key is None:
         if provider_name != "gemini":

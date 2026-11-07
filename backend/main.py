@@ -35,7 +35,6 @@ from database import (
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
-    get_user_api_key,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -58,6 +57,13 @@ from program import (
     week_in_cycle,
 )
 from push_notifier import send_push_notification
+from secret_vault import (
+    CredentialStatus,
+    CredentialUnavailableError,
+    ResolvedCredential,
+    SecretVault,
+    migrate_legacy_credentials,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -237,28 +243,75 @@ def _resolve_run_user(db_path: str) -> str:
     return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
 
 
+def _vault_credential(
+    db_path: str,
+    user_id: str,
+    provider: str,
+    *,
+    purpose: str,
+) -> ResolvedCredential | None:
+    """Resolve one owner's credential, treating unavailability as absent."""
+    try:
+        return SecretVault(db_path).resolve(user_id, provider, purpose=purpose)
+    except CredentialUnavailableError:
+        return None
+
+
+def _vault_record_exists(db_path: str, user_id: str, provider: str) -> bool:
+    """Whether the owner has any credential row, including a revoked one."""
+    return (
+        SecretVault(db_path).describe(user_id, provider).status
+        is not CredentialStatus.NOT_CONFIGURED
+    )
+
+
 def _scope_config_to_user(config: Config, user_id: str) -> Config:
     """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
-    key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
-    user_hevy_key = None
-    if key_record:
-        user_hevy_key = str(key_record.get("api_key") or "").strip() or None
+    hevy_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "hevy",
+        purpose="hevy_sync",
+    )
+    hevy_record_exists = _vault_record_exists(
+        config.database_path, user_id, "hevy"
+    )
+    user_hevy_key = (
+        hevy_credential.api_key.reveal()
+        if hevy_credential is not None and hevy_credential.api_key is not None
+        else None
+    )
+    google_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "google_health",
+        purpose="health_sync",
+    )
+    google_record_exists = _vault_record_exists(
+        config.database_path, user_id, "google_health"
+    )
+    user_google_token = (
+        google_credential.refresh_token.reveal()
+        if google_credential is not None and google_credential.refresh_token is not None
+        else None
+    )
 
     is_legacy_user = user_id == get_legacy_user_id(config.database_path)
-    hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
+    allow_legacy_hevy = is_legacy_user and not hevy_record_exists
+    allow_legacy_google = is_legacy_user and not google_record_exists
+    hevy_key = user_hevy_key or (config.hevy_api_key if allow_legacy_hevy else None)
+    google_token = user_google_token or (
+        config.google_health_refresh_token if allow_legacy_google else None
+    )
     return replace(
         config,
         hevy_api_key=hevy_key,
         health_connect_file=(config.health_connect_file if is_legacy_user else None),
-        google_health_client_id=(
-            config.google_health_client_id if is_legacy_user else None
-        ),
-        google_health_client_secret=(
-            config.google_health_client_secret if is_legacy_user else None
-        ),
-        google_health_refresh_token=(
-            config.google_health_refresh_token if is_legacy_user else None
-        ),
+        # The OAuth *client* belongs to the deployment and is safe to share;
+        # only the per-user refresh token is tenant scoped.
+        google_health_client_id=config.google_health_client_id,
+        google_health_client_secret=config.google_health_client_secret,
+        google_health_refresh_token=google_token,
     )
 
 
@@ -270,6 +323,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         return 1
 
     init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
 
     if user_id is None:
         user_id = _resolve_run_user(config.database_path)
@@ -295,6 +349,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         config.google_health_client_secret,
         config.google_health_refresh_token,
         config.database_path,
+        user_id=user_id,
     )
     if synced:
         # Live scale readings take precedence over a stale file.
@@ -428,6 +483,7 @@ if __name__ == "__main__":
 
         config = Config.load()
         init_db(config.database_path)
+        migrate_legacy_credentials(config.database_path)
         sync_user_id = args.user_id or _resolve_run_user(config.database_path)
         config = _scope_config_to_user(config, sync_user_id)
         api_key = config.hevy_api_key

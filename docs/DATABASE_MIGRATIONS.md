@@ -25,6 +25,22 @@ Never use a client-supplied owner identifier to choose the backfill tenant.
 Runtime requests must continue to derive tenant identity from the authenticated
 session.
 
+## Credential vault schema and migration
+
+`user_api_keys` keeps its original columns and gains additive lifecycle columns
+(`status`, `key_hint`, `key_version`, `rotated_at`, `revoked_at`,
+`last_tested_at`, `last_test_status`). `credential_audit_events` is append-only
+and tenant scoped. A trigger rejects any attempt to change a credential's
+`user_id`.
+
+`secret_vault.migrate_legacy_credentials()` runs after `init_db()` at web and
+agent startup. It re-seals pre-vault plaintext and Fernet rows under per-user
+AES-256-GCM and moves legacy `hevy_meta.google_health_refresh_token` values into
+the vault before blanking the legacy value. When `ENCRYPTION_KEY` is missing or
+invalid, migration changes nothing and reports the pending count; it never
+writes plaintext. The operation is idempotent and compare-and-swap protected so
+concurrent web and agent startups cannot corrupt a row.
+
 ## Regression coverage
 
 `backend/tests/test_database.py` contains three complementary checks:

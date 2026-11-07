@@ -21,8 +21,15 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
-
-from database import get_meta, set_meta
+from database import get_legacy_user_id
+from secret_vault import (
+    CredentialExistsError,
+    CredentialUnavailableError,
+    ResolvedCredential,
+    SecretVault,
+    UnavailableReason,
+    VaultError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +45,6 @@ SCOPE = (
 
 # How far back to look for the most recent reading.
 _LOOKBACK_DAYS = 35
-
-_KEY_REFRESH_TOKEN = "google_health_refresh_token"
-
 
 def _refresh_tokens(
     client_id: str,
@@ -176,31 +180,107 @@ def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
     return metrics or None
 
 
+def _resolve_refresh_token(
+    vault: SecretVault,
+    user_id: str,
+    env_refresh_token: str | None,
+) -> tuple[str | None, ResolvedCredential | None]:
+    """Resolve the owner's vaulted token, falling back only when unconfigured."""
+    try:
+        credential = vault.resolve(user_id, "google_health", purpose="health_sync")
+    except CredentialUnavailableError as exc:
+        if exc.reason is not UnavailableReason.NOT_CONFIGURED:
+            logger.warning(
+                "Google Health credentials are unavailable (%s).",
+                exc.reason.value,
+            )
+            return None, None
+        return env_refresh_token, None
+
+    token = (
+        credential.refresh_token.reveal()
+        if credential.refresh_token is not None
+        else None
+    )
+    return token or env_refresh_token, credential
+
+
+def _persist_refresh_token(
+    vault: SecretVault,
+    user_id: str,
+    credential: ResolvedCredential | None,
+    new_refresh_token: str,
+) -> None:
+    """Re-seal a rotated OAuth token for the same owner (never another user)."""
+    if (
+        credential is not None
+        and credential.refresh_token is not None
+        and credential.refresh_token.reveal() == new_refresh_token
+    ):
+        return
+    try:
+        if credential is not None:
+            vault.rotate(
+                user_id,
+                "google_health",
+                refresh_token=new_refresh_token,
+                actor="system",
+                source="oauth_refresh",
+            )
+        else:
+            try:
+                vault.store(
+                    user_id,
+                    "google_health",
+                    refresh_token=new_refresh_token,
+                    actor="system",
+                    source="oauth_refresh",
+                )
+            except CredentialExistsError:
+                vault.rotate(
+                    user_id,
+                    "google_health",
+                    refresh_token=new_refresh_token,
+                    actor="system",
+                    source="oauth_refresh",
+                )
+    except (VaultError, ValueError):
+        # Never log the token; a failed rotation leaves the previous credential
+        # in place and the next run will simply retry.
+        logger.warning("Could not persist a rotated Google Health refresh token.")
+
+
 def sync_body_metrics(
     client_id: str | None,
     client_secret: str | None,
     env_refresh_token: str | None,
     db_path: str,
+    *,
+    user_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Pull the latest body composition from Google Health, or None if disabled.
 
-    Persists the refresh token so subsequent runs stay authorised. The refresh
-    token may come from the environment or, when the user linked Google Health
-    from the web dashboard, from the database — either is sufficient.
+    Resolves the refresh token for the exact owning user through the secret
+    vault and persists any rotation back under that same user. The environment
+    token is only a legacy fallback when no vault credential is configured.
     """
     if not (client_id and client_secret):
         return None
 
-    refresh_token = get_meta(_KEY_REFRESH_TOKEN, db_path) or env_refresh_token
+    owner = user_id or get_legacy_user_id(db_path)
+    vault = SecretVault(db_path)
+    refresh_token, credential = _resolve_refresh_token(
+        vault, owner, env_refresh_token
+    )
     if not refresh_token:
         return None
     tokens = _refresh_tokens(client_id, client_secret, refresh_token)
     if tokens is None and env_refresh_token and refresh_token != env_refresh_token:
-        # The stored token may have been invalidated; fall back to the env one.
+        # A legacy stored token may have been invalidated; try the env one.
         tokens = _refresh_tokens(client_id, client_secret, env_refresh_token)
     if tokens is None:
         return None
 
     access, new_refresh = tokens
-    set_meta(_KEY_REFRESH_TOKEN, new_refresh, db_path)
+    _persist_refresh_token(vault, owner, credential, new_refresh)
     return fetch_body_metrics(access)

@@ -15,7 +15,6 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
 
 logger = logging.getLogger(__name__)
@@ -821,6 +820,78 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
             "ON user_api_keys (user_id)"
         )
+        _init_credential_vault_schema(cursor)
+
+
+def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
+    """Add the additive credential-vault lifecycle columns and audit trail.
+
+    ``secret_vault`` is the only module that reads or writes these tables; this
+    function owns only their schema so the whole database still migrates through
+    ``init_db``. Every statement is idempotent: columns are guarded by
+    ``PRAGMA table_info``, and the table, indexes and triggers use
+    ``IF NOT EXISTS``. Existing credential rows keep working unchanged and are
+    upgraded to per-user encryption by ``secret_vault.migrate_legacy_credentials``.
+    """
+    cursor.execute("PRAGMA table_info(user_api_keys)")
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    lifecycle_columns = (
+        ("status", "ALTER TABLE user_api_keys ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"),
+        ("key_hint", "ALTER TABLE user_api_keys ADD COLUMN key_hint TEXT"),
+        ("key_version", "ALTER TABLE user_api_keys ADD COLUMN key_version INTEGER NOT NULL DEFAULT 1"),
+        ("rotated_at", "ALTER TABLE user_api_keys ADD COLUMN rotated_at TEXT"),
+        ("revoked_at", "ALTER TABLE user_api_keys ADD COLUMN revoked_at TEXT"),
+        ("last_tested_at", "ALTER TABLE user_api_keys ADD COLUMN last_tested_at TEXT"),
+        ("last_test_status", "ALTER TABLE user_api_keys ADD COLUMN last_test_status TEXT"),
+    )
+    for column, statement in lifecycle_columns:
+        if column not in existing_columns:
+            cursor.execute(statement)
+
+    # A credential can never be re-parented to another tenant.
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_user_api_keys_user_immutable
+        BEFORE UPDATE OF user_id ON user_api_keys
+        WHEN NEW.user_id IS NOT OLD.user_id
+        BEGIN
+            SELECT RAISE(ABORT, 'user_api_keys.user_id is immutable');
+        END
+        """
+    )
+
+    # Append-only audit trail of credential lifecycle operations. It records who
+    # did what to which provider credential and the outcome, never secret
+    # material or provider error text.
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS credential_audit_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL REFERENCES users(id),
+            provider TEXT NOT NULL,
+            action TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            detail TEXT,
+            actor TEXT NOT NULL,
+            source TEXT NOT NULL,
+            credential_version INTEGER,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_credential_audit_events_user "
+        "ON credential_audit_events (user_id, created_at DESC, id DESC)"
+    )
+    cursor.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_credential_audit_events_append_only
+        BEFORE UPDATE ON credential_audit_events
+        BEGIN
+            SELECT RAISE(ABORT, 'credential audit events are append-only');
+        END
+        """
+    )
 
 
 
@@ -1944,129 +2015,14 @@ def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     ]
 
 
-# ---- API key management ----
-
-
-def save_user_api_key(
-    user_id: str,
-    provider: str,
-    api_key: str,
-    *,
-    client_id: str | None = None,
-    client_secret: str | None = None,
-    refresh_token: str | None = None,
-    extra: dict[str, Any] | None = None,
-    db_path: str = DEFAULT_DB_PATH,
-) -> None:
-    """Store (or update) an encrypted API key for a user + provider pair."""
-    from datetime import datetime, timezone
-
-    now = datetime.now(tz=timezone.utc).isoformat()
-    encrypted_key = encrypt(api_key) if api_key else ""
-    encrypted_secret = encrypt(client_secret) if client_secret else None
-    encrypted_refresh = encrypt(refresh_token) if refresh_token else None
-    extra_json = json.dumps(extra) if extra else None
-
-    with _connect(db_path) as conn:
-        conn.execute(
-            """
-            INSERT INTO user_api_keys
-                (user_id, provider, api_key, client_id, client_secret,
-                 refresh_token, extra_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(user_id, provider) DO UPDATE SET
-                api_key = excluded.api_key,
-                client_id = excluded.client_id,
-                client_secret = excluded.client_secret,
-                refresh_token = excluded.refresh_token,
-                extra_json = excluded.extra_json,
-                updated_at = excluded.updated_at
-            """,
-            (
-                user_id,
-                provider.lower(),
-                encrypted_key,
-                client_id,
-                encrypted_secret,
-                encrypted_refresh,
-                extra_json,
-                now,
-                now,
-            ),
-        )
-
-
-def get_user_api_key(
-    user_id: str,
-    provider: str,
-    db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, Any] | None:
-    """Return the decrypted API key record for a user + provider, or None."""
-    with _connect(db_path) as conn:
-        row = conn.execute(
-            """
-            SELECT api_key, client_id, client_secret, refresh_token,
-                   extra_json, updated_at
-            FROM user_api_keys
-            WHERE user_id = ? AND provider = ?
-            """,
-            (user_id, provider.lower()),
-        ).fetchone()
-    if not row:
-        return None
-    return {
-        "api_key": decrypt(row[0]) if row[0] else "",
-        "client_id": row[1],
-        "client_secret": decrypt(row[2]) if row[2] else None,
-        "refresh_token": decrypt(row[3]) if row[3] else None,
-        "extra": json.loads(row[4]) if row[4] else None,
-        "updated_at": row[5],
-    }
-
-
-def get_user_api_keys(
-    user_id: str,
-    db_path: str = DEFAULT_DB_PATH,
-) -> dict[str, dict[str, Any]]:
-    """Return all API key records for a user, keyed by provider name.
-
-    Keys are decrypted. Providers without a stored key are omitted.
-    """
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT provider, api_key, client_id, client_secret,
-                   refresh_token, extra_json, updated_at
-            FROM user_api_keys
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        ).fetchall()
-
-    result: dict[str, dict[str, Any]] = {}
-    for provider, key, cid, csecret, rtoken, extra, updated in rows:
-        result[provider] = {
-            "api_key": decrypt(key) if key else "",
-            "client_id": cid,
-            "client_secret": decrypt(csecret) if csecret else None,
-            "refresh_token": decrypt(rtoken) if rtoken else None,
-            "extra": json.loads(extra) if extra else None,
-            "updated_at": updated,
-        }
-    return result
-
-
-def delete_user_api_key(
-    user_id: str,
-    provider: str,
-    db_path: str = DEFAULT_DB_PATH,
-) -> None:
-    """Remove a stored API key for a user + provider."""
-    with _connect(db_path) as conn:
-        conn.execute(
-            "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
-            (user_id, provider.lower()),
-        )
+# ---- Credentials ----
+#
+# Per-user credentials (AI provider keys, connector API keys and OAuth tokens)
+# are stored in ``user_api_keys`` but are intentionally NOT readable or writable
+# from this module. ``secret_vault.SecretVault`` is the only supported interface:
+# it encrypts under the owning user, audits every lifecycle operation and never
+# returns plaintext to the browser. This module only owns the schema
+# (see ``_init_credential_vault_schema``).
 
 
 # ---- User preferences ----

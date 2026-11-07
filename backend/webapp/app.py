@@ -23,7 +23,7 @@ import logging
 import os
 import secrets
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -42,7 +42,6 @@ from database import (
     clear_all_notifications,
     clear_chat_messages,
     delete_notification,
-    delete_user_api_key,
     get_active_programme,
     get_body_metrics,
     get_chat_messages,
@@ -61,7 +60,6 @@ from database import (
     get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
-    get_user_api_keys,
     get_user_by_id,
     get_user_preferences,
     init_db,
@@ -71,7 +69,6 @@ from database import (
     save_notification,
     save_push_subscription,
     save_reasoning_log,
-    save_user_api_key,
     save_user_preferences,
     set_active_programme,
     set_meta,
@@ -102,14 +99,159 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from secret_vault import (
+    CredentialExistsError,
+    CredentialNotFoundError,
+    CredentialSummary,
+    CredentialUnavailableError,
+    InvalidSecretError,
+    ResolvedCredential,
+    SecretVault,
+    UnknownProviderError,
+    UnknownUserError,
+    VaultError,
+    VaultUnavailableError,
+    VerificationResult,
+    VerificationUnsupportedError,
+    migrate_legacy_credentials,
+    provider_spec,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
 
-
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+
+
+def _vault() -> SecretVault:
+    """Construct the narrow credential service for the current database."""
+    return SecretVault(DB_PATH)
+
+
+def _vault_credential(
+    user_id: str,
+    provider: str,
+    *,
+    purpose: str,
+) -> ResolvedCredential | None:
+    """Return the owner's credential or ``None`` when it is not configured."""
+    try:
+        return _vault().resolve(user_id, provider, purpose=purpose)
+    except CredentialUnavailableError:
+        return None
+    except VaultUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _verify_hevy_credential(credential: ResolvedCredential) -> VerificationResult:
+    from hevy_client import get_workout_count
+
+    key = credential.api_key.reveal() if credential.api_key is not None else ""
+    if not key:
+        return VerificationResult(False, "not_configured", "No Hevy key provided.")
+    count = get_workout_count(key)
+    if count is None:
+        return VerificationResult(
+            False,
+            "unreachable",
+            "Could not connect to Hevy. Check the API key.",
+        )
+    return VerificationResult(
+        True,
+        "ok",
+        f"Connected to Hevy ({count} workouts).",
+        {"workout_count": count},
+    )
+
+
+def _verify_ai_credential(credential: ResolvedCredential) -> VerificationResult:
+    from ai_provider import get_provider
+
+    key = credential.api_key.reveal() if credential.api_key is not None else ""
+    if not key:
+        return VerificationResult(False, "not_configured", "No API key provided.")
+    try:
+        provider = get_provider(
+            credential.provider,
+            api_key=key,
+            model=credential.model,
+        )
+        response = provider.generate("Reply with the single word OK.")
+        if not isinstance(response, str):
+            response = "".join(response)
+        if response.strip():
+            return VerificationResult(True, "ok", "The provider accepted the key.")
+    except Exception as exc:  # noqa: BLE001 - provider SDKs raise arbitrary types
+        logger.warning(
+            "AI credential test failed for %s (%s).",
+            credential.provider,
+            type(exc).__name__,
+        )
+    return VerificationResult(
+        False,
+        "rejected",
+        "The provider rejected the key or could not be reached.",
+    )
+
+
+def _verifier_for(provider: str) -> Callable[[ResolvedCredential], VerificationResult]:
+    spec = provider_spec(provider)
+    if not spec.testable:
+        raise VerificationUnsupportedError("This credential cannot be tested.")
+    if spec.provider == "hevy":
+        return _verify_hevy_credential
+    return _verify_ai_credential
+
+
+def _test_credential(
+    user_id: str,
+    provider: str,
+    api_key: str,
+    model: str | None,
+) -> dict[str, Any]:
+    vault = _vault()
+    verifier = _verifier_for(provider)
+    if api_key and api_key != "__stored__":
+        result = vault.verify_candidate(
+            user_id,
+            provider,
+            verifier=verifier,
+            api_key=api_key,
+            model=model,
+        )
+    else:
+        result = vault.verify_stored(user_id, provider, verifier=verifier)
+    payload: dict[str, Any] = {
+        "status": "ok" if result.ok else "error",
+        "provider": provider,
+        "code": result.code,
+        "detail": result.message,
+    }
+    workout_count = result.details.get("workout_count")
+    if isinstance(workout_count, int):
+        payload["workout_count"] = workout_count
+    return payload
+
+
+def _vault_http_error(exc: VaultError) -> HTTPException:
+    if isinstance(exc, (UnknownProviderError, InvalidSecretError)):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, CredentialNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, CredentialExistsError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, VaultUnavailableError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, (CredentialUnavailableError, UnknownUserError)):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=400, detail="The credential operation failed.")
+
+
+def _settings_key_payload(summary: CredentialSummary) -> dict[str, Any]:
+    """Public credential metadata; never contains secret material."""
+    return summary.to_public_dict()
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -189,7 +331,6 @@ GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 # scheme/host match exactly what is registered with Google). When unset it is
 # derived from the incoming request.
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
-_GH_TOKEN_KEY = "google_health_refresh_token"
 _GH_STATE_KEY = "google_health_oauth_state"
 
 oauth = OAuth()
@@ -215,6 +356,8 @@ _ASSET_VERSIONS: dict[str, str] = {}
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
+    # Re-seal any pre-vault Fernet/plaintext rows under per-user encryption.
+    migrate_legacy_credentials(DB_PATH)
     yield
 
 
@@ -907,8 +1050,12 @@ def _load_hevy_training_for_user(
 ) -> HevyTrainingData:
     """Fetch the current user's Hevy source data or raise a useful API error."""
 
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    credential = _vault_credential(user_id, "hevy", purpose="programme_import")
+    hevy_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
     if not hevy_key:
         raise HTTPException(
             status_code=400,
@@ -1090,8 +1237,8 @@ def _gh_redirect_uri(request: Request) -> str:
 
 
 @app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, str]:
-    """Save or update an API key for the current user."""
+async def save_api_key(request: Request) -> dict[str, Any]:
+    """Save a new credential or rotate an existing one for the current user."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
@@ -1105,20 +1252,10 @@ async def save_api_key(request: Request) -> dict[str, str]:
 
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
-
-    ai_provider_defaults = {
-        item["id"]: item["default_model"] for item in available_providers()
-    }
-    ai_provider_ids = set(ai_provider_defaults)
-    valid_providers = {"hevy", *ai_provider_ids}
-    if provider not in valid_providers:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unknown provider '{provider}'. "
-                f"Use: {', '.join(sorted(valid_providers))}"
-            ),
-        )
+    try:
+        provider_spec(provider)
+    except UnknownProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     model_value = body.get("model")
     if model_value is not None and not isinstance(model_value, str):
@@ -1127,14 +1264,26 @@ async def save_api_key(request: Request) -> dict[str, str]:
     if len(model) > 200:
         raise HTTPException(status_code=400, detail="Model is too long")
 
-    save_user_api_key(
-        user_id,
-        provider,
-        api_key,
-        extra={"model": model} if model else None,
-        db_path=DB_PATH,
-    )
-    if provider in ai_provider_ids:
+    vault = _vault()
+    try:
+        if vault.describe(user_id, provider).configured:
+            summary = vault.rotate(user_id, provider, api_key=api_key, model=model or None)
+        else:
+            summary = vault.store(user_id, provider, api_key=api_key, model=model or None)
+    except CredentialExistsError:
+        try:
+            summary = vault.rotate(
+                user_id, provider, api_key=api_key, model=model or None
+            )
+        except VaultError as exc:
+            raise _vault_http_error(exc) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
         preferences = get_user_preferences(user_id, DB_PATH)
         if preferences.get("preferred_ai") == provider:
             save_user_preferences(
@@ -1142,11 +1291,69 @@ async def save_api_key(request: Request) -> dict[str, str]:
                 ai_model=model or ai_provider_defaults[provider],
                 db_path=DB_PATH,
             )
-    return {"status": "ok", "provider": provider}
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
+
+
+@app.post("/api/settings/key/rotate")
+async def rotate_api_key(request: Request) -> dict[str, Any]:
+    """Replace an existing credential, keeping its audit history."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider_value = body.get("provider")
+    api_key_value = body.get("api_key")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+    if not provider or not api_key:
+        raise HTTPException(status_code=400, detail="Provider and api_key are required")
+
+    model_value = body.get("model")
+    model = model_value.strip() if isinstance(model_value, str) else None
+    try:
+        summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
+
+
+@app.post("/api/settings/key/revoke")
+async def revoke_api_key(request: Request) -> dict[str, Any]:
+    """Invalidate a credential and destroy its secret material."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
+
+    try:
+        summary = _vault().revoke(user_id, provider)
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
 
 
 @app.post("/api/settings/key/delete")
-async def remove_api_key(request: Request) -> dict[str, str]:
+async def remove_api_key(request: Request) -> dict[str, Any]:
     """Remove a stored API key for the current user."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -1154,35 +1361,72 @@ async def remove_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    provider = body.get("provider", "").strip().lower()
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
     if not provider:
         raise HTTPException(status_code=400, detail="Provider is required")
 
-    delete_user_api_key(user_id, provider, db_path=DB_PATH)
-    return {"status": "ok", "provider": provider}
+    try:
+        deleted = _vault().delete(user_id, provider)
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    return {"status": "ok", "provider": provider, "deleted": deleted}
 
 
-@app.post("/api/settings/verify-hevy")
-async def verify_hevy_key(request: Request) -> dict[str, Any]:
-    """Test a Hevy API key by calling /v1/workouts/count."""
+@app.post("/api/settings/key/test")
+async def test_api_key(request: Request) -> dict[str, Any]:
+    """Test a stored or candidate credential without returning it."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    api_key = body.get("api_key", "").strip()
-    if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
 
-    from hevy_client import get_workout_count
+    api_key_value = body.get("api_key")
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+    model_value = body.get("model")
+    model = model_value.strip() if isinstance(model_value, str) else None
+    try:
+        return _test_credential(user_id, provider, api_key, model)
+    except VerificationUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
 
-    count = get_workout_count(api_key)
-    if count is not None:
-        return {"status": "ok", "workout_count": count}
+
+@app.post("/api/settings/verify-hevy")
+async def verify_hevy_key(request: Request) -> dict[str, Any]:
+    """Test a candidate or the stored Hevy key through the vault."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    api_key_value = body.get("api_key")
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+    try:
+        return _test_credential(user_id, "hevy", api_key, None)
+    except VerificationUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+
+
+@app.get("/api/settings/credentials/audit")
+def credential_audit(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """Return the owner's credential lifecycle audit trail (metadata only)."""
+    user_id = _check_api_auth(request)
     return {
-        "status": "error",
-        "detail": "Could not connect to Hevy. Check the API key.",
+        "events": [
+            event.to_public_dict()
+            for event in _vault().recent_events(user_id, limit=limit)
+        ]
     }
 
 
@@ -1298,7 +1542,36 @@ def google_health_callback(request: Request) -> RedirectResponse:
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
+    try:
+        vault = _vault()
+        if vault.describe(user_id, "google_health").configured:
+            vault.rotate(
+                user_id,
+                "google_health",
+                refresh_token=tokens["refresh_token"],
+                actor="owner",
+                source="oauth_callback",
+            )
+        else:
+            try:
+                vault.store(
+                    user_id,
+                    "google_health",
+                    refresh_token=tokens["refresh_token"],
+                    actor="owner",
+                    source="oauth_callback",
+                )
+            except CredentialExistsError:
+                vault.rotate(
+                    user_id,
+                    "google_health",
+                    refresh_token=tokens["refresh_token"],
+                    actor="owner",
+                    source="oauth_callback",
+                )
+    except VaultError:
+        logger.warning("Could not store a Google Health credential.")
+        return RedirectResponse("/settings?gh=error", status_code=303)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
@@ -1307,7 +1580,13 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
+    try:
+        _vault().revoke(user_id, "google_health")
+    except CredentialNotFoundError:
+        pass
+    except VaultError:
+        logger.warning("Could not revoke a Google Health credential.")
+        return RedirectResponse("/settings?gh=error", status_code=303)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
@@ -1586,8 +1865,9 @@ def api_programmes(request: Request) -> JSONResponse:
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    hevy_credential = _vault_credential(
+        user_id, "hevy", purpose="programme_import"
+    )
 
     empty_source: dict[str, Any] = {
         "username": None,
@@ -1600,7 +1880,7 @@ def api_programmes(request: Request) -> JSONResponse:
     connection: dict[str, Any]
     source = empty_source
 
-    if not hevy_key:
+    if hevy_credential is None:
         connection = {
             "state": "disconnected",
             "detail": "Add your Hevy API key in Settings to import routines.",
@@ -1646,27 +1926,34 @@ def api_settings(request: Request):
     user_id = _check_api_auth(request)
 
     prefs = get_user_preferences(user_id, DB_PATH)
-    keys = get_user_api_keys(user_id, DB_PATH)
     ai_providers = available_providers()
+    vault = _vault()
+    summaries = vault.list_credentials(user_id)
 
     user_keys: dict[str, dict[str, Any]] = {}
     known_providers = ["hevy", *[item["id"] for item in ai_providers]]
     for provider_id in known_providers:
-        key_data = keys.get(provider_id, {})
-        key_value = key_data.get("api_key", "")
-        masked = None
-        if key_value:
-            masked = f"••••••••{key_value[-4:]}" if len(key_value) >= 4 else "••••••••"
-
-        extra = key_data.get("extra")
-        configured_model = extra.get("model") if isinstance(extra, dict) else None
+        summary = summaries[provider_id]
+        public = summary.to_public_dict()
         user_keys[provider_id] = {
-            "has_key": bool(key_value),
-            "masked": masked,
-            "model": configured_model,
+            "has_key": public["has_key"],
+            "masked": public["masked"],
+            "model": public["model"],
+            "status": public["status"],
+            "version": public["version"],
+            "last_tested_at": public["last_tested_at"],
+            "last_test_status": public["last_test_status"],
+            "revoked_at": public["revoked_at"],
         }
 
-    gh_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id))
+    gh_connected = summaries["google_health"].configured
+    credential_availability = vault.availability().to_public_dict()
+    try:
+        credential_events = [
+            event.to_public_dict() for event in vault.recent_events(user_id, limit=20)
+        ]
+    except VaultError:
+        credential_events = []
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
@@ -1700,6 +1987,8 @@ def api_settings(request: Request):
                 "ai_providers": ai_providers,
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
+                "credential_vault": credential_availability,
+                "credential_events": credential_events,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
@@ -1716,8 +2005,12 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=2)
     user_id = _check_api_auth(request)
 
-    keys = get_user_api_keys(user_id, DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    credential = _vault_credential(user_id, "hevy", purpose="hevy_sync")
+    hevy_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
     if not hevy_key:
         raise HTTPException(
             status_code=400,

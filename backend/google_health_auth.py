@@ -18,8 +18,8 @@ first refresh token. This script walks through that one-time flow:
   3. Run:  python google_health_auth.py
        - It prints an authorise URL. Open it, approve the weight scope.
        - Google redirects back to this script, which captures the code, swaps it
-         for tokens, prints the refresh token, and stores it in the database.
-  4. Paste the printed GOOGLE_HEALTH_REFRESH_TOKEN into your .env.
+         for tokens, and seals the refresh token in the credential vault for the
+         legacy tenant. The token is never printed or written to .env.
 
 Uses the Authorization Code Grant. Only stdlib + requests are needed.
 """
@@ -35,7 +35,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import requests
-
 from google_health_client import SCOPE, TOKEN_URL
 
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/auth"
@@ -196,19 +195,41 @@ def main() -> int:
 
     refresh_token = tokens["refresh_token"]
 
-    # Store it so the very next agent run is already authorised.
+    # Seal it in the credential vault so the very next agent run is authorised.
+    # The token is never printed or written to the environment.
+    from database import get_legacy_user_id, init_db
+    from secret_vault import CredentialExistsError, SecretVault, VaultError
+
+    db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
+    init_db(db_path)
+    owner = get_legacy_user_id(db_path)
+    vault = SecretVault(db_path)
     try:
-        from database import set_meta
+        try:
+            vault.store(
+                owner,
+                "google_health",
+                refresh_token=refresh_token,
+                actor="owner",
+                source="oauth_callback",
+            )
+        except CredentialExistsError:
+            vault.rotate(
+                owner,
+                "google_health",
+                refresh_token=refresh_token,
+                actor="owner",
+                source="oauth_callback",
+            )
+    except (VaultError, ValueError):
+        print(
+            "Authorisation succeeded but the token could not be stored in the "
+            "credential vault. Check ENCRYPTION_KEY and try again.",
+            file=sys.stderr,
+        )
+        return 1
 
-        db_path = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
-        set_meta("google_health_refresh_token", refresh_token, db_path)
-        stored = f" (also saved to {db_path})"
-    except Exception:  # noqa: BLE001
-        stored = ""
-
-    print("\nSuccess! Add this line to your .env:\n")
-    print(f"GOOGLE_HEALTH_REFRESH_TOKEN={refresh_token}")
-    print(f"\nThe token is now valid{stored}.")
+    print("\nSuccess! The Google Health token is sealed in the credential vault.")
     return 0
 
 
