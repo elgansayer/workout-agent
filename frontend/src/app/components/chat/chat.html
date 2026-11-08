@@ -20,6 +20,10 @@
             class="status-dot"
             [class.thinking]="isStreaming()"
             [class.online]="capability()?.status === 'ready'"
+            [class.warning]="
+              capabilities()?.overall_status === 'educational_only' ||
+              capabilities()?.overall_status === 'setup_required'
+            "
           ></span>
           <span class="status-text" role="status">{{ statusText() }}</span>
         </div>
@@ -74,9 +78,10 @@
           @for (suggest of suggestions(); track suggest.text) {
             <button
               class="suggest-card"
+              [class.disabled]="!suggest.enabled"
               [disabled]="!suggest.enabled"
               [attr.aria-disabled]="!suggest.enabled"
-              [title]="suggest.enabled ? '' : 'This question needs data Coach cannot access yet'"
+              [title]="suggest.enabled ? '' : (getSuggestionExplanation(suggest.text) || 'This question needs data Coach cannot access yet')"
               (click)="askSuggested(suggest.text)"
             >
               <span class="suggest-icon">{{ suggest.icon }}</span>

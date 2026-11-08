@@ -47,6 +47,10 @@ from coach_capability import (
     capability_prompt_block,
     derive_coach_capability,
 )
+from coaching_capabilities import (
+    classify_coaching_query,
+    get_coaching_capabilities,
+)
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -1359,6 +1363,14 @@ def project_peak(request: Request) -> dict[str, Any]:
         return {"error": "Failed to project peak."}
 
 
+@app.get("/api/coach/capabilities")
+@app.get("/api/chat/capabilities")
+def coach_capabilities(request: Request) -> JSONResponse:
+    user_id = _check_api_auth(request)
+    state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=get_config())
+    return JSONResponse(state.to_dict())
+
+
 def _parse_observed_at(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -1474,28 +1486,43 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
+    cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
+    mode, required_cap = classify_coaching_query(q)
+
     # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
     biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
     capability = _coach_capability_for_user(
         user_id,
         logs=logs,
         history=history,
         body_metrics=biometrics,
         personal_records=prs,
+        programme_available=active_prog is not None,
     )
+    access_block = capability_prompt_block(capability)
 
-    context = json.dumps(
-        {
-            "logs": logs,
-            "history": history,
-            "biometrics": biometrics[-10:],
-            "prs": prs[:10],
-        },
-        default=str,
-    )
+    # If data-specific prompt and prerequisites failed:
+    if mode == "data_grounded" and required_cap:
+        cap_item = cap_state.capabilities.get(required_cap)
+        if not cap_item or not cap_item.enabled:
+            save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
+            explanation_msg = (
+                f"**Data-Grounded Coaching Unavailable**\n\n"
+                f"{cap_item.explanation if cap_item else 'Required training inputs are unavailable.'}\n\n"
+                f"To prevent fabricated user history, personalised analysis is disabled until "
+                f"the prerequisite data is connected and current. You may still ask general educational "
+                f"questions about fitness, technique, and programming."
+            )
+            save_chat_message("assistant", explanation_msg, db_path=DB_PATH, user_id=user_id)
+
+            def generate_disabled_explanation() -> Iterator[str]:
+                yield explanation_msg
+
+            return StreamingResponse(generate_disabled_explanation(), media_type="text/plain")
 
     # Build multi-turn conversation from chat history
     chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
@@ -1510,25 +1537,51 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
-    access_block = capability_prompt_block(capability)
-    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+    if mode == "educational":
+        prompt = f"""You are Coach, an elite strength and conditioning AI coach providing general educational guidance.
 {access_block}
 
-Your personality:
-- Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
-- Reference specific numbers, dates, and exercises from the context when relevant.
+Important constraints:
+- This is a general educational inquiry. Do NOT fabricate, assume, or invent any user-specific training history, past workouts, personal records, or biometrics.
+- Keep your answer clear, evidence-based, concise, and structured. Use British English.
+- Start your response exactly with this header line:
+**Educational Guidance** (General advice — not personalised to your training history)
+
+Conversation so far:
+{conversation_text}
+
+User's question: {q}"""
+    else:
+        context = json.dumps(
+            {
+                "logs": logs,
+                "history": history,
+                "biometrics": biometrics[-10:],
+                "prs": prs[:10],
+                "active_programme": active_prog.get("name") if active_prog else None,
+            },
+            default=str,
+        )
+
+        prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+{access_block}
+
+Important constraints:
+- All analysis must be strictly grounded in the verified data context below.
+- Do NOT fabricate or hallucinate any numbers, dates, exercises, sets, or reps not present in the context.
+- Start your response exactly with this header line:
+**Personalised Analysis** (Grounded in your training data)
+- Reference specific numbers, dates, and exercises from the context.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use British English.
 
 Conversation so far:
 {conversation_text}
 
-Training data context (recent logs, progress history, biometrics, PRs):
+Verified training data context (recent logs, progress history, biometrics, PRs, active programme):
 {context[:25000]}
 
-User's new message: {q}
-
-Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible. Never claim access to a source marked unavailable above."""
+User's question: {q}"""
 
     def generate() -> Iterator[str]:
         collected: list[str] = []

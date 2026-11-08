@@ -689,6 +689,99 @@ def test_chat_clear_returns_ok(client: Any) -> None:
     assert resp.json() == {"status": "ok"}
 
 
+def test_coach_capabilities_endpoint(client: Any, monkeypatch: Any) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    resp = client.get("/api/coach/capabilities")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["provider_ready"] is True
+    assert "capabilities" in data
+    assert "suggested_prompts" in data
+    assert data["overall_status"] in {"educational_only", "partially_grounded", "fully_grounded"}
+
+    # Also check /api/chat/capabilities alias
+    alias_resp = client.get("/api/chat/capabilities")
+    assert alias_resp.status_code == 200
+
+
+def test_rag_search_disables_data_grounded_prompts_when_prerequisites_fail(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    provider_called: list[Any] = []
+
+    class _MockProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            provider_called.append(prompt)
+            return iter(["Hallucinated deadlift progress"])
+
+    monkeypatch.setattr("webapp.app.resolve_provider", lambda **kw: _MockProvider())
+
+    resp = client.get("/api/rag_search?q=How+is+my+deadlift+progressing%3F")
+    assert resp.status_code == 200
+    assert "Data-Grounded Coaching Unavailable" in resp.text
+    assert ("No workout logs found" in resp.text or "stale" in resp.text.lower())
+    # Provider must NOT have been called to invent data
+    assert len(provider_called) == 0
+
+
+def test_rag_search_allows_generic_educational_responses_without_inventing_history(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    prompts_captured: list[Any] = []
+
+    class _MockProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            prompts_captured.append(prompt)
+            return iter(["**Educational Guidance** (General advice)\n\nProgressive overload is..."])
+
+    monkeypatch.setattr("webapp.app.resolve_provider", lambda **kw: _MockProvider())
+
+    resp = client.get("/api/rag_search?q=What+is+progressive+overload%3F")
+    assert resp.status_code == 200
+    assert "Educational Guidance" in resp.text
+    assert len(prompts_captured) == 1
+    assert "Do NOT fabricate, assume, or invent any user-specific training history" in prompts_captured[0]
+    assert "verified training data context" not in prompts_captured[0].lower()
+
+
+def test_rag_search_allows_personalised_analysis_when_prerequisites_pass(
+    client: Any, monkeypatch: Any
+) -> None:
+    from datetime import datetime, timezone
+
+    import webapp.app as app_module
+    from database import save_daily_log
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    prompts_captured: list[Any] = []
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    save_daily_log(
+        today,
+        1,
+        "Deadlift day",
+        "medium",
+        "Deadlift 5x5 at 180kg",
+        "Good sleep",
+        db_path=app_module.DB_PATH,
+    )
+
+    class _MockProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            prompts_captured.append(prompt)
+            return iter(["**Personalised Analysis** (Grounded)\n\nYour deadlift is moving well."])
+
+    monkeypatch.setattr("webapp.app.resolve_provider", lambda **kw: _MockProvider())
+
+    resp = client.get("/api/rag_search?q=How+is+my+deadlift+progressing%3F")
+    assert resp.status_code == 200
+    assert "Personalised Analysis" in resp.text
+    assert len(prompts_captured) == 1
+    assert "Personalised Analysis" in prompts_captured[0]
+
+
 def test_coach_capability_is_derived_from_tenant_records(
     client: Any, monkeypatch: Any
 ) -> None:

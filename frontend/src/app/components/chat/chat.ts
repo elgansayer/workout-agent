@@ -5,6 +5,30 @@ import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
 
+export interface CapabilityItem {
+  enabled: boolean;
+  status: string;
+  explanation: string;
+}
+
+export interface SuggestedPromptState {
+  text: string;
+  capability: string;
+  icon: string;
+  enabled: boolean;
+  explanation: string;
+}
+
+export interface CoachingCapabilityState {
+  provider_ready: boolean;
+  provider_name: string | null;
+  capabilities: Record<string, CapabilityItem>;
+  suggested_prompts: SuggestedPromptState[];
+  overall_status: 'setup_required' | 'educational_only' | 'partially_grounded' | 'fully_grounded';
+  disclaimer: string;
+  welcome_message: string;
+}
+
 interface CoachSourceCapability {
   available: boolean;
   freshness: string;
@@ -66,7 +90,6 @@ const SUGGESTIONS: CoachSuggestion[] = [
     requires: ['programme', 'progress_history', 'training_logs'],
   },
 ];
-
 @Component({
   selector: 'app-chat',
   standalone: true,
@@ -85,16 +108,78 @@ export class Chat implements OnInit, OnDestroy {
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
   error = signal<string | null>(null);
+  capabilities = signal<CoachingCapabilityState | null>(null);
   capability = signal<CoachCapability | null>(null);
   private abortController: AbortController | null = null;
 
+  private defaultSuggestedPrompts: SuggestedPromptState[] = [
+    {
+      text: 'How is my deadlift progressing?',
+      capability: 'workout_analysis',
+      icon: '📊',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'Am I recovering well enough?',
+      capability: 'recovery_analysis',
+      icon: '💤',
+      enabled: false,
+      explanation: 'Checking recovery prerequisites...',
+    },
+    {
+      text: 'Which lifts are stalling?',
+      capability: 'workout_analysis',
+      icon: '📉',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'Should I deload this week?',
+      capability: 'workout_analysis',
+      icon: '🔄',
+      enabled: false,
+      explanation: 'Checking training prerequisites...',
+    },
+    {
+      text: 'How is my body composition trending?',
+      capability: 'body_composition',
+      icon: '⚖️',
+      enabled: false,
+      explanation: 'Checking body composition prerequisites...',
+    },
+    {
+      text: 'What should I focus on this block?',
+      capability: 'programme_guidance',
+      icon: '🎯',
+      enabled: false,
+      explanation: 'Checking programme prerequisites...',
+    },
+  ];
+
   ngOnInit() {
+    this.loadCapabilities();
     this.loadChatHistory();
     this.loadCapability();
   }
 
   ngOnDestroy(): void {
     this.stopGeneration();
+  }
+
+  loadCapabilities() {
+    this.http.get<CoachingCapabilityState>('/api/coach/capabilities').subscribe({
+      next: (caps) => {
+        this.capabilities.set(caps);
+      },
+      error: () => {
+        // Leave capabilities as fallback
+      },
+    });
+  }
+
+  suggestedPrompts(): SuggestedPromptState[] {
+    return this.capabilities()?.suggested_prompts || this.defaultSuggestedPrompts;
   }
 
   loadChatHistory() {
@@ -195,13 +280,33 @@ export class Chat implements OnInit, OnDestroy {
 
   suggestions(): CoachSuggestion[] {
     const capability = this.capability();
-    return SUGGESTIONS.map((suggestion) => ({
-      ...suggestion,
-      enabled:
+    const capabilities = this.capabilities();
+    return SUGGESTIONS.map((suggestion) => {
+      let enabled =
         !!capability &&
         capability.can_chat &&
-        suggestion.requires.some((source) => this.sourceAvailable(source)),
-    }));
+        suggestion.requires.some((source) => this.sourceAvailable(source));
+      if (capabilities) {
+        const promptState = capabilities.suggested_prompts?.find((p) => p.text === suggestion.text);
+        if (promptState !== undefined) {
+          enabled = enabled && promptState.enabled;
+        }
+      }
+      return {
+        ...suggestion,
+        enabled,
+      };
+    });
+  }
+
+  getSuggestionExplanation(text: string): string | null {
+    if (this.capabilities()) {
+      const prompt = this.suggestedPrompts().find((p) => p.text === text);
+      if (prompt && !prompt.enabled) {
+        return prompt.explanation;
+      }
+    }
+    return null;
   }
 
   canSend(): boolean {
@@ -234,8 +339,18 @@ export class Chat implements OnInit, OnDestroy {
   }
 
   askSuggested(query: string) {
-    const suggestion = this.suggestions().find((item) => item.text === query);
-    if (suggestion && !suggestion.enabled) return;
+    const prompt = this.capabilities()
+      ? this.suggestedPrompts().find((p) => p.text === query)
+      : undefined;
+    if (prompt) {
+      if (!prompt.enabled) {
+        this.error.set(prompt.explanation);
+        return;
+      }
+    } else {
+      const suggestion = this.suggestions().find((item) => item.text === query);
+      if (suggestion && !suggestion.enabled) return;
+    }
     this.userInput = query;
     this.sendMessage();
   }
