@@ -56,6 +56,23 @@
   </div>
 
   <div class="chat-messages" #scrollContainer>
+    @if (historyLoading()) {
+      <p class="loading-state muted" role="status">Loading your conversation…</p>
+    }
+    @if (historyError()) {
+      <div class="panel error-panel" role="alert">
+        {{ historyError() }}
+        <button class="btn btn-ghost" type="button" (click)="loadChatHistory()">Try again</button>
+      </div>
+    }
+    @if (coachNeedsSetup()) {
+      <div class="chat-setup">
+        <app-setup-notice
+          [setup]="setup()"
+          headingOverride="Coach needs setup before it can answer"
+        />
+      </div>
+    }
     @if (messages().length === 0) {
       <div class="chat-welcome">
         <div class="welcome-glow"></div>

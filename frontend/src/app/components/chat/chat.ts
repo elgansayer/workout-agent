@@ -1,9 +1,31 @@
-import { Component, inject, signal, OnInit, OnDestroy, ViewChild, ElementRef } from '@angular/core';
+import {
+  Component,
+  inject,
+  signal,
+  computed,
+  OnInit,
+  OnDestroy,
+  ViewChild,
+  ElementRef,
+} from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState } from '../../shared/setup-state';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+interface ChatHistoryResponse {
+  messages: ChatMessage[];
+  setup?: SetupState;
+}
 
 export interface CapabilityItem {
   enabled: boolean;
@@ -93,7 +115,7 @@ const SUGGESTIONS: CoachSuggestion[] = [
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, SetupNotice],
   templateUrl: './chat.html',
   styleUrl: './chat.css',
 })
@@ -103,14 +125,19 @@ export class Chat implements OnInit, OnDestroy {
 
   @ViewChild('scrollContainer') private scrollContainer?: ElementRef;
 
-  messages = signal<any[]>([]);
+  messages = signal<ChatMessage[]>([]);
   userInput = '';
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
   error = signal<string | null>(null);
+  historyLoading = signal<boolean>(true);
+  historyError = signal<string | null>(null);
+  setup = signal<SetupState | null>(null);
   capabilities = signal<CoachingCapabilityState | null>(null);
   capability = signal<CoachCapability | null>(null);
   private abortController: AbortController | null = null;
+
+  readonly coachNeedsSetup = computed(() => (this.setup()?.state ?? 'ready') !== 'ready');
 
   private defaultSuggestedPrompts: SuggestedPromptState[] = [
     {
@@ -183,13 +210,19 @@ export class Chat implements OnInit, OnDestroy {
   }
 
   loadChatHistory() {
-    this.http.get<{ messages: any[] }>('/api/chat/history').subscribe({
+    this.historyLoading.set(true);
+    this.historyError.set(null);
+    this.http.get<ChatHistoryResponse>('/api/chat/history').subscribe({
       next: (res) => {
-        const msgs = res.messages || (Array.isArray(res) ? res : []);
-        this.messages.set(msgs);
+        this.messages.set(res.messages);
+        this.setup.set(res.setup ?? null);
+        this.historyLoading.set(false);
         this.scrollToBottom();
       },
-      error: () => this.error.set('Could not load chat history. Try refreshing the page.'),
+      error: () => {
+        this.historyError.set('Could not load chat history. Try refreshing the page.');
+        this.historyLoading.set(false);
+      },
     });
   }
 
@@ -372,7 +405,7 @@ export class Chat implements OnInit, OnDestroy {
     this.currentStreamText.set('');
     this.error.set(null);
 
-    const userMsg = {
+    const userMsg: ChatMessage = {
       role: 'user',
       content: query,
       created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -435,8 +468,8 @@ export class Chat implements OnInit, OnDestroy {
           created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
+    } catch (err: unknown) {
+      if (!(err instanceof Error && err.name === 'AbortError')) {
         this.error.set(err instanceof Error ? err.message : 'Could not reach Coach. Try again.');
         if (!this.userInput) this.userInput = query;
       }
