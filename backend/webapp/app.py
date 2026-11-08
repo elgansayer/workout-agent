@@ -102,11 +102,11 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from programme_validator import validate_programme
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -749,8 +749,14 @@ def preview_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    prefs = get_user_preferences(user_id, DB_PATH)
+    profile_rules = prefs.get("constraints")
     try:
-        preview = build_programme_preview(training_data, payload)
+        preview = build_programme_preview(
+            training_data,
+            payload,
+            profile_rules=profile_rules,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -767,13 +773,30 @@ def activate_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    prefs = get_user_preferences(user_id, DB_PATH)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
+    profile_rules = prefs.get("constraints")
     try:
-        preview = build_programme_preview(training_data, preview_request)
+        preview = build_programme_preview(
+            training_data,
+            preview_request,
+            profile_rules=profile_rules,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if preview.get("blocking_violations"):
+        first = preview["blocking_violations"][0]
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Activation blocked by profile constraint: {first['exercise']} "
+                f"({first['prescription']}) violates '{first['rule']}'. "
+                f"Permitted remediation: {first['permitted_remediation']}"
+            ),
+        )
 
     if preview["preview_token"] != payload.preview_token:
         raise HTTPException(
@@ -872,9 +895,26 @@ async def select_programme(request: Request) -> JSONResponse:
                 body.get("adaptation_aggressiveness") or "balanced"
             ),
         )
-        preview = build_programme_preview(training_data, preview_request)
+        prefs = get_user_preferences(user_id, DB_PATH)
+        profile_rules = prefs.get("constraints")
+        preview = build_programme_preview(
+            training_data,
+            preview_request,
+            profile_rules=profile_rules,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if preview.get("blocking_violations"):
+        first = preview["blocking_violations"][0]
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Activation blocked by profile constraint: {first['exercise']} "
+                f"({first['prescription']}) violates '{first['rule']}'. "
+                f"Permitted remediation: {first['permitted_remediation']}"
+            ),
+        )
 
     set_active_programme(
         user_id,
@@ -1187,8 +1227,8 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
 
 
 @app.post("/api/settings/preferences")
-async def save_preferences(request: Request) -> dict[str, str]:
-    """Save user training preferences."""
+async def save_preferences(request: Request) -> dict[str, Any]:
+    """Save user training preferences and validate active programme."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
@@ -1233,7 +1273,20 @@ async def save_preferences(request: Request) -> dict[str, str]:
         custom_rules=body.get("custom_rules"),
         db_path=DB_PATH,
     )
-    return {"status": "ok"}
+
+    # Edit lifecycle: validate existing active programme against edited profile constraints
+    response: dict[str, Any] = {"status": "ok"}
+    if body.get("constraints") is not None:
+        active = get_active_programme(user_id, DB_PATH)
+        if active and active.get("definition"):
+            val = validate_programme(
+                active["definition"],
+                profile_rules=body.get("constraints"),
+            )
+            if val.blocking_violations:
+                response["blocking_violations"] = val.blocking_violations
+
+    return response
 
 
 @app.post("/api/settings/push-subscribe")
@@ -1609,7 +1662,11 @@ def api_programmes(request: Request) -> JSONResponse:
     else:
         try:
             training_data = _load_hevy_training_for_user(user_id)
-            source = serialise_hevy_source(training_data)
+            prefs = get_user_preferences(user_id, DB_PATH)
+            source = serialise_hevy_source(
+                training_data,
+                profile_rules=prefs.get("constraints"),
+            )
             connection = {
                 "state": "connected",
                 "detail": None,
