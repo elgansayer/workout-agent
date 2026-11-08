@@ -16,6 +16,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from canonical_programme import (
+    CANONICAL_SPLIT_NAME,
+    CANONICAL_TEMPLATE_KEY,
+    get_canonical_programme_definition,
+)
 import encryption
 from program import SPLIT_NAME, TOTAL_DAYS
 from tenancy import (
@@ -94,6 +99,7 @@ USER_OWNED_TABLES = (
     "user_api_keys",
     "push_subscriptions",
     "programmes",
+    "programme_decisions",
     "hevy_connections",
     "training_rules",
 )
@@ -699,20 +705,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON programmes (user_id, active)",
         )
 
-        # Archive any previously active static template. Existing history stays
-        # intact, but the user must explicitly activate a Hevy-native programme.
-        cursor.execute(
-            """
-            UPDATE programmes
-            SET active = 0,
-                source = 'legacy_static',
-                updated_at = ?
-            WHERE active = 1
-              AND (source = 'template' OR template_key = 'hybrid_powerbuilding')
-            """,
-            (datetime.now(tz=timezone.utc).isoformat(),),
-        )
-
         # Migration: Add user_id column to chat_messages
         cursor.execute("PRAGMA table_info(chat_messages)")
         cm_columns = {row[1] for row in cursor.fetchall()}
@@ -863,7 +855,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 cursor.execute(
                     "INSERT OR REPLACE INTO programme_state_new "
                     "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-                    (legacy, SPLIT_NAME),
+                    (legacy, CANONICAL_SPLIT_NAME),
                 )
             cursor.execute("DROP TABLE programme_state")
             cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
@@ -871,7 +863,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             cursor.execute(
                 "INSERT OR IGNORE INTO programme_state "
                 "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-                (legacy, SPLIT_NAME),
+                (legacy, CANONICAL_SPLIT_NAME),
             )
 
         # Migration: Migrate hevy_meta from key PK to (user_id, key) composite PK
@@ -976,6 +968,111 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
             "ON user_api_keys (user_id)"
         )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programmes_user "
+            "ON programmes (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
+            "ON programmes (user_id, active)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER REFERENCES programmes(id),
+                source TEXT NOT NULL,
+                template_key TEXT,
+                decision TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_decisions_user "
+            "ON programme_decisions (user_id)"
+        )
+
+        # Migration: Identify authoritative active programme version and record decision
+        cursor.execute("SELECT id FROM users")
+        for u_row in cursor.fetchall():
+            uid = u_row[0]
+            active_progs = cursor.execute(
+                """
+                SELECT id, source, template_key, definition, active, created_at, updated_at
+                FROM programmes
+                WHERE user_id = ? AND active = 1
+                ORDER BY (CASE WHEN source = 'hevy' THEN 1 ELSE 0 END) DESC, updated_at DESC, id DESC
+                """,
+                (uid,),
+            ).fetchall()
+
+            if active_progs:
+                auth_prog = active_progs[0]
+                auth_id = auth_prog[0]
+                auth_source = auth_prog[1]
+                auth_key = auth_prog[2]
+                auth_def_raw = auth_prog[3]
+
+                # Archive static templates if no Hevy programme is present
+                if auth_source in ("template", "legacy_static") or auth_key == "hybrid_powerbuilding":
+                    now_iso = datetime.now(tz=timezone.utc).isoformat()
+                    cursor.execute(
+                        """
+                        UPDATE programmes
+                        SET active = 0, source = 'legacy_static', updated_at = ?
+                        WHERE user_id = ? AND active = 1
+                        """,
+                        (now_iso, uid),
+                    )
+                    cursor.execute(
+                        """
+                        INSERT INTO programme_decisions
+                            (user_id, programme_id, source, template_key, decision, reason, created_at)
+                        VALUES (?, ?, 'legacy_static', ?, 'archived', 'retired_static_template', ?)
+                        """,
+                        (uid, auth_id, auth_key, now_iso),
+                    )
+                    continue
+
+                if len(active_progs) > 1:
+                    cursor.execute(
+                        "UPDATE programmes SET active = 0 WHERE user_id = ? AND id != ?",
+                        (uid, auth_id),
+                    )
+                    reason = "reconciled_multiple_active"
+                else:
+                    reason = "single_active"
+
+                existing_decision = cursor.execute(
+                    "SELECT id FROM programme_decisions WHERE user_id = ? AND programme_id = ?",
+                    (uid, auth_id),
+                ).fetchone()
+
+                if not existing_decision or len(active_progs) > 1:
+                    now_iso = datetime.now(tz=timezone.utc).isoformat()
+                    cursor.execute(
+                        """
+                        INSERT INTO programme_decisions
+                            (user_id, programme_id, source, template_key, decision, reason, created_at)
+                        VALUES (?, ?, ?, ?, 'authoritative', ?, ?)
+                        """,
+                        (uid, auth_id, auth_source, auth_key, reason, now_iso),
+                    )
+
+                if auth_def_raw:
+                    try:
+                        def_obj = json.loads(auth_def_raw) if isinstance(auth_def_raw, str) else auth_def_raw
+                        if isinstance(def_obj, dict) and def_obj.get("name"):
+                            cursor.execute(
+                                "UPDATE programme_state SET split_name = ? WHERE user_id = ? AND split_name = ?",
+                                (def_obj["name"], uid, SPLIT_NAME),
+                            )
+                    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+                        logger.debug("Failed to decode programme definition for name sync: %s", exc)
+
         _init_credential_vault_schema(cursor)
 
         # Server-side registry behind the browser session cookie (issue #752).
@@ -3223,7 +3320,7 @@ def get_user_preferences(
 ) -> dict[str, Any]:
     """Return the user's training preferences, with defaults for unset fields."""
     defaults: dict[str, Any] = {
-        "goals": [],
+        "goals": ["hypertrophy"],
         "constraints": [],
         "experience_level": "intermediate",
         "coaching_style": "direct",
@@ -3244,8 +3341,9 @@ def get_user_preferences(
     if not row:
         defaults["training_rules"] = get_training_rules(user_id, db_path)
         return defaults
+    loaded_goals = json.loads(row[0]) if row[0] else []
     res = {
-        "goals": json.loads(row[0]) if row[0] else [],
+        "goals": loaded_goals if loaded_goals else ["hypertrophy"],
         "constraints": json.loads(row[1]) if row[1] else [],
         "experience_level": row[2] or "intermediate",
         "coaching_style": row[3] or "direct",
@@ -3408,6 +3506,88 @@ def set_active_programme(
                 now,
             ),
         )
+        row = conn.execute(
+            "SELECT id FROM programmes WHERE user_id = ? AND template_key = ?",
+            (user_id, template_key),
+        ).fetchone()
+        new_id = row[0] if row else None
+        if new_id is not None:
+            conn.execute(
+                """
+                INSERT INTO programme_decisions
+                    (user_id, programme_id, source, template_key, decision, reason, created_at)
+                VALUES (?, ?, ?, ?, 'authoritative', 'user_activation', ?)
+                """,
+                (user_id, new_id, source, template_key, now),
+            )
+            if isinstance(definition, dict) and definition.get("name"):
+                conn.execute(
+                    "UPDATE programme_state SET split_name = ? WHERE user_id = ?",
+                    (definition["name"], user_id),
+                )
+
+
+def get_authoritative_programme_decision(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return the recorded authoritative programme decision for a user."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, programme_id, source, template_key, decision, reason, created_at
+            FROM programme_decisions
+            WHERE user_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "authoritative_programme_id": row[2],
+        "source": row[3],
+        "template_key": row[4],
+        "decision": row[5],
+        "reason": row[6],
+        "decided_at": row[7],
+    }
+
+
+def seed_canonical_programme(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    start_date: date | None = None,
+) -> int:
+    """Seed the canonical programme definition for a user and record authoritative decision."""
+    canonical_def = get_canonical_programme_definition(start_date=start_date)
+    set_active_programme(
+        user_id=user_id,
+        source="hevy",
+        template_key=CANONICAL_TEMPLATE_KEY,
+        definition=canonical_def,
+        db_path=db_path,
+    )
+    if start_date:
+        set_meta("programme_start_date", start_date.isoformat(), db_path, user_id=user_id)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM programmes WHERE user_id = ? AND template_key = ?",
+            (user_id, CANONICAL_TEMPLATE_KEY),
+        ).fetchone()
+        prog_id = row[0] if row else 0
+        conn.execute(
+            """
+            INSERT INTO programme_decisions
+                (user_id, programme_id, source, template_key, decision, reason, created_at)
+            VALUES (?, ?, 'hevy', ?, 'authoritative', 'canonical_seed', ?)
+            """,
+            (user_id, prog_id, CANONICAL_TEMPLATE_KEY, datetime.now(tz=timezone.utc).isoformat()),
+        )
+    return prog_id
 
 
 def save_notification(

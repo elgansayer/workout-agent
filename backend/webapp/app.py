@@ -1608,6 +1608,10 @@ Conversation so far:
 
 User's question: {q}"""
     else:
+        active_def = (active_prog.get("definition") if active_prog else None) or {}
+        prog_name = active_def.get("name") or "active programme"
+        spec = active_def.get("programme_spec") or {}
+        prog_goal = spec.get("goal_label") or spec.get("goal") or "strength and conditioning"
         rules = get_training_rules(user_id, DB_PATH)
         rules_text = format_rules_for_prompt(rules)
         context = json.dumps(
@@ -1616,12 +1620,13 @@ User's question: {q}"""
                 "history": history,
                 "biometrics": biometrics[-10:],
                 "prs": prs[:10],
-                "active_programme": active_prog.get("name") if active_prog else None,
+                "active_programme": prog_name if active_prog else None,
             },
             default=str,
         )
 
-        prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+        prompt = f"""You are Coach, an elite {prog_goal} AI coach embedded in the user's private training dashboard.
+The user's active programme is "{prog_name}".
 {access_block}
 
 Important constraints:
