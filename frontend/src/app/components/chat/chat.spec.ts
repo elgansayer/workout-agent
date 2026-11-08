@@ -160,6 +160,23 @@ describe('Coach connection', () => {
     expect(chat.userInput).toBe('How is my deadlift progressing?');
     expect(chat.error()).toBeNull();
   });
+
+  it('loads coaching capabilities from /api/coach/capabilities', () => {
+    const http = TestBed.inject(HttpTestingController);
+    chat.loadCapabilities();
+    const req = http.expectOne('/api/coach/capabilities');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      provider_ready: true,
+      provider_name: 'gemini',
+      overall_status: 'educational_only',
+      capabilities: {},
+      suggested_prompts: [],
+      disclaimer: 'Educational disclaimer',
+      welcome_message: 'Welcome message',
+    });
+    expect(chat.capabilities()?.overall_status).toBe('educational_only');
+  });
 });
 
 describe('Coach capability copy', () => {
