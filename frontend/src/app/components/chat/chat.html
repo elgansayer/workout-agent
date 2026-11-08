@@ -19,22 +19,13 @@
           <span
             class="status-dot"
             [class.thinking]="isStreaming()"
+            [class.online]="capability()?.status === 'ready'"
             [class.warning]="
               capabilities()?.overall_status === 'educational_only' ||
               capabilities()?.overall_status === 'setup_required'
             "
           ></span>
-          <span class="status-text" role="status">{{
-            isStreaming()
-              ? 'Responding...'
-              : error()
-                ? 'Could not connect'
-                : capabilities()?.overall_status === 'setup_required'
-                  ? 'Setup required — Add AI key in Settings'
-                  : capabilities()?.overall_status === 'educational_only'
-                    ? 'Educational mode — General guidance only'
-                    : 'Personalised coach active'
-          }}</span>
+          <span class="status-text" role="status">{{ statusText() }}</span>
         </div>
       </div>
     </div>
@@ -82,28 +73,19 @@
           </svg>
         </div>
         <h2 class="welcome-title">What can I help you with?</h2>
-        <p class="welcome-sub">
-          {{
-            capabilities()?.welcome_message ||
-              'Coach provides strength and conditioning guidance. Connect your workout and recovery data in Settings for personalised coaching.'
-          }}
-        </p>
+        <p class="welcome-sub">{{ welcomeSummary() }}</p>
         <div class="suggested-grid">
-          @for (prompt of suggestedPrompts(); track prompt.text) {
+          @for (suggest of suggestions(); track suggest.text) {
             <button
               class="suggest-card"
-              [class.disabled]="!prompt.enabled"
-              [disabled]="!prompt.enabled"
-              [title]="prompt.enabled ? prompt.text : prompt.explanation"
-              (click)="askSuggested(prompt.text)"
+              [class.disabled]="!suggest.enabled"
+              [disabled]="!suggest.enabled"
+              [attr.aria-disabled]="!suggest.enabled"
+              [title]="suggest.enabled ? '' : (getSuggestionExplanation(suggest.text) || 'This question needs data Coach cannot access yet')"
+              (click)="askSuggested(suggest.text)"
             >
-              <span class="suggest-icon">{{ prompt.icon }}</span>
-              <div class="suggest-content">
-                <span class="suggest-text">{{ prompt.text }}</span>
-                @if (!prompt.enabled) {
-                  <span class="suggest-hint">{{ prompt.explanation }}</span>
-                }
-              </div>
+              <span class="suggest-icon">{{ suggest.icon }}</span>
+              <span class="suggest-text">{{ suggest.text }}</span>
             </button>
           }
         </div>
@@ -187,7 +169,7 @@
         class="chat-textarea"
         [(ngModel)]="userInput"
         (keydown)="onKeyDown($event)"
-        placeholder="Ask Coach anything about your training, recovery, or split..."
+        [attr.aria-description]="inputHint()"
         rows="1"
       ></textarea>
       <div class="input-actions">
@@ -195,7 +177,7 @@
           <button
             class="chat-send-btn"
             (click)="sendMessage()"
-            [disabled]="!userInput.trim()"
+            [disabled]="!canSend() || !userInput.trim()"
             title="Send message"
             aria-label="Send message"
           >
@@ -226,10 +208,7 @@
       </div>
     </div>
     <p class="chat-disclaimer">
-      {{
-        capabilities()?.disclaimer ||
-          'Coach provides general educational guidance until training and recovery sources are connected.'
-      }}
+      {{ disclaimerText() }}
     </p>
   </div>
 </div>

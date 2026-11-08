@@ -1,5 +1,5 @@
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
 import { environment } from '../../../environments/environment';
@@ -159,5 +159,217 @@ describe('Coach connection', () => {
     expect(sendSpy).toHaveBeenCalledOnce();
     expect(chat.userInput).toBe('How is my deadlift progressing?');
     expect(chat.error()).toBeNull();
+  });
+});
+
+describe('Coach capability copy', () => {
+  const emptySource = { available: false, freshness: 'never', last_observed_at: null };
+
+  function capability(overrides: Record<string, unknown> = {}): any {
+    return {
+      provider_name: 'gemini',
+      provider_configured: false,
+      provider_state: 'missing_key',
+      can_chat: false,
+      status: 'unconfigured',
+      sync_configured: false,
+      sync_state: 'not_configured',
+      programme_available: false,
+      has_training_data: false,
+      has_fresh_training_data: false,
+      sources: {
+        training_logs: { ...emptySource },
+        progress_history: { ...emptySource },
+        personal_records: { ...emptySource },
+        body_metrics: { ...emptySource },
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Chat],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+  });
+
+  async function render(capabilityPayload: ReturnType<typeof capability>) {
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Chat);
+    fixture.detectChanges();
+    http.expectOne('/api/chat/history').flush({ messages: [] });
+    http.expectOne('/api/coach/capability').flush(capabilityPayload);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, element: fixture.nativeElement as HTMLElement, http };
+  }
+
+  function suggestButton(element: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(
+      element.querySelectorAll<HTMLButtonElement>('.suggest-card'),
+    ).find((item) => item.textContent?.includes(text));
+    if (!button) throw new Error(`Missing suggestion: ${text}`);
+    return button;
+  }
+
+  it('claims no data or provider access when neither exists', async () => {
+    const { element } = await render(capability());
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'No data source or AI provider configured',
+    );
+    expect(welcome).not.toMatch(/training logs|body composition|personal records|history/i);
+    expect(element.querySelector('.chat-disclaimer')?.textContent).not.toMatch(
+      /training logs|recovery data|programme/i,
+    );
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+    expect(
+      element.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled,
+    ).toBe(true);
+  });
+
+  it('does not claim training data when a provider exists but nothing is synced', async () => {
+    const { fixture, element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'ready',
+        can_chat: true,
+        status: 'no_data',
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'No training data synced',
+    );
+    expect(welcome).toContain('No training data has been synced yet');
+    expect(welcome).not.toContain('full access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+
+    const input = element.querySelector<HTMLTextAreaElement>('.chat-textarea');
+    if (!input) throw new Error('Missing chat input');
+    input.value = 'Hello';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(element.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(false);
+  });
+
+  it('lists available data but blocks questions when no provider is configured', async () => {
+    const { element } = await render(
+      capability({
+        has_training_data: true,
+        has_fresh_training_data: true,
+        status: 'provider_missing',
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          body_metrics: { available: true, freshness: 'fresh', last_observed_at: '2026-08-19' },
+        },
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'AI provider not configured',
+    );
+    expect(welcome).toContain('exercise progress');
+    expect(welcome).toContain('body composition');
+    expect(welcome).toContain('needs an AI provider');
+    expect(welcome).not.toContain('full access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+  });
+
+  it('enables only the questions backed by available data', async () => {
+    const { element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'ready',
+        can_chat: true,
+        status: 'ready',
+        sync_configured: true,
+        sync_state: 'synced',
+        has_training_data: true,
+        has_fresh_training_data: true,
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          body_metrics: emptySource,
+        },
+      }),
+    );
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Ready to use your training data',
+    );
+    expect(suggestButton(element, 'deadlift progressing').disabled).toBe(false);
+    expect(suggestButton(element, 'lifts are stalling').disabled).toBe(false);
+    expect(suggestButton(element, 'recovering well enough').disabled).toBe(true);
+    expect(suggestButton(element, 'body composition trending').disabled).toBe(true);
+    expect(element.querySelector('.welcome-sub')?.textContent).not.toContain('full access');
+  });
+
+  it('reports stale training data without hiding the available sources', async () => {
+    const { element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'ready',
+        can_chat: true,
+        status: 'stale_data',
+        sync_configured: true,
+        sync_state: 'synced',
+        has_training_data: true,
+        has_fresh_training_data: false,
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'stale', last_observed_at: '2026-06-01' },
+          personal_records: { available: true, freshness: 'stale', last_observed_at: '2026-06-01' },
+          body_metrics: emptySource,
+        },
+      }),
+    );
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Training data is stale',
+    );
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain(
+      'Some data may be out of date',
+    );
+  });
+
+  it('fails closed when capability cannot be verified', async () => {
+    const { element } = await render(
+      capability({
+        status: 'unavailable',
+        provider_name: null,
+        provider_state: 'unknown',
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Could not verify data access',
+    );
+    expect(welcome).toContain('will not claim access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
   });
 });

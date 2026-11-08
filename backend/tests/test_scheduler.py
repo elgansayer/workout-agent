@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -236,15 +237,30 @@ def test_now_in_tz_invalid_falls_back_to_utc() -> None:
     assert str(dt.tzinfo) == "UTC"
 
 
+def _seed_users(tmp_path: Path, *names: str) -> tuple[str, list[str]]:
+    """Create a real database with synthetic users the scheduler can re-authorize."""
+    from database import get_or_create_user, init_db
+
+    db = str(tmp_path / "scheduler.db")
+    init_db(db)
+    ids = [
+        get_or_create_user(f"{name}@example.com", name.title(), db)["id"]
+        for name in names
+    ]
+    return db, ids
+
+
 def test_active_scheduler_runs_coaching_for_each_user(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    db, (user_a, user_b) = _seed_users(tmp_path, "alpha", "bravo")
     calls: list[str | None] = []
-    config = MagicMock(database_path="synthetic.db")
+    config = MagicMock(database_path=db)
     monkeypatch.setattr(
         scheduler,
         "get_all_users",
-        lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
+        lambda _db: [{"id": user_a}, {"id": user_b}],
     )
     monkeypatch.setattr(
         "main.run",
@@ -252,19 +268,21 @@ def test_active_scheduler_runs_coaching_for_each_user(
     )
 
     assert scheduler.run_coaching(config) == 0
-    assert calls == ["user-a", "user-b"]
+    assert calls == [user_a, user_b]
 
 
 def test_active_scheduler_scopes_each_insight_job_to_user(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    db, (user_a, user_b) = _seed_users(tmp_path, "alpha", "bravo")
     daily_calls: list[str] = []
     weekly_calls: list[str] = []
-    config = MagicMock(database_path="synthetic.db")
+    config = MagicMock(database_path=db)
     monkeypatch.setattr(
         scheduler,
         "get_all_users",
-        lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
+        lambda _db: [{"id": user_a}, {"id": user_b}],
     )
     monkeypatch.setattr(
         "insight_cron.generate_daily_header",
@@ -278,5 +296,103 @@ def test_active_scheduler_scopes_each_insight_job_to_user(
     scheduler.run_daily_insight(config)
     scheduler.run_weekly_correlations(config)
 
-    assert daily_calls == ["user-a", "user-b"]
-    assert weekly_calls == ["user-a", "user-b"]
+    assert daily_calls == [user_a, user_b]
+    assert weekly_calls == [user_a, user_b]
+
+
+# ---------------------------------------------------------------------------
+# Owner isolation: re-authorization, denial and failure containment
+# ---------------------------------------------------------------------------
+
+
+def test_scheduler_reauthorizes_each_owner_when_the_job_executes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A user listed for a run but removed before it executes is denied."""
+    db, (user_a, user_b) = _seed_users(tmp_path, "alpha", "bravo")
+    config = MagicMock(database_path=db)
+    calls: list[str | None] = []
+
+    def _run(*, preview: bool, user_id: str | None = None) -> int:
+        calls.append(user_id)
+        if user_id == user_a:
+            # The next owner's account is deleted while this job is running.
+            import sqlite3
+
+            with sqlite3.connect(db) as conn:
+                conn.execute("DELETE FROM users WHERE id = ?", (user_b,))
+        return 0
+
+    monkeypatch.setattr(
+        scheduler, "get_all_users", lambda _db: [{"id": user_a}, {"id": user_b}]
+    )
+    monkeypatch.setattr("main.run", _run)
+
+    assert scheduler.run_coaching(config) == 1
+    assert calls == [user_a]
+
+
+def test_scheduler_denies_a_forged_owner_without_running_the_job(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db, (user_a,) = _seed_users(tmp_path, "alpha")
+    config = MagicMock(database_path=db)
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        scheduler,
+        "get_all_users",
+        lambda _db: [{"id": "forged-owner"}, {"id": user_a}],
+    )
+    monkeypatch.setattr(
+        "main.run",
+        lambda *, preview, user_id=None: calls.append(user_id) or 0,
+    )
+
+    assert scheduler.run_coaching(config) == 1
+    assert calls == [user_a]
+
+
+def test_scheduler_skips_user_rows_without_a_usable_id(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db, (user_a,) = _seed_users(tmp_path, "alpha")
+    config = MagicMock(database_path=db)
+    calls: list[str | None] = []
+    monkeypatch.setattr(
+        scheduler,
+        "get_all_users",
+        lambda _db: [{"id": None}, {"id": ""}, {}, {"id": user_a}],
+    )
+    monkeypatch.setattr(
+        "main.run",
+        lambda *, preview, user_id=None: calls.append(user_id) or 0,
+    )
+
+    assert scheduler.run_coaching(config) == 1
+    assert calls == [user_a]
+
+
+def test_scheduler_failure_for_one_owner_does_not_stop_the_next(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    db, (user_a, user_b) = _seed_users(tmp_path, "alpha", "bravo")
+    config = MagicMock(database_path=db)
+    calls: list[str | None] = []
+
+    def _run(*, preview: bool, user_id: str | None = None) -> int:
+        calls.append(user_id)
+        if user_id == user_a:
+            raise RuntimeError("synthetic provider outage")
+        return 0
+
+    monkeypatch.setattr(
+        scheduler, "get_all_users", lambda _db: [{"id": user_a}, {"id": user_b}]
+    )
+    monkeypatch.setattr("main.run", _run)
+
+    assert scheduler.run_coaching(config) == 1
+    assert calls == [user_a, user_b]

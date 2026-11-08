@@ -530,11 +530,8 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     import ai_provider
     import webapp.app as app_module
     from cryptography.fernet import Fernet
-    from database import (
-        get_legacy_user_id,
-        save_user_api_key,
-        save_user_preferences,
-    )
+    from database import get_legacy_user_id, save_user_preferences
+    from secret_vault import SecretVault
 
     db_path = app_module.DB_PATH
     user_id = get_legacy_user_id(db_path)
@@ -546,12 +543,11 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         ai_model="claude-synthetic-model",
         db_path=db_path,
     )
-    save_user_api_key(
+    SecretVault(db_path).store(
         user_id,
         "claude",
-        synthetic_key,
-        extra={"model": "stale-model-metadata"},
-        db_path=db_path,
+        api_key=synthetic_key,
+        model="stale-model-metadata",
     )
 
     with sqlite3.connect(db_path) as connection:
@@ -786,4 +782,257 @@ def test_rag_search_allows_personalised_analysis_when_prerequisites_pass(
     assert "Personalised Analysis" in prompts_captured[0]
 
 
+def test_coach_capability_is_derived_from_tenant_records(
+    client: Any, monkeypatch: Any
+) -> None:
+    """The capability endpoint reports the seeded user's real source state."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    resp = client.get("/api/coach/capability")
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["provider_configured"] is False
+    assert payload["provider_state"] == "missing_key"
+    assert payload["can_chat"] is False
+    assert payload["has_training_data"] is True
+    assert payload["sources"]["training_logs"]["available"] is True
+    assert payload["sources"]["progress_history"]["available"] is True
+    assert payload["sources"]["body_metrics"]["available"] is True
+    assert payload["status"] == "provider_missing"
+    assert "api_key" not in resp.text.lower()
+    assert "full access" not in resp.text.lower()
+
+
+def test_coach_capability_becomes_ready_for_a_configured_provider(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-server-fallback")
+
+    payload = client.get("/api/coach/capability").json()
+
+    assert payload["provider_configured"] is True
+    assert payload["provider_state"] == "ready"
+    assert payload["can_chat"] is True
+    assert payload["has_training_data"] is True
+    assert payload["status"] in {"ready", "stale_data"}
+
+
+def test_coach_capability_is_isolated_between_users(client: Any) -> None:
+    import webapp.app as app_module
+    from database import get_legacy_user_id, get_or_create_user
+
+    db_path = app_module.DB_PATH
+    populated_user = get_legacy_user_id(db_path)
+    empty_user = get_or_create_user("other@example.test", db_path=db_path)["id"]
+
+    populated = app_module._coach_capability_for_user(populated_user)
+    empty = app_module._coach_capability_for_user(empty_user)
+
+    assert populated.has_training_data is True
+    assert empty.has_training_data is False
+    assert all(not source.available for source in empty.sources.values())
+
+
+def test_coach_capability_claims_no_data_for_an_empty_tenant(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    db_path = str(tmp_path / "empty.db")
+    init_db(db_path)
+    monkeypatch.setenv("DATABASE_PATH", db_path)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    import webapp.app as app_module
+
+    importlib.reload(app_module)
+    with TestClient(app_module.app) as test_client:
+        payload = test_client.get("/api/coach/capability").json()
+
+    assert payload["status"] == "unconfigured"
+    assert payload["provider_configured"] is False
+    assert payload["has_training_data"] is False
+    assert payload["has_fresh_training_data"] is False
+    assert payload["programme_available"] is False
+    assert all(
+        not source["available"] for source in payload["sources"].values()
+    )
+
+
+def test_rag_prompt_only_claims_server_verified_sources(
+    client: Any, monkeypatch: Any
+) -> None:
+    monkeypatch.setenv("GEMINI_API_KEY", "synthetic-server-fallback")
+    prompts: list[str] = []
+
+    class _FakeProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            prompts.append(prompt)
+            return iter(["ok"]) if stream else "ok"
+
+    monkeypatch.setattr(
+        "webapp.app.resolve_provider", lambda user_id=None, **kw: _FakeProvider()
+    )
+
+    resp = client.get("/api/rag_search?q=How+is+my+training+going")
+
+    assert resp.status_code == 200
+    assert prompts
+    assert "Server-verified data access for this user" in prompts[0]
+    assert "You have access to this user's" not in prompts[0]
+
+
 # -- settings API-key CRUD ---------------------------------------------
+
+
+def _call_json_route(
+    app_module: Any,
+    handler: Any,
+    payload: dict[str, Any],
+    user_id: str,
+) -> Any:
+    from starlette.requests import Request
+
+    app_module._RATE_LIMITS.clear()
+    body = json.dumps(payload).encode()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/api/settings/{handler.__name__}",
+            "headers": [],
+            "query_string": b"",
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "session": {"user_id": user_id},
+        },
+        receive,
+    )
+    return asyncio.run(handler(request))
+
+
+def test_settings_credential_lifecycle_is_masked_and_audited(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """Save/test/rotate/revoke/delete never echo the submitted secret."""
+    import webapp.app as app_module
+    from cryptography.fernet import Fernet
+    from database import get_legacy_user_id
+    from secret_vault import CredentialUnavailableError, SecretVault, VerificationResult
+
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    original = "synthetic-claude-key-1234"
+
+    saved = _call_json_route(
+        app_module,
+        app_module.save_api_key,
+        {"provider": "claude", "api_key": original, "model": "claude-synthetic"},
+        user_id,
+    )
+    assert original not in repr(saved)
+    assert saved["credential"]["has_key"] is True
+    assert saved["credential"]["masked"].endswith("1234")
+
+    with sqlite3.connect(app_module.DB_PATH) as conn:
+        stored = conn.execute(
+            "SELECT api_key FROM user_api_keys WHERE user_id = ? AND provider = ?",
+            (user_id, "claude"),
+        ).fetchone()
+    assert stored is not None
+    assert stored[0].startswith("wv2.")
+    assert stored[0] != original
+
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200
+    payload = settings.json()
+    assert payload["user_keys"]["claude"]["has_key"] is True
+    assert original not in settings.text
+
+    rotated = "synthetic-claude-key-5678"
+    rotated_result = _call_json_route(
+        app_module,
+        app_module.rotate_api_key,
+        {"provider": "claude", "api_key": rotated, "model": "claude-rotated"},
+        user_id,
+    )
+    assert rotated not in repr(rotated_result)
+    assert rotated_result["credential"]["version"] == 2
+
+    monkeypatch.setattr(
+        app_module,
+        "_verify_ai_credential",
+        lambda credential: VerificationResult(True, "ok", "Accepted."),
+    )
+    tested = _call_json_route(
+        app_module,
+        app_module.test_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert tested["status"] == "ok"
+    assert rotated not in repr(tested)
+
+    revoked = _call_json_route(
+        app_module,
+        app_module.revoke_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert revoked["credential"]["status"] == "revoked"
+    with pytest.raises(CredentialUnavailableError):
+        SecretVault(app_module.DB_PATH).resolve(
+            user_id, "claude", purpose="ai_generate"
+        )
+
+    replacement = "synthetic-claude-key-9012"
+    _call_json_route(
+        app_module,
+        app_module.save_api_key,
+        {"provider": "claude", "api_key": replacement},
+        user_id,
+    )
+    deleted = _call_json_route(
+        app_module,
+        app_module.remove_api_key,
+        {"provider": "claude"},
+        user_id,
+    )
+    assert deleted["deleted"] is True
+
+    audit = client.get("/api/settings/credentials/audit")
+    assert audit.status_code == 200
+    actions = {event["action"] for event in audit.json()["events"]}
+    assert {"save", "rotate", "test", "revoke", "delete"} <= actions
+
+
+def test_settings_credential_save_fails_closed_without_encryption_key(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """No ENCRYPTION_KEY means no credential can be stored or read."""
+    import webapp.app as app_module
+    from database import get_legacy_user_id
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    secret = "synthetic-never-stored-key"
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    settings = client.get("/api/settings")
+    assert settings.status_code == 200
+    assert settings.json()["credential_vault"]["available"] is False
+
+    with pytest.raises(HTTPException) as caught:
+        _call_json_route(
+            app_module,
+            app_module.save_api_key,
+            {"provider": "claude", "api_key": secret},
+            user_id,
+        )
+
+    assert caught.value.status_code == 503
+    assert secret not in str(caught.value.detail)
