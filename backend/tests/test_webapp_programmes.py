@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import base64
 import importlib
-import json
 from datetime import date, timedelta
 from typing import Any
 
@@ -14,17 +12,11 @@ from hevy_reader import (
     Routine,
     RoutineExercise,
 )
-from itsdangerous import TimestampSigner
+from secret_vault import ResolvedCredential, SecretValue
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "programmes-test-secret-that-is-long-enough"
-
-
-def _session_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
-    )
-    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 def _training_data() -> HevyTrainingData:
@@ -113,8 +105,12 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     monkeypatch.setattr(app_module, "ALLOW_ANONYMOUS_WEB", True)
     monkeypatch.setattr(
         app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {"hevy": {"api_key": "fixture-hevy-key"}},
+        "_vault_credential",
+        lambda *args, **kwargs: ResolvedCredential(
+            provider="hevy",
+            version=1,
+            api_key=SecretValue("fixture-hevy-key"),
+        ),
     )
     monkeypatch.setattr(
         app_module,
@@ -122,7 +118,18 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
         lambda *args, **kwargs: _training_data(),
     )
     client = TestClient(app_module.app)
-    client.cookies.set("session", _session_cookie(database.get_legacy_user_id(db_file)))
+    # Register a real server-side session, exactly as login does.
+    user_id = database.get_legacy_user_id(db_file)
+    session_id = app_module.SESSION_STORE.create(user_id)
+    client.cookies.set(
+        app_module.SESSION_SECURITY.cookie.name,
+        signed_session_cookie(
+            _SECRET,
+            user="athlete@example.test",
+            user_id=user_id,
+            session_id=session_id,
+        ),
+    )
     return client, app_module, db_file
 
 
@@ -240,8 +247,8 @@ def test_disconnected_builder_does_not_return_static_fallback(
     client, app_module, _db_file = _client(tmp_path, monkeypatch)
     monkeypatch.setattr(
         app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {},
+        "_vault_credential",
+        lambda *args, **kwargs: None,
     )
 
     response = client.get("/api/programmes")

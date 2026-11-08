@@ -15,6 +15,7 @@ from typing import Any, Literal
 
 from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
+from programme_validator import validate_programme
 from pydantic import BaseModel, Field
 from training_rules import StructuredTrainingRules
 
@@ -48,6 +49,7 @@ class ProgrammePreviewRequest(BaseModel):
     experience: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     max_session_minutes: int | None = Field(default=None, ge=20, le=240)
     adaptation_aggressiveness: Aggressiveness = "balanced"
+    constraints: list[Any] | dict[str, Any] | None = None
     rules: dict[str, Any] | None = None
 
 
@@ -373,11 +375,14 @@ def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, An
     }
 
 
-def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
+def serialise_hevy_source(
+    data: HevyTrainingData,
+    profile_rules: Any = None,
+) -> dict[str, Any]:
     """Return the exact selectable Hevy source view used by the builder."""
 
     routines = [_serialise_routine(routine, data) for routine in data.routines]
-    return {
+    payload = {
         "username": data.username,
         "workout_count": data.workout_count,
         "routine_count": len(routines),
@@ -388,6 +393,9 @@ def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
         ],
         "routines": routines,
     }
+    validation = validate_programme(payload, profile_rules=profile_rules)
+    payload["blocking_violations"] = validation.blocking_violations
+    return payload
 
 
 def _allocate_phase_weeks(
@@ -689,6 +697,7 @@ def _prescriptions_for_exercise(
 def build_programme_preview(
     data: HevyTrainingData,
     request: ProgrammePreviewRequest,
+    profile_rules: Any = None,
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
 
@@ -871,7 +880,7 @@ def build_programme_preview(
     }
     preview_token = _canonical_hash(token_inputs)
 
-    return {
+    preview_result: dict[str, Any] = {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",
         "source": "hevy",
         "engine_version": ENGINE_VERSION,
@@ -892,3 +901,23 @@ def build_programme_preview(
             "Low-confidence or structurally changed source data must be reviewed rather than silently merged.",
         ],
     }
+
+    # Stored profile rules always apply; request constraints may only add rules.
+    # Structured-rule violations found above are preserved alongside the
+    # deterministic profile validator's findings rather than replaced.
+    validation = validate_programme(preview_result, profile_rules=profile_rules)
+    if request.constraints is not None:
+        extra = validate_programme(preview_result, profile_rules=request.constraints)
+        validation.blocking_violations.extend(
+            v for v in extra.blocking_violations if v not in validation.blocking_violations
+        )
+        validation.warnings.extend(w for w in extra.warnings if w not in validation.warnings)
+    preview_result["blocking_violations"] = blocking_violations + [
+        v for v in validation.blocking_violations if v not in blocking_violations
+    ]
+    if validation.warnings:
+        preview_warnings = preview_result.get("warnings")
+        if isinstance(preview_warnings, list):
+            preview_warnings.extend(validation.warnings)
+
+    return preview_result

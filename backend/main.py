@@ -23,6 +23,7 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from accounts import AccountError, require_active_user
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
@@ -30,13 +31,11 @@ from database import (
     get_body_metrics,
     get_daily_logs,
     get_legacy_user_id,
-    get_or_create_user,
     get_programme_start_date,
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
     get_training_rules,
-    get_user_api_key,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -49,6 +48,7 @@ from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from legacy_ownership import is_deployment_owner
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -59,6 +59,15 @@ from program import (
     week_in_cycle,
 )
 from push_notifier import send_push_notification
+from secret_vault import (
+    CredentialStatus,
+    CredentialUnavailableError,
+    ResolvedCredential,
+    SecretVault,
+    migrate_legacy_credentials,
+)
+from tenancy import TenantRequiredError, implicit_single_user_allowed
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -227,39 +236,106 @@ def _resolve_provider(
 
 
 def _resolve_run_user(db_path: str) -> str:
-    """Return the user_id the scheduled run should operate under.
+    """Return the user_id the run should operate under.
 
-    Prefers $SCHEDULER_USER_ID (set by scheduler.py when dispatching per-user).
-    Falls back to the first legacy user for single-tenant backwards compat.
+    ``$SCHEDULER_USER_ID`` (an active account chosen by the operator or the
+    scheduler) is always honoured. Without it the only fallback is the explicit
+    non-production local tenant; production has no shared fallback user, so the
+    run is refused instead.
+
+    Raises:
+        TenantRequiredError: no user was selected and no local fallback applies.
+        AccountError: the selected account does not exist or is not active.
     """
     env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
     if env_id:
+        require_active_user(env_id, db_path)
         return env_id
-    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
+    if implicit_single_user_allowed():
+        return get_legacy_user_id(db_path)
+    raise TenantRequiredError(
+        "No user selected: pass --user-id or set SCHEDULER_USER_ID."
+    )
+
+
+def _vault_credential(
+    db_path: str,
+    user_id: str,
+    provider: str,
+    *,
+    purpose: str,
+) -> ResolvedCredential | None:
+    """Resolve one owner's credential, treating unavailability as absent."""
+    try:
+        return SecretVault(db_path).resolve(user_id, provider, purpose=purpose)
+    except CredentialUnavailableError:
+        return None
+
+
+def _vault_record_exists(db_path: str, user_id: str, provider: str) -> bool:
+    """Whether the owner has any credential row, including a revoked one."""
+    return (
+        SecretVault(db_path).describe(user_id, provider).status
+        is not CredentialStatus.NOT_CONFIGURED
+    )
 
 
 def _scope_config_to_user(config: Config, user_id: str) -> Config:
-    """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
-    key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
-    user_hevy_key = None
-    if key_record:
-        user_hevy_key = str(key_record.get("api_key") or "").strip() or None
+    """Resolve user-owned connector secrets and fail closed on shared fallbacks.
 
-    is_legacy_user = user_id == get_legacy_user_id(config.database_path)
-    hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
+    Deployment-wide connector settings (the single-user ``HEVY_API_KEY`` and the
+    Google Health environment) are applied only for the deployment owner: the
+    verified person the pre-account data was assigned to, or the local tenant in
+    the explicit non-production mode. Every other user relies solely on their own
+    vaulted credentials.
+    """
+    hevy_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "hevy",
+        purpose="hevy_sync",
+    )
+    hevy_record_exists = _vault_record_exists(
+        config.database_path, user_id, "hevy"
+    )
+    user_hevy_key = (
+        hevy_credential.api_key.reveal()
+        if hevy_credential is not None and hevy_credential.api_key is not None
+        else None
+    )
+    google_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "google_health",
+        purpose="health_sync",
+    )
+    google_record_exists = _vault_record_exists(
+        config.database_path, user_id, "google_health"
+    )
+    user_google_token = (
+        google_credential.refresh_token.reveal()
+        if google_credential is not None and google_credential.refresh_token is not None
+        else None
+    )
+
+    owns_server_config = is_deployment_owner(user_id, config.database_path)
+    allow_legacy_hevy = owns_server_config and not hevy_record_exists
+    allow_legacy_google = owns_server_config and not google_record_exists
+    hevy_key = user_hevy_key or (config.hevy_api_key if allow_legacy_hevy else None)
+    google_token = user_google_token or (
+        config.google_health_refresh_token if allow_legacy_google else None
+    )
     return replace(
         config,
         hevy_api_key=hevy_key,
-        health_connect_file=(config.health_connect_file if is_legacy_user else None),
-        google_health_client_id=(
-            config.google_health_client_id if is_legacy_user else None
+        health_connect_file=(
+            config.health_connect_file if owns_server_config else None
         ),
-        google_health_client_secret=(
-            config.google_health_client_secret if is_legacy_user else None
-        ),
-        google_health_refresh_token=(
-            config.google_health_refresh_token if is_legacy_user else None
-        ),
+        # The OAuth *client* belongs to the deployment and is safe to share;
+        # only the per-user refresh token is tenant scoped.
+        google_health_client_id=config.google_health_client_id,
+        google_health_client_secret=config.google_health_client_secret,
+        google_health_refresh_token=google_token,
     )
 
 
@@ -271,9 +347,17 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         return 1
 
     init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
 
-    if user_id is None:
-        user_id = _resolve_run_user(config.database_path)
+    try:
+        if user_id is None:
+            user_id = _resolve_run_user(config.database_path)
+        owner = authorize_owner(config.database_path, user_id)
+        require_active_user(owner.user_id, config.database_path)
+        user_id = owner.user_id
+    except (TenantRequiredError, AccountError, OwnershipError) as exc:
+        logger.error("Cannot start the daily cycle: %s", exc)
+        return 1
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 
@@ -296,6 +380,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         config.google_health_client_secret,
         config.google_health_refresh_token,
         config.database_path,
+        user_id=user_id,
     )
     if synced:
         # Live scale readings take precedence over a stale file.
@@ -427,27 +512,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _sync_history(user_id: str | None = None) -> int:
+    """Rebuild one owner's Hevy history (``--sync-history``).
+
+    ``--user-id`` only claims an owner. It is re-authorized before any connector
+    credential is read, so a mistyped or forged id cannot select another
+    tenant's Hevy key or overwrite their history.
+    """
+    from scripts.sync_history import sync_all
+
+    try:
+        config = Config.load()
+    except ConfigError as exc:
+        logger.error("%s", exc)
+        return 1
+    init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
+    try:
+        owner = authorize_owner(
+            config.database_path, user_id or _resolve_run_user(config.database_path)
+        )
+        require_active_user(owner.user_id, config.database_path)
+    except (OwnershipError, TenantRequiredError, AccountError) as exc:
+        logger.error("Refusing history rebuild: %s", exc)
+        return 1
+    config = _scope_config_to_user(config, owner.user_id)
+    if not config.hevy_api_key:
+        logger.error("No Hevy API key is configured for this user.")
+        return 1
+    result = sync_all(config.hevy_api_key, config.database_path, user_id=owner.user_id)
+    if "error" in result:
+        logger.error("%s", result["error"])
+        return 1
+    logger.info("%s", result)
+    return 0
+
+
 if __name__ == "__main__":
     args = _parse_args()
     if args.sync_history:
-        from scripts.sync_history import sync_all
-
-        config = Config.load()
-        init_db(config.database_path)
-        sync_user_id = args.user_id or _resolve_run_user(config.database_path)
-        config = _scope_config_to_user(config, sync_user_id)
-        api_key = config.hevy_api_key
-        if not api_key:
-            logger.error("No Hevy API key is configured for this user.")
-            sys.exit(1)
-        result = sync_all(
-            api_key,
-            config.database_path,
-            user_id=sync_user_id,
-        )
-        if "error" in result:
-            logger.error("%s", result["error"])
-            sys.exit(1)
-        logger.info("%s", result)
-        sys.exit(0)
+        sys.exit(_sync_history(user_id=args.user_id))
     sys.exit(run(preview=args.preview, user_id=args.user_id))

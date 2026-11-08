@@ -36,8 +36,12 @@
   <section class="card" id="settings-hevy" [hidden]="section() !== 'connections'">
     <div class="card-head">
       <h2>Hevy Integration</h2>
-      @if (data.user_keys?.hevy?.has_key) {
-        <span class="status on">Connected</span>
+      @if (data.user_keys?.hevy?.has_key && hevyConnection()?.state === 'connected') {
+        <span class="status on">{{ hevyConnectionLabel() }}</span>
+      } @else if (data.user_keys?.hevy?.status === 'revoked') {
+        <span class="status off">Revoked</span>
+      } @else if (data.user_keys?.hevy?.has_key) {
+        <span class="status off">{{ hevyConnectionLabel() }}</span>
       } @else {
         <span class="status off">Not connected</span>
       }
@@ -51,7 +55,7 @@
         rel="noopener"
         style="color: var(--accent-2)"
         >hevy.com/settings</a
-      >.
+      >. The key is checked against Hevy before it is saved.
     </p>
 
     <div class="key-form" id="hevy-form">
@@ -68,14 +72,43 @@
         <button class="btn btn-sm" (click)="saveKey('hevy')" id="hevy-save-btn">
           {{ data.user_keys?.hevy?.has_key ? 'Update' : 'Connect' }}
         </button>
+        @if (hevyKeyInput.trim()) {
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            id="hevy-test-btn"
+            (click)="verifyHevy()"
+          >
+            Test
+          </button>
+        }
         @if (data.user_keys?.hevy?.has_key) {
-          <button class="btn btn-ghost btn-sm" (click)="verifyHevy()">Verify</button>
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            id="hevy-verify-btn"
+            (click)="verifyHevy()"
+          >
+            Verify
+          </button>
           <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
+          <button class="btn btn-ghost btn-sm" (click)="revokeKey('hevy')">Revoke</button>
           <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">
             Remove
           </button>
         }
       </div>
+      @if (data.user_keys?.hevy?.has_key) {
+        @if (hevyConnection()?.state === 'connected') {
+          <p class="muted" id="hevy-connection">
+            Connected{{ hevyConnection()?.account_username ? ' as ' + hevyConnection()?.account_username : '' }}
+            · API {{ hevyConnection()?.api_version || 'unknown' }} · verified
+            {{ hevyConnection()?.tested_at }}
+          </p>
+        } @else {
+          <p class="muted" id="hevy-connection">{{ hevyConnectionDetail() }}</p>
+        }
+      }
       <div id="hevy-status" class="key-status" role="status">{{ hevyStatus() }}</div>
     </div>
   </section>
@@ -86,6 +119,8 @@
       <h2>AI Provider</h2>
       @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
         <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
+      } @else if (data.user_keys?.[selectedAiProvider()]?.status === 'revoked') {
+        <span class="status off">Revoked</span>
       } @else {
         <span class="status off">No key</span>
       }
@@ -127,6 +162,8 @@
               {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
             </button>
             @if (data.user_keys?.[p.id]?.has_key) {
+              <button class="btn btn-ghost btn-sm" (click)="testKey(p.id)">Test</button>
+              <button class="btn btn-ghost btn-sm" (click)="revokeKey(p.id)">Revoke</button>
               <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey(p.id)">
                 Remove
               </button>
@@ -210,6 +247,34 @@
       </div>
     }
   </section>
+
+  @if (data.credential_vault && !data.credential_vault.available) {
+    <section class="card" [hidden]="section() !== 'connections'">
+      <div class="card-head"><h2>Credential vault</h2></div>
+      <p class="panel error-panel" role="alert">
+        Credential storage is unavailable ({{ data.credential_vault.reason }}). Keys cannot
+        be saved or used until the server operator configures ENCRYPTION_KEY.
+      </p>
+    </section>
+  }
+
+  @if (section() === 'connections' && data.credential_events?.length) {
+    <section class="card" id="settings-credential-activity">
+      <div class="card-head"><h2>Credential activity</h2></div>
+      <p class="muted">Every save, test, rotation, revocation and deletion is audited.</p>
+      <ul class="credential-events">
+        @for (event of data.credential_events; track event.id) {
+          <li>
+            <strong>{{ event.provider }}</strong> {{ event.action }}
+            <span [class]="event.outcome === 'success' ? 'status on' : 'status off'">
+              {{ event.outcome }}
+            </span>
+            <span class="muted">{{ event.created_at }}</span>
+          </li>
+        }
+      </ul>
+    </section>
+  }
 
   <!-- ──────────── Push Notifications ──────────── -->
   @if (data.vapid_public_key) {

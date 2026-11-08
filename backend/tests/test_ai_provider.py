@@ -20,6 +20,16 @@ from ai_provider import (
     get_provider,
 )
 from ai_resolver import resolve_provider
+from secret_vault import ResolvedCredential, SecretValue
+
+
+def _stored(api_key: str, model: str | None = None) -> ResolvedCredential:
+    return ResolvedCredential(
+        provider="gemini",
+        version=1,
+        api_key=SecretValue(api_key),
+        model=model,
+    )
 
 
 def test_get_provider_gemini_default_model():
@@ -310,8 +320,8 @@ def test_resolve_provider_user_prefers_claude_with_key():
             return_value={"preferred_ai": "claude", "ai_model": None},
         ),
         patch(
-            "database.get_user_api_key",
-            return_value={"api_key": "user-claude-key"},
+            "ai_resolver._user_credential",
+            return_value=_stored("user-claude-key"),
         ),
     ):
         provider = resolve_provider(
@@ -330,7 +340,7 @@ def test_resolve_provider_user_prefers_claude_no_key_raises():
             return_value={"preferred_ai": "claude", "ai_model": None},
         ),
         patch(
-            "database.get_user_api_key",
+            "ai_resolver._user_credential",
             return_value=None,
         ),
         pytest.raises(ValueError, match="No claude key"),
@@ -350,8 +360,8 @@ def test_resolve_provider_user_prefers_deepseek_with_model():
             return_value={"preferred_ai": "deepseek", "ai_model": "deepseek-coder"},
         ),
         patch(
-            "database.get_user_api_key",
-            return_value={"api_key": "user-ds-key"},
+            "ai_resolver._user_credential",
+            return_value=_stored("user-ds-key"),
         ),
     ):
         provider = resolve_provider(
@@ -371,7 +381,7 @@ def test_resolve_provider_user_no_prefs_defaults_to_gemini():
             return_value={},
         ),
         patch(
-            "database.get_user_api_key",
+            "ai_resolver._user_credential",
             return_value=None,
         ),
     ):
@@ -393,11 +403,8 @@ def test_resolve_provider_uses_model_stored_with_provider_key():
             return_value={"preferred_ai": "claude", "ai_model": None},
         ),
         patch(
-            "database.get_user_api_key",
-            return_value={
-                "api_key": "user-claude-key",
-                "extra": {"model": "claude-custom"},
-            },
+            "ai_resolver._user_credential",
+            return_value=_stored("user-claude-key", "claude-custom"),
         ),
     ):
         provider = resolve_provider(user_id="user-1")
@@ -413,11 +420,8 @@ def test_resolve_provider_preference_model_wins_over_stale_key_metadata():
             return_value={"preferred_ai": "openai", "ai_model": "gpt-current"},
         ),
         patch(
-            "database.get_user_api_key",
-            return_value={
-                "api_key": "user-openai-key",
-                "extra": {"model": "gpt-stale"},
-            },
+            "ai_resolver._user_credential",
+            return_value=_stored("user-openai-key", "gpt-stale"),
         ),
     ):
         provider = resolve_provider(user_id="user-1")
@@ -430,7 +434,7 @@ def test_resolve_provider_preference_model_wins_over_stale_key_metadata():
 def test_non_gemini_provider_does_not_inherit_server_gemini_model(provider_name: str):
     with (
         patch("database.get_user_preferences", return_value={"preferred_ai": provider_name}),
-        patch("database.get_user_api_key", return_value={"api_key": "synthetic-user-key"}),
+        patch("ai_resolver._user_credential", return_value=_stored("synthetic-user-key")),
         patch("ai_resolver.get_provider") as factory,
     ):
         resolve_provider(
@@ -456,7 +460,7 @@ def test_generation_callsite_inventory_and_sdk_boundary():
     expected_calls = {
         "gemini_engine.py": 3,
         "insight_cron.py": 2,
-        "webapp/app.py": 3,
+        "webapp/app.py": 4,
     }
 
     assert {

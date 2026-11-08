@@ -102,6 +102,24 @@ docker compose up -d --no-deps --force-recreate web agent
 docker compose ps
 ```
 
+For a stolen or leaked **browser session cookie** (lost device, shared computer, exposed log or backup), see [Session security](SESSION_SECURITY.md). A user can end all of their own sessions with **Sign out of all devices** on the Account page. To end every session for everyone, rotate `WEB_AUTH_SECRET` (every signed cookie stops verifying) or revoke the registry rows; both make all users sign in again. The statement below prints only a count and never a session identifier, and it is parameterised, so narrow it with `AND user_id = ?` to act on a single tenant.
+
+```bash
+docker compose exec -T web python - <<'PY'
+import os, sqlite3, time
+
+with sqlite3.connect(os.environ["DATABASE_PATH"]) as conn:
+    cursor = conn.execute(
+        "UPDATE user_sessions SET revoked_at = ?, revoked_reason = 'operator' "
+        "WHERE revoked_at IS NULL",
+        (int(time.time()),),
+    )
+    print("revoked sessions:", cursor.rowcount)
+PY
+```
+
+Only SHA-256 digests of session identifiers are stored, so a leaked database or backup cannot be replayed as a session. Verify afterwards that a cookie captured before the revocation is rejected with HTTP 401.
+
 For GitHub, deployment, OAuth, AI, Hevy, Telegram/Discord/Web Push, and future health-provider credentials: create replacement with least privilege, update the secret source, verify a non-destructive status/test call, revoke the old credential in the upstream console, then verify old credentials are rejected. For the application encryption key, use the repository's reviewed key-rotation/migration tooling when available; do not bulk-decrypt/re-encrypt with shell one-liners.
 
 ### Rollback
