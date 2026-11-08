@@ -679,10 +679,19 @@ def test_chat_page_renders(client: Any) -> None:
 
 @pytest.mark.skip(reason="Angular migration")
 def test_chat_history_returns_empty_list(client: Any) -> None:
-    """GET /api/chat/history returns an empty list for a fresh DB."""
+    """GET /api/chat/history returns an empty transcript plus readiness."""
     resp = client.get("/api/chat/history")
     assert resp.status_code == 200
-    assert resp.json() == []
+    payload = resp.json()
+    assert payload["messages"] == []
+    assert payload["readiness"]["phase"] in {
+        "setup_required",
+        "connecting",
+        "syncing",
+        "ready",
+        "stale",
+        "degraded",
+    }
 
 
 @pytest.mark.skip(reason="Angular migration")

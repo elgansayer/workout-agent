@@ -6,7 +6,84 @@ This is the single place every feature call site goes through to obtain an
 
 from __future__ import annotations
 
+import importlib.util
+from dataclasses import dataclass
+
 from ai_provider import PROVIDERS, AIProvider, get_provider
+
+_SDK_MODULES = {
+    "gemini": "google.generativeai",
+    "claude": "anthropic",
+    "openai": "openai",
+    "deepseek": "openai",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInspection:
+    """Server-verifiable provider facts without constructing an SDK client."""
+
+    provider_name: str
+    configured: bool
+    available: bool
+    reason: str | None = None
+
+
+def inspect_provider(
+    user_id: str | None = None,
+    *,
+    server_gemini_key: str | None = None,
+    db_path: str = "workout_agent.db",
+) -> ProviderInspection:
+    """Inspect the authenticated user's provider configuration.
+
+    This makes no network calls and does not instantiate a provider client, so
+    it is safe to call from read-only readiness endpoints.
+    """
+
+    provider_name = "gemini"
+    api_key: str | None = None
+    if user_id is not None:
+        from database import get_user_api_key, get_user_preferences
+
+        prefs = get_user_preferences(user_id, db_path=db_path)
+        provider_name = str(prefs.get("preferred_ai") or "gemini").lower().strip()
+        if provider_name not in PROVIDERS:
+            return ProviderInspection(
+                provider_name,
+                False,
+                False,
+                f"Unknown AI provider '{provider_name}'.",
+            )
+        key_record = get_user_api_key(user_id, provider_name, db_path=db_path)
+        if key_record:
+            api_key = str(key_record.get("api_key") or "").strip() or None
+
+    if api_key is None and provider_name == "gemini":
+        api_key = (server_gemini_key or "").strip() or None
+    if not api_key:
+        return ProviderInspection(
+            provider_name,
+            False,
+            False,
+            f"No {provider_name} key configured. Add one in Settings.",
+        )
+
+    module_name = _SDK_MODULES.get(provider_name)
+    sdk_present = False
+    if module_name is not None:
+        try:
+            sdk_present = importlib.util.find_spec(module_name) is not None
+        except (ImportError, ModuleNotFoundError, ValueError):
+            sdk_present = False
+    if not sdk_present:
+        return ProviderInspection(
+            provider_name,
+            True,
+            False,
+            f"The {provider_name} provider SDK is unavailable on this server.",
+        )
+    return ProviderInspection(provider_name, True, True)
 
 
 def resolve_provider(

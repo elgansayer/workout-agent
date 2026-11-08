@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ReadinessBanner } from '../../shared/readiness-banner';
 import { Component, inject, signal, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
@@ -8,7 +9,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 @Component({
   selector: 'app-progress',
   standalone: true,
-  imports: [ListControls, CommonModule],
+  imports: [ListControls, CommonModule, ReadinessBanner],
   templateUrl: './progress.html',
   styleUrl: './progress.css',
 })

@@ -15,6 +15,7 @@
 }
 
 @if (data(); as data) {
+  <app-readiness-banner [readiness]="data.readiness" />
   <header class="builder-header">
     <div>
       <p class="eyebrow">Hevy-native programming</p>

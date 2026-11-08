@@ -13,6 +13,7 @@
 
 @if (data(); as data) {
   <h1>Check-ins</h1>
+  <app-readiness-banner [readiness]="data.readiness" />
   @if (!data.checkins || data.checkins.length === 0) {
     <section class="panel">
       <p class="muted" style="margin-top: 0">

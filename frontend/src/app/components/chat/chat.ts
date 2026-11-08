@@ -1,14 +1,35 @@
-import { Component, inject, signal, OnInit, OnDestroy, ViewChild, ElementRef } from '@angular/core';
+import {
+  Component,
+  computed,
+  inject,
+  signal,
+  OnInit,
+  OnDestroy,
+  ViewChild,
+  ElementRef,
+} from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+import { ProductReadiness, ReadinessBanner } from '../../shared/readiness-banner';
+
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  created_at: string;
+}
+
+interface ChatHistoryResponse {
+  messages: ChatMessage[];
+  readiness: ProductReadiness;
+}
 
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ReadinessBanner],
   templateUrl: './chat.html',
   styleUrl: './chat.css',
 })
@@ -18,7 +39,9 @@ export class Chat implements OnInit, OnDestroy {
 
   @ViewChild('scrollContainer') private scrollContainer?: ElementRef;
 
-  messages = signal<any[]>([]);
+  messages = signal<ChatMessage[]>([]);
+  readiness = signal<ProductReadiness | null>(null);
+  readonly providerReady = computed(() => this.readiness()?.provider.available === true);
   userInput = '';
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
@@ -34,10 +57,10 @@ export class Chat implements OnInit, OnDestroy {
   }
 
   loadChatHistory() {
-    this.http.get<{ messages: any[] }>('/api/chat/history').subscribe({
+    this.http.get<ChatHistoryResponse | ChatMessage[]>('/api/chat/history').subscribe({
       next: (res) => {
-        const msgs = res.messages || (Array.isArray(res) ? res : []);
-        this.messages.set(msgs);
+        this.messages.set(Array.isArray(res) ? res : res.messages);
+        this.readiness.set(Array.isArray(res) ? null : res.readiness);
         this.scrollToBottom();
       },
       error: () => this.error.set('Could not load chat history. Try refreshing the page.'),
@@ -59,13 +82,17 @@ export class Chat implements OnInit, OnDestroy {
   async sendMessage() {
     const query = this.userInput.trim();
     if (!query || this.isStreaming()) return;
+    if (!this.providerReady()) {
+      this.error.set('Add an AI provider key in Settings to use Coach.');
+      return;
+    }
 
     this.userInput = '';
     this.isStreaming.set(true);
     this.currentStreamText.set('');
     this.error.set(null);
 
-    const userMsg = {
+    const userMsg: ChatMessage = {
       role: 'user',
       content: query,
       created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),

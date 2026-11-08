@@ -11,6 +11,7 @@
 
 @if (data(); as data) {
   <h1>Settings</h1>
+  <app-readiness-banner [readiness]="data.readiness" />
   <div class="settings-sections" role="group" aria-label="Settings sections">
     @for (
       option of [

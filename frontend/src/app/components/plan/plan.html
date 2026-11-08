@@ -9,6 +9,7 @@
 }
 
 @if (data(); as data) {
+  <app-readiness-banner [readiness]="data.readiness" />
   @if (data.setup_required) {
     <section class="panel" style="text-align: center; padding: 2rem">
       <p class="muted">No active programme</p>

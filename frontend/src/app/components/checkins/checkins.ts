@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ReadinessBanner } from '../../shared/readiness-banner';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
 import { Component, inject, signal, OnInit } from '@angular/core';
@@ -11,7 +12,7 @@ import { FormsModule } from '@angular/forms';
 @Component({
   selector: 'app-checkins',
   standalone: true,
-  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports],
+  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports, ReadinessBanner],
   templateUrl: './checkins.html',
   styleUrl: './checkins.css',
 })

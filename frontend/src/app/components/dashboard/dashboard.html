@@ -22,6 +22,7 @@
   </div>
 }
 @if (data(); as data) {
+  <app-readiness-banner [readiness]="data.readiness" />
   @if (data.setup_required) {
     <section class="panel">
       <h2>Build your programme from Hevy</h2>

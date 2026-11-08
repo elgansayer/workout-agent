@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ReadinessBanner } from '../../shared/readiness-banner';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
@@ -20,6 +21,7 @@ import { HlmCardImports } from '@spartan-ng/ui/card';
     HlmButtonImports,
     HlmBadgeImports,
     HlmAlertImports,
+    ReadinessBanner,
   ],
   templateUrl: './programmes.html',
   styleUrl: './programmes.css',

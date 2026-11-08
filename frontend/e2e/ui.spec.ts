@@ -347,3 +347,53 @@ test('display preferences preserve focus and readable selected states', async ({
   await expect(page.locator('.exercise summary').first()).toBeFocused();
   await noPageOverflow(page);
 });
+
+const setupReadiness = {
+  phase: 'setup_required',
+  message: 'Connect Hevy to import your routines and training history.',
+  next_action: '/settings',
+  data: { available: false, verified: false, reason: 'No training data source is connected.' },
+  provider: { available: false, verified: false, reason: 'No AI provider key is configured.' },
+  coach: { grounded: false, message: 'Coach needs an AI provider and a connected source.' },
+  setup_steps: [
+    { key: 'connect_source', label: 'Connect a training data source', complete: false, action: '/settings' },
+    { key: 'sync_source', label: 'Sync training history', complete: false, action: '/settings' },
+    { key: 'configure_provider', label: 'Configure an AI provider', complete: false, action: '/settings' },
+    { key: 'coach_ready', label: 'Use grounded Coach', complete: false, action: '/chat' },
+  ],
+};
+
+test('first-run readiness is explicit on dashboard and Coach', async ({ page }) => {
+  await page.route('**/api/dashboard', (route) =>
+    route.fulfill({
+      json: { ...dashboard, setup_required: true, rows: [], readiness: setupReadiness },
+    }),
+  );
+
+  await page.goto('/dashboard');
+  await expect(page.locator('app-readiness-banner')).toContainText('Finish setting up');
+  await expect(page.locator('app-readiness-banner')).toContainText('Connect Hevy');
+
+  const noDataReadiness = {
+    ...setupReadiness,
+    phase: 'stale',
+    message: 'Your data source is connected. Waiting for the first sync.',
+    provider: { available: true, verified: true, reason: null },
+    coach: { grounded: false, message: 'Coach has no training data to reference yet.' },
+  };
+  await page.route('**/api/chat/history', (route) =>
+    route.fulfill({ json: { messages: [], readiness: noDataReadiness } }),
+  );
+
+  await page.goto('/chat');
+  await expect(page.locator('.welcome-sub')).toContainText('do not have access');
+  await expect(page.getByLabel('Message Coach')).toBeEnabled();
+
+  await page.route('**/api/chat/history', (route) =>
+    route.fulfill({ json: { messages: [], readiness: setupReadiness } }),
+  );
+  await page.goto('/chat');
+  await expect(page.locator('app-readiness-banner')).toContainText('Finish setting up');
+  await expect(page.locator('.welcome-sub')).toContainText('Add an AI provider key');
+  await expect(page.getByLabel('Message Coach')).toBeDisabled();
+});

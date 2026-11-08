@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import ai_resolver
 import analytics
 import insights
 import lifestyle
@@ -98,6 +99,7 @@ from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from product_readiness import ProductReadiness, derive_product_readiness
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
@@ -106,7 +108,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -191,6 +192,91 @@ GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
 _GH_TOKEN_KEY = "google_health_refresh_token"
 _GH_STATE_KEY = "google_health_oauth_state"
+_HEVY_LAST_SYNC_KEY = "hevy_last_sync_at"
+_HEVY_SYNC_IN_PROGRESS_KEY = "hevy_sync_in_progress"
+_HEVY_SYNC_ERROR_KEY = "hevy_sync_error"
+
+
+def _as_utc(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _training_data_state(user_id: str) -> tuple[bool, datetime | None]:
+    """Return whether this user has stored training data and its newest date."""
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    candidates = [
+        str(entry.get("date") or "")
+        for entries in series.values()
+        for entry in entries
+    ]
+    parsed = [value for value in (_as_utc(raw) for raw in candidates) if value]
+    return bool(series), (max(parsed) if parsed else None)
+
+
+def _product_readiness_for_user(user_id: str) -> ProductReadiness:
+    """Reproducibly derive the authenticated user's product readiness."""
+    keys = get_user_api_keys(user_id, db_path=DB_PATH)
+    hevy_connected = bool(str(keys.get("hevy", {}).get("api_key") or "").strip())
+    health_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id))
+    has_data, last_data_at = _training_data_state(user_id)
+
+    started_at = _as_utc(get_meta(_HEVY_LAST_SYNC_KEY, DB_PATH, user_id=user_id))
+    if started_at is not None and (last_data_at is None or started_at > last_data_at):
+        last_data_at = started_at
+
+    config = get_config()
+    inspection = ai_resolver.inspect_provider(
+        user_id,
+        server_gemini_key=config.gemini_api_key,
+        db_path=DB_PATH,
+    )
+    provider_error = (
+        inspection.reason
+        if inspection.configured and not inspection.available
+        else None
+    )
+    sync_error = get_meta(_HEVY_SYNC_ERROR_KEY, DB_PATH, user_id=user_id)
+    source_error = sync_error if sync_error else None
+    sync_in_progress = (
+        get_meta(_HEVY_SYNC_IN_PROGRESS_KEY, DB_PATH, user_id=user_id) == "1"
+    )
+
+    return derive_product_readiness(
+        has_source_connected=hevy_connected or health_connected,
+        has_training_data=has_data,
+        last_data_at=last_data_at,
+        now=datetime.now(tz=timezone.utc),
+        sync_in_progress=sync_in_progress,
+        provider_configured=inspection.configured,
+        provider_available=inspection.available,
+        source_error=source_error,
+        provider_error=provider_error,
+    )
+
+
+def _readiness_payload(user_id: str) -> dict[str, Any]:
+    return _product_readiness_for_user(user_id).as_dict()
+
+
+def _require_training_data(user_id: str) -> None:
+    has_data, _ = _training_data_state(user_id)
+    if not has_data:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "No training data is available yet. Connect Hevy and sync your "
+                "history before requesting data-grounded coaching."
+            ),
+        )
+
 
 oauth = OAuth()
 if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
@@ -343,6 +429,14 @@ async def get_current_user_api(request: Request) -> Any:
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+@app.get("/api/status")
+def api_status(request: Request) -> JSONResponse:
+    """Return the authenticated user's honest readiness and capabilities."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(_readiness_payload(user_id))
+
 
 
 @app.get("/auth")
@@ -596,6 +690,7 @@ def _dashboard_context(
     return {
         "active": "today",
         "programme_status": runtime.status,
+        "readiness": _readiness_payload(user_id) if user_id else None,
         "rotation_message": runtime.message,
         "last_completed_at": runtime.last_completed_at,
         "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
@@ -651,6 +746,7 @@ def api_checkins(request: Request):
         jsonable_encoder(
             {
                 "checkins": checkins,
+                "readiness": _readiness_payload(user_id),
                 "loading_svg": charts._empty_chart(
                     "Check-in cycle in progress", 300, 100
                 )
@@ -948,6 +1044,8 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
     when, ex_name = parts
 
+    _require_training_data(user_id)
+
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
@@ -970,6 +1068,7 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 def project_peak(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    _require_training_data(user_id)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
@@ -991,7 +1090,16 @@ def project_peak(request: Request) -> dict[str, Any]:
 @app.get("/api/chat/history")
 def chat_history(request: Request):
     user_id = _check_api_auth(request)
-    return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "messages": get_chat_messages(
+                    limit=50, db_path=DB_PATH, user_id=user_id
+                ),
+                "readiness": _readiness_payload(user_id),
+            }
+        )
+    )
 
 
 @app.post("/api/chat/clear")
@@ -1007,6 +1115,7 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
+    readiness = _product_readiness_for_user(user_id)
 
     # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
@@ -1037,24 +1146,30 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
+    if readiness.data.available:
+        data_section = f"""Training data context (recent logs, progress history, biometrics, PRs):
+{context[:25000]}
+
+Data freshness: {readiness.phase.value}. {readiness.data.reason or "The data is current."}"""
+    else:
+        data_section = """You do NOT have access to this user's training logs, body composition, personal records, or programme history. Do not claim or imply that you can see or reference them. Answer only from general fitness knowledge and explain that connecting Hevy is required for personalised answers."""
+
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
-You have access to this user's training logs, body composition data, personal records, and programme history.
 
 Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
-- Reference specific numbers, dates, and exercises from the context when relevant.
+- Reference specific numbers, dates, and exercises from the context only when they are provided.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use British English.
 
 Conversation so far:
 {conversation_text}
 
-Training data context (recent logs, progress history, biometrics, PRs):
-{context[:25000]}
+{data_section}
 
 User's new message: {q}
 
-Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
+Respond naturally as Coach. If the question is about their training data and data is available, reference the actual numbers. If data is not available, say so plainly and do not invent numbers. If it is a general fitness question, answer from expertise but relate it back to their programme only when programme data is provided."""
 
     def generate() -> Iterator[str]:
         collected: list[str] = []
@@ -1356,7 +1471,13 @@ def api_progress(request: Request):
             }
         )
     return JSONResponse(
-        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+        jsonable_encoder(
+            {
+                "charts": charts_data,
+                "body": _body_charts(user_id=user_id),
+                "readiness": _readiness_payload(user_id),
+            }
+        )
     )
 
 
@@ -1489,6 +1610,7 @@ def api_stats(request: Request):
                 "ratio_chart": ratio_chart,
                 "projections": projections,
                 "prs": pr_rows,
+                "readiness": _readiness_payload(user_id),
             }
         )
     )
@@ -1499,7 +1621,15 @@ def api_history(request: Request):
     user_id = _check_api_auth(request)
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     levels = _training_levels(user_id=user_id)
-    return JSONResponse(jsonable_encoder({"logs": logs, "calendar": charts.calendar_heatmap(levels)}))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "logs": logs,
+                "calendar": charts.calendar_heatmap(levels),
+                "readiness": _readiness_payload(user_id),
+            }
+        )
+    )
 
 
 @app.get("/api/plan")
@@ -1533,6 +1663,7 @@ def api_plan(request: Request) -> JSONResponse:
                     "analysis": {},
                     "warnings": [],
                     "programme_spec": {},
+                    "readiness": _readiness_payload(user_id),
                 }
             )
         )
@@ -1575,6 +1706,7 @@ def api_plan(request: Request) -> JSONResponse:
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
                 "programme_spec": spec,
+                "readiness": _readiness_payload(user_id),
             }
         )
     )
@@ -1630,6 +1762,7 @@ def api_programmes(request: Request) -> JSONResponse:
                 "templates": [],
                 "connection": connection,
                 "source": source,
+                "readiness": _readiness_payload(user_id),
                 "duration": {
                     "minimum_weeks": MIN_DURATION_WEEKS,
                     "maximum_weeks": MAX_DURATION_WEEKS,
@@ -1702,6 +1835,7 @@ def api_settings(request: Request):
                 "gh_configured": gh_configured,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
+                "readiness": _readiness_payload(user_id),
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
@@ -1726,9 +1860,27 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
 
     from scripts.sync_history import sync_all
 
-    result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+    set_meta(_HEVY_SYNC_IN_PROGRESS_KEY, "1", DB_PATH, user_id=user_id)
+    set_meta(_HEVY_SYNC_ERROR_KEY, "", DB_PATH, user_id=user_id)
+    try:
+        result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+    except Exception as exc:
+        set_meta(_HEVY_SYNC_IN_PROGRESS_KEY, "0", DB_PATH, user_id=user_id)
+        set_meta(_HEVY_SYNC_ERROR_KEY, "Hevy sync failed.", DB_PATH, user_id=user_id)
+        logger.exception("Hevy history sync failed for user %s.", user_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Hevy sync failed. Check the connection and try again.",
+        ) from exc
+    set_meta(_HEVY_SYNC_IN_PROGRESS_KEY, "0", DB_PATH, user_id=user_id)
     if "error" in result:
         err_msg = str(result["error"])
+        set_meta(
+            _HEVY_SYNC_ERROR_KEY,
+            "Hevy sync failed. Check the connection and try again.",
+            DB_PATH,
+            user_id=user_id,
+        )
         save_notification(
             user_id,
             title="⚠️ Hevy Sync Failed",
@@ -1739,6 +1891,13 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
         )
         raise HTTPException(status_code=400, detail=err_msg)
 
+    set_meta(
+        _HEVY_LAST_SYNC_KEY,
+        datetime.now(tz=timezone.utc).isoformat(),
+        DB_PATH,
+        user_id=user_id,
+    )
+    set_meta(_HEVY_SYNC_ERROR_KEY, "", DB_PATH, user_id=user_id)
     workouts_found = int(result.get("workouts_found", 0))
     processed = int(result.get("processed", 0))
     save_notification(
@@ -1828,7 +1987,10 @@ def api_chat_history(request: Request):
     user_id = _check_api_auth(request)
     return JSONResponse(
         jsonable_encoder(
-            {"messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)}
+            {
+                "messages": get_chat_messages(db_path=DB_PATH, user_id=user_id),
+                "readiness": _readiness_payload(user_id),
+            }
         )
     )
 

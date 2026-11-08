@@ -9,11 +9,23 @@ describe('Coach connection', () => {
   let chat: Chat;
   const originalApiUrl = environment.apiUrl;
 
+  const markProviderReady = () => {
+    chat.readiness.set({
+      phase: 'ready',
+      message: 'Ready',
+      next_action: '/dashboard',
+      setup_steps: [],
+      data: { available: true },
+      provider: { available: true },
+    });
+  };
+
   beforeEach(() => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
     });
     chat = TestBed.runInInjectionContext(() => new Chat());
+    markProviderReady();
   });
 
   afterEach(() => {
@@ -45,16 +57,14 @@ describe('Coach connection', () => {
   it('shows configuration errors and keeps the question available to retry', async () => {
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue(
-          new Response(
-            JSON.stringify({
-              detail: 'No AI provider key available. Add your own key in Settings.',
-            }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } },
-          ),
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: 'No AI provider key available. Add your own key in Settings.',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
         ),
+      ),
     );
     chat.userInput = 'Review my training';
 
@@ -89,5 +99,18 @@ describe('Coach connection', () => {
     expect(send).not.toHaveBeenCalled();
     chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed until provider readiness is verified', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    chat.readiness.set(null);
+    chat.userInput = 'Review my training';
+
+    await chat.sendMessage();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(chat.error()).toContain('Add an AI provider key');
+    expect(chat.userInput).toBe('Review my training');
   });
 });

@@ -19,7 +19,7 @@ from ai_provider import (
     available_providers,
     get_provider,
 )
-from ai_resolver import resolve_provider
+from ai_resolver import inspect_provider, resolve_provider
 
 
 def test_get_provider_gemini_default_model():
@@ -531,3 +531,60 @@ def test_production_services_share_encryption_and_gemini_fallback_config():
         == 2
     )
     assert compose.count("GEMINI_API_KEY: ${GEMINI_API_KEY:-}") == 2
+
+
+# ---------------------------------------------------------------------------
+# inspect_provider tests - readiness must reflect configured and installed SDKs
+# ---------------------------------------------------------------------------
+
+
+def test_inspect_provider_reports_missing_key_without_network(monkeypatch, tmp_path):
+    db = str(tmp_path / "inspect.db")
+    import database
+
+    database.init_db(db)
+    user = database.get_or_create_user("nokey@example.com", db_path=db)
+
+    state = inspect_provider(user["id"], server_gemini_key=None, db_path=db)
+
+    assert state.configured is False
+    assert state.available is False
+    assert "No gemini key" in (state.reason or "")
+
+
+def test_inspect_provider_verifies_installed_sdk(monkeypatch, tmp_path):
+    db = str(tmp_path / "inspect.db")
+    import database
+
+    database.init_db(db)
+    user = database.get_or_create_user("keyed@example.com", db_path=db)
+    database.save_user_preferences(
+        user["id"], preferred_ai="gemini", ai_model=None, db_path=db
+    )
+    database.save_user_api_key(user["id"], "gemini", "synthetic-key", db_path=db)
+    monkeypatch.setattr("ai_resolver.importlib.util.find_spec", lambda name: object())
+
+    state = inspect_provider(user["id"], server_gemini_key=None, db_path=db)
+
+    assert state.configured is True
+    assert state.available is True
+    assert state.reason is None
+
+
+def test_inspect_provider_reports_unavailable_sdk(monkeypatch, tmp_path):
+    db = str(tmp_path / "inspect.db")
+    import database
+
+    database.init_db(db)
+    user = database.get_or_create_user("nodesdk@example.com", db_path=db)
+    database.save_user_preferences(
+        user["id"], preferred_ai="claude", ai_model=None, db_path=db
+    )
+    database.save_user_api_key(user["id"], "claude", "synthetic-key", db_path=db)
+    monkeypatch.setattr("ai_resolver.importlib.util.find_spec", lambda name: None)
+
+    state = inspect_provider(user["id"], server_gemini_key=None, db_path=db)
+
+    assert state.configured is True
+    assert state.available is False
+    assert "unavailable" in (state.reason or "").lower()

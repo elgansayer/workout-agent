@@ -20,9 +20,11 @@
           <span class="status-text" role="status">{{
             isStreaming()
               ? 'Responding...'
-              : error()
-                ? 'Could not connect'
-                : 'Ask about your training'
+              : !providerReady()
+                ? 'AI provider not configured'
+                : error()
+                  ? 'Could not connect'
+                  : 'Ask about your training'
           }}</span>
         </div>
       </div>
@@ -54,6 +56,7 @@
   </div>
 
   <div class="chat-messages" #scrollContainer>
+    <app-readiness-banner [readiness]="readiness()" />
     @if (messages().length === 0) {
       <div class="chat-welcome">
         <div class="welcome-glow"></div>
@@ -72,34 +75,63 @@
         </div>
         <h2 class="welcome-title">What can I help you with?</h2>
         <p class="welcome-sub">
-          I have full access to your training logs, body composition, personal records, and
-          programme history.
+          @if (readiness()?.data?.available && readiness()?.provider?.available) {
+            I can reference your training logs, body composition, personal records, and programme
+            history. I will tell you when that data is out of date.
+          } @else if (!providerReady()) {
+            Add an AI provider key in Settings to use Coach. I cannot respond until a provider is
+            configured.
+          } @else {
+            I do not have access to your training data yet. Connect Hevy and sync your history for
+            personalised answers; until then I can only answer general training questions.
+          }
         </p>
         <div class="suggested-grid">
-          <button class="suggest-card" (click)="askSuggested('How is my deadlift progressing?')">
+          <button
+            class="suggest-card"
+            [disabled]="!providerReady()"
+            (click)="askSuggested('How is my deadlift progressing?')"
+          >
             <span class="suggest-icon">📊</span>
             <span class="suggest-text">How is my deadlift progressing?</span>
           </button>
-          <button class="suggest-card" (click)="askSuggested('Am I recovering well enough?')">
+          <button
+            class="suggest-card"
+            [disabled]="!providerReady()"
+            (click)="askSuggested('Am I recovering well enough?')"
+          >
             <span class="suggest-icon">💤</span>
             <span class="suggest-text">Am I recovering well enough?</span>
           </button>
-          <button class="suggest-card" (click)="askSuggested('Which lifts are stalling?')">
+          <button
+            class="suggest-card"
+            [disabled]="!providerReady()"
+            (click)="askSuggested('Which lifts are stalling?')"
+          >
             <span class="suggest-icon">📉</span>
             <span class="suggest-text">Which lifts are stalling?</span>
           </button>
-          <button class="suggest-card" (click)="askSuggested('Should I deload this week?')">
+          <button
+            class="suggest-card"
+            [disabled]="!providerReady()"
+            (click)="askSuggested('Should I deload this week?')"
+          >
             <span class="suggest-icon">🔄</span>
             <span class="suggest-text">Should I deload this week?</span>
           </button>
           <button
             class="suggest-card"
+            [disabled]="!providerReady()"
             (click)="askSuggested('How is my body composition trending?')"
           >
             <span class="suggest-icon">⚖️</span>
             <span class="suggest-text">How is my body composition trending?</span>
           </button>
-          <button class="suggest-card" (click)="askSuggested('What should I focus on this block?')">
+          <button
+            class="suggest-card"
+            [disabled]="!providerReady()"
+            (click)="askSuggested('What should I focus on this block?')"
+          >
             <span class="suggest-icon">🎯</span>
             <span class="suggest-text">What should I focus on this block?</span>
           </button>
@@ -184,7 +216,8 @@
         class="chat-textarea"
         [(ngModel)]="userInput"
         (keydown)="onKeyDown($event)"
-        placeholder="Ask Coach anything about your training, recovery, or split..."
+        [disabled]="!providerReady()"
+        aria-label="Ask Coach about your training"
         rows="1"
       ></textarea>
       <div class="input-actions">
@@ -192,7 +225,7 @@
           <button
             class="chat-send-btn"
             (click)="sendMessage()"
-            [disabled]="!userInput.trim()"
+            [disabled]="!userInput.trim() || !providerReady()"
             title="Send message"
             aria-label="Send message"
           >
@@ -223,7 +256,13 @@
       </div>
     </div>
     <p class="chat-disclaimer">
-      Coach answers based on your training logs, recovery data, and programme.
+      @if (readiness()?.data?.available && readiness()?.provider?.available) {
+        Coach answers based on your training logs, recovery data, and programme.
+      } @else if (!providerReady()) {
+        Coach is unavailable until an AI provider key is configured.
+      } @else {
+        Coach has no training data to reference yet. Answers are general guidance.
+      }
     </p>
   </div>
 </div>

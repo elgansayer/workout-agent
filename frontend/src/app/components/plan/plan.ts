@@ -6,11 +6,19 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { ReadinessBanner } from '../../shared/readiness-banner';
 
 @Component({
   selector: 'app-plan',
   standalone: true,
-  imports: [CommonModule, FormsModule, HlmCardImports, HlmBadgeImports, HlmAlertImports],
+  imports: [
+    CommonModule,
+    FormsModule,
+    HlmCardImports,
+    HlmBadgeImports,
+    HlmAlertImports,
+    ReadinessBanner,
+  ],
   templateUrl: './plan.html',
   styleUrl: './plan.css'
 })
