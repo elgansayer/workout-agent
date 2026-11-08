@@ -166,7 +166,9 @@ Work is tracked in GitHub Issues. Before implementation:
 The OpenHands Agent Canvas on the VPS is the single autonomous scheduler for this
 repository. It selects eligible GitHub issues, claims them under a lease, and opens
 branches and pull requests. GitHub Actions remain deterministic verification and
-never select implementation work.
+never select implementation work. The VPS scheduler is the single owner of claim,
+branch, pull request, review response and repair; there is no GitHub-hosted
+planner, resolver, reviewer, hourly, daily or weekly agent fallback.
 
 The queue contract — eligible labels, claim lease and heartbeat, cancellation,
 branch naming, pull-request creation and review handling — is documented in
