@@ -3250,6 +3250,18 @@ def set_active_programme(
     if not isinstance(definition, dict) or not definition:
         raise ValueError("A non-empty Hevy-derived programme definition is required.")
 
+    from programme_validator import assert_programme_activatable
+
+    if definition.get("blocking_violations"):
+        first = definition["blocking_violations"][0]
+        raise ValueError(
+            f"Cannot activate programme with blocking violations: {first.get('exercise')} "
+            f"violates '{first.get('rule')}'. Permitted remediation: {first.get('permitted_remediation')}"
+        )
+
+    prefs = get_user_preferences(user_id, db_path=db_path)
+    assert_programme_activatable(definition, profile_rules=prefs.get("constraints"))
+
     with _connect(db_path) as conn:
         conn.execute(
             "UPDATE programmes SET active = 0 WHERE user_id = ?",

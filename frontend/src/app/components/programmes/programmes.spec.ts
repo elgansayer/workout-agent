@@ -55,4 +55,20 @@ describe('Programme preview consistency', () => {
     expect(component.visibleRoutines().map((r) => r.id)).toEqual(['r29']);
     expect(component.isSelected('r29')).toBe(true);
   });
+
+  it('blocks activation when preview contains blocking constraint violations', () => {
+    component.preview.set({
+      preview_token: 'violation-token',
+      blocking_violations: [
+        {
+          exercise: 'Bulgarian Split Squats',
+          prescription: '3 x 10',
+          rule: 'No Bulgarian split squats',
+          permitted_remediation: 'Use leg extensions or flat-foot leg press instead.',
+        },
+      ],
+    });
+    component.activatePreview();
+    http.expectNone('/api/programmes/activate');
+  });
 });
