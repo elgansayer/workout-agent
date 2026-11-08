@@ -1,7 +1,73 @@
 import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+
+export interface ProhibitedExerciseRule {
+  exercise: string;
+  reason?: string;
+}
+
+export interface ExerciseSubstitutionRule {
+  from_exercise: string;
+  to_exercise: string;
+  reason?: string;
+}
+
+export interface RepIntensityBoundsRule {
+  min_reps: number | null;
+  max_reps: number | null;
+  max_rpe: number | null;
+  min_rir: number | null;
+}
+
+export interface FrequencyRule {
+  max_sessions_per_week: number | null;
+  min_rest_days_between_sessions: number | null;
+}
+
+export interface VolumeRule {
+  max_sets_per_workout: number | null;
+  max_sets_per_exercise: number | null;
+}
+
+export interface EquipmentRule {
+  available_equipment: string[];
+  prohibited_equipment: string[];
+}
+
+export interface RecoveryRule {
+  min_sleep_hours: number | null;
+  min_readiness_score: number | null;
+  auto_deload_on_fatigue: boolean;
+}
+
+export interface ContextualNoteRule {
+  category: string;
+  note: string;
+  severity: string;
+}
+
+export interface TrainingRulesData {
+  version: number;
+  prohibited_exercises?: ProhibitedExerciseRule[];
+  substitutions?: ExerciseSubstitutionRule[];
+  rep_intensity_bounds?: RepIntensityBoundsRule;
+  frequency?: FrequencyRule;
+  volume?: VolumeRule;
+  equipment?: EquipmentRule;
+  recovery?: RecoveryRule;
+  contextual_notes?: ContextualNoteRule[];
+  updated_at?: string | null;
+}
+
+function parseNullableNumber(val: unknown): number | null {
+  if (val === null || val === undefined || val === '') {
+    return null;
+  }
+  const num = Number(val);
+  return Number.isNaN(num) ? null : num;
+}
 
 @Component({
   selector: 'app-settings',
@@ -37,6 +103,35 @@ export class Settings implements OnInit {
   selectedExperience = signal<string>('intermediate');
   constraintsInput = '';
 
+  trainingRules = signal<TrainingRulesData | null>(null);
+  rulesStatus = signal<string>('');
+  prohibitedExercises = signal<{ exercise: string; reason?: string }[]>([]);
+  substitutions = signal<{ from_exercise: string; to_exercise: string; reason?: string }[]>([]);
+  repBounds = signal<{ min_reps: number | null; max_reps: number | null; max_rpe: number | null; min_rir: number | null }>({
+    min_reps: null,
+    max_reps: null,
+    max_rpe: null,
+    min_rir: null,
+  });
+  frequency = signal<{ max_sessions_per_week: number | null; min_rest_days_between_sessions: number | null }>({
+    max_sessions_per_week: null,
+    min_rest_days_between_sessions: null,
+  });
+  volume = signal<{ max_sets_per_workout: number | null; max_sets_per_exercise: number | null }>({
+    max_sets_per_workout: null,
+    max_sets_per_exercise: null,
+  });
+  equipment = signal<{ available: string; prohibited: string }>({
+    available: '',
+    prohibited: '',
+  });
+  recovery = signal<{ min_sleep_hours: number | null; min_readiness_score: number | null; auto_deload_on_fatigue: boolean }>({
+    min_sleep_hours: null,
+    min_readiness_score: null,
+    auto_deload_on_fatigue: true,
+  });
+  contextualNotes = signal<{ category: string; note: string; severity: string }[]>([]);
+
   ngOnInit() {
     this.loadSettings();
   }
@@ -59,6 +154,42 @@ export class Settings implements OnInit {
           this.selectedGoals.set(prefs.goals || []);
           this.selectedExperience.set(prefs.experience_level || 'intermediate');
           this.constraintsInput = (prefs.constraints || []).join('. ');
+
+          const rules = res.training_rules || prefs.training_rules || null;
+          if (rules) {
+            this.trainingRules.set(rules);
+            this.prohibitedExercises.set(rules.prohibited_exercises || []);
+            this.substitutions.set(rules.substitutions || []);
+            const b = rules.rep_intensity_bounds || {};
+            this.repBounds.set({
+              min_reps: b.min_reps ?? null,
+              max_reps: b.max_reps ?? null,
+              max_rpe: b.max_rpe ?? null,
+              min_rir: b.min_rir ?? null,
+            });
+            const f = rules.frequency || {};
+            this.frequency.set({
+              max_sessions_per_week: f.max_sessions_per_week ?? null,
+              min_rest_days_between_sessions: f.min_rest_days_between_sessions ?? null,
+            });
+            const v = rules.volume || {};
+            this.volume.set({
+              max_sets_per_workout: v.max_sets_per_workout ?? null,
+              max_sets_per_exercise: v.max_sets_per_exercise ?? null,
+            });
+            const eq = rules.equipment || {};
+            this.equipment.set({
+              available: (eq.available_equipment || []).join(', '),
+              prohibited: (eq.prohibited_equipment || []).join(', '),
+            });
+            const r = rules.recovery || {};
+            this.recovery.set({
+              min_sleep_hours: r.min_sleep_hours ?? null,
+              min_readiness_score: r.min_readiness_score ?? null,
+              auto_deload_on_fatigue: r.auto_deload_on_fatigue ?? true,
+            });
+            this.contextualNotes.set(rules.contextual_notes || []);
+          }
         }
         void this.checkPushSubscription();
         this.loading.set(false);
@@ -163,6 +294,101 @@ export class Settings implements OnInit {
     });
   }
 
+  addProhibitedExercise() {
+    this.prohibitedExercises.set([...this.prohibitedExercises(), { exercise: '', reason: '' }]);
+  }
+
+  removeProhibitedExercise(index: number) {
+    this.prohibitedExercises.set(this.prohibitedExercises().filter((_, i) => i !== index));
+  }
+
+  addSubstitution() {
+    this.substitutions.set([
+      ...this.substitutions(),
+      { from_exercise: '', to_exercise: '', reason: '' },
+    ]);
+  }
+
+  removeSubstitution(index: number) {
+    this.substitutions.set(this.substitutions().filter((_, i) => i !== index));
+  }
+
+  addContextualNote() {
+    this.contextualNotes.set([
+      ...this.contextualNotes(),
+      { category: 'general', note: '', severity: 'info' },
+    ]);
+  }
+
+  removeContextualNote(index: number) {
+    this.contextualNotes.set(this.contextualNotes().filter((_, i) => i !== index));
+  }
+
+  buildTrainingRulesPayload() {
+    const currentVersion = this.trainingRules()?.version || 1;
+    const availEq = this.equipment().available
+      ? this.equipment()
+          .available.split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+    const prohibEq = this.equipment().prohibited
+      ? this.equipment()
+          .prohibited.split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+
+    return {
+      version: currentVersion,
+      prohibited_exercises: this.prohibitedExercises().filter((p) => p.exercise?.trim()),
+      substitutions: this.substitutions().filter(
+        (s) => s.from_exercise?.trim() && s.to_exercise?.trim(),
+      ),
+      rep_intensity_bounds: {
+        min_reps: parseNullableNumber(this.repBounds().min_reps),
+        max_reps: parseNullableNumber(this.repBounds().max_reps),
+        max_rpe: parseNullableNumber(this.repBounds().max_rpe),
+        min_rir: parseNullableNumber(this.repBounds().min_rir),
+      },
+      frequency: {
+        max_sessions_per_week: parseNullableNumber(this.frequency().max_sessions_per_week),
+        min_rest_days_between_sessions: parseNullableNumber(
+          this.frequency().min_rest_days_between_sessions,
+        ),
+      },
+      volume: {
+        max_sets_per_workout: parseNullableNumber(this.volume().max_sets_per_workout),
+        max_sets_per_exercise: parseNullableNumber(this.volume().max_sets_per_exercise),
+      },
+      equipment: {
+        available_equipment: availEq,
+        prohibited_equipment: prohibEq,
+      },
+      recovery: {
+        min_sleep_hours: parseNullableNumber(this.recovery().min_sleep_hours),
+        min_readiness_score: parseNullableNumber(this.recovery().min_readiness_score),
+        auto_deload_on_fatigue: Boolean(this.recovery().auto_deload_on_fatigue),
+      },
+      contextual_notes: this.contextualNotes().filter((n) => n.note?.trim()),
+    };
+  }
+
+  saveTrainingRules() {
+    const payload = this.buildTrainingRulesPayload();
+    this.http.post<{ rules: TrainingRulesData }>('/api/settings/rules', payload).subscribe({
+      next: (res: { rules: TrainingRulesData }) => {
+        this.trainingRules.set(res.rules);
+        this.rulesStatus.set(`Rules saved (v${res.rules?.version || payload.version})!`);
+        setTimeout(() => this.rulesStatus.set(''), 4000);
+      },
+      error: (err: HttpErrorResponse) => {
+        const detail = (err.error as { detail?: string } | undefined)?.detail;
+        this.rulesStatus.set(detail || 'Could not save training rules.');
+      },
+    });
+  }
+
   savePreferences() {
     const constraints = this.constraintsInput
       ? this.constraintsInput
@@ -177,6 +403,7 @@ export class Settings implements OnInit {
       experience_level: this.selectedExperience(),
       preferred_ai: this.selectedAiProvider(),
       ai_model: (this.aiModelInputs[this.selectedAiProvider()] || '').trim() || undefined,
+      training_rules: this.buildTrainingRulesPayload(),
     };
 
     this.http.post('/api/settings/preferences', payload).subscribe({

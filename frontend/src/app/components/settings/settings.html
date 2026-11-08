@@ -291,7 +291,7 @@
 
       <div class="pref-group">
         <label for="profile-constraints" class="pref-label"
-          >Constraints <span class="muted">(optional)</span></label
+          >Constraints Notes <span class="muted">(optional free-text)</span></label
         >
         <textarea
           id="profile-constraints"
@@ -301,6 +301,335 @@
           rows="2"
         ></textarea>
       </div>
+
+      <!-- Structured Training Rules & Constraints Editor -->
+      <fieldset class="pref-group border border-border/40 rounded-lg p-4 mt-4" aria-labelledby="rules-heading">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <legend id="rules-heading" class="pref-label text-base font-semibold text-text m-0">
+              Structured Training Rules & Constraints
+            </legend>
+            <p class="text-xs text-muted mt-1">
+              Deterministic rules enforced automatically on all coaching and programme prescriptions.
+            </p>
+          </div>
+          <span class="text-xs bg-panel-2 border border-border px-2 py-1 rounded text-accent font-mono" id="rule-version-badge">
+            v{{ trainingRules()?.version || 1 }}
+          </span>
+        </div>
+
+        <!-- Prohibited Exercises -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-text">Prohibited Exercises</span>
+            <button
+              type="button"
+              class="btn-sm btn-outline text-xs"
+              (click)="addProhibitedExercise()"
+              aria-label="Add prohibited exercise"
+            >
+              + Add Prohibited Exercise
+            </button>
+          </div>
+          @if (prohibitedExercises().length === 0) {
+            <p class="text-xs text-muted italic">No prohibited exercises configured.</p>
+          }
+          @for (item of prohibitedExercises(); track $index) {
+            <div class="flex gap-2 items-center mb-2">
+              <input
+                type="text"
+                class="key-input text-xs"
+                [(ngModel)]="item.exercise"
+                [attr.aria-label]="'Prohibited exercise name ' + ($index + 1)"
+              />
+              <input
+                type="text"
+                class="key-input text-xs"
+                [(ngModel)]="item.reason"
+                [attr.aria-label]="'Prohibited exercise reason ' + ($index + 1)"
+              />
+              <button
+                type="button"
+                class="btn-sm btn-danger text-xs"
+                (click)="removeProhibitedExercise($index)"
+                [attr.aria-label]="'Remove prohibited exercise ' + ($index + 1)"
+              >
+                ✕
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- Exercise Substitutions -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-text">Exercise Substitutions</span>
+            <button
+              type="button"
+              class="btn-sm btn-outline text-xs"
+              (click)="addSubstitution()"
+              aria-label="Add exercise substitution"
+            >
+              + Add Substitution
+            </button>
+          </div>
+          @if (substitutions().length === 0) {
+            <p class="text-xs text-muted italic">No substitutions configured.</p>
+          }
+          @for (sub of substitutions(); track $index) {
+            <div class="flex gap-2 items-center mb-2">
+              <input
+                type="text"
+                class="key-input text-xs"
+                [(ngModel)]="sub.from_exercise"
+                [attr.aria-label]="'Exercise to replace ' + ($index + 1)"
+              />
+              <span class="text-muted text-xs">→</span>
+              <input
+                type="text"
+                class="key-input text-xs"
+                [(ngModel)]="sub.to_exercise"
+                [attr.aria-label]="'Replacement exercise ' + ($index + 1)"
+              />
+              <input
+                type="text"
+                class="key-input text-xs"
+                [(ngModel)]="sub.reason"
+                [attr.aria-label]="'Substitution reason ' + ($index + 1)"
+              />
+              <button
+                type="button"
+                class="btn-sm btn-danger text-xs"
+                (click)="removeSubstitution($index)"
+                [attr.aria-label]="'Remove substitution ' + ($index + 1)"
+              >
+                ✕
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- Rep & Intensity Bounds -->
+        <div class="mb-4">
+          <span class="text-sm font-medium text-text block mb-2">Repetition & Intensity Bounds</span>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div>
+              <label for="rule-min-reps" class="text-xs text-muted block mb-1">Min Reps</label>
+              <input
+                id="rule-min-reps"
+                type="number"
+                min="1"
+                max="100"
+                class="key-input text-xs w-full"
+                [(ngModel)]="repBounds().min_reps"
+              />
+            </div>
+            <div>
+              <label for="rule-max-reps" class="text-xs text-muted block mb-1">Max Reps</label>
+              <input
+                id="rule-max-reps"
+                type="number"
+                min="1"
+                max="100"
+                class="key-input text-xs w-full"
+                [(ngModel)]="repBounds().max_reps"
+              />
+            </div>
+            <div>
+              <label for="rule-max-rpe" class="text-xs text-muted block mb-1">Max RPE</label>
+              <input
+                id="rule-max-rpe"
+                type="number"
+                step="0.5"
+                min="1"
+                max="10"
+                class="key-input text-xs w-full"
+                [(ngModel)]="repBounds().max_rpe"
+              />
+            </div>
+            <div>
+              <label for="rule-min-rir" class="text-xs text-muted block mb-1">Min RIR</label>
+              <input
+                id="rule-min-rir"
+                type="number"
+                step="0.5"
+                min="0"
+                max="10"
+                class="key-input text-xs w-full"
+                [(ngModel)]="repBounds().min_rir"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Frequency & Volume -->
+        <div class="mb-4">
+          <span class="text-sm font-medium text-text block mb-2">Frequency & Volume Limits</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div>
+              <label for="rule-max-sessions" class="text-xs text-muted block mb-1">Max Sessions / Week</label>
+              <input
+                id="rule-max-sessions"
+                type="number"
+                min="1"
+                max="14"
+                class="key-input text-xs w-full"
+                [(ngModel)]="frequency().max_sessions_per_week"
+              />
+            </div>
+            <div>
+              <label for="rule-max-sets-workout" class="text-xs text-muted block mb-1">Max Sets / Workout</label>
+              <input
+                id="rule-max-sets-workout"
+                type="number"
+                min="1"
+                max="100"
+                class="key-input text-xs w-full"
+                [(ngModel)]="volume().max_sets_per_workout"
+              />
+            </div>
+            <div>
+              <label for="rule-max-sets-exercise" class="text-xs text-muted block mb-1">Max Sets / Exercise</label>
+              <input
+                id="rule-max-sets-exercise"
+                type="number"
+                min="1"
+                max="30"
+                class="key-input text-xs w-full"
+                [(ngModel)]="volume().max_sets_per_exercise"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Equipment -->
+        <div class="mb-4">
+          <span class="text-sm font-medium text-text block mb-2">Equipment Constraints</span>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label for="rule-avail-equipment" class="text-xs text-muted block mb-1">Available Equipment (comma-separated)</label>
+              <input
+                id="rule-avail-equipment"
+                type="text"
+                class="key-input text-xs w-full"
+                [(ngModel)]="equipment().available"
+              />
+            </div>
+            <div>
+              <label for="rule-prohib-equipment" class="text-xs text-muted block mb-1">Prohibited Equipment (comma-separated)</label>
+              <input
+                id="rule-prohib-equipment"
+                type="text"
+                class="key-input text-xs w-full"
+                [(ngModel)]="equipment().prohibited"
+              />
+            </div>
+          </div>
+        </div>
+
+        <!-- Recovery -->
+        <div class="mb-4">
+          <span class="text-sm font-medium text-text block mb-2">Recovery & Deload Controls</span>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+            <div>
+              <label for="rule-min-sleep" class="text-xs text-muted block mb-1">Min Sleep (hours)</label>
+              <input
+                id="rule-min-sleep"
+                type="number"
+                step="0.5"
+                min="3"
+                max="16"
+                class="key-input text-xs w-full"
+                [(ngModel)]="recovery().min_sleep_hours"
+              />
+            </div>
+            <div>
+              <label for="rule-min-readiness" class="text-xs text-muted block mb-1">Min Readiness Score</label>
+              <input
+                id="rule-min-readiness"
+                type="number"
+                min="0"
+                max="100"
+                class="key-input text-xs w-full"
+                [(ngModel)]="recovery().min_readiness_score"
+              />
+            </div>
+            <div class="flex items-center gap-2 pt-2 sm:pt-0">
+              <input
+                id="rule-auto-deload"
+                type="checkbox"
+                class="rounded border-border text-accent focus:ring-accent"
+                [(ngModel)]="recovery().auto_deload_on_fatigue"
+              />
+              <label for="rule-auto-deload" class="text-xs text-text cursor-pointer">Auto-deload on fatigue</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Contextual Notes -->
+        <div class="mb-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-sm font-medium text-text">Contextual Notes (Joint, Medical & Scheduling)</span>
+            <button
+              type="button"
+              class="btn-sm btn-outline text-xs"
+              (click)="addContextualNote()"
+              aria-label="Add contextual note"
+            >
+              + Add Note
+            </button>
+          </div>
+          @if (contextualNotes().length === 0) {
+            <p class="text-xs text-muted italic">No contextual notes.</p>
+          }
+          @for (note of contextualNotes(); track $index) {
+            <div class="flex gap-2 items-center mb-2">
+              <select
+                class="key-input text-xs w-28"
+                [(ngModel)]="note.category"
+                [attr.aria-label]="'Note category ' + ($index + 1)"
+              >
+                <option value="medical">Medical</option>
+                <option value="joint">Joint</option>
+                <option value="schedule">Schedule</option>
+                <option value="lifestyle">Lifestyle</option>
+                <option value="general">General</option>
+              </select>
+              <input
+                type="text"
+                class="key-input text-xs flex-1"
+                [(ngModel)]="note.note"
+                [attr.aria-label]="'Note text ' + ($index + 1)"
+              />
+              <select
+                class="key-input text-xs w-24"
+                [(ngModel)]="note.severity"
+                [attr.aria-label]="'Note severity ' + ($index + 1)"
+              >
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="critical">Critical</option>
+              </select>
+              <button
+                type="button"
+                class="btn-sm btn-danger text-xs"
+                (click)="removeContextualNote($index)"
+                [attr.aria-label]="'Remove note ' + ($index + 1)"
+              >
+                ✕
+              </button>
+            </div>
+          }
+        </div>
+
+        <!-- Rules Save Row -->
+        <div class="flex items-center gap-3 pt-2">
+          <button type="button" class="btn btn-sm" (click)="saveTrainingRules()">
+            Save Training Rules
+          </button>
+          <div id="rules-status" class="key-status text-xs" role="status">{{ rulesStatus() }}</div>
+        </div>
+      </fieldset>
 
       <div class="btn-row">
         <button class="btn" (click)="savePreferences()">Save Profile</button>

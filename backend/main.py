@@ -35,6 +35,7 @@ from database import (
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
+    get_training_rules,
     get_user_api_key,
     init_db,
     save_body_metrics,
@@ -325,7 +326,10 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
-        message = generate_rest_day_message(provider, recovery=recovery)
+        rules = get_training_rules(user_id, db_path=config.database_path)
+        message = generate_rest_day_message(
+            provider, recovery=recovery, rules=rules
+        )
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
             if config.lifestyle_enabled
@@ -370,6 +374,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             last_plan = log["plan"]
             break
 
+    rules = get_training_rules(user_id, db_path=config.database_path)
     plan = generate_next_workout(
         provider,
         day=day,
@@ -380,6 +385,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         history=history,
         insights=review,
         last_plan=last_plan,
+        rules=rules,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)

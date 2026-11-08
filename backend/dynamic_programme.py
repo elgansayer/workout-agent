@@ -16,6 +16,7 @@ from typing import Any, Literal
 from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
 from pydantic import BaseModel, Field
+from training_rules import StructuredTrainingRules
 
 ENGINE_VERSION = "hevy-programme-v1"
 MIN_DURATION_WEEKS = 4
@@ -47,6 +48,7 @@ class ProgrammePreviewRequest(BaseModel):
     experience: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     max_session_minutes: int | None = Field(default=None, ge=20, le=240)
     adaptation_aggressiveness: Aggressiveness = "balanced"
+    rules: dict[str, Any] | None = None
 
 
 class ProgrammeActivationRequest(ProgrammePreviewRequest):
@@ -812,6 +814,41 @@ def build_programme_preview(
             "No reliable recent frequency was detected; the selected routine count is used as the initial weekly cadence."
         )
 
+    blocking_violations: list[str] = []
+    if request.rules:
+        try:
+            rules_obj = StructuredTrainingRules.from_raw(request.rules)
+            prohib_set = {
+                p.exercise.strip().lower(): p
+                for p in rules_obj.prohibited_exercises
+                if p.exercise.strip()
+            }
+            sub_set = {
+                s.from_exercise.strip().lower(): s
+                for s in rules_obj.substitutions
+                if s.from_exercise.strip()
+            }
+            for source_routine in source_snapshots:
+                for ex in source_routine.get("exercises", []):
+                    name_lower = ex["title"].strip().lower()
+                    if name_lower in sub_set:
+                        sub = sub_set[name_lower]
+                        warnings.append(
+                            f"Routine '{source_routine['title']}' contains '{ex['title']}' "
+                            f"which has a mandatory substitution to '{sub.to_exercise}'."
+                        )
+                    elif name_lower in prohib_set:
+                        p_rule = prohib_set[name_lower]
+                        reason_str = f" ({p_rule.reason})" if p_rule.reason else ""
+                        blocking_violations.append(
+                            f"Routine '{source_routine['title']}' contains prohibited exercise "
+                            f"'{ex['title']}'{reason_str}."
+                        )
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid structured training rules; constraint check failed: {exc}"
+            ) from exc
+
     programme_spec = {
         **request.model_dump(mode="json"),
         "selected_routine_ids": list(request.selected_routine_ids),
@@ -847,7 +884,7 @@ def build_programme_preview(
         "blocks": blocks,
         "days": days,
         "warnings": warnings,
-        "blocking_violations": [],
+        "blocking_violations": blocking_violations,
         "assumptions": assumptions,
         "rules": [
             "Progressions are deterministic, modality-aware and bounded.",

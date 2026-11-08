@@ -60,6 +60,7 @@ from database import (
     get_recent_bests,
     get_recent_hevy_logs,
     get_session_volumes,
+    get_training_rules,
     get_unread_notification_count,
     get_user_api_keys,
     get_user_by_id,
@@ -71,6 +72,7 @@ from database import (
     save_notification,
     save_push_subscription,
     save_reasoning_log,
+    save_training_rules,
     save_user_api_key,
     save_user_preferences,
     set_active_programme,
@@ -104,9 +106,12 @@ from program import (
 )
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
+from training_rules import (
+    StructuredTrainingRules,
+    format_rules_for_prompt,
+)
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -749,6 +754,8 @@ def preview_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    if not payload.rules:
+        payload.rules = get_training_rules(user_id, DB_PATH)
     try:
         preview = build_programme_preview(training_data, payload)
     except ValueError as exc:
@@ -767,6 +774,8 @@ def activate_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    if not payload.rules:
+        payload.rules = get_training_rules(user_id, DB_PATH)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
@@ -774,6 +783,15 @@ def activate_programme(
         preview = build_programme_preview(training_data, preview_request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if preview.get("blocking_violations"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Programme violates structured constraints: "
+                + "; ".join(preview["blocking_violations"])
+            ),
+        )
 
     if preview["preview_token"] != payload.preview_token:
         raise HTTPException(
@@ -1037,6 +1055,9 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
+    rules = get_training_rules(user_id, DB_PATH)
+    rules_text = format_rules_for_prompt(rules)
+
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
 You have access to this user's training logs, body composition data, personal records, and programme history.
 
@@ -1045,6 +1066,8 @@ Your personality:
 - Reference specific numbers, dates, and exercises from the context when relevant.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use British English.
+
+{rules_text}
 
 Conversation so far:
 {conversation_text}
@@ -1222,6 +1245,15 @@ async def save_preferences(request: Request) -> dict[str, str]:
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
 
+    training_rules_payload = body.get("training_rules")
+    if training_rules_payload is not None:
+        try:
+            StructuredTrainingRules.from_raw(training_rules_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400, detail=f"Invalid training rules: {exc}"
+            )
+
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
@@ -1231,9 +1263,32 @@ async def save_preferences(request: Request) -> dict[str, str]:
         preferred_ai=preferred_ai,
         ai_model=ai_model,
         custom_rules=body.get("custom_rules"),
+        training_rules=training_rules_payload,
         db_path=DB_PATH,
     )
     return {"status": "ok"}
+
+
+@app.get("/api/settings/rules")
+def get_user_training_rules(request: Request) -> JSONResponse:
+    """Return the current user's versioned structured training rules."""
+    user_id = _check_api_auth(request)
+    rules = get_training_rules(user_id, DB_PATH)
+    return JSONResponse(jsonable_encoder(rules))
+
+
+@app.post("/api/settings/rules")
+async def save_user_training_rules(request: Request) -> JSONResponse:
+    """Validate and save user's structured training rules."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    body = await request.json()
+    try:
+        validated = StructuredTrainingRules.model_validate(body)
+        saved = save_training_rules(user_id, validated, DB_PATH)
+        return JSONResponse(jsonable_encoder({"status": "ok", "rules": saved}))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid training rules: {exc}")
 
 
 @app.post("/api/settings/push-subscribe")
@@ -1696,6 +1751,7 @@ def api_settings(request: Request):
         jsonable_encoder(
             {
                 "user_prefs": prefs,
+                "training_rules": get_training_rules(user_id, DB_PATH),
                 "user_keys": user_keys,
                 "ai_providers": ai_providers,
                 "gh_connected": gh_connected,
