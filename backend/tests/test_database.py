@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from database import (
+    USER_OWNED_TABLES,
     advance_day,
     delete_routine_record,
     get_body_metrics,
@@ -765,12 +766,19 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
 
     init_db(db)
 
-    from database import get_dashboard_insight, save_dashboard_insight
+    from database import (
+        get_dashboard_insight,
+        get_legacy_user_id,
+        save_dashboard_insight,
+    )
 
-    # The old row should have been backfilled to the legacy user
-    # Without a user_id filter, we default to None which was backfilled as legacy
-    legacy_insight = get_dashboard_insight(db_path=db, user_id=None)
-    assert legacy_insight is None  # None doesn't match legacy user in new schema
+    # The old singleton row is owned by the legacy placeholder tenant and only
+    # that tenant (reached implicitly in the explicit local mode) can read it.
+    legacy_id = get_legacy_user_id(db)
+    legacy_insight = get_dashboard_insight(db_path=db, user_id=legacy_id)
+    assert legacy_insight == {"fatigue": "Green"}
+    assert get_dashboard_insight(db_path=db, user_id=None) == legacy_insight
+    assert get_dashboard_insight(db_path=db, user_id="someone-else") is None
 
     user_a = "user-a-123"
     save_dashboard_insight('{"fatigue": "Red"}', db, user_id=user_a)
@@ -1034,7 +1042,11 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
 
     init_db(db)
 
-    from database import get_deep_correlation, save_deep_correlation
+    from database import (
+        get_deep_correlation,
+        get_legacy_user_id,
+        save_deep_correlation,
+    )
 
     user_a = "user-a-123"
     save_deep_correlation("Correlation A", db, user_id=user_a)
@@ -1047,8 +1059,12 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
     # Users don't see each other's correlations
     assert get_deep_correlation(db_path=db, user_id=user_a) == "Correlation A"
 
-    # None user_id returns None (no matching row)
-    assert get_deep_correlation(db_path=db, user_id=None) is None
+    # The migrated singleton row belongs to the legacy placeholder tenant only;
+    # the implicit local-mode default resolves to that same tenant.
+    legacy_id = get_legacy_user_id(db)
+    assert get_deep_correlation(db_path=db, user_id=legacy_id) == "Old insight"
+    assert get_deep_correlation(db_path=db, user_id=None) == "Old insight"
+    assert get_deep_correlation(db_path=db, user_id="someone-else") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1427,7 +1443,13 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             assert conn.execute(query).fetchall() == [(legacy_user_id,)], table
             assert _user_id_is_indexed_first(conn, table), table
 
-        for table in ("user_api_keys", "user_preferences", "programmes"):
+        for table in (
+            "user_api_keys",
+            "user_preferences",
+            "programmes",
+            "hevy_connections",
+            "user_sessions",
+        ):
             assert _user_id_is_indexed_first(conn, table), table
 
         index_names = {
@@ -1447,6 +1469,7 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             "idx_check_ins_user",
             "idx_programmes_user_active",
             "idx_hevy_routines_user",
+            "idx_hevy_connections_user",
         } <= index_names
 
         routine = conn.execute(
@@ -1459,6 +1482,53 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
         assert state == (3, "Synthetic Legacy Split")
 
 
+def test_complete_legacy_schema_is_adopted_by_the_first_account_only(
+    tmp_path: Any,
+) -> None:
+    """Single-user rows reach exactly the account the operator names, via the real upgrade."""
+    from pathlib import Path
+
+    from cryptography.fernet import Fernet
+
+    from tools.backup_restore import Keyring
+    from tools.legacy_data_migration import migrate
+
+    db = _db(tmp_path)
+    _create_pre_multi_tenant_schema(db)
+    init_db(db)
+    owner = get_or_create_user("owner@example.invalid", "Owner", db_path=db)["id"]
+
+    evidence = migrate(
+        Path(db),
+        target_user_id=owner,
+        backup_output=tmp_path / "pre-migration.wab",
+        keyring=Keyring(keys={"test": Fernet.generate_key()}, active_key_id="test"),
+    )
+    new_account = get_or_create_user("new@example.invalid", "New", db_path=db)["id"]
+
+    assert evidence["status"] == "migrated"
+    assert evidence["rows_reassigned"] == 12  # one synthetic row per pre-tenant table
+    assert evidence["retained_default_rows"] == {}
+    assert get_recent_hevy_logs(db_path=db, user_id=owner) == [{"synthetic": True}]
+    assert [row["focus"] for row in get_daily_logs(db_path=db, user_id=owner)] == [
+        "Synthetic focus"
+    ]
+    assert get_current_day(db, user_id=owner) == 3
+    assert get_programme_start_date(db, user_id=owner).isoformat() == "2030-01-01"
+    assert get_routine_record("synthetic-routine", db, user_id=owner) == (
+        "routine-1",
+        "hash-1",
+    )
+    assert get_reasoning_log("synthetic-context", db, user_id=owner) is not None
+    # An account created after the migration sees none of the legacy records.
+    assert get_recent_hevy_logs(db_path=db, user_id=new_account) == []
+    assert get_daily_logs(db_path=db, user_id=new_account) == []
+    assert get_body_metrics(db_path=db, user_id=new_account) == []
+    assert get_current_day(db, user_id=new_account) == 1
+    assert get_routine_record("synthetic-routine", db, user_id=new_account) is None
+    assert get_reasoning_log("synthetic-context", db, user_id=new_account) is None
+
+
 def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
     """Partially applied tenant migrations are completed on the next init."""
     import sqlite3
@@ -1467,6 +1537,15 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
     init_db(db)
 
     with sqlite3.connect(db, timeout=10) as conn:
+        # A database written by a release from before the owner guards existed
+        # has no such triggers and may hold unowned rows. Model that state by
+        # removing the guards; the next init_db must repair the rows and then
+        # reinstall them.
+        for (guard,) in conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'trigger' AND name LIKE '%owner_required%'"
+        ).fetchall():
+            conn.execute(f'DROP TRIGGER "{guard}"')
         conn.execute("DROP TABLE exercise_progress")
         conn.execute(
             """
@@ -1568,6 +1647,19 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
             "idx_daily_log_user_date",
         } <= daily_log_indexes
 
+        # Repair is followed by the guards, so the table cannot regress to
+        # holding unowned rows again.
+        installed_guards = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'trigger' AND name LIKE '%owner_required%'"
+            ).fetchall()
+        }
+        for table in USER_OWNED_TABLES:
+            assert f"trg_{table}_owner_required_insert" in installed_guards
+            assert f"trg_{table}_owner_required_update" in installed_guards
+
 
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
     db = _db(tmp_path)
@@ -1617,6 +1709,8 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "notifications",
         "user_preferences",
         "programmes",
+        "credential_audit_events",
+        "hevy_connections",
     )
     with sqlite3.connect(db, timeout=10) as conn:
         for table in user_owned_tables:
@@ -1625,3 +1719,81 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
                 (table,),
             ).fetchall()
             assert ("users", "user_id") in foreign_keys, table
+
+
+def test_account_policy_schema_is_added_idempotently_to_a_pre_existing_users_table(
+    tmp_path: Any,
+) -> None:
+    """Issue #753: status/epoch columns and invitations arrive additively.
+
+    A database created before the account access policy has a ``users`` table
+    without the new columns. Initialisation must add them with safe defaults,
+    keep every existing account (active, epoch 0), and be repeatable.
+    """
+    import sqlite3
+
+    db = _db(tmp_path)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            """
+            CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
+                display_name TEXT,
+                created_at TEXT NOT NULL,
+                timezone TEXT DEFAULT 'UTC',
+                units TEXT DEFAULT 'metric'
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO users (id, email, created_at) VALUES ('u-old', 'old@example.com', 'x')"
+        )
+
+    init_db(db)
+    init_db(db)  # repeatable
+
+    with sqlite3.connect(db) as conn:
+        columns = {row[1]: row for row in conn.execute("PRAGMA table_info(users)")}
+        assert {"status", "status_changed_at", "session_epoch"} <= set(columns)
+        # NOT NULL with a default, so no existing row can be left without a state.
+        assert columns["status"][3] == 1 and columns["status"][4] == "'active'"
+        assert columns["session_epoch"][3] == 1 and columns["session_epoch"][4] == "0"
+        old = conn.execute(
+            "SELECT status, session_epoch, status_changed_at FROM users WHERE id = 'u-old'"
+        ).fetchone()
+        assert old == ("active", 0, "x")
+        assert conn.execute("SELECT COUNT(*) FROM users WHERE email = 'old@example.com'").fetchone() == (1,)
+
+        # Invitations are operator-owned access records, not tenant data: no
+        # owning user_id, a single FK to the account that accepted them, and at
+        # most one pending invitation per address.
+        invitation_columns = {row[1] for row in conn.execute("PRAGMA table_info(account_invitations)")}
+        assert "user_id" not in invitation_columns and "accepted_user_id" in invitation_columns
+        foreign_keys = {
+            (row[2], row[3], row[4])
+            for row in conn.execute("PRAGMA foreign_key_list(account_invitations)")
+        }
+        assert foreign_keys == {("users", "accepted_user_id", "id")}
+        indexes = {row[1]: row[2] for row in conn.execute("PRAGMA index_list(account_invitations)")}
+        assert indexes["idx_account_invitations_pending_email"] == 1  # unique
+        assert "idx_account_invitations_email_status" in indexes
+
+
+def test_account_policy_epoch_survives_repeated_initialisation(tmp_path: Any) -> None:
+    """Restarting the service must never reset a revocation."""
+    from database import revoke_account_sessions
+
+    db = _db(tmp_path)
+    init_db(db)
+    user = get_or_create_user("epoch@example.com", db_path=db)
+    revoked = revoke_account_sessions(user["id"], db)
+    assert revoked is not None and revoked["session_epoch"] == 1
+
+    init_db(db)
+    init_db(db)
+
+    from database import get_account_state
+
+    state = get_account_state(user["id"], db)
+    assert state is not None and state["session_epoch"] == 1

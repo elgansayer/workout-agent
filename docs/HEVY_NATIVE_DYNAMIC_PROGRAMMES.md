@@ -177,6 +177,8 @@ Show connector status, last successful sync, source freshness and errors. Fetch 
 
 If the account is not Hevy Pro or the API fails, explain the limitation and do not offer a fake inferred programme.
 
+A Hevy credential is verified before it is stored or activated: the check proves the account identity and the minimum read access with bounded requests, and records the connected identity, test time, API version and capability metadata. See [Hevy credential verification](HEVY_CREDENTIALS.md).
+
 ### Step 2: Select routines
 
 The user can:
@@ -725,6 +727,7 @@ Connector requirements:
 
 - typed provider adapter and capabilities;
 - per-user credential ownership;
+- credential verification before activation (identity plus minimum required access, bounded requests);
 - pagination and rate/error handling;
 - incremental cursor for workout events;
 - idempotent upsert/delete processing;

@@ -35,6 +35,8 @@ from programme_inference import infer_programme
 from programme_validator import (
     validate_programme,
 )
+from secret_vault import ResolvedCredential, SecretValue
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "constraints-test-secret-that-is-long-enough"
@@ -156,8 +158,12 @@ def _client(tmp_path: Any, monkeypatch: Any, training_data: HevyTrainingData | N
     monkeypatch.setattr(app_module, "ALLOW_ANONYMOUS_WEB", True)
     monkeypatch.setattr(
         app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {"hevy": {"api_key": "fixture-hevy-key"}},
+        "_vault_credential",
+        lambda user_id, provider, **kwargs: ResolvedCredential(
+            provider="hevy",
+            version=1,
+            api_key=SecretValue("fixture-hevy-key"),
+        ),
     )
     t_data = training_data or _training_data()
     monkeypatch.setattr(
@@ -166,7 +172,17 @@ def _client(tmp_path: Any, monkeypatch: Any, training_data: HevyTrainingData | N
         lambda *args, **kwargs: t_data,
     )
     client = TestClient(app_module.app)
-    client.cookies.set("session", _session_cookie(database.get_legacy_user_id(db_file)))
+    user_id = database.get_legacy_user_id(db_file)
+    session_id = app_module.SESSION_STORE.create(user_id)
+    client.cookies.set(
+        app_module.SESSION_SECURITY.cookie.name,
+        signed_session_cookie(
+            _SECRET,
+            user="athlete@example.test",
+            user_id=user_id,
+            session_id=session_id,
+        ),
+    )
     return client, app_module, db_file
 
 
