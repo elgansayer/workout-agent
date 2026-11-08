@@ -88,6 +88,7 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "deep_correlations",
     "hevy_meta",
     "hevy_connections",
+    "training_rules",
 )
 
 # Tables that carry ``user_id`` but hold transient session-security state, not

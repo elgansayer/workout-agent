@@ -39,6 +39,24 @@ const settingsResponse: SettingsResponse = {
   credential_vault: { available: true, reason: null },
   credential_events: [],
   ai_providers: providers,
+  training_rules: {
+    version: 2,
+    prohibited_exercises: [{ exercise: 'Behind The Neck Press', reason: 'Shoulder impingement' }],
+    substitutions: [
+      { from_exercise: 'Barbell Back Squat', to_exercise: 'Leg Press', reason: 'Knee strain' },
+    ],
+    rep_intensity_bounds: { min_reps: 5, max_reps: 20, max_rpe: 8.5, min_rir: 1.5 },
+    frequency: { max_sessions_per_week: 4, min_rest_days_between_sessions: 1 },
+    volume: { max_sets_per_workout: 18, max_sets_per_exercise: 4 },
+    equipment: {
+      available_equipment: ['barbell', 'dumbbells'],
+      prohibited_equipment: ['smith_machine'],
+    },
+    recovery: { min_sleep_hours: 7.5, min_readiness_score: 65, auto_deload_on_fatigue: true },
+    contextual_notes: [
+      { category: 'joint', note: 'Right shoulder sensitivity', severity: 'warning' },
+    ],
+  },
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
@@ -158,6 +176,83 @@ describe('Settings AI provider parity', () => {
     request.flush('');
     http.expectOne('/api/settings').flush(settingsResponse);
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
+  });
+
+  it('loads and displays structured training rules in the accessible editor', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    expect(component.trainingRules()?.version).toBe(2);
+    expect(component.prohibitedExercises().length).toBe(1);
+    expect(component.prohibitedExercises()[0].exercise).toBe('Behind The Neck Press');
+    expect(component.substitutions().length).toBe(1);
+    expect(component.substitutions()[0].to_exercise).toBe('Leg Press');
+    expect(component.repBounds().min_reps).toBe(5);
+    expect(component.repBounds().max_reps).toBe(20);
+    expect(component.volume().max_sets_per_workout).toBe(18);
+    expect(component.equipment().available).toContain('barbell');
+    expect(component.recovery().min_sleep_hours).toBe(7.5);
+    expect(component.contextualNotes().length).toBe(1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('#rule-version-badge')?.textContent).toContain('v2');
+  });
+
+  it('allows adding and removing prohibited exercises, substitutions, and notes', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.addProhibitedExercise();
+    expect(component.prohibitedExercises().length).toBe(2);
+    component.removeProhibitedExercise(0);
+    expect(component.prohibitedExercises().length).toBe(1);
+
+    component.addSubstitution();
+    expect(component.substitutions().length).toBe(2);
+    component.removeSubstitution(0);
+    expect(component.substitutions().length).toBe(1);
+
+    component.addContextualNote();
+    expect(component.contextualNotes().length).toBe(2);
+    component.removeContextualNote(0);
+    expect(component.contextualNotes().length).toBe(1);
+  });
+
+  it('saves structured training rules via dedicated rules endpoint', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.saveTrainingRules();
+
+    const request = http.expectOne('/api/settings/rules');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.version).toBe(2);
+    expect(request.request.body.prohibited_exercises[0].exercise).toBe('Behind The Neck Press');
+    expect(request.request.body.substitutions[0].from_exercise).toBe('Barbell Back Squat');
+
+    request.flush({
+      status: 'ok',
+      rules: {
+        ...request.request.body,
+        version: 3,
+      },
+    });
+
+    expect(component.rulesStatus()).toContain('Rules saved (v3)');
+    expect(component.trainingRules()?.version).toBe(3);
+  });
+
+  it('includes structured rules in savePreferences profile payload', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.savePreferences();
+
+    const request = http.expectOne('/api/settings/preferences');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.training_rules).toBeDefined();
+    expect(request.request.body.training_rules.version).toBe(2);
+    expect(request.request.body.training_rules.rep_intensity_bounds.min_reps).toBe(5);
+    request.flush({ status: 'ok' });
   });
 
   it('verifies the stored Hevy credential without submitting a key', async () => {

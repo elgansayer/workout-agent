@@ -366,6 +366,34 @@ def test_validator_runs_on_activation_and_blocks(tmp_path: Any, monkeypatch: Any
     assert "Permitted remediation:" in err_detail
 
 
+def test_structured_rules_block_activation_with_readable_detail(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """A prohibited exercise from structured rules blocks activation with a string detail."""
+    client, _app, db_file = _client(tmp_path, monkeypatch)
+    legacy_uid = database.get_legacy_user_id(db_file)
+    database.save_training_rules(
+        legacy_uid,
+        {
+            "version": 1,
+            "prohibited_exercises": [{"exercise": "Bench Press", "reason": "Shoulder"}],
+        },
+        db_path=db_file,
+    )
+
+    preview_res = client.post("/api/programmes/preview", json=_payload())
+    preview = preview_res.json()["preview"]
+    assert any("prohibited exercise 'Bench Press'" in v for v in preview["blocking_violations"])
+
+    activate_res = client.post(
+        "/api/programmes/activate",
+        json={**_payload(), "preview_token": preview["preview_token"]},
+    )
+    assert activate_res.status_code == 422
+    assert "Activation blocked by training rules" in activate_res.json()["detail"]
+    assert "Bench Press" in activate_res.json()["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Acceptance Criterion 2: Blocking violations identify exercise, prescription, rule, remediation
 # ---------------------------------------------------------------------------

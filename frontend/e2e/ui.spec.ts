@@ -463,10 +463,10 @@ test('navigation, list paging and settings sections work with keyboard focus', a
   await page.getByRole('button', { name: 'AI coach', exact: true }).click();
   await expect(page.locator('#settings-ai')).toBeVisible();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await page.getByLabel('Constraints (optional)').fill('Synthetic preference');
+  await page.getByLabel('Constraints Notes (optional free-text)').fill('Synthetic preference');
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await expect(page.getByLabel('Constraints (optional)')).toHaveValue('Synthetic preference');
+  await expect(page.getByLabel('Constraints Notes (optional free-text)')).toHaveValue('Synthetic preference');
   await page.getByRole('button', { name: 'Notifications', exact: true }).click();
   await expect(
     page.getByText('Push notifications are not available on this server.'),

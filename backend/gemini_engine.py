@@ -18,6 +18,11 @@ from program import (
     day_focus,
     format_day,
 )
+from training_rules import (
+    StructuredTrainingRules,
+    enforce_rules_on_plan_text,
+    format_rules_for_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,10 +51,12 @@ def _build_prompt(
     history: dict[str, dict[str, Any]] | None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
 ) -> str:
     baseline = format_day(day, block)
     focus = day_focus(day)
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    coaching_rules_str = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    structured_rules_str = format_rules_for_prompt(rules)
     workout_text = workout_summary.as_text() if workout_summary else "None available."
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
     history_text = _format_history(history)
@@ -70,7 +77,9 @@ in Block {block.number}: {block.name} ({block.focus}).
 Today is Day {day}: {focus}.
 
 Coaching rules you must always respect:
-{rules}
+{coaching_rules_str}
+
+{structured_rules_str}
 
 The baseline plan for today (already block-adjusted) is:
 {baseline}
@@ -134,6 +143,7 @@ def generate_next_workout(
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error.
@@ -142,6 +152,13 @@ def generate_next_workout(
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
     """
+    effective_rules = rules or _kwargs.get("rules")
+    rules_obj = (
+        StructuredTrainingRules.from_raw(effective_rules)
+        if effective_rules
+        else None
+    )
+
     try:
         prompt = _build_prompt(
             day,
@@ -152,15 +169,26 @@ def generate_next_workout(
             history,
             insights,
             last_plan,
+            rules=rules_obj,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
+            if rules_obj:
+                enforced, _ = enforce_rules_on_plan_text(
+                    text, rules_obj, recovery=recovery
+                )
+                return enforced
             return text
         logger.warning("AI provider returned an empty response; using baseline plan.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
-    return _fallback_plan(day, week, block)
+    fallback = _fallback_plan(day, week, block)
+    if rules_obj:
+        fallback, _ = enforce_rules_on_plan_text(
+            fallback, rules_obj, recovery=recovery
+        )
+    return fallback
 
 
 def _fallback_plan(day: int, week: int, block: Block) -> str:
@@ -171,8 +199,12 @@ def _fallback_plan(day: int, week: int, block: Block) -> str:
     return "\n".join(lines)
 
 
-def _build_rest_prompt(recovery: dict[str, Any] | None) -> str:
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+def _build_rest_prompt(
+    recovery: dict[str, Any] | None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
+) -> str:
+    rules_str = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    structured_rules_str = format_rules_for_prompt(rules)
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
 
     return f"""You are an elite bodybuilding and stage-prep coach for Elgan.
@@ -180,7 +212,9 @@ def _build_rest_prompt(recovery: dict[str, Any] | None) -> str:
 Today is a scheduled rest day in his 6-day "{SPLIT_NAME}".
 
 Coaching rules you must always respect:
-{rules}
+{rules_str}
+
+{structured_rules_str}
 
 Recovery metrics from Health Connect (sleep, bodyweight, resting heart rate):
 {recovery_json}
@@ -198,6 +232,7 @@ Use British English. Never use the em dash."""
 def generate_rest_day_message(
     provider: AIProvider,
     recovery: dict[str, Any] | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error.
@@ -206,8 +241,9 @@ def generate_rest_day_message(
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
     """
+    effective_rules = rules or _kwargs.get("rules")
     try:
-        prompt = _build_rest_prompt(recovery)
+        prompt = _build_rest_prompt(recovery, rules=effective_rules)
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
@@ -237,8 +273,10 @@ def _build_checkin_prompt(
     workouts_done: int,
     weeks: int,
     analysis_text: str,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
 ) -> str:
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    rules_str = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    structured_rules_str = format_rules_for_prompt(rules)
     return f"""You are an elite powerbuilding and stage-prep coach for Elgan.
 
 This is programme check-in number {number}. He has logged {workouts_done}
@@ -246,7 +284,9 @@ sessions over the last {weeks} weeks, and is in Week {week} of 12, Block
 {block.number}: {block.name} ({block.focus}).
 
 Coaching rules you must always respect:
-{rules}
+{rules_str}
+
+{structured_rules_str}
 
 Here is the data: planned targets versus what he actually logged this block.
 {analysis_text}
@@ -272,6 +312,8 @@ def generate_checkin_message(
     weeks: int,
     analysis_text: str,
     fallback: str,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    **_kwargs: Any,
 ) -> str:
     """Generate a periodic check-in message, falling back on error.
 
@@ -279,6 +321,7 @@ def generate_checkin_message(
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
     """
+    effective_rules = rules or _kwargs.get("rules")
     try:
         prompt = _build_checkin_prompt(
             number,
@@ -287,6 +330,7 @@ def generate_checkin_message(
             workouts_done,
             weeks,
             analysis_text,
+            rules=effective_rules,
         )
         text = str(provider.generate(prompt)).strip()
         if text:

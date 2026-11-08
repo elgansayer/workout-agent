@@ -1709,6 +1709,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "notifications",
         "user_preferences",
         "programmes",
+        "training_rules",
         "credential_audit_events",
         "hevy_connections",
     )
@@ -1719,6 +1720,49 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
                 (table,),
             ).fetchall()
             assert ("users", "user_id") in foreign_keys, table
+
+
+def test_training_rules_multi_tenant_isolation_and_versioning(tmp_path: Any) -> None:
+    """Structured training rules are strictly isolated per user and version bumped."""
+    from database import (
+        get_or_create_user,
+        get_training_rules,
+        save_training_rules,
+        save_user_preferences,
+    )
+
+    db = _db(tmp_path)
+    init_db(db)
+
+    u1 = get_or_create_user("u1@example.com", db_path=db)["id"]
+    u2 = get_or_create_user("u2@example.com", db_path=db)["id"]
+
+    # 1. Legacy free-text migration
+    save_user_preferences(u1, constraints=["Bad shoulder - no overhead press"], db_path=db)
+    u1_migrated = get_training_rules(u1, db_path=db)
+    assert u1_migrated["version"] == 1
+    assert len(u1_migrated["contextual_notes"]) == 1
+    assert "Bad shoulder" in u1_migrated["contextual_notes"][0]["note"]
+
+    # 2. Save structured rules for u1
+    u1_rules = {
+        "version": 1,
+        "prohibited_exercises": [{"exercise": "Behind The Neck Press", "reason": "Shoulder impingement"}],
+        "rep_intensity_bounds": {"min_reps": 6, "max_reps": 12},
+    }
+    saved_1 = save_training_rules(u1, u1_rules, db_path=db)
+    assert saved_1["version"] == 1
+    assert saved_1["prohibited_exercises"][0]["exercise"] == "Behind The Neck Press"
+
+    # Save again bumps version
+    saved_2 = save_training_rules(u1, u1_rules, db_path=db)
+    assert saved_2["version"] == 2
+
+    # 3. u2 is completely isolated
+    u2_rules = get_training_rules(u2, db_path=db)
+    assert u2_rules["version"] == 1
+    assert u2_rules["prohibited_exercises"] == []
+    assert u2_rules["contextual_notes"] == []
 
 
 def test_account_policy_schema_is_added_idempotently_to_a_pre_existing_users_table(

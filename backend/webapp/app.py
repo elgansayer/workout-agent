@@ -77,6 +77,7 @@ from database import (
     get_recent_bests,
     get_recent_hevy_logs,
     get_session_volumes,
+    get_training_rules,
     get_unread_notification_count,
     get_user_api_keys,
     get_user_by_id,
@@ -89,6 +90,7 @@ from database import (
     save_notification,
     save_push_subscription,
     save_reasoning_log,
+    save_training_rules,
     save_user_preferences,
     set_active_programme,
     set_meta,
@@ -146,6 +148,10 @@ from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from tenancy import implicit_single_user_allowed
 from tenant_isolation import OwnerIdentity, OwnershipError, owner_scoped_key
+from training_rules import (
+    StructuredTrainingRules,
+    format_rules_for_prompt,
+)
 
 from webapp import ai_widgets, charts
 from webapp.session_security import (
@@ -1111,6 +1117,21 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
+def _blocking_violation_detail(violation: Any) -> str:
+    """Render a blocking violation for an API error, accepting both shapes.
+
+    Deterministic profile validation emits structured dicts; structured training
+    rules emit plain-text messages. Both must produce a readable 422 detail.
+    """
+    if isinstance(violation, dict):
+        return (
+            f"Activation blocked by profile constraint: {violation['exercise']} "
+            f"({violation['prescription']}) violates '{violation['rule']}'. "
+            f"Permitted remediation: {violation['permitted_remediation']}"
+        )
+    return f"Activation blocked by training rules: {violation}"
+
+
 @app.post("/api/programmes/preview")
 def preview_programme(
     payload: ProgrammePreviewRequest,
@@ -1123,6 +1144,8 @@ def preview_programme(
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
     profile_rules = prefs.get("constraints")
+    if not payload.rules:
+        payload.rules = get_training_rules(user_id, DB_PATH)
     try:
         preview = build_programme_preview(
             training_data,
@@ -1146,6 +1169,8 @@ def activate_programme(
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
+    if not payload.rules:
+        payload.rules = get_training_rules(user_id, DB_PATH)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
@@ -1160,14 +1185,9 @@ def activate_programme(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if preview.get("blocking_violations"):
-        first = preview["blocking_violations"][0]
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Activation blocked by profile constraint: {first['exercise']} "
-                f"({first['prescription']}) violates '{first['rule']}'. "
-                f"Permitted remediation: {first['permitted_remediation']}"
-            ),
+            detail=_blocking_violation_detail(preview["blocking_violations"][0]),
         )
 
     if preview["preview_token"] != payload.preview_token:
@@ -1278,14 +1298,9 @@ async def select_programme(request: Request) -> JSONResponse:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     if preview.get("blocking_violations"):
-        first = preview["blocking_violations"][0]
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Activation blocked by profile constraint: {first['exercise']} "
-                f"({first['prescription']}) violates '{first['rule']}'. "
-                f"Permitted remediation: {first['permitted_remediation']}"
-            ),
+            detail=_blocking_violation_detail(preview["blocking_violations"][0]),
         )
 
     set_active_programme(
@@ -1593,6 +1608,8 @@ Conversation so far:
 
 User's question: {q}"""
     else:
+        rules = get_training_rules(user_id, DB_PATH)
+        rules_text = format_rules_for_prompt(rules)
         context = json.dumps(
             {
                 "logs": logs,
@@ -1615,6 +1632,8 @@ Important constraints:
 - Reference specific numbers, dates, and exercises from the context.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use British English.
+
+{rules_text}
 
 Conversation so far:
 {conversation_text}
@@ -1979,6 +1998,15 @@ async def save_preferences(request: Request) -> dict[str, Any]:
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
 
+    training_rules_payload = body.get("training_rules")
+    if training_rules_payload is not None:
+        try:
+            StructuredTrainingRules.from_raw(training_rules_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400, detail=f"Invalid training rules: {exc}"
+            )
+
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
@@ -1988,6 +2016,7 @@ async def save_preferences(request: Request) -> dict[str, Any]:
         preferred_ai=preferred_ai,
         ai_model=ai_model,
         custom_rules=body.get("custom_rules"),
+        training_rules=training_rules_payload,
         db_path=DB_PATH,
     )
 
@@ -2004,6 +2033,28 @@ async def save_preferences(request: Request) -> dict[str, Any]:
                 response["blocking_violations"] = val.blocking_violations
 
     return response
+
+
+@app.get("/api/settings/rules")
+def get_user_training_rules(request: Request) -> JSONResponse:
+    """Return the current user's versioned structured training rules."""
+    user_id = _check_api_auth(request)
+    rules = get_training_rules(user_id, DB_PATH)
+    return JSONResponse(jsonable_encoder(rules))
+
+
+@app.post("/api/settings/rules")
+async def save_user_training_rules(request: Request) -> JSONResponse:
+    """Validate and save user's structured training rules."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    body = await request.json()
+    try:
+        validated = StructuredTrainingRules.model_validate(body)
+        saved = save_training_rules(user_id, validated, DB_PATH)
+        return JSONResponse(jsonable_encoder({"status": "ok", "rules": saved}))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid training rules: {exc}")
 
 
 @app.post("/api/settings/push-subscribe")
@@ -2532,6 +2583,7 @@ def api_settings(request: Request):
         jsonable_encoder(
             {
                 "user_prefs": prefs,
+                "training_rules": get_training_rules(user_id, DB_PATH),
                 "user_keys": user_keys,
                 "hevy_connection": hevy_connection_payload,
                 "ai_providers": ai_providers,

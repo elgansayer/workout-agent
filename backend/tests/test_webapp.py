@@ -883,25 +883,25 @@ def test_rag_prompt_only_claims_server_verified_sources(
 # -- settings API-key CRUD ---------------------------------------------
 
 
-def _call_json_route(
-    app_module: Any,
-    handler: Any,
-    payload: dict[str, Any],
+def _make_auth_request(
+    method: str,
+    path: str,
+    *,
+    body: dict[str, Any] | None = None,
     user_id: str,
 ) -> Any:
     from starlette.requests import Request
 
-    app_module._RATE_LIMITS.clear()
-    body = json.dumps(payload).encode()
+    raw_body = json.dumps(body or {}).encode() if body is not None else b""
 
     async def receive() -> dict[str, Any]:
-        return {"type": "http.request", "body": body, "more_body": False}
+        return {"type": "http.request", "body": raw_body, "more_body": False}
 
-    request = Request(
+    return Request(
         {
             "type": "http",
-            "method": "POST",
-            "path": f"/api/settings/{handler.__name__}",
+            "method": method,
+            "path": path,
             "headers": [],
             "query_string": b"",
             "client": ("testclient", 50000),
@@ -911,7 +911,126 @@ def _call_json_route(
         },
         receive,
     )
+
+
+def _call_json_route(
+    app_module: Any,
+    handler: Any,
+    payload: dict[str, Any],
+    user_id: str,
+) -> Any:
+    import asyncio
+
+    app_module._RATE_LIMITS.clear()
+    request = _make_auth_request(
+        "POST",
+        f"/api/settings/{handler.__name__}",
+        body=payload,
+        user_id=user_id,
+    )
     return asyncio.run(handler(request))
+
+
+def test_structured_rules_crud_and_tenant_isolation(client: Any) -> None:
+    """Rules support all 8 categories, are validated, versioned, and tenant-isolated."""
+    import webapp.app as app_module
+    from database import get_legacy_user_id, get_or_create_user
+    from fastapi import HTTPException
+
+    user_a = get_legacy_user_id(app_module.DB_PATH)
+    user_b_row = get_or_create_user("user_b@example.com", db_path=app_module.DB_PATH)
+    user_b = user_b_row["id"] if isinstance(user_b_row, dict) else user_b_row.id
+
+    # 1. GET /api/settings/rules for User A returns defaults
+    request_a = _make_auth_request("GET", "/api/settings/rules", user_id=user_a)
+    resp_a = app_module.get_user_training_rules(request_a)
+    rules_a = json.loads(resp_a.body.decode())
+    assert rules_a["version"] == 1
+    assert rules_a["prohibited_exercises"] == []
+
+    # 2. POST /api/settings/rules saves and increments version
+    valid_payload = {
+        "version": 1,
+        "prohibited_exercises": [
+            {"exercise": "Behind The Neck Press", "reason": "Shoulder impingement"}
+        ],
+        "substitutions": [
+            {
+                "from_exercise": "Barbell Back Squat",
+                "to_exercise": "Leg Press",
+                "reason": "Knee strain",
+            }
+        ],
+        "rep_intensity_bounds": {
+            "min_reps": 6,
+            "max_reps": 12,
+            "max_rpe": 8.5,
+            "min_rir": 1.5,
+        },
+        "frequency": {
+            "max_sessions_per_week": 4,
+            "min_rest_days_between_sessions": 1,
+        },
+        "volume": {"max_sets_per_workout": 16, "max_sets_per_exercise": 4},
+        "equipment": {
+            "available_equipment": ["barbell", "dumbbells"],
+            "prohibited_equipment": ["smith_machine"],
+        },
+        "recovery": {
+            "min_sleep_hours": 7.5,
+            "min_readiness_score": 65,
+            "auto_deload_on_fatigue": True,
+        },
+        "contextual_notes": [
+            {
+                "category": "joint",
+                "note": "Right shoulder sensitivity",
+                "severity": "warning",
+            }
+        ],
+    }
+    request_save_a = _make_auth_request(
+        "POST", "/api/settings/rules", body=valid_payload, user_id=user_a
+    )
+    save_resp = asyncio.run(app_module.save_user_training_rules(request_save_a))
+    save_data = json.loads(save_resp.body.decode())
+    assert save_data["status"] == "ok"
+    assert save_data["rules"]["version"] == 1
+    assert (
+        save_data["rules"]["prohibited_exercises"][0]["exercise"]
+        == "Behind The Neck Press"
+    )
+
+    # Subsequent save increments version
+    save_resp_2 = asyncio.run(app_module.save_user_training_rules(request_save_a))
+    save_data_2 = json.loads(save_resp_2.body.decode())
+    assert save_data_2["rules"]["version"] == 2
+
+    # 3. Multi-tenancy: User B's rules remain isolated and unaffected
+    request_b = _make_auth_request("GET", "/api/settings/rules", user_id=user_b)
+    resp_b = app_module.get_user_training_rules(request_b)
+    rules_b = json.loads(resp_b.body.decode())
+    assert rules_b["prohibited_exercises"] == []
+    assert rules_b["version"] == 1
+
+    # 4. Validation error: conflicting equipment or invalid rep bounds returns 400
+    invalid_payload = {
+        "version": 2,
+        "rep_intensity_bounds": {"min_reps": 15, "max_reps": 8},
+    }
+    request_invalid = _make_auth_request(
+        "POST", "/api/settings/rules", body=invalid_payload, user_id=user_a
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(app_module.save_user_training_rules(request_invalid))
+    assert exc_info.value.status_code == 400
+
+    # 5. GET /api/settings includes training_rules
+    settings_req = _make_auth_request("GET", "/api/settings", user_id=user_a)
+    settings_resp = app_module.api_settings(settings_req)
+    settings_data = json.loads(settings_resp.body.decode())
+    assert "training_rules" in settings_data
+    assert settings_data["training_rules"]["version"] == 2
 
 
 def test_settings_credential_lifecycle_is_masked_and_audited(

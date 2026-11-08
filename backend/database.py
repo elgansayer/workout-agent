@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
+    from training_rules import StructuredTrainingRules
 
 
 class UserRow(TypedDict):
@@ -94,6 +95,7 @@ USER_OWNED_TABLES = (
     "push_subscriptions",
     "programmes",
     "hevy_connections",
+    "training_rules",
 )
 
 
@@ -524,6 +526,16 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON programmes (user_id, active)"
         )
 
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS training_rules (
+                user_id TEXT PRIMARY KEY REFERENCES users(id),
+                version INTEGER NOT NULL DEFAULT 1,
+                rules_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL DEFAULT ''
+            )
+            """,
+        )
         # Verified Hevy connection metadata. Holds no credential material,
         # only the connected account identity, the last test time, the API
         # version and the capabilities the credential was proven to have.
@@ -544,6 +556,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 UNIQUE(user_id, provider)
             )
             """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_training_rules_user "
+            "ON training_rules (user_id)"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_hevy_connections_user "
@@ -3063,6 +3079,7 @@ def save_user_preferences(
     preferred_ai: str | None = None,
     ai_model: str | None = None,
     custom_rules: list[str] | None = None,
+    training_rules: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
     """Save or update a user's training preferences."""
@@ -3099,6 +3116,106 @@ def save_user_preferences(
             ),
         )
 
+    if training_rules is not None:
+        save_training_rules(user_id, training_rules, db_path=db_path)
+
+
+def get_training_rules(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Return the user's structured training rules, migrating legacy constraints if needed."""
+    from training_rules import StructuredTrainingRules
+
+    try:
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT version, rules_json, updated_at
+                FROM training_rules
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        return StructuredTrainingRules(version=1).model_dump()
+
+    if row:
+        try:
+            data = json.loads(row[1]) if row[1] else {}
+            data["version"] = row[0]
+            data["updated_at"] = row[2]
+            return StructuredTrainingRules.model_validate(data).model_dump()
+        except (ValueError, TypeError, json.JSONDecodeError):
+            logger.warning(
+                "Failed to deserialize training_rules for %s; regenerating default.",
+                user_id,
+            )
+
+    # Check for legacy free-text constraints in user_preferences to migrate
+    try:
+        with _connect(db_path) as conn:
+            pref_row = conn.execute(
+                "SELECT constraints FROM user_preferences WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            if pref_row and pref_row[0]:
+                try:
+                    legacy = json.loads(pref_row[0])
+                    if isinstance(legacy, list):
+                        migrated = StructuredTrainingRules.from_raw(legacy)
+                        return migrated.model_dump()
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    logger.debug("Could not parse legacy constraints for %s", user_id)
+    except sqlite3.OperationalError:
+        pass
+
+    return StructuredTrainingRules(version=1).model_dump()
+
+
+def save_training_rules(
+    user_id: str,
+    rules_input: dict[str, Any] | StructuredTrainingRules,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Save or update structured training rules for a user with version bump."""
+    from datetime import UTC, datetime
+
+    from training_rules import StructuredTrainingRules
+
+    rules_obj = (
+        rules_input
+        if isinstance(rules_input, StructuredTrainingRules)
+        else StructuredTrainingRules.model_validate(rules_input)
+    )
+
+    now = datetime.now(tz=UTC).isoformat()
+    with _connect(db_path) as conn:
+        existing = conn.execute(
+            "SELECT version FROM training_rules WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        next_version = (existing[0] + 1) if existing else max(1, rules_obj.version)
+        rules_obj.version = next_version
+
+        dump = rules_obj.model_dump()
+        rules_json = json.dumps(dump)
+
+        conn.execute(
+            """
+            INSERT INTO training_rules (user_id, version, rules_json, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                version = excluded.version,
+                rules_json = excluded.rules_json,
+                updated_at = excluded.updated_at
+            """,
+            (user_id, next_version, rules_json, now),
+        )
+
+    dump["updated_at"] = now
+    return dump
+
 
 def get_user_preferences(
     user_id: str,
@@ -3125,8 +3242,9 @@ def get_user_preferences(
             (user_id,),
         ).fetchone()
     if not row:
+        defaults["training_rules"] = get_training_rules(user_id, db_path)
         return defaults
-    return {
+    res = {
         "goals": json.loads(row[0]) if row[0] else [],
         "constraints": json.loads(row[1]) if row[1] else [],
         "experience_level": row[2] or "intermediate",
@@ -3135,6 +3253,8 @@ def get_user_preferences(
         "ai_model": row[5],
         "custom_rules": json.loads(row[6]) if row[6] else [],
     }
+    res["training_rules"] = get_training_rules(user_id, db_path)
+    return res
 
 
 def save_push_subscription(

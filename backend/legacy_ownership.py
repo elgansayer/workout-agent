@@ -100,6 +100,7 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("push_subscriptions", ("endpoint",)),
     OwnedTable("programmes", ("template_key",), single_active=True),
     OwnedTable("hevy_connections", ("provider",)),
+    OwnedTable("training_rules", ()),
 )
 
 

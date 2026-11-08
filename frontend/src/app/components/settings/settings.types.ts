@@ -98,6 +98,7 @@ export interface UserPreferences {
   readonly preferred_ai: string;
   readonly ai_model: string | null;
   readonly custom_rules: readonly string[];
+  readonly training_rules?: TrainingRulesData | null;
 }
 
 /** Status of one platform connector. */
@@ -107,6 +108,73 @@ export interface ConnectorInfo {
   readonly state: string;
   readonly message: string;
   readonly authorize_supported: boolean;
+}
+
+/** An exercise that must never be prescribed or performed. */
+export interface ProhibitedExerciseRule {
+  exercise: string;
+  reason?: string;
+}
+
+/** An explicit replacement of one exercise with another. */
+export interface ExerciseSubstitutionRule {
+  from_exercise: string;
+  to_exercise: string;
+  reason?: string;
+}
+
+/** Bounds on repetitions, RPE, RIR and intensity. */
+export interface RepIntensityBoundsRule {
+  min_reps: number | null;
+  max_reps: number | null;
+  max_rpe: number | null;
+  min_rir: number | null;
+}
+
+/** Scheduling and frequency limits. */
+export interface FrequencyRule {
+  max_sessions_per_week: number | null;
+  min_rest_days_between_sessions: number | null;
+}
+
+/** Volume limits. */
+export interface VolumeRule {
+  max_sets_per_workout: number | null;
+  max_sets_per_exercise: number | null;
+}
+
+/** Available and prohibited equipment. */
+export interface EquipmentRule {
+  available_equipment: string[];
+  prohibited_equipment: string[];
+}
+
+/** Recovery and readiness thresholds. */
+export interface RecoveryRule {
+  min_sleep_hours: number | null;
+  min_readiness_score: number | null;
+  auto_deload_on_fatigue: boolean;
+}
+
+/** A contextual medical, joint or general note. */
+export interface ContextualNoteRule {
+  category: string;
+  note: string;
+  severity: string;
+}
+
+/** Versioned, user-owned structured training rules document. */
+export interface TrainingRulesData {
+  version: number;
+  prohibited_exercises?: ProhibitedExerciseRule[];
+  substitutions?: ExerciseSubstitutionRule[];
+  rep_intensity_bounds?: RepIntensityBoundsRule;
+  frequency?: FrequencyRule;
+  volume?: VolumeRule;
+  equipment?: EquipmentRule;
+  recovery?: RecoveryRule;
+  contextual_notes?: ContextualNoteRule[];
+  updated_at?: string | null;
 }
 
 /** The `/api/settings` response. */
@@ -124,4 +192,5 @@ export interface SettingsResponse {
   readonly vapid_public_key: string | null;
   readonly key_status?: string | null;
   readonly pref_status?: string | null;
+  readonly training_rules?: TrainingRulesData | null;
 }
