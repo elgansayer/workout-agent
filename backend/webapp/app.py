@@ -107,7 +107,6 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
 
-
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
 
@@ -1037,7 +1036,14 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
-    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+    active = get_active_programme(user_id, DB_PATH)
+    active_def = (active.get("definition") if active else None) or {}
+    prog_name = active_def.get("name") or "Hypertrophy · Six-day split"
+    spec = active_def.get("programme_spec") or {}
+    prog_goal = spec.get("goal_label") or spec.get("goal") or "hypertrophy"
+
+    prompt = f"""You are Coach, an elite {prog_goal} AI coach embedded in the user's private training dashboard.
+The user's active programme is "{prog_name}".
 You have access to this user's training logs, body composition data, personal records, and programme history.
 
 Your personality:
