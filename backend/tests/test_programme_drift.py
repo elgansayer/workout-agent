@@ -8,7 +8,6 @@ Verifies:
 
 from __future__ import annotations
 
-import base64
 import json
 import re
 from datetime import date
@@ -31,17 +30,10 @@ from canonical_programme import (
     get_canonical_training_data,
     render_documentation_example,
 )
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "drift-test-secret-key-that-is-sufficiently-long"
-
-
-def _session_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
-    )
-    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 def _parse_doc_exercises(text: str) -> dict[str, list[dict[str, str]]]:
@@ -216,7 +208,16 @@ def test_live_pages_produce_canonical_programme(
     monkeypatch.setattr("programme_runtime.local_today", lambda tz: date(2026, 9, 1))
 
     client = TestClient(app_module.app)
-    client.cookies.set("session", _session_cookie(legacy_uid))
+    session_id = app_module.SESSION_STORE.create(legacy_uid)
+    client.cookies.set(
+        app_module.SESSION_SECURITY.cookie.name,
+        signed_session_cookie(
+            _SECRET,
+            user="athlete@example.test",
+            user_id=legacy_uid,
+            session_id=session_id,
+        ),
+    )
 
     # Test Plan endpoint
     plan_resp = client.get("/api/plan")
