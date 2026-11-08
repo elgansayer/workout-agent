@@ -38,16 +38,20 @@ consolidated into this one process — do not add additional sleep loops.
 The unified `scheduler.py` already handles the main loop. To add a new
 recurring job:
 
-1. Add a new dispatch function in `scheduler.py` (e.g. `_run_connector_sync()`)
-   following the existing pattern of `_run_coaching()` / `_run_insight_job()`.
-2. If the job is per-user, accept a `user_id` parameter and wrap each user
-   dispatch in a try/except for failure isolation.
-3. Wire it into `run_scheduler()`'s main loop at the appropriate cadence
+1. Add a new dispatch function in `scheduler.py` (e.g. `run_connector_sync()`)
+   following the existing pattern of `run_coaching()` / `run_daily_insight()`.
+2. If the job is per-user, accept an `OwnerIdentity` and dispatch it through
+   `scheduler._run_per_owner`, which runs each user as an `OwnedJob` via
+   `tenant_isolation.run_owned_job`. That re-authorizes the owner against the
+   user store immediately before the job runs, takes a per-owner lock and
+   contains the failure. Never trust a user id from a flag, environment
+   variable or queued payload without that check (`docs/TENANT_ISOLATION.md`).
+3. Wire it into `run_schedule()`'s main loop at the appropriate cadence
    (daily, weekly, per-run-time, etc.).
 4. **Failure isolation between users**: one user's Hevy API being down or
    their AI key being invalid must not stop other users' scheduled runs from
-   executing. Wrap each per-user dispatch in a try/except that logs and
-   continues, matching the connector-level isolation already required by the
+   executing. `run_owned_job` already logs and continues past a failed owner,
+   matching the connector-level isolation required by the
    `connector-integration` skill.
 5. Keep `MODE=once`/`MODE=preview` (manual single-run, dry-run) working —
    they're useful for local dev and CI and shouldn't require the full
