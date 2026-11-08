@@ -12,7 +12,8 @@ sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
 gym.example.com). All motivation is automated; nothing here calls out to an API
 on a page view.
 
-Run locally:   uvicorn webapp.app:app --reload
+Run locally:   APP_ENV=development ALLOW_ANONYMOUS_WEB=1 \
+                   uvicorn webapp.secure_app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 """
 
@@ -106,10 +107,12 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
+from webapp.runtime_security import validate_web_runtime
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+_WEB_RUNTIME = validate_web_runtime()
+_SESSION_LIFETIME_SECONDS = 14 * 24 * 60 * 60
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -315,9 +318,19 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
 # request.session raises an AssertionError -> 500 Internal Server Error.
 # When WEB_AUTH_SECRET is unset we fall back to a per-process random key; this
 # is fine because there is nothing sensitive to protect when auth is off.
+#
+# The cookie is HttpOnly (Starlette default), host-only, SameSite=Lax and bounded
+# to the same 14-day lifetime the CSRF token signer accepts. In production the
+# runtime boundary requires HTTPS, so the cookie is also marked Secure and can
+# never be sent over a plaintext connection.
 app.add_middleware(
     SessionMiddleware,
     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
+    session_cookie="session",
+    max_age=_SESSION_LIFETIME_SECONDS,
+    same_site="lax",
+    https_only=_WEB_RUNTIME.production,
+    path="/",
 )
 
 
