@@ -12,7 +12,8 @@ sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
 gym.example.com). All motivation is automated; nothing here calls out to an API
 on a page view.
 
-Run locally:   uvicorn webapp.app:app --reload
+Run locally:   APP_ENV=development ALLOW_ANONYMOUS_WEB=1 \
+                   uvicorn webapp.secure_app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 """
 
@@ -159,6 +160,7 @@ from training_rules import (
 )
 
 from webapp import ai_widgets, charts
+from webapp.runtime_security import validate_web_runtime
 from webapp.session_security import (
     HardenedSessionMiddleware,
     SessionLifecycle,
@@ -168,6 +170,8 @@ from webapp.session_security import (
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+_WEB_RUNTIME = validate_web_runtime()
+_SESSION_LIFETIME_SECONDS = 14 * 24 * 60 * 60
 
 
 def _vault() -> SecretVault:
@@ -400,6 +404,8 @@ _LOGIN_UNAVAILABLE_URL = "/login?error=unavailable"
 # Cookie attributes, idle/absolute lifetimes and the server-side session
 # registry. Validated at import so unsafe limits stop startup (issue #752).
 SESSION_SECURITY = load_session_security_config()
+if _WEB_RUNTIME.production and not SESSION_SECURITY.cookie.secure:
+    raise RuntimeError("Production sessions must use Secure cookies.")
 SESSION_STORE = SessionStore(DB_PATH, SESSION_SECURITY.lifetime)
 SESSION_LIFECYCLE = SessionLifecycle(SESSION_STORE)
 
@@ -610,6 +616,10 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
 # When WEB_AUTH_SECRET is unset we fall back to a per-process random key; this
 # is fine because there is nothing sensitive to protect when auth is off.
 #
+# The cookie is HttpOnly (Starlette default), host-only, SameSite=Lax and bounded
+# to the same 14-day lifetime the CSRF token signer accepts. In production the
+# runtime boundary requires HTTPS, so the cookie is also marked Secure and can
+# never be sent over a plaintext connection.
 # HardenedSessionMiddleware is Starlette's SessionMiddleware with a Secure /
 # HttpOnly / SameSite / host-only cookie and a server-side registry: a session
 # is honoured only while it is unexpired (idle and absolute), unrevoked and

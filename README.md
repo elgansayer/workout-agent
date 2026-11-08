@@ -87,14 +87,26 @@ python main.py --preview
 
 ### Web application
 
-Install any web-specific dependencies required by the current branch, then start the FastAPI application using the repository's documented runtime entrypoint or Docker Compose configuration.
+The canonical web entrypoint is `webapp.secure_app:app`. It installs the
+fail-closed authentication, CSRF, cache, proxy-host, and security-header
+boundaries described in `docs/`. Direct `webapp.app:app` imports exist only for
+focused unit tests and must not be used for a deployed process.
 
-A typical local backend invocation is:
+Every backend process must set `APP_ENV` explicitly. For local read-only
+development, opt in to anonymous access deliberately:
 
 ```bash
 pip install -r requirements.txt -r requirements-web.txt
-uvicorn webapp.app:app --host 0.0.0.0 --port 8770
+APP_ENV=development ALLOW_ANONYMOUS_WEB=1 WEB_PUBLIC_URL=http://localhost:8770 \
+  uvicorn webapp.secure_app:app --host 127.0.0.1 --port 8770
 ```
+
+For production, use the Docker image (or `webapp.secure_app:app`) with a complete
+Google login configuration and a canonical HTTPS origin. Startup fails closed
+when `APP_ENV` is missing or unsupported, when authentication is partial, when
+`WEB_AUTH_SECRET` is shorter than 32 characters, or when production omits
+`WEB_PUBLIC_URL`. See `.env.example`, `docs/REVERSE_PROXY_SECURITY.md`, and
+`docs/CSRF_SECURITY.md`.
 
 ### Docker
 
