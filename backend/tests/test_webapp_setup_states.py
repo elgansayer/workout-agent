@@ -8,16 +8,14 @@ disconnected.
 
 from __future__ import annotations
 
-import base64
 import importlib
-import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import database
 import pytest
 from hevy_parser import ExerciseSummary, WorkoutSummary
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 pytest.importorskip("fastapi")
@@ -27,13 +25,6 @@ pytest.importorskip("httpx")
 _SECRET = "setup-state-test-secret-that-is-long-enough"
 
 ACCOUNT_STATES = ("new", "partially_configured", "ready", "stale", "disconnected")
-
-
-def _session_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
-    )
-    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 def _programme_definition(start_date: str) -> dict[str, Any]:
@@ -106,9 +97,12 @@ def db_path(tmp_path: Any) -> str:
 
 
 @pytest.fixture()
-def tenants(db_path: str) -> dict[str, str]:
+def tenants(db_path: str, monkeypatch: Any) -> dict[str, str]:
     """Create one tenant per account state and return their user ids."""
 
+    monkeypatch.setenv(
+        "ENCRYPTION_KEY", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
+    )
     database.init_db(db_path)
     today = datetime.now(tz=timezone.utc).date()
 
@@ -182,7 +176,17 @@ def client(
 
 
 def _sign_in(client: TestClient, user_id: str) -> None:
-    client.cookies.set("session", _session_cookie(user_id))
+    import webapp.app as app_module
+
+    client.cookies.set(
+        "session",
+        signed_session_cookie(
+            _SECRET,
+            user="athlete@example.test",
+            user_id=user_id,
+            session_id=app_module.SESSION_STORE.create(user_id),
+        ),
+    )
 
 
 def _setup(client: TestClient, path: str) -> dict[str, Any]:

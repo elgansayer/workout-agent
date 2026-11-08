@@ -2,6 +2,7 @@ import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { Settings } from './settings';
+import { SettingsResponse } from './settings.types';
 
 const providers = [
   { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-3.8-flash' },
@@ -10,13 +11,15 @@ const providers = [
   { id: 'deepseek', name: 'DeepSeek', default_model: 'deepseek-chat' },
 ];
 
-const settingsResponse = {
+const settingsResponse: SettingsResponse = {
   user_prefs: {
     preferred_ai: 'claude',
     ai_model: 'claude-selected',
     goals: ['strength'],
     experience_level: 'advanced',
     constraints: [],
+    coaching_style: 'direct',
+    custom_rules: [],
   },
   user_keys: {
     hevy: { has_key: false, masked: null, model: null },
@@ -25,11 +28,55 @@ const settingsResponse = {
     openai: { has_key: false, masked: null, model: null },
     deepseek: { has_key: false, masked: null, model: null },
   },
+  hevy_connection: {
+    state: 'not_connected',
+    account_username: null,
+    account_id: null,
+    api_version: null,
+    capabilities: {},
+    tested_at: null,
+  },
+  credential_vault: { available: true, reason: null },
+  credential_events: [],
   ai_providers: providers,
+  training_rules: {
+    version: 2,
+    prohibited_exercises: [{ exercise: 'Behind The Neck Press', reason: 'Shoulder impingement' }],
+    substitutions: [
+      { from_exercise: 'Barbell Back Squat', to_exercise: 'Leg Press', reason: 'Knee strain' },
+    ],
+    rep_intensity_bounds: { min_reps: 5, max_reps: 20, max_rpe: 8.5, min_rir: 1.5 },
+    frequency: { max_sessions_per_week: 4, min_rest_days_between_sessions: 1 },
+    volume: { max_sets_per_workout: 18, max_sets_per_exercise: 4 },
+    equipment: {
+      available_equipment: ['barbell', 'dumbbells'],
+      prohibited_equipment: ['smith_machine'],
+    },
+    recovery: { min_sleep_hours: 7.5, min_readiness_score: 65, auto_deload_on_fatigue: true },
+    contextual_notes: [
+      { category: 'joint', note: 'Right shoulder sensitivity', severity: 'warning' },
+    ],
+  },
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
   vapid_public_key: null,
+};
+
+const connectedHevyResponse: SettingsResponse = {
+  ...settingsResponse,
+  user_keys: {
+    ...settingsResponse.user_keys,
+    hevy: { has_key: true, masked: '••••••••key9', model: null },
+  },
+  hevy_connection: {
+    state: 'connected',
+    account_username: 'lifter42',
+    account_id: 'acct-1',
+    api_version: 'v1',
+    capabilities: { workouts: true, routines: false },
+    tested_at: '2026-11-05T10:00:00+00:00',
+  },
 };
 
 describe('Settings AI provider parity', () => {
@@ -45,10 +92,12 @@ describe('Settings AI provider parity', () => {
 
   afterEach(() => http.verify());
 
-  async function loadSettings(): Promise<ComponentFixture<Settings>> {
+  async function loadSettings(
+    response: SettingsResponse = settingsResponse,
+  ): Promise<ComponentFixture<Settings>> {
     const fixture = TestBed.createComponent(Settings);
     fixture.detectChanges();
-    http.expectOne('/api/settings').flush(settingsResponse);
+    http.expectOne('/api/settings').flush(response);
     await fixture.whenStable();
     fixture.detectChanges();
     return fixture;
@@ -96,6 +145,20 @@ describe('Settings AI provider parity', () => {
     expect(component.hevyKeyInput).toBe('');
   });
 
+
+  it('tests a stored credential through the vault endpoint and refreshes status', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.testKey('hevy');
+
+    const request = http.expectOne('/api/settings/key/test');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.provider).toBe('hevy');
+    request.flush({ status: 'ok', provider: 'hevy', detail: 'Connected.' });
+    http.expectOne('/api/settings').flush(settingsResponse);
+    expect(component.hevyStatus()).toContain('Connected');
+  });
+
   it('explains unsupported notifications instead of silently failing', async () => {
     const fixture = await loadSettings();
     await fixture.componentInstance.subscribeToPush();
@@ -113,5 +176,229 @@ describe('Settings AI provider parity', () => {
     request.flush('');
     http.expectOne('/api/settings').flush(settingsResponse);
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
+  });
+
+  it('loads and displays structured training rules in the accessible editor', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    expect(component.trainingRules()?.version).toBe(2);
+    expect(component.prohibitedExercises().length).toBe(1);
+    expect(component.prohibitedExercises()[0].exercise).toBe('Behind The Neck Press');
+    expect(component.substitutions().length).toBe(1);
+    expect(component.substitutions()[0].to_exercise).toBe('Leg Press');
+    expect(component.repBounds().min_reps).toBe(5);
+    expect(component.repBounds().max_reps).toBe(20);
+    expect(component.volume().max_sets_per_workout).toBe(18);
+    expect(component.equipment().available).toContain('barbell');
+    expect(component.recovery().min_sleep_hours).toBe(7.5);
+    expect(component.contextualNotes().length).toBe(1);
+
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('#rule-version-badge')?.textContent).toContain('v2');
+  });
+
+  it('allows adding and removing prohibited exercises, substitutions, and notes', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.addProhibitedExercise();
+    expect(component.prohibitedExercises().length).toBe(2);
+    component.removeProhibitedExercise(0);
+    expect(component.prohibitedExercises().length).toBe(1);
+
+    component.addSubstitution();
+    expect(component.substitutions().length).toBe(2);
+    component.removeSubstitution(0);
+    expect(component.substitutions().length).toBe(1);
+
+    component.addContextualNote();
+    expect(component.contextualNotes().length).toBe(2);
+    component.removeContextualNote(0);
+    expect(component.contextualNotes().length).toBe(1);
+  });
+
+  it('saves structured training rules via dedicated rules endpoint', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.saveTrainingRules();
+
+    const request = http.expectOne('/api/settings/rules');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.version).toBe(2);
+    expect(request.request.body.prohibited_exercises[0].exercise).toBe('Behind The Neck Press');
+    expect(request.request.body.substitutions[0].from_exercise).toBe('Barbell Back Squat');
+
+    request.flush({
+      status: 'ok',
+      rules: {
+        ...request.request.body,
+        version: 3,
+      },
+    });
+
+    expect(component.rulesStatus()).toContain('Rules saved (v3)');
+    expect(component.trainingRules()?.version).toBe(3);
+  });
+
+  it('includes structured rules in savePreferences profile payload', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.savePreferences();
+
+    const request = http.expectOne('/api/settings/preferences');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body.training_rules).toBeDefined();
+    expect(request.request.body.training_rules.version).toBe(2);
+    expect(request.request.body.training_rules.rep_intensity_bounds.min_reps).toBe(5);
+    request.flush({ status: 'ok' });
+  });
+
+  it('verifies the stored Hevy credential without submitting a key', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({});
+    request.flush({
+      status: 'ok',
+      state: 'connected',
+      account_username: 'lifter42',
+      api_version: 'v1',
+      capabilities: { workouts: true, routines: false },
+      tested_at: '2026-11-05T10:00:00+00:00',
+      workout_count: 42,
+    });
+    http.expectOne('/api/settings').flush(connectedHevyResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.hevyStatus()).toContain('Connected as lifter42');
+    expect(component.hevyStatus()).toContain('API v1');
+  });
+
+  it('reports a rejected Hevy credential instead of a connection', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    request.flush(
+      { detail: 'Hevy rejected this API key. Generate a new key and try again.' },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    expect(component.hevyStatus()).toContain('rejected');
+    expect(component.hevyStatus()).not.toContain('Connected');
+  });
+
+  it('keeps an unverified Hevy key out of storage and reports the rejection', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.hevyKeyInput = 'synthetic-bad-key';
+
+    component.saveKey('hevy');
+
+    const request = http.expectOne('/api/settings/key');
+    expect(request.request.body.provider).toBe('hevy');
+    request.flush(
+      { detail: 'Hevy rejected this API key. Generate a new key and try again.' },
+      { status: 400, statusText: 'Bad Request' },
+    );
+
+    expect(component.hevyStatus()).toContain('rejected');
+    // The rejected credential is not treated as a saved connection.
+    expect(component.hevyKeyInput).toBe('synthetic-bad-key');
+  });
+
+  it('tests a typed Hevy key without storing it', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    component.hevyKeyInput = 'synthetic-candidate-key';
+
+    component.verifyHevy();
+
+    const request = http.expectOne('/api/settings/verify-hevy');
+    expect(request.request.body.api_key).toBe('synthetic-candidate-key');
+    request.flush({
+      status: 'ok',
+      state: 'connected',
+      account_username: 'lifter42',
+      api_version: 'v1',
+      capabilities: { workouts: true },
+      tested_at: '2026-11-05T10:00:00+00:00',
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.hevyStatus()).toContain('Connected as lifter42');
+    // The tested key stays in the form so it can be saved without retyping.
+    expect(component.hevyKeyInput).toBe('synthetic-candidate-key');
+    // Testing a candidate never activates it, so no connection is recorded.
+    expect(component.hevyConnection()?.state).toBe('not_connected');
+  });
+
+  it('shows the verified Hevy account returned by the settings API', async () => {
+    const fixture = await loadSettings(connectedHevyResponse);
+    const element = fixture.nativeElement as HTMLElement;
+    const connection = element.querySelector('#hevy-connection')?.textContent ?? '';
+
+    expect(connection).toContain('lifter42');
+    expect(connection).toContain('API v1');
+    expect(element.querySelector('.status.on')?.textContent).toContain('Connected');
+  });
+
+  it('flags a stored Hevy key that Hevy rejected', async () => {
+    const rejectedResponse: SettingsResponse = {
+      ...connectedHevyResponse,
+      hevy_connection: {
+        ...connectedHevyResponse.hevy_connection,
+        state: 'invalid',
+        account_username: null,
+        tested_at: '2026-11-06T09:00:00+00:00',
+      },
+    };
+    const fixture = await loadSettings(rejectedResponse);
+    const element = fixture.nativeElement as HTMLElement;
+
+    expect(element.querySelector('.status.off')?.textContent).toContain('Needs attention');
+    expect(element.querySelector('#hevy-connection')?.textContent).toContain('rejected');
+  });
+
+  it('flags a stored Hevy key that cannot read workouts', async () => {
+    const scopedResponse: SettingsResponse = {
+      ...connectedHevyResponse,
+      hevy_connection: {
+        ...connectedHevyResponse.hevy_connection,
+        state: 'insufficient_scope',
+        capabilities: { workouts: false },
+      },
+    };
+    const fixture = await loadSettings(scopedResponse);
+    const element = fixture.nativeElement as HTMLElement;
+
+    expect(element.querySelector('.status.off')?.textContent).toContain('Needs attention');
+    expect(element.querySelector('#hevy-connection')?.textContent).toContain('cannot read');
+  });
+
+  it('never describes an unconfirmed Hevy connection as connected', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    expect(
+      component.describeHevyConnection({
+        state: 'invalid',
+        account_username: 'lifter42',
+        account_id: 'acct-1',
+        api_version: 'v1',
+        capabilities: { workouts: true },
+        tested_at: '2026-11-05T10:00:00+00:00',
+      }),
+    ).toContain('Not connected');
   });
 });

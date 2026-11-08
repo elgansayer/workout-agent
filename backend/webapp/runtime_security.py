@@ -36,6 +36,12 @@ class WebRuntimeSecurity:
     authentication_enabled: bool
     anonymous_enabled: bool
 
+    @property
+    def production(self) -> bool:
+        """Whether the validated ``APP_ENV`` is a production environment."""
+
+        return self.environment in _PRODUCTION_ENVIRONMENTS
+
 
 def _value(environ: Mapping[str, str], name: str) -> str:
     return environ.get(name, "").strip()
