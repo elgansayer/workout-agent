@@ -113,6 +113,32 @@ const settings = {
   vapid_public_key: null,
 };
 const payloads: Record<string, unknown> = {
+  '/api/setup/state': {
+    account: {
+      state: 'ready',
+      label: 'Ready',
+      checks: {},
+      missing: [],
+      last_activity_at: '2026-11-01T10:00:00Z',
+      age_days: 7,
+      stale: false,
+    },
+    surfaces: Object.fromEntries(
+      ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'].map((surface) => [
+        surface,
+        {
+          state: 'ready',
+          label: 'Ready',
+          reason: 'Synthetic account setup is complete.',
+          action: null,
+          missing: [],
+          last_activity_at: '2026-11-01T10:00:00Z',
+          age_days: 7,
+          stale: false,
+        },
+      ]),
+    ),
+  },
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
   },
