@@ -1,14 +1,16 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 @Component({
   selector: 'app-progress',
   standalone: true,
-  imports: [ListControls, CommonModule],
+  imports: [ListControls, CommonModule, SetupNotice],
   templateUrl: './progress.html',
   styleUrl: './progress.css',
 })
@@ -20,6 +22,24 @@ export class Progress implements OnInit {
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
   xaiReasoning = signal<{ [key: string]: string }>({});
+  setup = signal<SetupState | null>(null);
+
+  readonly viewState = computed<ViewState>(() =>
+    resolveViewState({
+      loading: this.loading(),
+      error: this.error(),
+      hasData: this.hasData(),
+      stale: this.setup()?.stale ?? false,
+    }),
+  );
+
+  readonly hasData = computed(() => {
+    const data = this.data();
+    if (!data) return false;
+    if ((data.charts?.length ?? 0) > 0) return true;
+    const body = data.body ?? {};
+    return !!(body.weight || body.body_fat || body.muscle || body.resting_hr);
+  });
 
   readonly lifts = new PagedList<any>(
     () => this.data()?.charts ?? [],
@@ -37,6 +57,7 @@ export class Progress implements OnInit {
     this.http.get('/api/progress').subscribe({
       next: (data: any) => {
         this.data.set(data);
+        this.setup.set(data?.setup ?? null);
         this.loading.set(false);
       },
       error: () => {

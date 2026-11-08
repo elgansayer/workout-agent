@@ -102,11 +102,15 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from setup_state import (
+    AccountSetup,
+    build_account_setup,
+    surface_setup_payload,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -179,6 +183,31 @@ def _check_api_auth(request: Request) -> str:
 
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _account_setup(user_id: str) -> AccountSetup:
+    """Derive this tenant's account setup state from their own records."""
+
+    return build_account_setup(
+        user_id=user_id,
+        db_path=DB_PATH,
+        server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+    )
+
+
+def _setup_payload(
+    user_id: str,
+    surface: str,
+    *,
+    programme_status: str | None = None,
+) -> dict[str, Any]:
+    """Return the setup contract for one surface of this tenant."""
+
+    return surface_setup_payload(
+        _account_setup(user_id),
+        surface,
+        programme_status=programme_status,
+    )
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -593,6 +622,15 @@ def _dashboard_context(
     block_progress = week_in_block / block_weeks * 100 if week_in_block else 0
     block_label = str(block.get("name") or "Setup").split(" ")[0]
 
+    setup_payload = (
+        _setup_payload(user_id, "dashboard", programme_status=runtime.status)
+        if user_id
+        else None
+    )
+    coach_setup_payload = (
+        _setup_payload(user_id, "coach") if user_id else None
+    )
+
     return {
         "active": "today",
         "programme_status": runtime.status,
@@ -600,6 +638,8 @@ def _dashboard_context(
         "last_completed_at": runtime.last_completed_at,
         "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
         "setup_required": setup_required,
+        "setup": setup_payload,
+        "coach_setup": coach_setup_payload,
         "active_programme_name": (definition.get("name") if definition else None),
         "quote": _daily_quote(today),
         "week": week,
@@ -656,8 +696,30 @@ def api_checkins(request: Request):
                 )
                 if not checkins
                 else None,
+                "setup": _setup_payload(user_id, "checkins"),
             }
         )
+    )
+
+
+@app.get("/api/setup/state")
+def api_setup_state(request: Request) -> JSONResponse:
+    """Return this tenant's setup state for every surface.
+
+    The navigation shell uses it to show which surfaces still need setup, and
+    the coach uses it to explain why it has nothing to answer from.
+    """
+
+    from setup_state import SURFACE_REQUIREMENTS
+
+    user_id = _check_api_auth(request)
+    account = _account_setup(user_id)
+    surfaces = {
+        surface: surface_setup_payload(account, surface)
+        for surface in sorted(SURFACE_REQUIREMENTS)
+    }
+    return JSONResponse(
+        jsonable_encoder({"account": account.as_dict(), "surfaces": surfaces})
     )
 
 
@@ -991,7 +1053,15 @@ def project_peak(request: Request) -> dict[str, Any]:
 @app.get("/api/chat/history")
 def chat_history(request: Request):
     user_id = _check_api_auth(request)
-    return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "messages": messages,
+                "setup": _setup_payload(user_id, "coach"),
+            }
+        )
+    )
 
 
 @app.post("/api/chat/clear")
@@ -1356,7 +1426,13 @@ def api_progress(request: Request):
             }
         )
     return JSONResponse(
-        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+        jsonable_encoder(
+            {
+                "charts": charts_data,
+                "body": _body_charts(user_id=user_id),
+                "setup": _setup_payload(user_id, "progress"),
+            }
+        )
     )
 
 
@@ -1489,6 +1565,7 @@ def api_stats(request: Request):
                 "ratio_chart": ratio_chart,
                 "projections": projections,
                 "prs": pr_rows,
+                "setup": _setup_payload(user_id, "stats"),
             }
         )
     )
@@ -1499,7 +1576,15 @@ def api_history(request: Request):
     user_id = _check_api_auth(request)
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
     levels = _training_levels(user_id=user_id)
-    return JSONResponse(jsonable_encoder({"logs": logs, "calendar": charts.calendar_heatmap(levels)}))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "logs": logs,
+                "calendar": charts.calendar_heatmap(levels),
+                "setup": _setup_payload(user_id, "history"),
+            }
+        )
+    )
 
 
 @app.get("/api/plan")
@@ -1533,6 +1618,11 @@ def api_plan(request: Request) -> JSONResponse:
                     "analysis": {},
                     "warnings": [],
                     "programme_spec": {},
+                    "setup": _setup_payload(
+                        user_id,
+                        "plan",
+                        programme_status="setup_required",
+                    ),
                 }
             )
         )
@@ -1575,6 +1665,11 @@ def api_plan(request: Request) -> JSONResponse:
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
                 "programme_spec": spec,
+                "setup": _setup_payload(
+                    user_id,
+                    "plan",
+                    programme_status=runtime.status,
+                ),
             }
         )
     )
