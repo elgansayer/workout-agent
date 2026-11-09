@@ -177,6 +177,8 @@ Show connector status, last successful sync, source freshness and errors. Fetch 
 
 If the account is not Hevy Pro or the API fails, explain the limitation and do not offer a fake inferred programme.
 
+A Hevy credential is verified before it is stored or activated: the check proves the account identity and the minimum read access with bounded requests, and records the connected identity, test time, API version and capability metadata. See [Hevy credential verification](HEVY_CREDENTIALS.md).
+
 ### Step 2: Select routines
 
 The user can:
@@ -725,6 +727,7 @@ Connector requirements:
 
 - typed provider adapter and capabilities;
 - per-user credential ownership;
+- credential verification before activation (identity plus minimum required access, bounded requests);
 - pagination and rate/error handling;
 - incremental cursor for workout events;
 - idempotent upsert/delete processing;
@@ -1032,6 +1035,16 @@ These are conservative product guardrails and must remain configurable/versioned
 - constraint violations block activation or require an explicitly defined warning acknowledgement.
 
 Safety-sensitive symptoms, pain or medical constraints should pause or narrow automation and direct the user to appropriate professional advice rather than diagnose.
+
+### 24.1 Structured constraint enforcement
+
+The versioned `StructuredTrainingRules` document is the single source of truth for profile constraints. The shared validator (`backend/programme_validator.py`) consumes it for preview, import, inference, selection, activation, and profile/rule edits.
+
+- Blocking rules: prohibited exercises, mandatory substitutions that have not been applied, rep/RIR/RPE/intensity bounds, per-exercise and per-workout set limits, sessions-per-week limits, and prohibited equipment.
+- Warning rules: contextual notes. Warnings identify the relevant review context but do not block activation by themselves.
+- Stored rules always apply. Request-supplied constraints and rules can only tighten the stored profile; an empty client payload cannot clear them.
+- Editing profile constraints or structured rules revalidates and atomically deactivates a contradictory active programme. The response returns the exact blocking violations with `reconciliation.status = "deactivated_requires_remediation"` so the programme can be remediated and explicitly reactivated.
+- Seeded canonical defaults pass the same validator. If a user's rules contradict the seeded default, activation fails closed instead of persisting a contradicting programme.
 
 ## 25. Testing strategy
 

@@ -20,6 +20,7 @@ import logging
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from hevy_reader import (
     CompletedWorkout,
@@ -27,6 +28,7 @@ from hevy_reader import (
     Routine,
     RoutineExercise,
 )
+from programme_validator import validate_programme
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,9 @@ class InferredProgramme:
 
     # The next routine the user should do (round-robin from their routines).
     next_routine: TrainingDay | None = None
+
+    # Deterministic constraint validation findings.
+    blocking_violations: list[dict[str, Any]] = field(default_factory=list)
 
     def day_titles(self) -> list[str]:
         return [d.title for d in self.training_days]
@@ -285,13 +290,23 @@ def _determine_next_routine(
 # ---------------------------------------------------------------------------
 
 
-def infer_programme(hevy_data: HevyTrainingData) -> InferredProgramme:
+def infer_programme(
+    hevy_data: HevyTrainingData,
+    profile_rules: Any = None,
+    training_rules: Any = None,
+) -> InferredProgramme:
     """Build an InferredProgramme from the user's Hevy training data.
 
     This is the replacement for the static ``program.py``. Everything is
     derived from what the user actually has in their Hevy account.
     """
     programme = InferredProgramme()
+    validation = validate_programme(
+        hevy_data.routines,
+        profile_rules=profile_rules,
+        training_rules=training_rules,
+    )
+    programme.blocking_violations = validation.blocking_violations
 
     # Build training days from routines.
     for routine in hevy_data.routines:

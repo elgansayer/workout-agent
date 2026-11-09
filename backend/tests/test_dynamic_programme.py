@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import date
 from itertools import pairwise
+from typing import Any
 
 import pytest
 from dynamic_programme import (
@@ -142,12 +143,14 @@ def _request(
     goal: str = "general_fitness",
     duration: int = 12,
     selected: list[str] | None = None,
+    rules: dict[str, Any] | None = None,
 ) -> ProgrammePreviewRequest:
     return ProgrammePreviewRequest(
         selected_routine_ids=selected or ["routine-upper", "routine-lower"],
         duration_weeks=duration,
         goal=goal,
         start_date=date(2026, 9, 1),
+        rules=rules,
     )
 
 
@@ -357,3 +360,43 @@ def test_source_drift_ignores_provider_timestamp_only_revision(
 
     assert drift["status"] == "unchanged"
     assert drift["routines"][0]["source_hash"] != drift["routines"][0]["current_hash"]
+
+
+def test_programme_preview_flags_prohibited_exercises(
+    training_data: HevyTrainingData,
+) -> None:
+    rules = {
+        "version": 1,
+        "prohibited_exercises": [{"exercise": "Squat", "reason": "Knee injury"}],
+        "substitutions": [
+            {"from_exercise": "Bench Press", "to_exercise": "Dumbbell Press"}
+        ],
+    }
+    request = _request(rules=rules)
+    preview = build_programme_preview(training_data, request)
+
+    assert len(preview["blocking_violations"]) > 0
+    assert any(
+        v["exercise"] == "Squat"
+        and "Prohibited exercise" in v["rule"]
+        and "Knee injury" in v["rule"]
+        and v["permitted_remediation"]
+        for v in preview["blocking_violations"]
+    )
+    assert any(
+        "Bench Press" in w
+        and "Dumbbell Press" in w
+        and "Permitted remediation" in w
+        for w in preview["warnings"]
+    )
+
+
+
+def test_programme_preview_rejects_invalid_structured_rules(
+    training_data: HevyTrainingData,
+) -> None:
+    rules = {"version": 1, "rep_intensity_bounds": {"min_reps": 15, "max_reps": 8}}
+    request = _request(rules=rules)
+
+    with pytest.raises(ValueError, match="Invalid structured training rules"):
+        build_programme_preview(training_data, request)

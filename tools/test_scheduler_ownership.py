@@ -8,9 +8,11 @@ from tools.check_scheduler_ownership import (
     CONTRACT_DOC,
     REQUIRED_CONTRACT_SECTIONS,
     executable_lines,
+    instruction_fallback_violations,
     scan_repository,
     scan_workflow,
     validate_contract_document,
+    workflow_hardening_violations,
     workflow_triggers,
 )
 
@@ -107,6 +109,9 @@ class WorkflowScanTests(unittest.TestCase):
             "    branches: [main]\n"
             "permissions:\n"
             "  contents: read\n"
+            "concurrency:\n"
+            "  group: required-ci-${{ github.ref }}\n"
+            "  cancel-in-progress: true\n"
             "jobs:\n"
             "  backend:\n"
             "    steps:\n"
@@ -115,10 +120,82 @@ class WorkflowScanTests(unittest.TestCase):
 
         self.assertEqual(scan_workflow(path), [])
 
+    def test_retired_agent_workflow_is_rejected(self) -> None:
+        path = self._write(
+            "auto-dispatcher.yml",
+            "name: Retired dispatcher\non: workflow_dispatch\npermissions: {}\n"
+            "concurrency:\n  group: retired\n  cancel-in-progress: true\n",
+        )
+
+        violations = scan_workflow(path)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("retired GitHub-hosted agent workflow", violations[0].reason)
+
+    def test_every_retired_agent_role_workflow_name_is_rejected(self) -> None:
+        for name in (
+            "agent-daily.yml",
+            "agent-hourly.yml",
+            "agent-weekly.yml",
+            "daily.yml",
+            "failure-monitor.yml",
+            "hourly.yml",
+            "planner.yml",
+            "resolver.yml",
+            "reviewer.yml",
+            "swarm.yml",
+            "weekly.yml",
+        ):
+            path = self._write(
+                name,
+                "name: Retired\non: workflow_dispatch\npermissions: {}\n"
+                "concurrency:\n  group: retired\n  cancel-in-progress: true\n",
+            )
+
+            violations = scan_workflow(path)
+
+            self.assertEqual(len(violations), 1, name)
+            self.assertIn("retired GitHub-hosted agent workflow", violations[0].reason)
+
+    def test_retired_failure_monitor_is_rejected(self) -> None:
+        path = self._write(
+            "on-failure.yml",
+            "name: Retired failure monitor\non: workflow_dispatch\npermissions: {}\n"
+            "concurrency:\n  group: retired\n  cancel-in-progress: true\n",
+        )
+
+        violations = scan_workflow(path)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("on-failure.yml", violations[0].reason)
+
+    def test_missing_top_level_permissions_is_rejected(self) -> None:
+        path = self._write(
+            "missing-permissions.yml",
+            "name: Missing permissions\non: workflow_dispatch\nconcurrency:\n"
+            "  group: test\n  cancel-in-progress: true\njobs: {}\n",
+        )
+
+        violations = workflow_hardening_violations(path)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("permissions", violations[0].reason)
+
+    def test_missing_top_level_concurrency_is_rejected(self) -> None:
+        path = self._write(
+            "missing-concurrency.yml",
+            "name: Missing concurrency\non: workflow_dispatch\npermissions: {}\njobs: {}\n",
+        )
+
+        violations = workflow_hardening_violations(path)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("concurrency", violations[0].reason)
+
     def test_issue_trigger_is_rejected(self) -> None:
         path = self._write(
-            "swarm.yml",
-            "name: Swarm\n"
+            "issue-driven.yml",
+            "name: Issue-driven\n"
             "on:\n"
             "  issues:\n"
             "    types: [labeled]\n"
@@ -275,12 +352,68 @@ class WorkflowScanTests(unittest.TestCase):
     def test_repository_scan_reports_violations(self) -> None:
         self._write(
             "bad.yml",
-            "name: Bad\non:\n  issues:\njobs:\n  a:\n    steps:\n      - run: echo hi\n",
+            "name: Bad\non:\n  issues:\npermissions: {}\nconcurrency:\n"
+            "  group: bad\n  cancel-in-progress: true\njobs:\n  a:\n    steps:\n"
+            "      - run: echo hi\n",
         )
 
         violations = scan_repository(self.root)
 
         self.assertEqual(len(violations), 1)
+
+    def test_current_repository_workflows_are_hardened(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        violations = scan_repository(root)
+
+        self.assertEqual([], violations, "\n".join(v.render(root) for v in violations))
+
+
+class InstructionFallbackTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tempdir = tempfile.TemporaryDirectory()
+        self.root = Path(self._tempdir.name)
+        (self.root / ".agents" / "skills" / "gate").mkdir(parents=True)
+        (self.root / ".agents" / "automations").mkdir(parents=True)
+        self.addCleanup(self._tempdir.cleanup)
+
+    def test_skill_referencing_the_retired_swarm_daemon_is_rejected(self) -> None:
+        (self.root / ".agents" / "skills" / "gate" / "SKILL.md").write_text(
+            "Run `swarmd.py` before committing.\n", encoding="utf-8"
+        )
+
+        violations = instruction_fallback_violations(self.root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn("retired swarm daemon", violations[0].reason)
+
+    def test_readme_referencing_the_retired_task_directory_is_rejected(self) -> None:
+        (self.root / "README.md").write_text(
+            "Stuck work lands in `.tasks/stuck/`.\n", encoding="utf-8"
+        )
+
+        violations = instruction_fallback_violations(self.root)
+
+        self.assertEqual(len(violations), 1)
+        self.assertIn(".tasks/stuck", violations[0].reason)
+
+    def test_clean_instructions_declaring_the_vps_owner_are_allowed(self) -> None:
+        (self.root / "README.md").write_text(
+            "The OpenHands VPS scheduler owns claim, branch, pull request and repair.\n",
+            encoding="utf-8",
+        )
+        (self.root / ".agents" / "automations" / "task.md").write_text(
+            "Run the verification gate.\n", encoding="utf-8"
+        )
+
+        self.assertEqual(instruction_fallback_violations(self.root), [])
+
+    def test_current_repository_instructions_have_no_swarm_fallback(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+
+        violations = instruction_fallback_violations(root)
+
+        self.assertEqual([], violations, "\n".join(v.render(root) for v in violations))
 
 
 class ContractDocumentTests(unittest.TestCase):
