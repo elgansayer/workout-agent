@@ -38,6 +38,30 @@ describe('Programme preview consistency', () => {
     expect(component.status()).toBe('Your Hevy-derived programme is now active.');
   });
 
+  it('surfaces Hevy source drift and lets the user keep the active programme', () => {
+    component.data.set({
+      source_drift: {
+        status: 'action_required',
+        has_changes: true,
+        routines: [{ routine_id: 'routine-a', title: 'Upper A', state: 'removed' }],
+      },
+    });
+    expect(component.driftNeedsAttention()).toBe(true);
+    expect(component.sourceDrift()?.status).toBe('action_required');
+
+    component.keepCurrentProgramme();
+
+    expect(component.sourceDrift()).toBeNull();
+    expect(component.status()).toContain('Keeping the active programme');
+  });
+
+  it('asks the user to reconnect when the Hevy source cannot be verified', () => {
+    component.data.set({
+      source_drift: { status: 'source_unavailable', has_changes: false, routines: [] },
+    });
+    expect(component.driftNeedsAttention()).toBe(true);
+  });
+
   it('keeps selections across filtered and paginated routine lists', () => {
     component.data.set({
       source: {
@@ -54,5 +78,21 @@ describe('Programme preview consistency', () => {
     component.routineList.search('Routine 29');
     expect(component.visibleRoutines().map((r) => r.id)).toEqual(['r29']);
     expect(component.isSelected('r29')).toBe(true);
+  });
+
+  it('blocks activation when preview contains blocking constraint violations', () => {
+    component.preview.set({
+      preview_token: 'violation-token',
+      blocking_violations: [
+        {
+          exercise: 'Bulgarian Split Squats',
+          prescription: '3 x 10',
+          rule: 'No Bulgarian split squats',
+          permitted_remediation: 'Use leg extensions or flat-foot leg press instead.',
+        },
+      ],
+    });
+    component.activatePreview();
+    http.expectNone('/api/programmes/activate');
   });
 });

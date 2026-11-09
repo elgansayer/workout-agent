@@ -52,6 +52,95 @@
     </section>
   }
 
+  @if (sourceDrift(); as drift) {
+    @if (driftNeedsAttention()) {
+      <section class="panel warning-list" aria-labelledby="source-drift-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">
+              {{ drift.status === 'source_unavailable' ? 'Source unavailable' : 'Source changed' }}
+            </p>
+            <h2 id="source-drift-heading">
+              {{
+                drift.status === 'source_unavailable'
+                  ? 'Check your Hevy connection'
+                  : 'Your Hevy routines changed'
+              }}
+            </h2>
+            <p class="muted">
+              Your active programme keeps using the routines captured at activation. Nothing in
+              Hevy was overwritten, and past prescriptions remain locked.
+            </p>
+          </div>
+        </div>
+
+        @if (drift.status === 'source_unavailable') {
+          <p>{{ drift.detail }}</p>
+        } @else {
+          <ul class="drift-list">
+            @for (routine of drift.routines; track routine.routine_id) {
+              @if (routine.state !== 'unchanged') {
+                <li>
+                  <strong>{{ routine.title }}</strong>
+                  <span class="badge">{{ routine.state }}</span>
+                  @if (routine.state === 'removed') {
+                    <p class="muted">
+                      This routine is no longer in Hevy. Generate a new preview to replace it.
+                    </p>
+                  } @else {
+                    <p class="muted">
+                      {{ routine.source_exercise_count }} → {{ routine.current_exercise_count }}
+                      exercises
+                      @if (routine.current_title && routine.current_title !== routine.title) {
+                        · renamed to “{{ routine.current_title }}”
+                      }
+                    </p>
+                  }
+                </li>
+              }
+            }
+          </ul>
+        }
+
+        <div class="activation-row">
+          <p class="muted">
+            @if (drift.status === 'source_unavailable') {
+              Reconnect Hevy to verify whether the active programme's source routines changed.
+            } @else {
+              Compare the live Hevy routines in the selector, then generate a fresh preview to
+              adopt the changes. The active snapshot will not change until you activate a new
+              preview.
+            }
+          </p>
+          <div class="drift-actions">
+            <button type="button" class="btn btn-secondary" (click)="keepCurrentProgramme()">
+              Keep current programme
+            </button>
+            @if (drift.status === 'source_unavailable') {
+              <button
+                type="button"
+                class="btn"
+                [disabled]="refreshing()"
+                (click)="loadProgrammes(true)"
+              >
+                {{ refreshing() ? 'Refreshing…' : 'Reconnect and refresh' }}
+              </button>
+            } @else {
+              <button
+                type="button"
+                class="btn"
+                [disabled]="previewing() || activating() || refreshing()"
+                (click)="reviewSourceChanges()"
+              >
+                {{ previewing() ? 'Generating…' : 'Review and preview changes' }}
+              </button>
+            }
+          </div>
+        </div>
+      </section>
+    }
+  }
+
   @if (data.connection.state === 'disconnected') {
     <section class="panel empty-state">
       <h2>Connect Hevy first</h2>
@@ -382,6 +471,20 @@
           }
         </div>
 
+        @if (preview.blocking_violations && preview.blocking_violations.length > 0) {
+          <div class="panel error-panel" role="alert">
+            <strong>Blocking profile constraints prevent activation:</strong>
+            <ul>
+              @for (violation of preview.blocking_violations; track violation.exercise + violation.prescription) {
+                <li>
+                  <strong>{{ violation.exercise }}:</strong> {{ violation.prescription }} violates <em>{{ violation.rule }}</em>.
+                  <div><strong>Permitted remediation:</strong> {{ violation.permitted_remediation }}</div>
+                </li>
+              }
+            </ul>
+          </div>
+        }
+
         <details>
           <summary>Assumptions and safety bounds</summary>
           <ul>
@@ -396,7 +499,12 @@
             Activation reconfirms every Hevy source hash. A changed routine requires a fresh
             preview.
           </p>
-          <button type="button" class="btn" [disabled]="activating()" (click)="activatePreview()">
+          <button
+            type="button"
+            class="btn"
+            [disabled]="activating() || (preview.blocking_violations && preview.blocking_violations.length > 0)"
+            (click)="activatePreview()"
+          >
             {{ activating() ? 'Activating…' : 'Activate this programme' }}
           </button>
         </div>

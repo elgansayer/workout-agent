@@ -12,16 +12,78 @@
     {{ menuOpen() ? 'Close menu' : 'Menu' }}
   </button>
   <nav id="primary-navigation" aria-label="Primary navigation" [class.is-open]="menuOpen()">
-    <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Today</a>
-    <a routerLink="/progress" routerLinkActive="on" ariaCurrentWhenActive="page">Progress</a>
-    <a routerLink="/stats" routerLinkActive="on" ariaCurrentWhenActive="page">Stats</a>
-    <a routerLink="/plan" routerLinkActive="on" ariaCurrentWhenActive="page">Plan</a>
+    <a
+      routerLink="/dashboard"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('dashboard') ? 'Today (setup needed)' : null"
+      >Today</a
+    >
+    @if (setup.needsSetup('dashboard')) {
+      <span class="nav-badge">Setup</span>
+    }
+    <a
+      routerLink="/progress"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('progress') ? 'Progress (setup needed)' : null"
+      >Progress</a
+    >
+    @if (setup.needsSetup('progress')) {
+      <span class="nav-badge">Setup</span>
+    }
+    <a
+      routerLink="/stats"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('stats') ? 'Stats (setup needed)' : null"
+      >Stats</a
+    >
+    @if (setup.needsSetup('stats')) {
+      <span class="nav-badge">Setup</span>
+    }
+    <a
+      routerLink="/plan"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('plan') ? 'Plan (setup needed)' : null"
+      >Plan</a
+    >
+    @if (setup.needsSetup('plan')) {
+      <span class="nav-badge">Setup</span>
+    }
     <a routerLink="/programmes" routerLinkActive="on" ariaCurrentWhenActive="page">Programmes</a>
-    <a routerLink="/history" routerLinkActive="on" ariaCurrentWhenActive="page">History</a>
-    <a routerLink="/checkins" routerLinkActive="on" ariaCurrentWhenActive="page">Check-ins</a>
-    <a routerLink="/chat" class="nav-coach" routerLinkActive="on" ariaCurrentWhenActive="page"
+    <a
+      routerLink="/history"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('history') ? 'History (setup needed)' : null"
+      >History</a
+    >
+    @if (setup.needsSetup('history')) {
+      <span class="nav-badge">Setup</span>
+    }
+    <a
+      routerLink="/checkins"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('checkins') ? 'Check-ins (setup needed)' : null"
+      >Check-ins</a
+    >
+    @if (setup.needsSetup('checkins')) {
+      <span class="nav-badge">Setup</span>
+    }
+    <a
+      routerLink="/chat"
+      class="nav-coach"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.needsSetup('coach') ? 'Coach (setup needed)' : null"
       >Coach</a
     >
+    @if (setup.needsSetup('coach')) {
+      <span class="nav-badge">Setup</span>
+    }
     <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
     @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
       <a routerLink="/profile" routerLinkActive="on" ariaCurrentWhenActive="page">Account</a>

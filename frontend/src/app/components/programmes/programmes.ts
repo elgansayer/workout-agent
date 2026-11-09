@@ -9,6 +9,41 @@ import { HlmBadgeImports } from '@spartan-ng/ui/badge';
 import { HlmButtonImports } from '@spartan-ng/ui/button';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 
+export type ProgrammeDriftStatus =
+  | 'no_active_programme'
+  | 'unchanged'
+  | 'review_recommended'
+  | 'action_required'
+  | 'source_unavailable';
+
+export type ProgrammeDriftRoutineState =
+  | 'renamed'
+  | 'content_changed'
+  | 'removed'
+  | 'unchanged';
+
+export interface ProgrammeDriftRoutine {
+  position: number;
+  routine_id: string;
+  title: string;
+  current_title: string | null;
+  state: ProgrammeDriftRoutineState;
+  source_exercise_count: number | null;
+  current_exercise_count: number | null;
+}
+
+export interface ProgrammeSourceDrift {
+  status: ProgrammeDriftStatus;
+  has_changes: boolean;
+  routines: ProgrammeDriftRoutine[];
+  summary: {
+    renamed: number;
+    content_changed: number;
+    removed: number;
+  };
+  detail?: string | null;
+}
+
 @Component({
   selector: 'app-programmes',
   standalone: true,
@@ -36,6 +71,7 @@ export class Programmes implements OnInit {
   error = signal<string | null>(null);
   status = signal<string | null>(null);
   selectedRoutineIds = signal<string[]>([]);
+  driftDismissed = signal(false);
 
   folderFilter = signal('');
   readonly routineList = new PagedList<any>(
@@ -109,6 +145,30 @@ export class Programmes implements OnInit {
   filterFolder(folder: string): void {
     this.folderFilter.set(folder);
     this.routineList.reset();
+  }
+
+  sourceDrift(): ProgrammeSourceDrift | null {
+    const drift: ProgrammeSourceDrift | undefined = this.data()?.source_drift;
+    if (!drift || this.driftDismissed()) {
+      return null;
+    }
+    return drift;
+  }
+
+  driftNeedsAttention(): boolean {
+    const drift = this.sourceDrift();
+    return !!drift && (drift.has_changes || drift.status === 'source_unavailable');
+  }
+
+  keepCurrentProgramme(): void {
+    this.driftDismissed.set(true);
+    this.status.set(
+      'Keeping the active programme. Hevy source changes are not applied until you generate a new preview.',
+    );
+  }
+
+  reviewSourceChanges(): void {
+    this.generatePreview();
   }
 
   isSelected(routineId: string): boolean {
@@ -193,7 +253,13 @@ export class Programmes implements OnInit {
 
   activatePreview(): void {
     const preview = this.preview();
-    if (!preview || this.activating() || this.previewing() || this.refreshing()) {
+    if (
+      !preview ||
+      (preview.blocking_violations && preview.blocking_violations.length > 0) ||
+      this.activating() ||
+      this.previewing() ||
+      this.refreshing()
+    ) {
       return;
     }
     this.error.set(null);
