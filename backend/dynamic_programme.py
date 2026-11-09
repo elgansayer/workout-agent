@@ -26,11 +26,13 @@ import hashlib
 import json
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal
 
+from hevy_history import analyse_history
 from hevy_reader import CompletedWorkout, HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
+from programme_validator import validate_programme
 from pydantic import BaseModel, Field, model_validator
 
 ENGINE_VERSION = "hevy-programme-v3"
@@ -207,7 +209,8 @@ class ProgrammePreviewRequest(BaseModel):
     fatigue_management: FatigueManagement = "adaptive"
     strength_model: StrengthModel = "auto"
     exercise_overrides: list[ExerciseOverride] = Field(default_factory=list)
-    constraints: ProgrammeConstraints = Field(default_factory=ProgrammeConstraints)
+    constraints: ProgrammeConstraints | list[Any] | dict[str, Any] | None = None
+    rules: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_selection(self) -> ProgrammePreviewRequest:
@@ -716,7 +719,11 @@ def _serialise_routine(
     }
 
 
-def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
+def serialise_hevy_source(
+    data: HevyTrainingData,
+    profile_rules: Any = None,
+    training_rules: Any = None,
+) -> dict[str, Any]:
     """Return the exact selectable Hevy source view used by the builder."""
 
     routines = [_serialise_routine(routine, data) for routine in data.routines]
@@ -731,13 +738,130 @@ def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
                 ),
             }
         )
-    return {
+    payload = {
         "username": data.username,
         "workout_count": data.workout_count,
         "routine_count": len(routines),
         "recent_workout_count": len(data.recent_workouts),
         "folders": folders,
         "routines": routines,
+    }
+    validation = validate_programme(
+        payload,
+        profile_rules=profile_rules,
+        training_rules=training_rules,
+    )
+    payload["blocking_violations"] = validation.blocking_violations
+    return payload
+
+
+_DRIFT_EXERCISE_FIELDS = (
+    "template_id",
+    "title",
+    "exercise_type",
+    "sets",
+    "set_targets",
+    "rest_seconds",
+    "notes",
+    "superset_id",
+    "target_weight_kg",
+    "target_reps",
+    "target_rep_range",
+)
+
+
+def _routine_content_signature(view: dict[str, Any]) -> str:
+    """Hash routine content while ignoring provider revision timestamps."""
+    exercises = [
+        {field: exercise.get(field) for field in _DRIFT_EXERCISE_FIELDS}
+        for exercise in view.get("exercises") or []
+        if isinstance(exercise, dict)
+    ]
+    return _canonical_hash(
+        {
+            "folder_id": view.get("folder_id"),
+            "exercises": exercises,
+        }
+    )
+
+
+def detect_source_drift(
+    active_definition: dict[str, Any] | None,
+    live_source: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare an active programme's source snapshots with the live Hevy library.
+
+    The activated prescription overlay is never rewritten silently. This report
+    names every selected routine that was renamed, edited or removed in Hevy so
+    the user can compare and deliberately generate a fresh programme version.
+    """
+
+    snapshots = [
+        snapshot
+        for snapshot in (active_definition or {}).get("source_snapshots") or []
+        if isinstance(snapshot, dict) and snapshot.get("id")
+    ]
+    summary = {"renamed": 0, "content_changed": 0, "removed": 0}
+    if not snapshots:
+        return {
+            "status": "no_active_programme",
+            "has_changes": False,
+            "routines": [],
+            "summary": summary,
+        }
+
+    live_by_id = {
+        str(routine.get("id")): routine
+        for routine in (live_source or {}).get("routines") or []
+        if isinstance(routine, dict) and routine.get("id")
+    }
+    routines: list[dict[str, Any]] = []
+    for position, snapshot in enumerate(snapshots, start=1):
+        routine_id = str(snapshot.get("id"))
+        current = live_by_id.get(routine_id)
+        if current is None:
+            state = "removed"
+        elif _routine_content_signature(snapshot) != _routine_content_signature(
+            current
+        ):
+            state = "content_changed"
+        elif snapshot.get("title") != current.get("title"):
+            state = "renamed"
+        else:
+            state = "unchanged"
+        if state != "unchanged":
+            summary[state] += 1
+        routines.append(
+            {
+                "position": position,
+                "routine_id": routine_id,
+                "title": snapshot.get("title"),
+                "current_title": current.get("title") if current else None,
+                "state": state,
+                "source_hash": snapshot.get("source_hash"),
+                "current_hash": current.get("source_hash") if current else None,
+                "source_updated_at": snapshot.get("updated_at"),
+                "current_updated_at": (
+                    current.get("updated_at") if current else None
+                ),
+                "source_exercise_count": snapshot.get("exercise_count"),
+                "current_exercise_count": (
+                    current.get("exercise_count") if current else None
+                ),
+            }
+        )
+
+    if summary["content_changed"] or summary["removed"]:
+        status = "action_required"
+    elif summary["renamed"]:
+        status = "review_recommended"
+    else:
+        status = "unchanged"
+    return {
+        "status": status,
+        "has_changes": status != "unchanged",
+        "routines": routines,
+        "summary": summary,
     }
 
 
@@ -938,36 +1062,45 @@ def _allocate_blocks(
 def _history_analysis(
     data: HevyTrainingData,
     selected: list[Routine],
+    *,
+    programme_weeks: int | None = None,
+    now: datetime | None = None,
+    overrides: Any = (),
 ) -> dict[str, Any]:
-    selected_titles = {routine.title.casefold() for routine in selected}
-    matched_workouts = sum(
-        1
-        for workout in data.recent_workouts
-        if workout.title.casefold() in selected_titles
-    )
-    selected_with_match = sum(
-        1
-        for routine in selected
-        if any(
-            workout.title.casefold() == routine.title.casefold()
-            for workout in data.recent_workouts
-        )
-    )
-    coverage = selected_with_match / len(selected) if selected else 0.0
-    history_count = len(data.recent_workouts)
+    """Run the deterministic history engine for the selected routines."""
 
-    if history_count >= 8 and coverage >= 0.75:
-        confidence = "high"
-    elif history_count >= 3 and coverage >= 0.40:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
+    history = analyse_history(
+        data,
+        [routine.id for routine in selected],
+        programme_weeks=programme_weeks,
+        now=now,
+        overrides=overrides,
+    )
+    counts = history["match_counts"]
+    matched_workouts = counts["high"] + counts["probable"]
+    band = str(history["confidence"])
+    public_confidence = {
+        "high": "high",
+        "probable": "medium",
+    }.get(band, "low")
     return {
-        "history_workouts": history_count,
+        "history_workouts": len(history["matches"]),
         "matched_workouts": matched_workouts,
-        "routine_match_coverage": round(coverage, 2),
-        "confidence": confidence,
+        "routine_match_coverage": history["routine_match_coverage"],
+        "workout_match_coverage": history["workout_match_coverage"],
+        "confidence": public_confidence,
+        "match_confidence": band,
+        "matcher_version": history["rule_versions"]["matcher"],
+        "baseline_version": history["rule_versions"]["baseline"],
+        "rule_versions": history["rule_versions"],
+        "unmatched_workouts": history["unmatched_workout_count"],
+        "ambiguous_workouts": history["ambiguous_workout_count"],
+        "calibration_required": history["calibration_required"],
+        "evidence_window": history["evidence_window"],
+        "routine_coverage": history["routine_coverage"],
+        "exercise_baselines": history["baselines"],
+        "history_warnings": history["warnings"],
+        "matches": history["matches"],
     }
 
 
@@ -990,6 +1123,24 @@ def _observed_working_sets(exercise: Any) -> tuple[int, dict[str, int]]:
         if set_type in EXPECTED_WORKING_SET_TYPES:
             working += 1
     return working, totals
+def _adaptation_bounds(
+    match_confidence: str,
+    baseline_confidence: str | None,
+) -> dict[str, int]:
+    """Return allowed automatic set change at the inferred confidence level."""
+
+    if baseline_confidence is None:
+        return {"minimum": 0, "maximum": 0}
+    if match_confidence == "high" and baseline_confidence == "high":
+        return {"minimum": -1, "maximum": 2}
+    if match_confidence in {"high", "probable"} and baseline_confidence in {
+        "high",
+        "probable",
+    }:
+        return {"minimum": -1, "maximum": 1}
+    if baseline_confidence == "ambiguous":
+        return {"minimum": 0, "maximum": 1}
+    return {"minimum": 0, "maximum": 0}
 
 
 def _exercise_baselines(
@@ -1480,7 +1631,12 @@ def _rep_range_for(
             return "2-6"
         if phase_key in {"expression", "realisation", "taper_test"}:
             return "1-4"
-        if phase_key in {"foundation_volume", "overload", "resensitisation"}:
+        if phase_key in {
+            "foundation_volume",
+            "overload",
+            "resensitisation",
+            "calibration",
+        }:
             return "5-10"
         return "4-8"
     if role == "secondary_compound":
@@ -1747,6 +1903,7 @@ def _prescriptions_for_exercise(
     experience: str = "intermediate",
     strength_model: str = "auto",
     aggressiveness: str = "balanced",
+    adaptation_bounds: dict[str, int] | None = None,
 ) -> tuple[str, str, str, list[str], list[dict[str, Any]]]:
     role, role_reason, role_confidence, evidence = _classify_role(
         source,
@@ -1810,7 +1967,9 @@ def _prescriptions_for_exercise(
                 "progression": progression,
                 "load_anchor": load_anchor,
                 "equipment_increment_kg": progression.get("load_increment_kg"),
-                "allowed_set_change_from_source": dict(ALLOWED_SET_CHANGE),
+                "allowed_set_change_from_source": dict(
+                    adaptation_bounds or ALLOWED_SET_CHANGE
+                ),
                 "allowed_change": {
                     "max_set_delta": ALLOWED_SET_CHANGE["maximum"],
                     "min_set_delta": ALLOWED_SET_CHANGE["minimum"],
@@ -2205,6 +2364,8 @@ def validate_programme_preview(preview: dict[str, Any]) -> list[dict[str, Any]]:
     spec = preview.get("programme_spec") or {}
     cadence_preview = preview.get("cadence") or {}
     constraints = spec.get("constraints") or {}
+    if not isinstance(constraints, dict):
+        constraints = {}
     rotation = cadence_preview.get("rotation") or []
     cycle_weeks = int(preview.get("cycle_weeks") or 0)
 
@@ -2534,7 +2695,9 @@ def build_programme_preview(
     data: HevyTrainingData,
     request: ProgrammePreviewRequest,
     *,
+    history_overrides: Any = (),
     active_definition: dict[str, Any] | None = None,
+    profile_rules: Any = None,
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
 
@@ -2555,6 +2718,11 @@ def build_programme_preview(
             + ", ".join(missing)
         )
 
+    structured_constraints = (
+        request.constraints
+        if isinstance(request.constraints, ProgrammeConstraints)
+        else ProgrammeConstraints()
+    )
     selected = [
         routine_by_id[routine_id] for routine_id in request.selected_routine_ids
     ]
@@ -2568,7 +2736,18 @@ def build_programme_preview(
     )
     inferred = infer_programme(selected_data)
     source_snapshots = [_serialise_routine(routine, data) for routine in selected]
-    history = _history_analysis(data, selected)
+    history_overrides = list(history_overrides or ())
+    history = _history_analysis(
+        data,
+        selected,
+        programme_weeks=request.duration_weeks,
+        now=datetime.combine(
+            request.start_date,
+            time.max,
+            tzinfo=timezone.utc,
+        ),
+        overrides=history_overrides,
+    )
     blocks = _allocate_blocks(
         request.duration_weeks,
         request.goal,
@@ -2623,6 +2802,14 @@ def build_programme_preview(
         for position, source_exercise in enumerate(source_routine["exercises"]):
             template_id = source_exercise["template_id"]
             baseline = baselines_by_template.get(template_id)
+            history_baseline = history["exercise_baselines"].get(template_id)
+            baseline_confidence = (
+                str(history_baseline["confidence"]) if history_baseline else None
+            )
+            bounds = _adaptation_bounds(
+                str(history["match_confidence"]),
+                baseline_confidence,
+            )
             (
                 role,
                 role_reason,
@@ -2645,6 +2832,7 @@ def build_programme_preview(
                 experience=request.experience,
                 strength_model=request.strength_model,
                 aggressiveness=request.adaptation_aggressiveness,
+                adaptation_bounds=bounds,
             )
             opening = prescriptions[0]
             exercises.append(
@@ -2652,6 +2840,7 @@ def build_programme_preview(
                     "name": source_exercise["title"],
                     "template_id": template_id,
                     "exercise_type": source_exercise["exercise_type"],
+                    "equipment": source_exercise.get("equipment"),
                     "role": role,
                     "role_reason": role_reason,
                     "role_confidence": role_confidence,
@@ -2669,6 +2858,11 @@ def build_programme_preview(
                     "source_targets": source_exercise["set_targets"],
                     "unsupported_fields": source_exercise["unsupported_fields"],
                     "prescriptions": prescriptions,
+                    "baseline_confidence": baseline_confidence,
+                    "baseline": baseline,
+                    "role_features": history_baseline.get("role_features")
+                    if history_baseline
+                    else None,
                 }
             )
         days.append(
@@ -2746,7 +2940,7 @@ def build_programme_preview(
             "Planned fatigue management keeps the block structure fixed; no "
             "automatic recovery week is inserted."
         )
-    if request.constraints.concurrent_training:
+    if structured_constraints.concurrent_training:
         assumptions.append(
             "Concurrent training is recorded as context only; no automatic volume "
             "reduction is applied."
@@ -2770,6 +2964,18 @@ def build_programme_preview(
             "Aggressive progression was requested but history confidence is not "
             "high. The engine keeps automatic changes inside its bounds and will "
             "not fabricate precise baselines."
+        )
+    if history["ambiguous_workouts"]:
+        warnings.append(
+            "Some completed workouts have ambiguous routine matches. Confirm the routine for those sessions before relying on routine-specific adaptation."
+        )
+    if history["unmatched_workouts"]:
+        warnings.append(
+            "Some completed workouts could not be matched to a selected routine. They remain exercise-level evidence only."
+        )
+    if history["calibration_required"]:
+        warnings.append(
+            "More recent, complete training history is required to calibrate automatic progression confidently."
         )
     if request.max_session_minutes is not None:
         too_long = [
@@ -2840,7 +3046,7 @@ def build_programme_preview(
             "Some Hevy set fields are retained but not interpreted by this engine "
             "version: " + ", ".join(unsupported_fields)
         )
-    if request.constraints.injuries:
+    if structured_constraints.injuries:
         warnings.append(
             "Saved injury or medical constraints are shown as context only. The "
             "engine does not diagnose or automatically remove exercises; review the "
@@ -2865,6 +3071,7 @@ def build_programme_preview(
             "The active programme uses different Hevy routine revisions. "
             "Review the source changes before activating a new programme."
         )
+    blocking_violations: list[dict[str, Any]] = []
 
     programme_spec = {
         **request.model_dump(mode="json"),
@@ -2880,6 +3087,10 @@ def build_programme_preview(
     }
     token_inputs = {
         "engine_version": ENGINE_VERSION,
+        "history_rule_version": history["rule_versions"]["history"],
+        "matcher_version": history["rule_versions"]["matcher"],
+        "baseline_version": history["rule_versions"]["baseline"],
+        "history_overrides": _canonical_hash(history_overrides),
         "programme_spec": programme_spec,
         "source_hashes": [
             {
@@ -2891,7 +3102,7 @@ def build_programme_preview(
     }
     preview_token = _canonical_hash(token_inputs)
 
-    preview = {
+    preview: dict[str, Any] = {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",
         "source": "hevy",
         "engine_version": ENGINE_VERSION,
@@ -2955,7 +3166,7 @@ def build_programme_preview(
         "blocks": blocks,
         "days": days,
         "warnings": warnings,
-        "blocking_violations": [],
+        "blocking_violations": blocking_violations,
         "assumptions": assumptions,
         "rules": [
             "Progressions are deterministic, modality-aware and bounded.",
@@ -2964,5 +3175,59 @@ def build_programme_preview(
             "Every prescription carries its role evidence, confidence and rule version.",
         ],
     }
-    preview["blocking_violations"] = validate_programme_preview(preview)
+
+    request_rules = (
+        request.constraints
+        if request.constraints is not None
+        and not isinstance(request.constraints, ProgrammeConstraints)
+        else None
+    )
+    effective_profile_rules = (
+        profile_rules if profile_rules is not None else request_rules
+    )
+
+    local_violations = validate_programme_preview(preview)
+    try:
+        validation = validate_programme(
+            preview,
+            profile_rules=effective_profile_rules,
+            training_rules=request.rules,
+        )
+        if (
+            request_rules is not None
+            and profile_rules is not None
+            and request_rules is not effective_profile_rules
+        ):
+            extra = validate_programme(preview, profile_rules=request_rules)
+            validation.blocking_violations.extend(
+                violation
+                for violation in extra.blocking_violations
+                if violation not in validation.blocking_violations
+            )
+            validation.warnings.extend(
+                warning
+                for warning in extra.warnings
+                if warning not in validation.warnings
+            )
+    except ValueError as exc:
+        if request.rules is not None:
+            raise ValueError(
+                f"Invalid structured training rules; constraint check failed: {exc}"
+            ) from exc
+        raise
+
+    blocking = list(local_violations)
+    blocking.extend(
+        violation
+        for violation in validation.blocking_violations
+        if violation not in blocking
+    )
+    preview["blocking_violations"] = blocking
+    if validation.warnings:
+        preview["warnings"].extend(
+            warning
+            for warning in validation.warnings
+            if warning not in preview["warnings"]
+        )
+
     return preview

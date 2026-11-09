@@ -187,6 +187,56 @@ def test_generate_next_workout_exception_falls_back() -> None:
     assert "Back, Deadlifts & Chest - Week 3" in result
 
 
+def test_generate_next_workout_enforces_rules_deterministically() -> None:
+    from training_rules import (
+        ExerciseSubstitutionRule,
+        ProhibitedExerciseRule,
+        RepIntensityBoundsRule,
+        StructuredTrainingRules,
+    )
+
+    # Provider outputs a plan with a prohibited lift and out-of-bound reps
+    ai_output = (
+        "Back, Deadlifts & Chest - Week 3 (Strength Base)\n"
+        "Barbell Back Squat: 3 x 4\n"
+        "Conventional Deadlift: 3 x 5\n"
+        "Lat Pulldown: 3 x 10"
+    )
+    mock_provider = _make_mock_provider(ai_output)
+
+    rules = StructuredTrainingRules(
+        prohibited_exercises=[ProhibitedExerciseRule(exercise="Conventional Deadlift")],
+        substitutions=[
+            ExerciseSubstitutionRule(
+                from_exercise="Barbell Back Squat", to_exercise="Leg Press"
+            )
+        ],
+        rep_intensity_bounds=RepIntensityBoundsRule(min_reps=6, max_reps=15),
+    )
+
+    result = generate_next_workout(
+        mock_provider,
+        day=1,
+        week=3,
+        block=BLOCKS[1],
+        rules=rules,
+    )
+
+    # Prompt consumed the structured rules
+    called_prompt = mock_provider.generate.call_args[0][0]
+    assert "MANDATORY TRAINING CONSTRAINTS" in called_prompt
+    assert "Conventional Deadlift" in called_prompt
+
+    # Deterministic enforcement:
+    # 1. Barbell Back Squat substituted with Leg Press
+    # 2. Conventional Deadlift omitted
+    # 3. Reps clamped to min_reps=6 (4 -> 6)
+    assert "Leg Press: 3 x 6" in result
+    assert "Barbell Back Squat" not in result
+    assert "Conventional Deadlift" not in result
+    assert "Lat Pulldown: 3 x 10" in result
+
+
 # ---------------------------------------------------------------------------
 # _build_rest_prompt / generate_rest_day_message
 # ---------------------------------------------------------------------------

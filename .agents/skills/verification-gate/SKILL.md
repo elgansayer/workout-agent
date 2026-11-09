@@ -1,14 +1,15 @@
 ---
 name: verification-gate
-description: 'Run the full completion checklist (ruff, mypy, pytest, import-sanity) before marking any task complete or committing. Use before every commit, whether working interactively or as part of the swarmd.py autonomous loop.'
+description: 'Run the full completion checklist (ruff, mypy, pytest, import-sanity) before marking any task complete or committing. Use before every commit, whether working interactively or through the OpenHands VPS autonomous queue.'
 ---
 
 # Verification Gate
 
-This is the human/agent-facing checklist version of the gate `swarmd.py`
-automates mechanically after every autonomous task (see `AGENTS.md` §4 and
-§9, `SWARM.md`). Run it yourself before considering any interactive change
-complete too — don't rely on the swarm catching what you skipped.
+This is the human/agent-facing checklist version of the repository verification
+gate (see `AGENTS.md` §4 and §5). Run it yourself before considering any change
+complete. The OpenHands Agent Canvas on the VPS is the single autonomous
+scheduler; there is no GitHub-hosted swarm fallback (see
+`docs/AUTONOMOUS_QUEUE_CONTRACT.md`).
 
 ## Steps
 
@@ -32,7 +33,7 @@ than skipping the check.
 ## Pass Criteria
 
 - `compileall`, `ruff check .`, `pytest -q`, and both import-sanity checks
-  must all exit zero. This is what `swarmd.py`'s gate treats as blocking.
+  must all exit zero. These are the blocking checks; treat any failure as fatal.
 - `mypy` is **advisory, not blocking** — the codebase doesn't have full type
   coverage yet (`AGENTS.md` §5). Don't introduce *new* mypy errors in files
   you touch, but pre-existing errors elsewhere aren't your problem to fix as
@@ -59,12 +60,12 @@ than skipping the check.
   with the right JSON in a test can still render broken HTML. Load it in a
   browser (`uvicorn webapp.app:app --reload`) for anything template-facing.
 
-## For the Autonomous Swarm Specifically
+## For the OpenHands VPS Scheduler
 
-`swarmd.py`'s `run_tests()` runs exactly the blocking subset of the steps
-above (`compileall`, `ruff`, `pytest`, both import checks) after every task.
-On failure it runs up to `SWARM_FIX_MAX_ROUNDS` automated fix passes scoped
-to the failing files; if still failing, it discards the working tree changes
-entirely and moves the task to `.tasks/stuck/` rather than committing broken
-work. This gate is deliberately blocking (unlike the `mypy` step) — do not
-add a flag or config path that skips it "just this once."
+Claim, branch, pull-request, review and repair ownership belongs to the OpenHands
+Agent Canvas on the VPS. A review that requests changes returns the same issue to
+the scheduler, which repairs the existing branch under a fresh lease; when the
+attempt budget is spent the issue is blocked for a human. No GitHub-hosted agent
+workflow plans, resolves, reviews or repairs implementation work. This gate is
+deliberately blocking (unlike the `mypy` step) — do not add a flag or config path
+that skips it "just this once."

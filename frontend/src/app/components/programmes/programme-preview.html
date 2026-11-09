@@ -1,0 +1,269 @@
+@if (violations().length) {
+  <div class="panel violation-panel" role="alert" aria-labelledby="violation-heading">
+    <h2 id="violation-heading" class="sr-only">Blocking programme violations</h2>
+    <p><strong>Fix these before activating:</strong></p>
+    <ul>
+      @for (violation of violations(); track violation.code + (violation.routine_id ?? '')) {
+        <li>{{ violation.message }}</li>
+      }
+    </ul>
+  </div>
+}
+
+@if (conflict(); as conflictData) {
+  <div class="panel conflict-panel" role="alert" aria-labelledby="conflict-heading">
+    <h2 id="conflict-heading">Source changed since the preview</h2>
+    <p>
+      The Hevy routines changed after the preview was generated, so this programme was not
+      activated.
+    </p>
+    @if (conflictData.changed_routines?.length) {
+      <h3>Changed routines</h3>
+      <ul>
+        @for (routine of conflictData.changed_routines; track routine.routine_id) {
+          <li>{{ routine.title || routine.routine_id }}</li>
+        }
+      </ul>
+    }
+    @if (conflictData.added_routines?.length) {
+      <h3>Routines added in Hevy</h3>
+      <ul>
+        @for (routine of conflictData.added_routines; track routine.routine_id) {
+          <li>{{ routine.title || routine.routine_id }}</li>
+        }
+      </ul>
+    }
+    @if (conflictData.removed_routines?.length) {
+      <h3>Routines removed in Hevy</h3>
+      <ul>
+        @for (routine of conflictData.removed_routines; track routine.routine_id) {
+          <li>{{ routine.title || routine.routine_id }}</li>
+        }
+      </ul>
+    }
+    @if (remediation().length) {
+      <h3>How to continue</h3>
+      <ol>
+        @for (step of remediation(); track step) {
+          <li>{{ step }}</li>
+        }
+      </ol>
+    }
+    <button type="button" class="btn" (click)="refresh.emit()">Refresh from Hevy</button>
+  </div>
+}
+
+<section class="panel" aria-labelledby="selected-routine-preview-heading">
+      <p class="eyebrow">Step 5</p>
+      <h2 id="selected-routine-preview-heading">Selected Hevy routine preview</h2>
+      @if (routines().length) {
+        <p class="muted">
+          The exact source routines below are what the programme will use. Nothing here is
+          rewritten in Hevy.
+        </p>
+        <div class="routine-preview-grid">
+          @for (routine of routines(); track routine.id) {
+            <article class="day-card">
+              <h3>{{ routine.title }}</h3>
+              <p class="muted">
+                {{ routine.exercise_count }} exercises · {{ routine.work_set_count }} work sets ·
+                approximately {{ routine.estimated_duration_minutes }} min ·
+                {{ routine.muscle_summary?.join(', ') || 'no muscle data' }}
+              </p>
+              <details>
+                <summary>Exact Hevy details</summary>
+                <ol class="source-exercises">
+                  @for (exercise of routine.exercises; track $index) {
+                    <li>
+                      <div class="exercise-source-head">
+                        <strong>{{ exercise.title }}</strong>
+                        <span> {{ exercise.sets }} sets · {{ exercise.exercise_type }} </span>
+                      </div>
+                      @if (exercise.notes) {
+                        <p class="muted">{{ exercise.notes }}</p>
+                      }
+                      <div class="set-targets">
+                        <app-set-targets [targets]="exercise.set_summary ?? []" />
+                      </div>
+                      <small>
+                        Rest {{ exercise.rest_seconds }} sec
+                        @if (exercise.superset_id !== null) {
+                          · superset {{ exercise.superset_id }}
+                        }
+                      </small>
+                    </li>
+                  }
+                </ol>
+                <p class="source-revision">
+                  Source ID <code>{{ routine.id }}</code> · revision
+                  <code>{{ routine.source_hash.slice(0, 12) }}</code>
+                </p>
+              </details>
+            </article>
+          }
+        </div>
+      } @else {
+        <p class="muted">Select routines to see their exact Hevy details here.</p>
+      }
+    </section>
+
+    @if (preview(); as preview) {
+      <section class="panel generated-preview" aria-labelledby="generated-preview-heading">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Step 5</p>
+            <h2 id="generated-preview-heading">Generated programme preview</h2>
+            <p class="muted">
+              {{ preview.name }} · {{ preview.cycle_weeks }} weeks · confidence
+              {{ preview.analysis.confidence }} ·
+              {{ preview.cadence?.sessions_per_week }} sessions per week
+              @if (preview.cadence?.training_day_names?.length) {
+                · {{ preview.cadence.training_day_names.join(', ') }}
+              }
+            </p>
+          </div>
+          <code>{{ preview.engine_version }}</code>
+        </div>
+
+        @if (preview.blocking_violations.length) {
+          <div class="violation-panel" role="alert">
+            <p><strong>This programme cannot be activated yet:</strong></p>
+            <ul>
+              @for (violation of preview.blocking_violations; track violation.code) {
+                <li>{{ violation.message }}</li>
+              }
+            </ul>
+          </div>
+        }
+
+        @if (preview.warnings.length) {
+          <div class="warning-list" role="status">
+            @for (warning of preview.warnings; track warning) {
+              <p>{{ warning }}</p>
+            }
+          </div>
+        }
+
+        @if (preview.drift?.state === 'changed') {
+          <div class="warning-list" role="status">
+            <p>
+              The active programme uses different Hevy routine revisions. Review the source changes
+              before activating a new programme.
+            </p>
+          </div>
+        }
+
+        <h3>Block timeline</h3>
+        <div class="block-timeline">
+          @for (block of preview.blocks; track block.number) {
+            <article class="block-preview">
+              <span class="badge">Weeks {{ block.weeks }}</span>
+              <h4>{{ block.name }}</h4>
+              <p class="muted">{{ block.start_date }} → {{ block.end_date }}</p>
+              <p>{{ block.focus }}</p>
+              <dl>
+                <div>
+                  <dt>Volume</dt>
+                  <dd>{{ block.volume_multiplier }}× source</dd>
+                </div>
+                <div>
+                  <dt>Effort</dt>
+                  <dd>RIR {{ block.target_rir }}</dd>
+                </div>
+                <div>
+                  <dt>Emphasis</dt>
+                  <dd>{{ block.rep_emphasis }}</dd>
+                </div>
+              </dl>
+            </article>
+          }
+        </div>
+
+        <h3>Estimated weekly sets by muscle</h3>
+        <p class="muted">{{ preview.muscle_sets.method }}</p>
+        <ul class="muscle-list">
+          @for (estimate of preview.muscle_sets.estimates; track estimate.muscle) {
+            <li>
+              <span>{{ estimate.muscle }}</span>
+              <span>{{ estimate.weekly_sets }} sets</span>
+              <span class="badge subtle">{{ estimate.status.replace('_', ' ') }}</span>
+            </li>
+          }
+        </ul>
+
+        <h3>Prescriptions</h3>
+        <div class="routine-preview-grid">
+          @for (day of preview.days; track day.routine_id) {
+            <article class="day-card">
+              <p class="eyebrow">Rotation {{ day.number }}</p>
+              <h4>{{ day.focus }}</h4>
+              <p class="muted">
+                {{ day.estimated_duration_minutes }} min · {{ day.muscles?.join(', ') }}
+              </p>
+              <details>
+                <summary>{{ day.exercises.length }} exercises · View prescription</summary>
+                <ul class="day-ex">
+                  @for (exercise of day.exercises; track $index) {
+                    <li>
+                      <span>
+                        <strong>{{ exercise.name }}</strong>
+                        <small>{{ exercise.role }}</small>
+                        <small>{{ exercise.role_reason }}</small>
+                      </span>
+                      <span>{{ exercise.scheme }}</span>
+                      <ul class="prescription-list">
+                        @for (prescription of exercise.prescriptions; track prescription.block_number) {
+                          <li>
+                            Block {{ prescription.block_number }}: {{ prescription.sets }} ×
+                            {{ prescription.rep_range }} at RIR {{ prescription.target_rir }}
+                            <small>{{ prescription.progression.rule }}</small>
+                          </li>
+                        }
+                      </ul>
+                    </li>
+                  }
+                </ul>
+              </details>
+            </article>
+          }
+        </div>
+
+        <details>
+          <summary>Assumptions and safety bounds</summary>
+          <ul>
+            @for (assumption of preview.assumptions; track assumption) {
+              <li>{{ assumption }}</li>
+            }
+          </ul>
+        </details>
+
+        <details>
+          <summary>Programme schedule ({{ preview.schedule.length }} sessions)</summary>
+          <ul class="schedule-list">
+            @for (session of preview.schedule.slice(0, 24); track session.date + session.routine_id) {
+              <li>
+                {{ session.date }} · {{ session.weekday }} · {{ session.routine_title }}
+              </li>
+            }
+          </ul>
+          @if (preview.schedule.length > 24) {
+            <p class="muted">Showing the first 24 of {{ preview.schedule.length }} sessions.</p>
+          }
+        </details>
+
+        <div class="activation-row">
+          <p class="muted">
+            Activation reconfirms every Hevy source hash. A changed routine requires a fresh
+            preview.
+          </p>
+          <button
+            type="button"
+            class="btn"
+            [disabled]="activating() || previewing() || preview.blocking_violations.length > 0"
+            (click)="activate.emit()"
+          >
+            {{ activating() ? 'Activating…' : 'Activate this programme' }}
+          </button>
+        </div>
+      </section>
+    }
