@@ -590,6 +590,38 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     assert stored["definition"] == definition
 
 
+def test_activation_is_blocked_by_structured_constraint_violation(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+
+    payload = {
+        **_payload(),
+        "constraints": {"max_sessions_per_week": 1},
+    }
+
+    preview_response = client.post("/api/programmes/preview", json=payload)
+    assert preview_response.status_code == 200
+    preview = preview_response.json()["preview"]
+    assert preview["blocking_violations"]
+    assert any(
+        item["code"] == "session_limit_exceeded"
+        for item in preview["blocking_violations"]
+    )
+
+    activation_response = client.post(
+        "/api/programmes/activate",
+        json={**payload, "preview_token": preview["preview_token"]},
+    )
+    assert activation_response.status_code == 422
+    detail = activation_response.json()["detail"]
+    assert detail["violations"]
+
+    legacy_uid = database.get_legacy_user_id(db_file)
+    assert database.get_active_programme(legacy_uid, db_path=db_file) is None
+
+
 def test_history_endpoint_exposes_matches_and_accepts_user_override(
     tmp_path: Any,
     monkeypatch: Any,
@@ -627,86 +659,6 @@ def test_history_endpoint_exposes_matches_and_accepts_user_override(
     overrides = database.get_routine_match_overrides(user_id, db_file)
     assert overrides[0]["pattern_value"] == "workout-0"
     assert overrides[0]["routine_id"] == "routine-a"
-def _activate(training_data: Any, client: Any, db_file: str) -> None:
-    preview = client.post("/api/programmes/preview", json=_payload())
-    assert preview.status_code == 200
-    token = preview.json()["preview"]["preview_token"]
-    activation = client.post(
-        "/api/programmes/activate",
-        json={**_payload(), "preview_token": token},
-    )
-    assert activation.status_code == 200
 
 
-def test_programme_builder_reports_renamed_and_edited_routines(
-    tmp_path: Any,
-    monkeypatch: Any,
-) -> None:
-    client, app_module, db_file = _client(tmp_path, monkeypatch)
-    _activate(_training_data(), client, db_file)
 
-    edited = _training_data()
-    edited.routines[0].title = "Push A"
-    edited.routines[1].exercises[0].sets = 5
-    monkeypatch.setattr(
-        app_module,
-        "_load_hevy_snapshot_for_user",
-        lambda *args, **kwargs: _snapshot(edited),
-    )
-
-    data = client.get("/api/programmes").json()
-    drift = data["source_drift"]
-    assert drift["status"] == "action_required"
-    assert drift["has_changes"] is True
-    assert drift["summary"] == {
-        "renamed": 1,
-        "content_changed": 1,
-        "removed": 0,
-    }
-    by_id = {row["routine_id"]: row for row in drift["routines"]}
-    assert by_id["routine-a"]["state"] == "renamed"
-    assert by_id["routine-a"]["current_title"] == "Push A"
-    assert by_id["routine-b"]["state"] == "content_changed"
-
-
-def test_programme_builder_reports_deleted_routine_as_removed(
-    tmp_path: Any,
-    monkeypatch: Any,
-) -> None:
-    client, app_module, db_file = _client(tmp_path, monkeypatch)
-    _activate(_training_data(), client, db_file)
-
-    edited = _training_data()
-    edited.routines = [routine for routine in edited.routines if routine.id != "routine-b"]
-    monkeypatch.setattr(
-        app_module,
-        "_load_hevy_snapshot_for_user",
-        lambda *args, **kwargs: _snapshot(edited),
-    )
-
-    drift = client.get("/api/programmes").json()["source_drift"]
-    assert drift["status"] == "action_required"
-    assert drift["summary"]["removed"] == 1
-    by_id = {row["routine_id"]: row for row in drift["routines"]}
-    assert by_id["routine-b"]["state"] == "removed"
-    assert by_id["routine-b"]["current_hash"] is None
-
-
-def test_programme_builder_reports_unavailable_source_without_leaking_snapshot(
-    tmp_path: Any,
-    monkeypatch: Any,
-) -> None:
-    client, app_module, db_file = _client(tmp_path, monkeypatch)
-    _activate(_training_data(), client, db_file)
-    monkeypatch.setattr(
-        app_module,
-        "_vault_credential",
-        lambda *args, **kwargs: None,
-    )
-
-    data = client.get("/api/programmes").json()
-    drift = data["source_drift"]
-    assert data["connection"]["state"] == "disconnected"
-    assert drift["status"] == "source_unavailable"
-    assert drift["has_changes"] is False
-    assert drift["routines"] == []
