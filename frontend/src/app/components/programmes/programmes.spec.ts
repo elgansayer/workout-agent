@@ -38,6 +38,30 @@ describe('Programme preview consistency', () => {
     expect(component.status()).toBe('Your Hevy-derived programme is now active.');
   });
 
+  it('surfaces Hevy source drift and lets the user keep the active programme', () => {
+    component.data.set({
+      source_drift: {
+        status: 'action_required',
+        has_changes: true,
+        routines: [{ routine_id: 'routine-a', title: 'Upper A', state: 'removed' }],
+      },
+    });
+    expect(component.driftNeedsAttention()).toBe(true);
+    expect(component.sourceDrift()?.status).toBe('action_required');
+
+    component.keepCurrentProgramme();
+
+    expect(component.sourceDrift()).toBeNull();
+    expect(component.status()).toContain('Keeping the active programme');
+  });
+
+  it('asks the user to reconnect when the Hevy source cannot be verified', () => {
+    component.data.set({
+      source_drift: { status: 'source_unavailable', has_changes: false, routines: [] },
+    });
+    expect(component.driftNeedsAttention()).toBe(true);
+  });
+
   it('keeps selections across filtered and paginated routine lists', () => {
     component.data.set({
       source: {

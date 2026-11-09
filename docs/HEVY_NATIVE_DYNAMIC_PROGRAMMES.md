@@ -770,6 +770,8 @@ Conflict states:
 
 A compatible edit may preserve exercise prescriptions by exercise-template ID and occurrence. Structural edits require a preview and explicit reconciliation.
 
+Implemented: an activated programme stores its selected routine snapshots with a normalised content hash. `GET /api/programmes` compares those snapshots with the live Hevy library and returns `source_drift` with per-routine states (`unchanged`, `renamed`, `content_changed`, `removed`) or `source_unavailable` when the source cannot be read. The active overlay is never rewritten; adopting a change requires a fresh preview and activation, while the builder offers an explicit keep-current action. Provider revision timestamps alone do not create a conflict.
+
 ## 19. Proposed data model
 
 All tables require `user_id TEXT NOT NULL REFERENCES users(id)` and every query must filter by it.

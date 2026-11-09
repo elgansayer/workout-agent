@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 from itertools import pairwise
 from typing import Any
@@ -9,6 +10,7 @@ from dynamic_programme import (
     ENGINE_VERSION,
     ProgrammePreviewRequest,
     build_programme_preview,
+    detect_source_drift,
     goal_options,
     serialise_hevy_source,
 )
@@ -283,6 +285,81 @@ def test_sparse_history_is_labelled_low_confidence(
 
     assert preview["analysis"]["confidence"] == "low"
     assert any("confidence is low" in warning for warning in preview["warnings"])
+
+
+def test_source_drift_is_unchanged_for_identical_live_source(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(training_data, _request())
+    live = serialise_hevy_source(training_data)
+
+    drift = detect_source_drift(preview, live)
+
+    assert drift["status"] == "unchanged"
+    assert drift["has_changes"] is False
+    assert [row["state"] for row in drift["routines"]] == ["unchanged", "unchanged"]
+
+
+def test_source_drift_distinguishes_rename_from_content_change(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(training_data, _request())
+    live = serialise_hevy_source(training_data)
+
+    renamed = deepcopy(live)
+    renamed["routines"][0]["title"] = "Upper A"
+    rename_drift = detect_source_drift(preview, renamed)
+    assert rename_drift["status"] == "review_recommended"
+    assert rename_drift["has_changes"] is True
+    assert rename_drift["routines"][0]["state"] == "renamed"
+    assert rename_drift["routines"][0]["current_title"] == "Upper A"
+
+    edited = deepcopy(live)
+    edited["routines"][1]["exercises"][0]["sets"] = 5
+    edit_drift = detect_source_drift(preview, edited)
+    assert edit_drift["status"] == "action_required"
+    assert edit_drift["routines"][1]["state"] == "content_changed"
+    assert edit_drift["summary"]["content_changed"] == 1
+
+
+def test_source_drift_reports_removed_routines(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(training_data, _request())
+    live = serialise_hevy_source(training_data)
+    live["routines"] = [routine for routine in live["routines"] if routine["id"] != "routine-lower"]
+
+    drift = detect_source_drift(preview, live)
+
+    assert drift["status"] == "action_required"
+    assert drift["summary"]["removed"] == 1
+    assert drift["routines"][1]["state"] == "removed"
+    assert drift["routines"][1]["current_hash"] is None
+
+
+def test_source_drift_without_active_programme_is_empty() -> None:
+    drift = detect_source_drift(None, {"routines": []})
+
+    assert drift == {
+        "status": "no_active_programme",
+        "has_changes": False,
+        "routines": [],
+        "summary": {"renamed": 0, "content_changed": 0, "removed": 0},
+    }
+
+
+def test_source_drift_ignores_provider_timestamp_only_revision(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(training_data, _request())
+    revised = deepcopy(training_data)
+    revised.routines[0].updated_at = "2026-09-01T09:00:00Z"
+    live = serialise_hevy_source(revised)
+
+    drift = detect_source_drift(preview, live)
+
+    assert drift["status"] == "unchanged"
+    assert drift["routines"][0]["source_hash"] != drift["routines"][0]["current_hash"]
 
 
 def test_programme_preview_flags_prohibited_exercises(
