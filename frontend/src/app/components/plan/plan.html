@@ -1,25 +1,26 @@
-@if (loading()) {
-  <div class="muted" style="text-align: center; padding: 2rem">Loading…</div>
+@if (viewState() === 'loading') {
+  <div class="loading-state muted" role="status">Loading your plan…</div>
 }
 
-@if (error()) {
-  <div class="panel" style="border-color: #ef4444; color: #ef4444; margin-bottom: 1rem">
+@if (viewState() === 'failed') {
+  <div class="panel error-panel" role="alert">
     <strong>Plan:</strong> {{ error() }}
+    <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
+      Try again
+    </button>
   </div>
 }
 
 @if (data(); as data) {
-  @if (data.setup_required) {
-    <section class="panel" style="text-align: center; padding: 2rem">
-      <p class="muted">No active programme</p>
-      <h1>Build your plan from Hevy</h1>
-      <p class="muted">
-        Select your Hevy routines, programme duration and goal. A built-in fallback is not
-        substituted.
-      </p>
-      <a class="btn" href="/programmes">Open programme builder</a>
-    </section>
-  } @else {
+  @if (viewState() === 'empty') {
+    <app-setup-notice [setup]="setup()" />
+  }
+
+  @if (viewState() === 'stale') {
+    <app-setup-notice [setup]="setup()" />
+  }
+
+  @if (viewState() === 'ready' || viewState() === 'stale') {
     <header>
       <p class="muted">Active Hevy programme</p>
       <h1>{{ data.split_name }}</h1>
