@@ -2297,6 +2297,65 @@ def set_active_programme(
         )
 
 
+def activate_programme_definition(
+    user_id: str,
+    source: str,
+    template_key: str,
+    definition: dict[str, Any],
+    *,
+    start_date: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Activate a programme definition and its start date atomically.
+
+    The programme row and the ``programme_start_date`` metadata are written in
+    a single transaction so a failed activation never leaves a programme
+    without its start date (or the other way round).
+    """
+    if source == "template":
+        raise ValueError(
+            "Static programme templates have been removed; activate a Hevy-derived definition."
+        )
+    if not isinstance(definition, dict) or not definition:
+        raise ValueError("A non-empty Hevy-derived programme definition is required.")
+
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE programmes SET active = 0 WHERE user_id = ?",
+            (user_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO programmes
+                (user_id, source, template_key, definition, active,
+                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(user_id, template_key) DO UPDATE SET
+                source = excluded.source,
+                definition = excluded.definition,
+                active = 1,
+                updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                source,
+                template_key,
+                json.dumps(definition, default=str),
+                now,
+                now,
+            ),
+        )
+        if start_date:
+            conn.execute(
+                """
+                INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (user_id, "programme_start_date", start_date),
+            )
+
+
 def save_notification(
     user_id: str,
     title: str,

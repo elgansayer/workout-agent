@@ -29,12 +29,25 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 import analytics
 import insights
 import lifestyle
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
-from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -73,7 +86,6 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from dynamic_programme import (
@@ -85,28 +97,23 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from hevy_client import HevyAuthError, HevyError, HevyRateLimitError
 from hevy_parser import normalise_name
-from hevy_reader import HevyTrainingData
+from hevy_reader import HevySourceSnapshot
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
+from programme_service import (
+    ProgrammeValidationError,
+    conflict_remediation,
+    detect_source_conflicts,
+)
+from programme_service import (
+    activate_programme as activate_generated_programme,
+)
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -739,6 +746,94 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
+HEVY_SYNC_META_KEY = "hevy_source_sync"
+HEVY_SYNC_STALE_HOURS = 24
+
+
+def _read_hevy_sync_state(user_id: str) -> dict[str, Any]:
+    """Return the tenant's stored Hevy sync metadata."""
+
+    raw = get_meta(HEVY_SYNC_META_KEY, DB_PATH, user_id=user_id)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _record_hevy_sync_state(user_id: str, snapshot: HevySourceSnapshot) -> None:
+    """Store the last successful Hevy sync for this tenant only.
+
+    A partial read does not replace the last successful sync: the account was
+    not read completely, so the previous complete sync stays the reference.
+    """
+
+    if snapshot.is_partial:
+        return
+    set_meta(
+        HEVY_SYNC_META_KEY,
+        json.dumps(
+            {
+                "synced_at": snapshot.fetched_at,
+                "status": snapshot.status,
+                "counts": snapshot.counts,
+            },
+            default=str,
+        ),
+        DB_PATH,
+        user_id=user_id,
+    )
+
+
+def _hevy_sync_is_stale(sync_state: dict[str, Any]) -> bool:
+    """True when the last successful sync is missing or older than a day."""
+
+    synced_at = sync_state.get("synced_at")
+    if not synced_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(str(synced_at).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    age = datetime.now(tz=timezone.utc) - parsed
+    return age > timedelta(hours=HEVY_SYNC_STALE_HOURS)
+
+
+def _connection_state_for_status(status_code: int) -> str:
+    """Map an API status code onto a builder connection state."""
+
+    if status_code == 400:
+        return "disconnected"
+    if status_code == 401:
+        return "auth_error"
+    if status_code == 429:
+        return "rate_limited"
+    return "error"
+
+
+def _authenticated_owner(user_id: str) -> str | None:
+    """Return the authenticated owner's account label for the builder."""
+
+    user = get_user_by_id(user_id, DB_PATH)
+    if not user:
+        return None
+    return str(user.get("email") or user.get("display_name") or "") or None
+
+
+def _active_definition(user_id: str) -> dict[str, Any] | None:
+    """Return the active programme definition for drift comparison."""
+
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    if not active:
+        return None
+    definition = active.get("definition")
+    return definition if isinstance(definition, dict) else None
+
+
 @app.post("/api/programmes/preview")
 def preview_programme(
     payload: ProgrammePreviewRequest,
@@ -748,9 +843,15 @@ def preview_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
-    training_data = _load_hevy_training_for_user(user_id)
+    snapshot = _load_hevy_snapshot_for_user(user_id)
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    active_definition = active.get("definition") if active else None
     try:
-        preview = build_programme_preview(training_data, payload)
+        preview = build_programme_preview(
+            snapshot.data,
+            payload,
+            active_definition=active_definition,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -766,58 +867,78 @@ def activate_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
-    training_data = _load_hevy_training_for_user(user_id)
+    snapshot = _load_hevy_snapshot_for_user(user_id)
     preview_request = ProgrammePreviewRequest.model_validate(
-        payload.model_dump(exclude={"preview_token"})
+        payload.model_dump(
+            exclude={"preview_token", "source_hashes"},
+        )
     )
     try:
-        preview = build_programme_preview(training_data, preview_request)
+        preview = build_programme_preview(
+            snapshot.data,
+            preview_request,
+            active_definition=_active_definition(user_id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if preview["preview_token"] != payload.preview_token:
+    current_hashes = [
+        {
+            "routine_id": snapshot_item["id"],
+            "source_hash": snapshot_item["source_hash"],
+        }
+        for snapshot_item in preview["source_snapshots"]
+    ]
+    titles = {
+        str(item["id"]): str(item["title"])
+        for item in preview["source_snapshots"]
+    }
+    conflict = detect_source_conflicts(
+        [
+            {
+                "routine_id": item.routine_id,
+                "source_hash": item.source_hash,
+            }
+            for item in payload.source_hashes
+        ],
+        current_hashes,
+        titles=titles,
+    ) if payload.source_hashes else {
+        "changed_routines": [],
+        "added_routines": [],
+        "removed_routines": [],
+        "has_conflicts": False,
+    }
+
+    if preview["preview_token"] != payload.preview_token or conflict["has_conflicts"]:
         raise HTTPException(
             status_code=409,
-            detail=(
-                "The Hevy routines or programme settings changed after preview. "
-                "Generate a fresh preview before activation."
-            ),
+            detail={
+                "message": (
+                    "The Hevy routines or programme settings changed after the "
+                    "preview. Generate a fresh preview before activation."
+                ),
+                "conflict": conflict,
+                "remediation": conflict_remediation(conflict),
+            },
         )
 
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
-    save_notification(
-        user_id,
-        title="Hevy programme activated",
-        message=(
-            f"{preview['name']} is active for "
-            f"{preview['cycle_weeks']} weeks using "
-            f"{preview['total_days']} selected routines."
-        ),
-        type="programme",
-        link="/plan",
-        db_path=DB_PATH,
-    )
+    try:
+        active = activate_generated_programme(user_id, preview, db_path=DB_PATH)
+    except ProgrammeValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": exc.message,
+                "violations": exc.details.get("violations", []),
+            },
+        ) from exc
 
     return JSONResponse(
         jsonable_encoder(
             {
                 "status": "ok",
-                "active_programme": get_active_programme(
-                    user_id,
-                    db_path=DB_PATH,
-                ),
+                "active_programme": active,
             }
         )
     )
@@ -852,8 +973,8 @@ async def select_programme(request: Request) -> JSONResponse:
             ),
         )
 
-    training_data = _load_hevy_training_for_user(user_id)
-    if not training_data.routines:
+    snapshot = _load_hevy_snapshot_for_user(user_id)
+    if not snapshot.data.routines:
         raise HTTPException(
             status_code=422,
             detail="No Hevy routines are available for programme generation.",
@@ -861,7 +982,9 @@ async def select_programme(request: Request) -> JSONResponse:
 
     try:
         preview_request = ProgrammePreviewRequest(
-            selected_routine_ids=[routine.id for routine in training_data.routines],
+            selected_routine_ids=[
+                routine.id for routine in snapshot.data.routines
+            ],
             duration_weeks=int(body.get("duration_weeks") or 12),
             goal=body.get("goal") or "general_fitness",
             start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
@@ -872,23 +995,20 @@ async def select_programme(request: Request) -> JSONResponse:
                 body.get("adaptation_aggressiveness") or "balanced"
             ),
         )
-        preview = build_programme_preview(training_data, preview_request)
+        preview = build_programme_preview(snapshot.data, preview_request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
+    try:
+        activate_generated_programme(user_id, preview, db_path=DB_PATH)
+    except ProgrammeValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": exc.message,
+                "violations": exc.details.get("violations", []),
+            },
+        ) from exc
     return JSONResponse(
         jsonable_encoder(
             {
@@ -900,12 +1020,8 @@ async def select_programme(request: Request) -> JSONResponse:
     )
 
 
-def _load_hevy_training_for_user(
-    user_id: str,
-    *,
-    workout_limit: int = 56,
-) -> HevyTrainingData:
-    """Fetch the current user's Hevy source data or raise a useful API error."""
+def _hevy_api_key_for_user(user_id: str) -> str:
+    """Return the tenant's Hevy API key or raise a useful API error."""
 
     keys = get_user_api_keys(user_id, db_path=DB_PATH)
     hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
@@ -914,15 +1030,44 @@ def _load_hevy_training_for_user(
             status_code=400,
             detail="No Hevy API key configured. Add your key in Settings first.",
         )
+    return hevy_key
 
-    from hevy_reader import fetch_user_training
+
+def _load_hevy_snapshot_for_user(
+    user_id: str,
+    *,
+    workout_limit: int = 56,
+) -> HevySourceSnapshot:
+    """Fetch the current user's Hevy source data or raise a useful API error.
+
+    Provider failures are mapped onto distinct status codes so the builder can
+    show authentication, rate-limit and outage states separately.
+    """
+
+    hevy_key = _hevy_api_key_for_user(user_id)
+
+    from hevy_reader import fetch_user_training_snapshot
 
     try:
-        return fetch_user_training(
+        return fetch_user_training_snapshot(
             hevy_key,
             workout_limit=workout_limit,
         )
-    except Exception as exc:
+    except HevyAuthError as exc:
+        logger.warning("Hevy rejected the stored credential for user %s.", user_id)
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Hevy rejected your API key. Update it in Settings and refresh."
+            ),
+        ) from exc
+    except HevyRateLimitError as exc:
+        logger.warning("Hevy rate limited user %s.", user_id)
+        raise HTTPException(
+            status_code=429,
+            detail="Hevy is rate limiting requests. Try again in a few minutes.",
+        ) from exc
+    except HevyError as exc:
         logger.exception(
             "Could not fetch Hevy source data for user %s.",
             user_id,
@@ -1570,6 +1715,7 @@ def api_plan(request: Request) -> JSONResponse:
                 "days": runtime.days,
                 "programme_status": runtime.status,
                 "rotation_message": runtime.message,
+                "next_session_date": runtime.next_session_date,
                 "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
@@ -1586,8 +1732,7 @@ def api_programmes(request: Request) -> JSONResponse:
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    sync_state = _read_hevy_sync_state(user_id)
 
     empty_source: dict[str, Any] = {
         "username": None,
@@ -1600,27 +1745,42 @@ def api_programmes(request: Request) -> JSONResponse:
     connection: dict[str, Any]
     source = empty_source
 
-    if not hevy_key:
+    try:
+        _hevy_api_key_for_user(user_id)
+    except HTTPException as exc:
         connection = {
             "state": "disconnected",
-            "detail": "Add your Hevy API key in Settings to import routines.",
+            "detail": str(exc.detail),
             "username": None,
         }
     else:
         try:
-            training_data = _load_hevy_training_for_user(user_id)
-            source = serialise_hevy_source(training_data)
+            snapshot = _load_hevy_snapshot_for_user(user_id)
+            source = serialise_hevy_source(snapshot.data)
             connection = {
-                "state": "connected",
+                "state": "partial" if snapshot.is_partial else "connected",
                 "detail": None,
-                "username": training_data.username,
+                "username": snapshot.data.username,
             }
+            connection["warnings"] = list(snapshot.warnings)
+            connection["counts"] = dict(snapshot.counts)
+            connection["fetched_at"] = snapshot.fetched_at
+            _record_hevy_sync_state(user_id, snapshot)
+            sync_state = _read_hevy_sync_state(user_id)
         except HTTPException as exc:
             connection = {
-                "state": "error",
+                "state": _connection_state_for_status(exc.status_code),
                 "detail": str(exc.detail),
                 "username": None,
+                "warnings": [],
+                "counts": {},
             }
+
+    connection.setdefault("warnings", [])
+    connection.setdefault("counts", {})
+    connection["owner"] = _authenticated_owner(user_id)
+    connection["last_successful_sync"] = sync_state.get("synced_at")
+    connection["stale"] = _hevy_sync_is_stale(sync_state)
 
     return JSONResponse(
         jsonable_encoder(
@@ -1636,6 +1796,87 @@ def api_programmes(request: Request) -> JSONResponse:
                     "default_weeks": 12,
                 },
                 "goals": goal_options(),
+                "cadence": {
+                    "modes": [
+                        {
+                            "key": "rolling",
+                            "label": "Rolling rotation",
+                            "description": (
+                                "Keep the routine order and advance one routine per "
+                                "training day."
+                            ),
+                        },
+                        {
+                            "key": "weekly",
+                            "label": "Weekly calendar",
+                            "description": (
+                                "Place routines on the weekdays you actually train."
+                            ),
+                        },
+                    ],
+                    "weekdays": [
+                        {"index": index, "name": name}
+                        for index, name in enumerate(
+                            (
+                                "Monday",
+                                "Tuesday",
+                                "Wednesday",
+                                "Thursday",
+                                "Friday",
+                                "Saturday",
+                                "Sunday",
+                            )
+                        )
+                    ],
+                    "roles": [
+                        {"key": "required", "label": "Required"},
+                        {"key": "optional", "label": "Optional"},
+                        {"key": "rotating", "label": "Rotating"},
+                    ],
+                },
+            }
+        )
+    )
+
+
+@app.post("/api/programmes/refresh")
+def api_programmes_refresh(request: Request) -> JSONResponse:
+    """Re-read the tenant's Hevy source and record the sync result."""
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        snapshot = _load_hevy_snapshot_for_user(user_id)
+    except HTTPException as exc:
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "state": _connection_state_for_status(exc.status_code),
+                    "detail": str(exc.detail),
+                    "source": None,
+                    "counts": {},
+                    "warnings": [],
+                    "last_successful_sync": _read_hevy_sync_state(user_id).get(
+                        "synced_at"
+                    ),
+                    "stale": True,
+                }
+            ),
+            status_code=200,
+        )
+
+    _record_hevy_sync_state(user_id, snapshot)
+    sync_state = _read_hevy_sync_state(user_id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "state": "partial" if snapshot.is_partial else "ok",
+                "detail": None,
+                "source": serialise_hevy_source(snapshot.data),
+                "counts": dict(snapshot.counts),
+                "warnings": list(snapshot.warnings),
+                "last_successful_sync": sync_state.get("synced_at"),
+                "stale": False,
             }
         )
     )

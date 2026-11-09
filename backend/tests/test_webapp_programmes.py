@@ -3,19 +3,21 @@ from __future__ import annotations
 import base64
 import importlib
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+from itsdangerous import TimestampSigner
+from starlette.testclient import TestClient
 
 import database
 from hevy_reader import (
     CompletedWorkout,
     ExerciseTemplate,
+    HevySourceSnapshot,
     HevyTrainingData,
     Routine,
     RoutineExercise,
 )
-from itsdangerous import TimestampSigner
-from starlette.testclient import TestClient
 
 _SECRET = "programmes-test-secret-that-is-long-enough"
 
@@ -98,6 +100,29 @@ def _training_data() -> HevyTrainingData:
     )
 
 
+def _snapshot(
+    data: HevyTrainingData | None = None,
+    *,
+    status: str = "ok",
+    warnings: list[str] | None = None,
+    fetched_at: str | None = None,
+) -> HevySourceSnapshot:
+    training = data or _training_data()
+    return HevySourceSnapshot(
+        data=training,
+        status=status,
+        fetched_at=fetched_at or datetime.now(tz=timezone.utc).isoformat(),
+        warnings=list(warnings or []),
+        counts={
+            "routines": len(training.routines),
+            "folders": len(training.folders),
+            "exercise_templates": len(training.exercise_templates),
+            "recent_workouts": len(training.recent_workouts),
+            "workouts": int(training.workout_count or 0),
+        },
+    )
+
+
 def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     db_file = str(tmp_path / "test.db")
     database.init_db(db_file)
@@ -118,16 +143,16 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     )
     monkeypatch.setattr(
         app_module,
-        "_load_hevy_training_for_user",
-        lambda *args, **kwargs: _training_data(),
+        "_load_hevy_snapshot_for_user",
+        lambda *args, **kwargs: _snapshot(),
     )
     client = TestClient(app_module.app)
     client.cookies.set("session", _session_cookie(database.get_legacy_user_id(db_file)))
     return client, app_module, db_file
 
 
-def _payload() -> dict[str, Any]:
-    return {
+def _payload(**overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "selected_routine_ids": ["routine-b", "routine-a"],
         "duration_weeks": 12,
         "goal": "hypertrophy",
@@ -137,6 +162,8 @@ def _payload() -> dict[str, Any]:
         "max_session_minutes": 90,
         "adaptation_aggressiveness": "balanced",
     }
+    payload.update(overrides)
+    return payload
 
 
 def test_programme_builder_returns_hevy_source_without_templates(
@@ -156,6 +183,107 @@ def test_programme_builder_returns_hevy_source_without_templates(
         "routine-b",
     ]
     assert data["source"]["routines"][0]["exercises"][0]["set_targets"]
+
+
+def test_builder_reports_owner_sync_state_and_counts(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+
+    data = client.get("/api/programmes").json()
+    connection = data["connection"]
+
+    user_id = database.get_legacy_user_id(db_file)
+    assert connection["owner"] == database.get_user_by_id(user_id, db_file)["email"]
+    assert connection["username"] == "fixture-user"
+    assert connection["counts"]["routines"] == 2
+    assert connection["last_successful_sync"] is not None
+    assert connection["stale"] is False
+
+    stored = database.get_meta(
+        "hevy_source_sync", db_file, user_id=database.get_legacy_user_id(db_file)
+    )
+    assert stored is not None
+    assert json.loads(stored)["counts"]["routines"] == 2
+
+
+def test_builder_reports_partial_source_state(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, app_module, _db_file = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        app_module,
+        "_load_hevy_snapshot_for_user",
+        lambda *args, **kwargs: _snapshot(
+            status="partial",
+            warnings=["Routine folders could not be read from Hevy: timeout"],
+        ),
+    )
+
+    data = client.get("/api/programmes").json()
+    assert data["connection"]["state"] == "partial"
+    assert data["connection"]["warnings"]
+
+
+def test_refresh_endpoint_reports_partial_success(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, app_module, _db_file = _client(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        app_module,
+        "_load_hevy_snapshot_for_user",
+        lambda *args, **kwargs: _snapshot(status="partial", warnings=["folders stale"]),
+    )
+
+    response = client.post("/api/programmes/refresh")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["state"] == "partial"
+    assert body["warnings"] == ["folders stale"]
+    assert body["counts"]["routines"] == 2
+
+
+def test_refresh_endpoint_reports_auth_and_rate_limit_states(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    from fastapi import HTTPException
+
+    client, app_module, _db_file = _client(tmp_path, monkeypatch)
+
+    def _raise(status_code: int, detail: str):
+        def _loader(*args: Any, **kwargs: Any) -> None:
+            raise HTTPException(status_code=status_code, detail=detail)
+
+        return _loader
+
+    monkeypatch.setattr(
+        app_module,
+        "_load_hevy_snapshot_for_user",
+        _raise(401, "Hevy rejected your API key. Update it in Settings and refresh."),
+    )
+    auth = client.post("/api/programmes/refresh").json()
+    assert auth["state"] == "auth_error"
+    assert "rejected" in auth["detail"]
+
+    monkeypatch.setattr(
+        app_module,
+        "_load_hevy_snapshot_for_user",
+        _raise(429, "Hevy is rate limiting requests. Try again in a few minutes."),
+    )
+    limited = client.post("/api/programmes/refresh").json()
+    assert limited["state"] == "rate_limited"
+
+    monkeypatch.setattr(
+        app_module,
+        "_load_hevy_snapshot_for_user",
+        _raise(502, "Hevy could not be reached. Check the connection and try again."),
+    )
+    failed = client.post("/api/programmes/refresh").json()
+    assert failed["state"] == "error"
 
 
 def test_preview_activation_and_plan_round_trip(
@@ -180,7 +308,17 @@ def test_preview_activation_and_plan_round_trip(
 
     activation_response = client.post(
         "/api/programmes/activate",
-        json={**_payload(), "preview_token": preview["preview_token"]},
+        json={
+            **_payload(),
+            "preview_token": preview["preview_token"],
+            "source_hashes": [
+                {
+                    "routine_id": snapshot["id"],
+                    "source_hash": snapshot["source_hash"],
+                }
+                for snapshot in preview["source_snapshots"]
+            ],
+        },
     )
     assert activation_response.status_code == 200
 
@@ -206,6 +344,90 @@ def test_preview_activation_and_plan_round_trip(
     assert dashboard["block"]["number"] >= 1
 
 
+def test_preview_reports_cadence_schedule_and_muscle_sets(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/programmes/preview",
+        json=_payload(
+            cadence={"mode": "weekly", "weekdays": [0, 2, 4]},
+            routine_selections=[
+                {"routine_id": "routine-a", "role": "required"},
+                {"routine_id": "routine-b", "role": "rotating"},
+            ],
+            sessions_per_week=3,
+        ),
+    )
+    assert response.status_code == 200
+    preview = response.json()["preview"]
+
+    assert preview["cadence"]["mode"] == "weekly"
+    assert preview["cadence"]["training_day_names"] == [
+        "Monday",
+        "Wednesday",
+        "Friday",
+    ]
+    assert preview["cadence"]["sessions_per_week"] == 3
+    assert len(preview["schedule"]) == 36
+    assert preview["schedule"][0]["date"] == "2026-09-02"
+    assert preview["muscle_sets"]["weekly_sets"]["chest"] == 3.0
+    assert preview["blocking_violations"] == []
+
+
+def test_preview_reports_blocking_violation_when_a_routine_cannot_be_scheduled(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/programmes/preview",
+        json=_payload(
+            cadence={"mode": "weekly", "weekdays": [0]},
+            routine_selections=[
+                {"routine_id": "routine-a", "role": "required"},
+                {"routine_id": "routine-b", "role": "required"},
+            ],
+            sessions_per_week=1,
+        ),
+    )
+    assert response.status_code == 200
+    preview = response.json()["preview"]
+    codes = {item["code"] for item in preview["blocking_violations"]}
+    assert "routine_not_scheduled" in codes
+
+
+def test_activation_refuses_a_preview_with_blocking_violations(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+
+    payload = _payload(
+        cadence={"mode": "weekly", "weekdays": [0]},
+        routine_selections=[
+            {"routine_id": "routine-a", "role": "required"},
+            {"routine_id": "routine-b", "role": "required"},
+        ],
+        sessions_per_week=1,
+    )
+    preview = client.post("/api/programmes/preview", json=payload).json()["preview"]
+
+    response = client.post(
+        "/api/programmes/activate",
+        json={**payload, "preview_token": preview["preview_token"]},
+    )
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["violations"]
+    assert database.get_active_programme(
+        database.get_legacy_user_id(db_file), db_path=db_file
+    ) is None
+
+
 def test_activation_rejects_changed_preview_token(
     tmp_path: Any,
     monkeypatch: Any,
@@ -217,6 +439,49 @@ def test_activation_rejects_changed_preview_token(
         json={**_payload(), "preview_token": "0" * 64},
     )
     assert response.status_code == 409
+    assert "changed" in response.json()["detail"]["message"].lower()
+
+
+def test_activation_reports_which_routine_changed(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+
+    preview = client.post("/api/programmes/preview", json=_payload()).json()["preview"]
+    response = client.post(
+        "/api/programmes/activate",
+        json={
+            **_payload(),
+            "preview_token": preview["preview_token"],
+            "source_hashes": [
+                {
+                    "routine_id": snapshot["id"],
+                    "source_hash": "stale-hash",
+                }
+                for snapshot in preview["source_snapshots"]
+            ],
+        },
+    )
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    changed = detail["conflict"]["changed_routines"]
+    assert {item["routine_id"] for item in changed} == {"routine-a", "routine-b"}
+    assert detail["remediation"]
+
+
+def test_preview_rejects_routines_from_another_account(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/programmes/preview",
+        json=_payload(selected_routine_ids=["someone-elses-routine"]),
+    )
+    assert response.status_code == 422
+    assert "not available" in response.json()["detail"]
 
 
 def test_static_template_compatibility_key_is_gone(

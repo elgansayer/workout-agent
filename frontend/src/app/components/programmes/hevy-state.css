@@ -1,0 +1,41 @@
+.source-status {
+  border-color: var(--accent);
+  margin-bottom: 1.25rem;
+}
+
+.state-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  margin: 1rem 0 0;
+}
+
+.state-grid div {
+  border: 1px solid var(--border, #374151);
+  border-radius: 0.6rem;
+  padding: 0.6rem 0.75rem;
+}
+
+.state-grid dt {
+  color: var(--muted, #9ca3af);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+}
+
+.state-grid dd {
+  font-weight: 700;
+  margin: 0.25rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.warning-list {
+  background: rgb(245 158 11 / 0.12);
+  border: 1px solid rgb(245 158 11 / 0.55);
+  border-radius: 0.65rem;
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+}
+
+.warning-list p {
+  margin: 0.3rem 0;
+}
