@@ -84,6 +84,7 @@ from dynamic_programme import (
     build_programme_preview,
     goal_options,
     serialise_hevy_source,
+    validate_programme_preview,
 )
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,7 +107,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -749,8 +749,13 @@ def preview_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    active = get_active_programme(user_id, db_path=DB_PATH)
     try:
-        preview = build_programme_preview(training_data, payload)
+        preview = build_programme_preview(
+            training_data,
+            payload,
+            active_definition=active.get("definition") if active else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -770,8 +775,13 @@ def activate_programme(
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
+    active = get_active_programme(user_id, db_path=DB_PATH)
     try:
-        preview = build_programme_preview(training_data, preview_request)
+        preview = build_programme_preview(
+            training_data,
+            preview_request,
+            active_definition=active.get("definition") if active else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -782,6 +792,19 @@ def activate_programme(
                 "The Hevy routines or programme settings changed after preview. "
                 "Generate a fresh preview before activation."
             ),
+        )
+
+    violations = validate_programme_preview(preview)
+    if violations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "The generated programme violates a blocking constraint and "
+                    "cannot be activated."
+                ),
+                "violations": violations,
+            },
         )
 
     set_active_programme(
@@ -875,6 +898,19 @@ async def select_programme(request: Request) -> JSONResponse:
         preview = build_programme_preview(training_data, preview_request)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    violations = validate_programme_preview(preview)
+    if violations:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": (
+                    "The generated programme violates a blocking constraint and "
+                    "cannot be activated."
+                ),
+                "violations": violations,
+            },
+        )
 
     set_active_programme(
         user_id,

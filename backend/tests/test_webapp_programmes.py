@@ -316,3 +316,34 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     stored = database.get_active_programme(user_id, db_file)
     assert stored is not None
     assert stored["definition"] == definition
+
+
+def test_activation_is_blocked_by_structured_constraint_violation(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+    payload = {
+        **_payload(),
+        "constraints": {"max_sessions_per_week": 1},
+    }
+
+    preview_response = client.post("/api/programmes/preview", json=payload)
+    assert preview_response.status_code == 200
+    preview = preview_response.json()["preview"]
+    assert preview["blocking_violations"]
+    assert any(
+        item["code"] == "session_limit_exceeded"
+        for item in preview["blocking_violations"]
+    )
+
+    activation_response = client.post(
+        "/api/programmes/activate",
+        json={**payload, "preview_token": preview["preview_token"]},
+    )
+    assert activation_response.status_code == 422
+    detail = activation_response.json()["detail"]
+    assert detail["violations"]
+
+    legacy_uid = database.get_legacy_user_id(db_file)
+    assert database.get_active_programme(legacy_uid, db_path=db_file) is None
