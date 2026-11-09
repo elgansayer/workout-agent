@@ -1,8 +1,8 @@
-@if (loading()) {
-  <div class="loading-state muted" role="status">Loading...</div>
+@if (viewState() === 'loading') {
+  <div class="loading-state muted" role="status">Loading your training history…</div>
 }
 
-@if (error()) {
+@if (viewState() === 'failed') {
   <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
     <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
@@ -14,36 +14,46 @@
 @if (data(); as data) {
   <h1>History</h1>
 
-  <section class="panel">
-    <h2>Training calendar</h2>
-    <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>
-  </section>
+  @if (viewState() === 'empty') {
+    <app-setup-notice [setup]="setup()" />
+  }
 
-  <section class="panel">
-    <h2>Daily log</h2>
-    @if (!data.logs || data.logs.length === 0) {
-      <p class="muted">
-        No daily plans logged yet. Each morning run records the day's plan and lifestyle guidance
-        here.
-      </p>
-    }
-    <app-list-controls [list]="logs" id="history" label="logs">
-      <div class="log-list">
-        @for (log of logs.visible(); track log.date + (logs.start() + $index)) {
-          <details class="log-row" [class.rest]="log.day === null || log.day === undefined">
-            <summary class="log-head">
-              <span class="log-date">{{ log.date | date: 'shortDate' }}</span>
-              <span class="log-focus">{{ log.focus }}</span>
-              @if (log.carb_tier) {
-                <span class="chip ghost">{{ log.carb_tier }} carb</span>
+  @if (viewState() === 'stale') {
+    <app-setup-notice [setup]="setup()" />
+  }
+
+  @if (viewState() === 'ready' || viewState() === 'stale') {
+    <section class="panel">
+      <h2>Training calendar</h2>
+      <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Daily log</h2>
+      @if (!data.logs || data.logs.length === 0) {
+        <p class="muted">
+          No daily plans logged yet. Once your programme is running, the daily run records the day's
+          plan and lifestyle guidance here.
+        </p>
+      }
+      <app-list-controls [list]="logs" id="history" label="logs">
+        <div class="log-list">
+          @for (log of logs.visible(); track log.date + (logs.start() + $index)) {
+            <details class="log-row" [class.rest]="log.day === null || log.day === undefined">
+              <summary class="log-head">
+                <span class="log-date">{{ log.date | date: 'shortDate' }}</span>
+                <span class="log-focus">{{ log.focus }}</span>
+                @if (log.carb_tier) {
+                  <span class="chip ghost">{{ log.carb_tier }} carb</span>
+                }
+              </summary>
+              @if (log.plan) {
+                <pre class="log-body">{{ log.plan }}</pre>
               }
-            </summary>
-            @if (log.plan) {
-              <pre class="log-body">{{ log.plan }}</pre>
-            }
-          </details>
-        }
-      </div>
-    </app-list-controls>
-  </section>
+            </details>
+          }
+        </div>
+      </app-list-controls>
+    </section>
+  }
 }
