@@ -366,6 +366,12 @@ h1 { font-size: clamp(1.4rem, 4vw, 1.8rem); margin: 0.2rem 0 1rem; }
     white-space: nowrap;
 }
 
+.badge.badge-alert {
+    background: rgb(239 68 68 / 0.18);
+    border-color: rgb(239 68 68 / 0.6);
+    color: #fecaca;
+}
+
 /* ---- Donut legend ---- */
 .donut-wrap { display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
 .legend { display: flex; flex-direction: column; gap: 0.4rem; flex: 1; min-width: 150px; }

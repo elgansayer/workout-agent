@@ -8,11 +8,14 @@ from typing import Any
 import pytest
 from dynamic_programme import (
     ENGINE_VERSION,
+    ProgrammeCadence,
     ProgrammePreviewRequest,
+    RoutineSelection,
     build_programme_preview,
     detect_source_drift,
     goal_options,
     serialise_hevy_source,
+    validate_programme_preview,
 )
 from hevy_reader import (
     CompletedWorkout,
@@ -287,6 +290,198 @@ def test_sparse_history_is_labelled_low_confidence(
     assert any("confidence is low" in warning for warning in preview["warnings"])
 
 
+def test_rolling_cadence_keeps_the_selected_order(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        _request(selected=["routine-lower", "routine-upper"]),
+    )
+
+    cadence = preview["cadence"]
+    assert cadence["mode"] == "rolling"
+    assert [entry["routine_id"] for entry in cadence["rotation"]] == [
+        "routine-lower",
+        "routine-upper",
+    ]
+    assert cadence["sessions_per_week"] == 7
+    assert all(entry["scheduled"] for entry in cadence["rotation"])
+
+
+def test_weekly_cadence_places_routines_on_the_selected_weekdays(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        ProgrammePreviewRequest(
+            selected_routine_ids=["routine-upper", "routine-lower"],
+            duration_weeks=12,
+            goal="general_fitness",
+            start_date=date(2026, 9, 7),
+            cadence=ProgrammeCadence(mode="weekly", weekdays=[0, 2, 4]),
+            routine_selections=[
+                RoutineSelection(routine_id="routine-upper", role="required"),
+                RoutineSelection(routine_id="routine-lower", role="rotating"),
+            ],
+        ),
+    )
+
+    cadence = preview["cadence"]
+    assert cadence["training_day_names"] == ["Monday", "Wednesday", "Friday"]
+    assert cadence["sessions_per_week"] == 3
+    upper = next(
+        entry for entry in cadence["rotation"] if entry["routine_id"] == "routine-upper"
+    )
+    lower = next(
+        entry for entry in cadence["rotation"] if entry["routine_id"] == "routine-lower"
+    )
+    assert upper["scheduled_weekday_names"] == ["Monday"]
+    assert lower["scheduled_weekday_names"] == ["Wednesday", "Friday"]
+    assert preview["blocking_violations"] == []
+    assert len(preview["schedule"]) == 36
+    assert preview["schedule"][0]["date"] == "2026-09-07"
+
+
+def test_required_routine_without_a_weekday_is_a_blocking_violation(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        ProgrammePreviewRequest(
+            selected_routine_ids=["routine-upper", "routine-lower"],
+            duration_weeks=12,
+            goal="general_fitness",
+            start_date=date(2026, 9, 7),
+            cadence=ProgrammeCadence(mode="weekly", weekdays=[0]),
+            routine_selections=[
+                RoutineSelection(routine_id="routine-upper", role="required"),
+                RoutineSelection(routine_id="routine-lower", role="required"),
+            ],
+        ),
+    )
+
+    codes = {item["code"] for item in preview["blocking_violations"]}
+    assert "routine_not_scheduled" in codes
+    assert validate_programme_preview(preview) == preview["blocking_violations"]
+
+
+def test_optional_routines_are_dropped_when_the_week_runs_out_of_days(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        ProgrammePreviewRequest(
+            selected_routine_ids=["routine-upper", "routine-lower"],
+            duration_weeks=8,
+            goal="general_fitness",
+            start_date=date(2026, 9, 7),
+            cadence=ProgrammeCadence(mode="weekly", weekdays=[0]),
+            routine_selections=[
+                RoutineSelection(routine_id="routine-upper", role="required"),
+                RoutineSelection(routine_id="routine-lower", role="optional"),
+            ],
+        ),
+    )
+
+    assert preview["blocking_violations"] == []
+    dropped = preview["cadence"]["unscheduled_routines"]
+    assert [entry["routine_id"] for entry in dropped] == ["routine-lower"]
+    assert dropped[0]["role"] == "optional"
+
+
+def test_muscle_set_estimates_use_the_fractional_model(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        ProgrammePreviewRequest(
+            selected_routine_ids=["routine-upper", "routine-lower"],
+            duration_weeks=12,
+            goal="general_fitness",
+            start_date=date(2026, 9, 7),
+            cadence=ProgrammeCadence(mode="weekly", weekdays=[0, 2, 4]),
+        ),
+    )
+
+    weekly = preview["muscle_sets"]["weekly_sets"]
+    # Bench: 4 direct chest sets; pull-up adds 1.5 secondary triceps sets.
+    assert weekly["chest"] == 4.0
+    assert weekly["upper_back"] == 3.0
+    assert weekly["lats"] == 3.0
+    assert weekly["triceps"] == 2.0
+    assert all(
+        estimate["status"] in {"within_reference_range", "below_reference_range"}
+        for estimate in preview["muscle_sets"]["estimates"]
+    )
+
+
+def test_source_drift_is_reported_against_the_active_programme(
+    training_data: HevyTrainingData,
+) -> None:
+    first = build_programme_preview(training_data, _request())
+    assert first["drift"]["state"] == "no_active_programme"
+
+    unchanged = build_programme_preview(
+        training_data,
+        _request(),
+        active_definition=first,
+    )
+    assert unchanged["drift"]["state"] == "in_sync"
+
+    training_data.routines[0].exercises[0].sets = 5
+    changed = build_programme_preview(
+        training_data,
+        _request(),
+        active_definition=first,
+    )
+    assert changed["drift"]["state"] == "changed"
+    assert changed["drift"]["changed_routines"] == ["routine-upper"]
+    assert any("different Hevy routine revisions" in w for w in changed["warnings"])
+
+
+def test_exercise_baselines_come_from_the_users_own_history(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(training_data, _request())
+
+    baselines = {
+        entry["template_id"]: entry
+        for entry in preview["analysis"]["exercise_baselines"]
+    }
+    assert baselines["bench"]["exposures"] == 4
+    assert baselines["bench"]["source"] == "hevy_history"
+
+
+def test_event_date_before_the_start_blocks_activation(
+    training_data: HevyTrainingData,
+) -> None:
+    preview = build_programme_preview(
+        training_data,
+        ProgrammePreviewRequest(
+            selected_routine_ids=["routine-upper"],
+            duration_weeks=12,
+            goal="strength_test",
+            start_date=date(2026, 9, 1),
+            event_date=date(2026, 8, 1),
+        ),
+    )
+
+    codes = {item["code"] for item in preview["blocking_violations"]}
+    assert "event_before_start" in codes
+
+
+def test_unsupported_set_fields_are_reported_to_the_user(
+    training_data: HevyTrainingData,
+) -> None:
+    training_data.routines[0].exercises[0].set_targets = [
+        {"type": "normal", "reps": 6, "weight_kg": 50.0, "rpe": 9, "tempo": "3-1-1"},
+    ]
+
+    source = serialise_hevy_source(training_data)
+    exercise = source["routines"][0]["exercises"][0]
+    assert exercise["unsupported_fields"] == ["rpe", "tempo"]
+    assert exercise["set_summary"][0]["rpe"] == 9
+    assert source["routines"][0]["unsupported_fields"] == ["rpe", "tempo"]
 def test_source_drift_is_unchanged_for_identical_live_source(
     training_data: HevyTrainingData,
 ) -> None:

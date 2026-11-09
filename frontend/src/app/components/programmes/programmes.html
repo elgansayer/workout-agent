@@ -5,6 +5,11 @@
 @if (error()) {
   <div class="panel error-panel" role="alert">
     <strong>Programme builder:</strong> {{ error() }}
+    <p>
+      <button type="button" class="btn btn-secondary" (click)="loadProgrammes(true)">
+        Try again
+      </button>
+    </p>
   </div>
 }
 
@@ -14,22 +19,24 @@
   </div>
 }
 
+<app-hevy-state [data]="data()" />
+
 @if (data(); as data) {
   <header class="builder-header">
     <div>
       <p class="eyebrow">Hevy-native programming</p>
       <h1>Build a programme from your Hevy routines</h1>
       <p class="muted">
-        Select the routines you already use, choose the goal and duration, then review the exact
-        source routines and generated blocks before activation. Your original Hevy routines remain
-        read-only.
+        Select the routines you already use, choose the goal, duration and schedule, then review
+        the exact source routines and the generated blocks before activation. Your original Hevy
+        routines remain read-only.
       </p>
     </div>
     <button
       type="button"
       class="btn btn-secondary"
       [disabled]="refreshing() || previewing() || activating()"
-      (click)="loadProgrammes(true)"
+      (click)="refreshFromHevy()"
     >
       {{ refreshing() ? 'Refreshing…' : 'Refresh from Hevy' }}
     </button>
@@ -141,7 +148,7 @@
     }
   }
 
-  @if (data.connection.state === 'disconnected') {
+  @if (connectionState() === 'disconnected') {
     <section class="panel empty-state">
       <h2>Connect Hevy first</h2>
       <p class="muted">
@@ -150,11 +157,23 @@
       </p>
       <a class="btn" href="/settings">Open Settings</a>
     </section>
-  } @else if (data.connection.state === 'error') {
+  } @else if (connectionState() === 'auth_error') {
+    <section class="panel error-panel" role="alert">
+      <h2>Hevy rejected your API key</h2>
+      <p>{{ data.connection.detail }}</p>
+      <a class="btn" href="/settings">Update your Hevy key</a>
+    </section>
+  } @else if (connectionState() === 'rate_limited') {
+    <section class="panel error-panel" role="alert">
+      <h2>Hevy is rate limiting requests</h2>
+      <p>{{ data.connection.detail }}</p>
+      <button type="button" class="btn" (click)="refreshFromHevy()">Try again</button>
+    </section>
+  } @else if (connectionState() === 'error') {
     <section class="panel error-panel" role="alert">
       <h2>Hevy source unavailable</h2>
       <p>{{ data.connection.detail }}</p>
-      <button type="button" class="btn" (click)="loadProgrammes(true)">Try again</button>
+      <button type="button" class="btn" (click)="refreshFromHevy()">Try again</button>
     </section>
   } @else if (!data.source.routines.length) {
     <section class="panel empty-state">
@@ -163,6 +182,7 @@
         Create at least one routine in Hevy, then refresh this page. Workout history alone is not
         used as an invisible static template.
       </p>
+      <button type="button" class="btn" (click)="refreshFromHevy()">Refresh from Hevy</button>
     </section>
   } @else {
     <fieldset class="builder-fields" [disabled]="previewing() || activating() || refreshing()">
@@ -171,7 +191,7 @@
         <section class="panel source-panel" aria-labelledby="routine-library-heading">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Step 1</p>
+              <p class="eyebrow">Step 2</p>
               <h2 id="routine-library-heading">Select routines from Hevy</h2>
               <p class="muted">
                 {{ data.source.routine_count }} routines ·
@@ -183,97 +203,182 @@
             </div>
           </div>
 
-          <app-list-controls [list]="routineList" id="routines" label="routines">
-            <select
-              list-filter
-              aria-label="Hevy folder"
-              [ngModel]="folderFilter()"
-              (ngModelChange)="filterFolder($event)"
-            >
-              <option value="">All folders</option>
-              @for (folder of data.source.folders; track folder.id) {
-                <option [value]="folder.id">{{ folder.title }}</option>
-              }
-            </select>
-            <div class="routine-library">
-              @for (routine of visibleRoutines(); track routine.id) {
-                <article class="routine-card" [class.selected]="isSelected(routine.id)">
-                  <label class="routine-select">
-                    <input
-                      type="checkbox"
-                      [checked]="isSelected(routine.id)"
-                      (change)="toggleRoutine(routine.id)"
-                    />
-                    <span>
-                      <strong>{{ routine.title }}</strong>
-                      <small>
-                        {{ routine.exercise_count }} exercises · {{ routine.work_set_count }} sets ·
-                        approximately {{ routine.estimated_duration_minutes }} min
-                      </small>
-                    </span>
-                  </label>
-
-                  @if (routine.folder_name || routine.muscle_summary.length) {
-                    <div class="tag-row">
-                      @if (routine.folder_name) {
-                        <span class="badge">{{ routine.folder_name }}</span>
-                      }
-                      @for (muscle of routine.muscle_summary; track muscle) {
-                        <span class="badge subtle">{{ muscle }}</span>
-                      }
-                    </div>
-                  }
-
-                  <details>
-                    <summary>Hevy routine preview</summary>
-                    <ol class="source-exercises">
-                      @for (exercise of routine.exercises; track $index) {
-                        <li>
-                          <div class="exercise-source-head">
-                            <strong>{{ exercise.title }}</strong>
-                            <span> {{ exercise.sets }} sets · {{ exercise.exercise_type }} </span>
-                          </div>
-                          @if (exercise.notes) {
-                            <p class="muted">{{ exercise.notes }}</p>
-                          }
-                          <div class="set-targets">
-                            @for (target of exercise.set_targets; track $index) {
-                              <code>Set {{ $index + 1 }}: {{ target | json }}</code>
-                            } @empty {
-                              <code>No explicit Hevy set target</code>
-                            }
-                          </div>
-                          <small>
-                            Rest {{ exercise.rest_seconds }} sec
-                            @if (exercise.superset_id !== null) {
-                              · superset {{ exercise.superset_id }}
-                            }
-                          </small>
-                        </li>
-                      }
-                    </ol>
-                    <p class="source-revision">
-                      Source ID <code>{{ routine.id }}</code> · revision
-                      <code>{{ routine.source_hash.slice(0, 12) }}</code>
-                    </p>
-                  </details>
-                </article>
-              } @empty {
-                <p class="muted">No routines match the current filters.</p>
-              }
+          <div class="list-toolbar">
+            <label for="routine-search">Search Hevy routines</label>
+            <div class="input-row">
+              <input
+                id="routine-search"
+                type="search"
+                class="list-search"
+                [value]="searchQuery()"
+                (input)="setSearch($any($event.target).value)"
+              />
+              <label class="sr-only" for="folder-filter">Hevy folder</label>
+              <select
+                id="folder-filter"
+                [ngModel]="folderFilter()"
+                (ngModelChange)="filterFolder($event)"
+              >
+                <option value="">All folders</option>
+                @for (folder of data.source.folders; track folder.id) {
+                  <option [value]="folder.id">{{ folder.title }}</option>
+                }
+              </select>
             </div>
-          </app-list-controls>
+          </div>
+
+          <div class="list-pagination" aria-label="Routine folder pages">
+            <p class="muted" role="status">
+              {{ routineGroups().length }} folder groups ·
+              {{ matchingRoutines().length }} matching routines
+            </p>
+            @if (groupPageCount() > 1) {
+              <div class="pager-buttons">
+                <button
+                  class="btn btn-ghost"
+                  type="button"
+                  (click)="previousGroupPage()"
+                  [disabled]="page() === 1"
+                  aria-label="Previous routine folder page"
+                >
+                  Previous
+                </button>
+                <span class="muted">{{ page() }} / {{ groupPageCount() }}</span>
+                <button
+                  class="btn btn-ghost"
+                  type="button"
+                  (click)="nextGroupPage()"
+                  [disabled]="page() === groupPageCount()"
+                  aria-label="Next routine folder page"
+                >
+                  Next
+                </button>
+              </div>
+            }
+          </div>
+
+          @for (group of visibleGroups(); track group.key) {
+            <section class="routine-group" [attr.aria-label]="group.title">
+              <h3>{{ group.title }}</h3>
+              <div class="routine-library">
+                @for (routine of group.routines; track routine.id) {
+                  <article class="routine-card" [class.selected]="isSelected(routine.id)">
+                    <label class="routine-select">
+                      <input
+                        type="checkbox"
+                        [checked]="isSelected(routine.id)"
+                        (change)="toggleRoutine(routine.id)"
+                        [attr.aria-label]="'Select routine ' + routine.title"
+                      />
+                      <span>
+                        <strong>{{ routine.title }}</strong>
+                        <small>
+                          {{ routine.exercise_count }} exercises · {{ routine.work_set_count }} sets ·
+                          approximately {{ routine.estimated_duration_minutes }} min
+                        </small>
+                      </span>
+                    </label>
+
+                    @if (routine.folder_name || routine.muscle_summary.length) {
+                      <div class="tag-row">
+                        @if (routine.folder_name) {
+                          <span class="badge">{{ routine.folder_name }}</span>
+                        }
+                        @for (muscle of routine.muscle_summary; track muscle) {
+                          <span class="badge subtle">{{ muscle }}</span>
+                        }
+                        @if (driftFor(routine) === 'changed') {
+                          <span class="badge badge-alert">Source changed</span>
+                        }
+                        @if (driftFor(routine) === 'added') {
+                          <span class="badge badge-alert">Not in the active programme</span>
+                        }
+                      </div>
+                    }
+
+                    <p class="source-revision">
+                      Updated
+                      {{ routine.updated_at || 'not reported by Hevy' }} ·
+                      {{ routine.recent_completion_count }} recent completions
+                      @if (routine.last_performed_at) {
+                        · last performed {{ routine.last_performed_at }}
+                      }
+                    </p>
+
+                    @if (routine.unsupported_fields?.length) {
+                      <p class="warning-inline" role="note">
+                        Unsupported set fields in this routine:
+                        {{ routine.unsupported_fields.join(', ') }}. They are shown as-is and are not
+                        used for progression.
+                      </p>
+                    }
+
+                    <details>
+                      <summary>Hevy routine preview</summary>
+                      <ol class="source-exercises">
+                        @for (exercise of routine.exercises; track $index) {
+                          <li>
+                            <div class="exercise-source-head">
+                              <strong>{{ exercise.title }}</strong>
+                              <span> {{ exercise.sets }} sets · {{ exercise.exercise_type }} </span>
+                            </div>
+                            @if (exercise.notes) {
+                              <p class="muted">{{ exercise.notes }}</p>
+                            }
+                            <div class="set-targets">
+                              <app-set-targets [targets]="exercise.set_summary ?? []" />
+                            </div>
+                            @if (exercise.unsupported_fields?.length) {
+                              <small class="warning-inline">
+                                Unsupported fields: {{ exercise.unsupported_fields.join(', ') }}
+                              </small>
+                            }
+                            <small>
+                              Rest {{ exercise.rest_seconds }} sec
+                              @if (exercise.superset_id !== null) {
+                                · superset {{ exercise.superset_id }}
+                              }
+                            </small>
+                          </li>
+                        }
+                      </ol>
+                      <p class="source-revision">
+                        Source ID <code>{{ routine.id }}</code> · revision
+                        <code>{{ routine.source_hash.slice(0, 12) }}</code>
+                      </p>
+                    </details>
+                  </article>
+                }
+              </div>
+            </section>
+          } @empty {
+            <p class="muted">No routines match the current filters.</p>
+          }
         </section>
 
         <aside class="builder-sidebar">
           <section class="panel" aria-labelledby="rotation-heading">
-            <p class="eyebrow">Step 2</p>
-            <h2 id="rotation-heading">Routine order</h2>
-            <p class="muted">This ordered rotation is preserved in the generated programme.</p>
-            <ol class="selected-routines">
+            <p class="eyebrow">Step 3</p>
+            <h2 id="rotation-heading">Selected routine order</h2>
+            <p class="muted">
+              This ordered rotation is preserved in the generated programme. Use the buttons or
+              Ctrl/⌘ with the arrow keys to reorder.
+            </p>
+            <ol class="selected-routines" aria-label="Selected routines in rotation order">
               @for (routineId of selectedRoutineIds(); track routineId; let index = $index) {
                 @if (routineById(routineId); as routine) {
-                  <li>
+                  <li
+                    tabindex="0"
+                    (keydown)="onRoutineKeydown($event, index)"
+                    [attr.aria-label]="
+                      'Position ' +
+                      (index + 1) +
+                      ' of ' +
+                      selectedRoutineIds().length +
+                      ': ' +
+                      routine.title
+                    "
+                  >
                     <span>
                       <strong>{{ index + 1 }}. {{ routine.title }}</strong>
                       <small>{{ routine.exercise_count }} exercises</small>
@@ -303,16 +408,67 @@
                         Remove
                       </button>
                     </div>
+                    <label class="role-select">
+                      <span class="sr-only">Role for {{ routine.title }}</span>
+                      <select
+                        [ngModel]="roleFor(routine.id)"
+                        (ngModelChange)="setRole(routine.id, $event)"
+                        [attr.aria-label]="'Role for ' + routine.title"
+                      >
+                        <option value="required">{{ roleLabels.required }}</option>
+                        <option value="optional">{{ roleLabels.optional }}</option>
+                        <option value="rotating">{{ roleLabels.rotating }}</option>
+                      </select>
+                    </label>
                   </li>
                 }
               } @empty {
                 <li class="muted">Select at least one Hevy routine.</li>
               }
             </ol>
+
+            <fieldset class="cadence-fieldset">
+              <legend>Schedule</legend>
+              <label class="radio-row">
+                <input
+                  type="radio"
+                  name="cadence-mode"
+                  value="rolling"
+                  [checked]="cadenceMode === 'rolling'"
+                  (change)="setCadenceMode('rolling')"
+                />
+                <span>Rolling rotation — advance one routine per training day</span>
+              </label>
+              <label class="radio-row">
+                <input
+                  type="radio"
+                  name="cadence-mode"
+                  value="weekly"
+                  [checked]="cadenceMode === 'weekly'"
+                  (change)="setCadenceMode('weekly')"
+                />
+                <span>Weekly calendar — place routines on your training days</span>
+              </label>
+
+              <fieldset class="weekday-fieldset">
+                <legend>Training days</legend>
+                @for (day of weekdays; track $index) {
+                  <label class="weekday-option">
+                    <input
+                      type="checkbox"
+                      [checked]="isWeekdaySelected($index)"
+                      (change)="toggleWeekday($index)"
+                      [attr.aria-label]="day"
+                    />
+                    <span>{{ day.slice(0, 3) }}</span>
+                  </label>
+                }
+              </fieldset>
+            </fieldset>
           </section>
 
           <section class="panel settings-panel" aria-labelledby="settings-heading">
-            <p class="eyebrow">Step 3</p>
+            <p class="eyebrow">Step 4</p>
             <h2 id="settings-heading">Programme settings</h2>
 
             <label>
@@ -349,8 +505,8 @@
                 max="14"
                 [(ngModel)]="sessionsPerWeek"
                 (ngModelChange)="invalidatePreview()"
-                placeholder="Infer from history"
               />
+              <small>Keep this in step with the training days above.</small>
             </label>
 
             <label>
@@ -370,18 +526,101 @@
                 max="240"
                 [(ngModel)]="maxSessionMinutes"
                 (ngModelChange)="invalidatePreview()"
-                placeholder="No limit"
               />
-              <small>Minutes, optional</small>
+              <small>Minutes, optional. Leave blank for no limit.</small>
             </label>
 
             <label>
-              <span>Adaptation aggressiveness</span>
+              <span>Progression aggressiveness</span>
               <select [(ngModel)]="adaptationAggressiveness" (ngModelChange)="invalidatePreview()">
                 <option value="conservative">Conservative</option>
                 <option value="balanced">Balanced</option>
                 <option value="aggressive">Aggressive</option>
               </select>
+            </label>
+
+            <label>
+              <span>Fatigue management</span>
+              <select [(ngModel)]="fatigueManagement" (ngModelChange)="invalidatePreview()">
+                <option value="planned">Planned — fixed blocks, no automatic recovery week</option>
+                <option value="adaptive">Adaptive — bounded adjustments after review</option>
+              </select>
+            </label>
+
+            <label>
+              <span>Priority muscles</span>
+              <input
+                type="text"
+                [(ngModel)]="priorityMuscles"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>Comma-separated muscle names, optional.</small>
+            </label>
+
+            <label>
+              <span>Priority exercises</span>
+              <input
+                type="text"
+                [(ngModel)]="priorityExercises"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>Comma-separated exercise names, optional.</small>
+            </label>
+
+            <label>
+              <span>Test or competition date</span>
+              <input
+                type="date"
+                [(ngModel)]="eventDate"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>Only needed for test, event and peak goals</small>
+            </label>
+
+            <label>
+              <span>Concurrent training</span>
+              <input
+                type="text"
+                [(ngModel)]="concurrentTraining"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>
+                Comma-separated activities, optional. Recorded as context, no automatic volume
+                change.
+              </small>
+            </label>
+
+            <label>
+              <span>Constraints and injuries</span>
+              <input
+                type="text"
+                [(ngModel)]="injuryConstraints"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>Comma-separated constraints or injuries, optional.</small>
+            </label>
+
+            <label>
+              <span>Maximum sessions per week</span>
+              <input
+                type="number"
+                min="1"
+                max="14"
+                [(ngModel)]="maxSessionsPerWeek"
+                (ngModelChange)="invalidatePreview()"
+              />
+              <small>
+                Optional. Leave blank for no limit. Blocks activation when the schedule exceeds it.
+              </small>
+            </label>
+
+            <label>
+              <span>Notes</span>
+              <textarea
+                rows="2"
+                [(ngModel)]="constraintNotes"
+                (ngModelChange)="invalidatePreview()"
+              ></textarea>
             </label>
 
             <button
@@ -397,118 +636,16 @@
       </div>
     </fieldset>
 
-    @if (preview(); as preview) {
-      <section class="panel generated-preview" aria-labelledby="generated-preview-heading">
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Step 4</p>
-            <h2 id="generated-preview-heading">Generated programme preview</h2>
-            <p class="muted">
-              {{ preview.name }} · {{ preview.cycle_weeks }} weeks · confidence
-              {{ preview.analysis.confidence }}
-            </p>
-          </div>
-          <code>{{ preview.engine_version }}</code>
-        </div>
-
-        @if (preview.warnings.length) {
-          <div class="warning-list" role="status">
-            @for (warning of preview.warnings; track warning) {
-              <p>{{ warning }}</p>
-            }
-          </div>
-        }
-
-        <div class="block-timeline">
-          @for (block of preview.blocks; track block.number) {
-            <article class="block-preview">
-              <span class="badge">Weeks {{ block.weeks }}</span>
-              <h3>{{ block.name }}</h3>
-              <p>{{ block.focus }}</p>
-              <dl>
-                <div>
-                  <dt>Volume</dt>
-                  <dd>{{ block.volume_multiplier }}× source</dd>
-                </div>
-                <div>
-                  <dt>Effort</dt>
-                  <dd>RIR {{ block.target_rir }}</dd>
-                </div>
-                <div>
-                  <dt>Emphasis</dt>
-                  <dd>{{ block.rep_emphasis }}</dd>
-                </div>
-              </dl>
-            </article>
-          }
-        </div>
-
-        <h3>Selected Hevy routine preview</h3>
-        <div class="routine-preview-grid">
-          @for (day of preview.days; track day.routine_id) {
-            <article class="day-card">
-              <p class="eyebrow">Rotation {{ day.number }}</p>
-              <h3>{{ day.focus }}</h3>
-              <p class="muted">
-                {{ day.estimated_duration_minutes }} min ·
-                {{ day.muscles.join(', ') }}
-              </p>
-              <details>
-                <summary>{{ day.exercises.length }} exercises · View prescription</summary>
-                <ul class="day-ex">
-                  @for (exercise of day.exercises; track $index) {
-                    <li>
-                      <span>
-                        <strong>{{ exercise.name }}</strong>
-                        <small>{{ exercise.role }}</small>
-                      </span>
-                      <span>{{ exercise.scheme }}</span>
-                    </li>
-                  }
-                </ul>
-              </details>
-            </article>
-          }
-        </div>
-
-        @if (preview.blocking_violations && preview.blocking_violations.length > 0) {
-          <div class="panel error-panel" role="alert">
-            <strong>Blocking profile constraints prevent activation:</strong>
-            <ul>
-              @for (violation of preview.blocking_violations; track violation.exercise + violation.prescription) {
-                <li>
-                  <strong>{{ violation.exercise }}:</strong> {{ violation.prescription }} violates <em>{{ violation.rule }}</em>.
-                  <div><strong>Permitted remediation:</strong> {{ violation.permitted_remediation }}</div>
-                </li>
-              }
-            </ul>
-          </div>
-        }
-
-        <details>
-          <summary>Assumptions and safety bounds</summary>
-          <ul>
-            @for (assumption of preview.assumptions; track assumption) {
-              <li>{{ assumption }}</li>
-            }
-          </ul>
-        </details>
-
-        <div class="activation-row">
-          <p class="muted">
-            Activation reconfirms every Hevy source hash. A changed routine requires a fresh
-            preview.
-          </p>
-          <button
-            type="button"
-            class="btn"
-            [disabled]="activating() || (preview.blocking_violations && preview.blocking_violations.length > 0)"
-            (click)="activatePreview()"
-          >
-            {{ activating() ? 'Activating…' : 'Activate this programme' }}
-          </button>
-        </div>
-      </section>
-    }
+    <app-programme-preview
+      [preview]="preview()"
+      [routines]="selectedRoutines()"
+      [violations]="violations()"
+      [conflict]="conflict()"
+      [remediation]="remediation()"
+      [activating]="activating()"
+      [previewing]="previewing()"
+      (activate)="activatePreview()"
+      (refresh)="refreshFromHevy()"
+    />
   }
 }

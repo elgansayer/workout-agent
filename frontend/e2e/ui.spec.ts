@@ -190,15 +190,25 @@ const payloads: Record<string, unknown> = {
     rules: ['Follow your routine rotation'],
   },
   '/api/programmes': {
-    connection: { state: 'connected' },
+    connection: {
+      state: 'connected',
+      detail: null,
+      username: 'synthetic-lifter',
+      owner: 'athlete@example.test',
+      last_successful_sync: '2026-11-01T09:00:00+00:00',
+      stale: false,
+      warnings: [],
+      counts: { routines: 20, folders: 1, recent_workouts: 40 },
+    },
     source: {
       routines,
-      folders: [{ id: 'folder', title: 'Training' }],
+      folders: [{ id: 'folder', title: 'Training', routine_count: 20 }],
       routine_count: 20,
       recent_workout_count: 40,
     },
     goals: [{ key: 'general_fitness', label: 'General fitness' }],
-    duration: { minimum_weeks: 4, maximum_weeks: 24 },
+    duration: { minimum_weeks: 4, maximum_weeks: 52 },
+    cadence: { modes: [], weekdays: [], roles: [] },
   },
   '/api/settings': settings,
   '/api/chat/history': { messages: [] },
@@ -499,33 +509,119 @@ test('navigation, list paging and settings sections work with keyboard focus', a
   ).toBeVisible();
 });
 
+const previewPayload = {
+  name: 'Synthetic programme',
+  cycle_weeks: 12,
+  analysis: { confidence: 'medium' },
+  cadence: {
+    mode: 'rolling',
+    sessions_per_week: 7,
+    training_day_names: ['Monday'],
+    rotation: [],
+    unscheduled_routines: [],
+  },
+  schedule: [
+    { date: '2026-11-02', weekday: 'Monday', routine_title: 'Routine 1' },
+  ],
+  muscle_sets: {
+    method: 'Direct sets count as 1.0.',
+    weekly_sets: { chest: 3 },
+    estimates: [{ muscle: 'chest', weekly_sets: 3, status: 'below_reference_range' }],
+    warnings: [],
+  },
+  drift: { state: 'in_sync', changed_routines: [] },
+  warnings: [],
+  blocking_violations: [],
+  blocks,
+  days,
+  assumptions: [],
+  source_snapshots: [{ id: 'r0', title: 'Routine 1', source_hash: 'synthetic-source-revision' }],
+  preview_token: 'synthetic-token',
+  engine_version: 'hevy-programme-v2',
+};
+
 test('routine selection survives pages and edited settings remove the activation preview', async ({
   page,
 }) => {
   await page.route('**/api/programmes/preview', (route) =>
-    route.fulfill({
-      json: {
-        preview: {
-          name: 'Synthetic programme',
-          cycle_weeks: 12,
-          analysis: { confidence: 'Moderate' },
-          warnings: [],
-          blocks,
-          days,
-          assumptions: [],
-          preview_token: 'synthetic-token',
-        },
-      },
-    }),
+    route.fulfill({ json: { preview: previewPayload } }),
   );
   await page.goto('/programmes');
   await page.getByRole('checkbox').first().check();
-  await page.getByRole('button', { name: 'Next routines page' }).click();
   await expect(page.locator('.selected-routines')).toContainText('Routine 1');
   await page.getByRole('button', { name: 'Generate programme preview' }).click();
   await expect(page.getByRole('button', { name: 'Activate this programme' })).toBeVisible();
   await page.getByLabel('Programme duration').fill('8');
   await expect(page.getByRole('button', { name: 'Activate this programme' })).toHaveCount(0);
+});
+
+test('the Hevy-first builder previews and activates a selected routine', async ({ page }) => {
+  await page.route('**/api/programmes/preview', (route) =>
+    route.fulfill({ json: { preview: previewPayload } }),
+  );
+  await page.route('**/api/programmes/activate', (route) =>
+    route.fulfill({ json: { status: 'ok', active_programme: {} } }),
+  );
+  await page.goto('/programmes');
+
+  await expect(page.getByRole('heading', { name: 'Hevy state' })).toBeVisible();
+  await expect(page.getByText('Signed in as')).toBeVisible();
+  await expect(page.getByText('Hybrid Powerbuilding')).toHaveCount(0);
+  await expect(page.getByText('Active Split Preview')).toHaveCount(0);
+
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
+  await expect(page.locator('.selected-routines')).toContainText('Routine 1');
+
+  await page.getByLabel('Primary goal').selectOption('general_fitness');
+  await page.getByLabel('Programme duration').fill('12');
+  await page.getByRole('button', { name: 'Generate programme preview' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Generated programme preview' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Block timeline' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Selected Hevy routine preview' }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Activate this programme' }).click();
+  await expect(page.getByText('Your Hevy-derived programme is now active.')).toBeVisible();
+});
+
+test('a changed Hevy source blocks activation and offers remediation', async ({ page }) => {
+  await page.route('**/api/programmes/preview', (route) =>
+    route.fulfill({ json: { preview: previewPayload } }),
+  );
+  await page.route('**/api/programmes/activate', (route) =>
+    route.fulfill({
+      status: 409,
+      json: {
+        detail: {
+          message: 'The Hevy routines or programme settings changed after the preview.',
+          conflict: {
+            changed_routines: [{ routine_id: 'r0', title: 'Routine 1' }],
+            added_routines: [],
+            removed_routines: [],
+            has_conflicts: true,
+          },
+          remediation: ['Refresh from Hevy to load the current routine revisions.'],
+        },
+      },
+    }),
+  );
+  await page.goto('/programmes');
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
+  await page.getByRole('button', { name: 'Generate programme preview' }).click();
+  await page.getByRole('button', { name: 'Activate this programme' }).click();
+
+  await expect(
+    page.getByRole('heading', { name: 'Source changed since the preview' }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Refresh from Hevy to load the current routine revisions.'),
+  ).toBeVisible();
 });
 
 test('display preferences preserve focus and readable selected states', async ({ page }) => {

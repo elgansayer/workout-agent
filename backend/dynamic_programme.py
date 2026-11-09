@@ -3,6 +3,21 @@
 The imported Hevy routines remain immutable source material.  This module builds
 an explainable prescription overlay for a requested goal and duration without
 depending on the legacy static programme.
+
+The builder is split into four deterministic stages:
+
+1. **Source** - the authenticated user's Hevy routines are serialised with
+   provider identity, exact set payloads and a content hash.
+2. **Cadence** - the selected routines are ordered, marked ``required``,
+   ``optional`` or ``rotating`` and mapped onto either a rolling rotation or an
+   explicit weekly calendar.
+3. **Plan** - goal specific blocks, weekly muscle-set estimates, inferred
+   baselines and a prescription overlay for every exercise are generated.
+4. **Validation** - a shared validator reports blocking violations that stop
+   activation and non-blocking warnings the user should read.
+
+Everything in this module is a pure function of the Hevy source data and the
+validated request, so the same input always yields the same preview token.
 """
 
 from __future__ import annotations
@@ -13,12 +28,12 @@ import math
 from datetime import date, timedelta
 from typing import Any, Literal
 
-from hevy_reader import HevyTrainingData, Routine, RoutineExercise
+from hevy_reader import CompletedWorkout, HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
 from programme_validator import validate_programme
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-ENGINE_VERSION = "hevy-programme-v1"
+ENGINE_VERSION = "hevy-programme-v2"
 MIN_DURATION_WEEKS = 4
 MAX_DURATION_WEEKS = 52
 
@@ -33,29 +48,136 @@ GoalKey = Literal[
     "power_performance",
 ]
 Aggressiveness = Literal["conservative", "balanced", "aggressive"]
+RoutineRole = Literal["required", "optional", "rotating"]
+CadenceMode = Literal["rolling", "weekly"]
+FatigueManagement = Literal["planned", "adaptive"]
+
+WEEKDAY_NAMES = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+
+# Fractional set model (docs/HEVY_NATIVE_DYNAMIC_PROGRAMMES.md, section 8.4).
+DIRECT_SET_WEIGHT = 1.0
+SECONDARY_SET_WEIGHT = 0.5
+
+# Reference band for weekly per-muscle hard sets. These are review triggers,
+# never prescriptions: a user may deliberately train outside them.
+MIN_RECOVERABLE_SETS = 6.0
+MAX_RECOVERABLE_SETS = 24.0
+
+# Set payload keys the engine understands. Anything else is reported to the
+# user as an unsupported field instead of being silently ignored.
+SUPPORTED_SET_TARGET_KEYS = frozenset(
+    {
+        "type",
+        "reps",
+        "weight_kg",
+        "distance_meters",
+        "duration_seconds",
+        "rep_range",
+        "start_rep_range",
+        "end_rep_range",
+    }
+)
+
+
+class RoutineSelection(BaseModel):
+    """One selected Hevy routine together with its rotation role."""
+
+    routine_id: str = Field(min_length=1)
+    role: RoutineRole = "required"
+    preferred_weekday: int | None = Field(default=None, ge=0, le=6)
+
+
+class ProgrammeCadence(BaseModel):
+    """How the selected routines are scheduled.
+
+    ``rolling`` keeps the user's routine order and advances one routine per
+    training day.  ``weekly`` places routines on explicit weekdays so the
+    programme never forces a Monday-to-Saturday pattern.
+    """
+
+    mode: CadenceMode = "rolling"
+    weekdays: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_weekdays(self) -> ProgrammeCadence:
+        if any(day < 0 or day > 6 for day in self.weekdays):
+            raise ValueError("Weekdays must be between 0 (Monday) and 6 (Sunday).")
+        if len(set(self.weekdays)) != len(self.weekdays):
+            raise ValueError("Each weekday can only be selected once.")
+        if self.mode == "weekly" and not self.weekdays:
+            raise ValueError("A weekly cadence needs at least one selected weekday.")
+        return self
+
+
+class ProgrammeConstraints(BaseModel):
+    """Structured constraints the user confirmed before activation."""
+
+    concurrent_training: list[str] = Field(default_factory=list)
+    injuries: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    max_sessions_per_week: int | None = Field(default=None, ge=1, le=14)
 
 
 class ProgrammePreviewRequest(BaseModel):
     """Validated inputs for a generated Hevy-native programme preview."""
 
     selected_routine_ids: list[str] = Field(min_length=1)
+    routine_selections: list[RoutineSelection] = Field(default_factory=list)
     duration_weeks: int = Field(
         default=12, ge=MIN_DURATION_WEEKS, le=MAX_DURATION_WEEKS
     )
     goal: GoalKey = "general_fitness"
     start_date: date = Field(default_factory=date.today)
     sessions_per_week: int | None = Field(default=None, ge=1, le=14)
+    cadence: ProgrammeCadence = Field(default_factory=ProgrammeCadence)
     experience: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     max_session_minutes: int | None = Field(default=None, ge=20, le=240)
     adaptation_aggressiveness: Aggressiveness = "balanced"
-    constraints: list[Any] | dict[str, Any] | None = None
+    priority_muscles: list[str] = Field(default_factory=list)
+    priority_exercises: list[str] = Field(default_factory=list)
+    event_date: date | None = None
+    fatigue_management: FatigueManagement = "planned"
+    constraints: ProgrammeConstraints | list[Any] | dict[str, Any] | None = None
     rules: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def _validate_selection(self) -> ProgrammePreviewRequest:
+        selection_ids = [item.routine_id for item in self.routine_selections]
+        if len(set(selection_ids)) != len(selection_ids):
+            raise ValueError("Each routine may appear only once in the selection.")
+        unknown = [
+            routine_id
+            for routine_id in selection_ids
+            if routine_id not in self.selected_routine_ids
+        ]
+        if unknown:
+            raise ValueError(
+                "Routine selections must reference selected routines: "
+                + ", ".join(unknown)
+            )
+        return self
+
+
+class SourceHash(BaseModel):
+    """The provider content hash of one routine at preview time."""
+
+    routine_id: str = Field(min_length=1)
+    source_hash: str = Field(min_length=1)
 
 
 class ProgrammeActivationRequest(ProgrammePreviewRequest):
     """Preview inputs plus the source-bound token being activated."""
 
     preview_token: str = Field(min_length=16)
+    source_hashes: list[SourceHash] = Field(default_factory=list)
 
 
 _GOALS: dict[str, dict[str, Any]] = {
@@ -308,11 +430,55 @@ def _normalise_set_target(value: Any) -> dict[str, Any]:
     return {"value": value}
 
 
+def _set_target_summary(
+    target: dict[str, Any],
+    index: int,
+) -> dict[str, Any]:
+    """Describe one provider set target without inventing values."""
+
+    rep_range = target.get("rep_range")
+    if not isinstance(rep_range, dict):
+        rep_range = None
+    unsupported = sorted(
+        key
+        for key in target
+        if key not in SUPPORTED_SET_TARGET_KEYS
+    )
+    return {
+        "index": index,
+        "type": target.get("type") or "normal",
+        "load_kg": target.get("weight_kg"),
+        "reps": target.get("reps"),
+        "rep_range": rep_range,
+        "distance_meters": target.get("distance_meters"),
+        "duration_seconds": target.get("duration_seconds"),
+        "rpe": target.get("rpe"),
+        "custom_targets": {
+            key: value
+            for key, value in target.items()
+            if key not in SUPPORTED_SET_TARGET_KEYS
+        },
+        "unsupported_fields": unsupported,
+    }
+
+
 def _serialise_exercise(
     exercise: RoutineExercise,
     data: HevyTrainingData,
 ) -> dict[str, Any]:
     template = data.exercise_templates.get(exercise.template_id)
+    set_targets = [_normalise_set_target(item) for item in exercise.set_targets]
+    summaries = [
+        _set_target_summary(target, index)
+        for index, target in enumerate(set_targets, start=1)
+    ]
+    unsupported = sorted(
+        {
+            field
+            for summary in summaries
+            for field in summary["unsupported_fields"]
+        }
+    )
     return {
         "template_id": exercise.template_id,
         "title": exercise.title,
@@ -325,7 +491,12 @@ def _serialise_exercise(
         ),
         "equipment": template.equipment if template else None,
         "sets": exercise.sets,
-        "set_targets": [_normalise_set_target(item) for item in exercise.set_targets],
+        "set_targets": set_targets,
+        "set_summary": summaries,
+        "set_types": sorted(
+            {str(summary["type"]) for summary in summaries}
+        ),
+        "unsupported_fields": unsupported,
         "rest_seconds": exercise.rest_seconds,
         "notes": exercise.notes,
         "superset_id": exercise.superset_id,
@@ -339,7 +510,33 @@ def _serialise_exercise(
     }
 
 
-def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, Any]:
+def _routine_history_context(
+    routine: Routine,
+    workouts: list[CompletedWorkout],
+) -> dict[str, Any]:
+    """Return the observed completion context for one routine."""
+
+    matches = [
+        workout
+        for workout in workouts
+        if workout.title.casefold() == routine.title.casefold()
+    ]
+    last_performed_at = None
+    for workout in matches:
+        if workout.end_time or workout.start_time:
+            last_performed_at = max(
+                filter(None, [last_performed_at, workout.end_time, workout.start_time])
+            )
+    return {
+        "last_performed_at": last_performed_at,
+        "recent_completion_count": len(matches),
+    }
+
+
+def _serialise_routine(
+    routine: Routine,
+    data: HevyTrainingData,
+) -> dict[str, Any]:
     exercises = [_serialise_exercise(exercise, data) for exercise in routine.exercises]
     direct_muscles = sorted(
         {
@@ -361,6 +558,14 @@ def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, An
         "updated_at": routine.updated_at,
         "exercises": exercises,
     }
+    unsupported = sorted(
+        {
+            field
+            for exercise in exercises
+            for field in exercise["unsupported_fields"]
+        }
+    )
+    history = _routine_history_context(routine, data.recent_workouts)
     return {
         **source_payload,
         "folder_name": data.folders.get(routine.folder_id)
@@ -370,7 +575,9 @@ def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, An
         "work_set_count": work_sets,
         "estimated_duration_minutes": max(10, round(estimated_seconds / 60)),
         "muscle_summary": direct_muscles,
+        "unsupported_fields": unsupported,
         "source_hash": _canonical_hash(source_payload),
+        **history,
     }
 
 
@@ -382,15 +589,23 @@ def serialise_hevy_source(
     """Return the exact selectable Hevy source view used by the builder."""
 
     routines = [_serialise_routine(routine, data) for routine in data.routines]
+    folders: list[dict[str, Any]] = []
+    for folder_id, title in sorted(data.folders.items()):
+        folders.append(
+            {
+                "id": folder_id,
+                "title": title,
+                "routine_count": sum(
+                    1 for routine in routines if routine["folder_id"] == folder_id
+                ),
+            }
+        )
     payload = {
         "username": data.username,
         "workout_count": data.workout_count,
         "routine_count": len(routines),
         "recent_workout_count": len(data.recent_workouts),
-        "folders": [
-            {"id": folder_id, "title": title}
-            for folder_id, title in sorted(data.folders.items())
-        ],
+        "folders": folders,
         "routines": routines,
     }
     validation = validate_programme(
@@ -636,6 +851,51 @@ def _history_analysis(
     }
 
 
+def _exercise_baselines(
+    data: HevyTrainingData,
+    selected: list[Routine],
+) -> list[dict[str, Any]]:
+    """Derive observed load/rep baselines from the user's own history."""
+
+    selected_template_ids = {
+        exercise.template_id
+        for routine in selected
+        for exercise in routine.exercises
+    }
+    observations: dict[str, dict[str, Any]] = {}
+    for workout in data.recent_workouts:
+        for exercise in workout.exercises:
+            if exercise.template_id not in selected_template_ids:
+                continue
+            entry = observations.setdefault(
+                exercise.template_id,
+                {
+                    "template_id": exercise.template_id,
+                    "title": exercise.title,
+                    "exposures": 0,
+                    "top_weight_kg": None,
+                    "top_reps": None,
+                    "source": "hevy_history",
+                },
+            )
+            entry["exposures"] += 1
+            if exercise.top_weight_kg is not None:
+                current = entry["top_weight_kg"]
+                entry["top_weight_kg"] = (
+                    float(exercise.top_weight_kg)
+                    if current is None
+                    else max(float(current), float(exercise.top_weight_kg))
+                )
+            if exercise.top_reps is not None:
+                current_reps = entry["top_reps"]
+                entry["top_reps"] = (
+                    int(exercise.top_reps)
+                    if current_reps is None
+                    else max(int(current_reps), int(exercise.top_reps))
+                )
+    return [observations[key] for key in sorted(observations)]
+
+
 def _classify_role(
     exercise: dict[str, Any],
     position: int,
@@ -808,9 +1068,488 @@ def _prescriptions_for_exercise(
     return role, role_reason, prescriptions
 
 
+def _resolve_selection(
+    request: ProgrammePreviewRequest,
+    routine_by_id: dict[str, Routine],
+) -> list[dict[str, Any]]:
+    """Return the ordered selection with the role of every routine."""
+
+    roles = {item.routine_id: item for item in request.routine_selections}
+    selection: list[dict[str, Any]] = []
+    for routine_id in request.selected_routine_ids:
+        routine = routine_by_id[routine_id]
+        item = roles.get(routine_id)
+        selection.append(
+            {
+                "routine_id": routine.id,
+                "title": routine.title,
+                "role": item.role if item else "required",
+                "preferred_weekday": item.preferred_weekday if item else None,
+            }
+        )
+    return selection
+
+
+def _training_days(cadence: ProgrammeCadence) -> list[int]:
+    if cadence.weekdays:
+        return sorted(cadence.weekdays)
+    return list(range(7))
+
+
+def _build_cadence(
+    selection: list[dict[str, Any]],
+    cadence: ProgrammeCadence,
+) -> dict[str, Any]:
+    """Map the ordered selection onto training days.
+
+    ``weekly`` assigns each routine its own weekday so a routine is never
+    silently dropped.  ``rolling`` keeps the user's routine order and advances
+    one routine per training day.
+    """
+
+    training_days = _training_days(cadence)
+    required = [item for item in selection if item["role"] == "required"]
+    optional = [item for item in selection if item["role"] == "optional"]
+    rotating = [item for item in selection if item["role"] == "rotating"]
+
+    assignments: dict[str, list[int]] = {}
+    unscheduled: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    def _assign(entry: dict[str, Any], day: int) -> None:
+        assignments.setdefault(entry["routine_id"], []).append(day)
+
+    if cadence.mode == "weekly":
+        free_days = list(training_days)
+        # Required routines claim one weekday each, honouring a preferred day.
+        for entry in required:
+            preferred = entry.get("preferred_weekday")
+            if preferred is not None and preferred in free_days:
+                _assign(entry, preferred)
+                free_days.remove(preferred)
+                continue
+            if free_days:
+                _assign(entry, free_days.pop(0))
+                continue
+            unscheduled.append(
+                {
+                    "routine_id": entry["routine_id"],
+                    "title": entry["title"],
+                    "role": entry["role"],
+                    "reason": (
+                        "The selected training days do not fit every required routine."
+                    ),
+                }
+            )
+        # Rotating routines fill the remaining days in rotation order.
+        rotating_cycle = list(rotating)
+        rotating_index = 0
+        while free_days and rotating_cycle:
+            entry = rotating_cycle[rotating_index % len(rotating_cycle)]
+            _assign(entry, free_days.pop(0))
+            rotating_index += 1
+        # Optional routines only take days that are still free.
+        for entry in optional:
+            if free_days:
+                _assign(entry, free_days.pop(0))
+            else:
+                unscheduled.append(
+                    {
+                        "routine_id": entry["routine_id"],
+                        "title": entry["title"],
+                        "role": entry["role"],
+                        "reason": (
+                            "The selected training days are already used by required "
+                            "and rotating routines."
+                        ),
+                    }
+                )
+    rotation: list[dict[str, Any]] = []
+    for position, entry in enumerate(selection, start=1):
+        days = assignments.get(entry["routine_id"], [])
+        scheduled = bool(days) or cadence.mode == "rolling"
+        rotation.append(
+            {
+                "routine_id": entry["routine_id"],
+                "title": entry["title"],
+                "role": entry["role"],
+                "position": position,
+                "preferred_weekday": entry.get("preferred_weekday"),
+                "scheduled_weekdays": sorted(days),
+                "scheduled_weekday_names": [
+                    WEEKDAY_NAMES[day] for day in sorted(days)
+                ],
+                "scheduled": scheduled,
+            }
+        )
+
+    if unscheduled:
+        warnings.append(
+            "Some routines are not scheduled by the current cadence. "
+            "Review the selected training days before activation."
+        )
+
+    return {
+        "mode": cadence.mode,
+        "training_days": training_days,
+        "training_day_names": [WEEKDAY_NAMES[day] for day in training_days],
+        "sessions_per_week": len(training_days),
+        "rotation": rotation,
+        "unscheduled_routines": unscheduled,
+        "warnings": warnings,
+    }
+
+
+def _build_schedule(
+    cadence_preview: dict[str, Any],
+    start_date: date,
+    duration_weeks: int,
+) -> list[dict[str, Any]]:
+    """Return the exact programme dates for every scheduled session.
+
+    ``weekly`` maps each training day onto its routine for every week.
+    ``rolling`` advances the rotation by one routine per training day, so the
+    routine for a date is decided by the number of training days before it.
+    """
+
+    rotation = cadence_preview["rotation"]
+    training_days = cadence_preview["training_days"]
+    programme_days = duration_weeks * 7
+    schedule: list[dict[str, Any]] = []
+
+    if cadence_preview["mode"] == "weekly":
+        assignments: dict[int, list[dict[str, Any]]] = {}
+        for entry in rotation:
+            for day in entry["scheduled_weekdays"]:
+                assignments.setdefault(day, []).append(entry)
+        for week in range(1, duration_weeks + 1):
+            week_start = start_date + timedelta(weeks=week - 1)
+            for offset in range(7):
+                session_date = week_start + timedelta(days=offset)
+                day = session_date.weekday()
+                if day not in training_days:
+                    continue
+                for entry in assignments.get(day, []):
+                    schedule.append(
+                        {
+                            "week": week,
+                            "date": session_date.isoformat(),
+                            "weekday_index": day,
+                            "weekday": WEEKDAY_NAMES[day],
+                            "routine_id": entry["routine_id"],
+                            "routine_title": entry["title"],
+                            "rotation_position": entry["position"],
+                            "role": entry["role"],
+                        }
+                    )
+        schedule.sort(key=lambda item: (item["date"], item["rotation_position"]))
+        return schedule
+
+    training_day_index = 0
+    for offset in range(programme_days):
+        session_date = start_date + timedelta(days=offset)
+        if session_date.weekday() not in training_days:
+            continue
+        if not rotation:
+            break
+        entry = rotation[training_day_index % len(rotation)]
+        training_day_index += 1
+        schedule.append(
+            {
+                "week": (offset // 7) + 1,
+                "date": session_date.isoformat(),
+                "weekday_index": session_date.weekday(),
+                "weekday": WEEKDAY_NAMES[session_date.weekday()],
+                "routine_id": entry["routine_id"],
+                "routine_title": entry["title"],
+                "rotation_position": entry["position"],
+                "role": entry["role"],
+            }
+        )
+    return schedule
+
+
+def _muscle_set_estimates(
+    source_snapshots: list[dict[str, Any]],
+    cadence_preview: dict[str, Any],
+    schedule: list[dict[str, Any]],
+    duration_weeks: int,
+) -> dict[str, Any]:
+    """Estimate weekly fractional hard sets per muscle.
+
+    The estimate uses the generated schedule so a routine that appears more
+    than once a week contributes proportionally more volume.
+    """
+
+    routine_by_id = {snapshot["id"]: snapshot for snapshot in source_snapshots}
+    occurrences: dict[str, int] = {}
+    for session in schedule:
+        routine_id = str(session.get("routine_id"))
+        occurrences[routine_id] = occurrences.get(routine_id, 0) + 1
+    weeks = max(1, duration_weeks)
+
+    weekly: dict[str, float] = {}
+    for routine_id, count in occurrences.items():
+        snapshot = routine_by_id.get(routine_id)
+        if snapshot is None:
+            continue
+        frequency = count / weeks
+        for exercise in snapshot["exercises"]:
+            sets = max(0, int(exercise.get("sets") or 0))
+            if not sets:
+                continue
+            primary = str(exercise.get("primary_muscle_group") or "other")
+            weekly[primary] = (
+                weekly.get(primary, 0.0) + sets * DIRECT_SET_WEIGHT * frequency
+            )
+            for secondary in exercise.get("secondary_muscle_groups") or []:
+                weekly[str(secondary)] = (
+                    weekly.get(str(secondary), 0.0)
+                    + sets * SECONDARY_SET_WEIGHT * frequency
+                )
+
+    estimates: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for muscle in sorted(weekly):
+        value = round(weekly[muscle], 1)
+        if value < MIN_RECOVERABLE_SETS:
+            status = "below_reference_range"
+            warnings.append(
+                f"Estimated weekly sets for {muscle} are {value}, below the "
+                "reference range used for review. Add priority work if this "
+                "muscle matters for your goal."
+            )
+        elif value > MAX_RECOVERABLE_SETS:
+            status = "above_reference_range"
+            warnings.append(
+                f"Estimated weekly sets for {muscle} are {value}, above the "
+                "reference range used for review. Check recovery before adding "
+                "more volume."
+            )
+        else:
+            status = "within_reference_range"
+        estimates.append(
+            {"muscle": muscle, "weekly_sets": value, "status": status}
+        )
+
+    return {
+        "method": (
+            "Direct sets count as 1.0 and meaningful secondary contributions "
+            "as 0.5 for the selected weekly schedule."
+        ),
+        "weekly_sets": {
+            estimate["muscle"]: estimate["weekly_sets"] for estimate in estimates
+        },
+        "estimates": estimates,
+        "warnings": warnings,
+    }
+
+
+def _drift_report(
+    source_snapshots: list[dict[str, Any]],
+    active_definition: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare the active programme snapshot with the current Hevy source."""
+
+    if not active_definition:
+        return {
+            "state": "no_active_programme",
+            "routines": [],
+            "changed_routines": [],
+        }
+
+    stored = {
+        str(snapshot.get("id")): str(snapshot.get("source_hash") or "")
+        for snapshot in active_definition.get("source_snapshots") or []
+    }
+    current = {
+        str(snapshot.get("id")): str(snapshot.get("source_hash") or "")
+        for snapshot in source_snapshots
+    }
+    routines: list[dict[str, Any]] = []
+    changed: list[str] = []
+    for routine_id, source_hash in current.items():
+        previous = stored.get(routine_id)
+        if previous is None:
+            status = "added"
+        elif previous == source_hash:
+            status = "unchanged"
+        else:
+            status = "changed"
+        if status != "unchanged":
+            changed.append(routine_id)
+        routines.append(
+            {
+                "routine_id": routine_id,
+                "status": status,
+                "previous_source_hash": previous,
+                "current_source_hash": source_hash,
+            }
+        )
+    for routine_id, previous_hash in stored.items():
+        if routine_id in current:
+            continue
+        changed.append(routine_id)
+        routines.append(
+            {
+                "routine_id": routine_id,
+                "status": "removed",
+                "previous_source_hash": previous_hash,
+                "current_source_hash": None,
+            }
+        )
+
+    return {
+        "state": "changed" if changed else "in_sync",
+        "routines": routines,
+        "changed_routines": changed,
+    }
+
+
+def validate_programme_preview(preview: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the blocking violations of a generated programme preview.
+
+    This is the shared validator used by both the preview and the activation
+    route.  A violation always identifies the affected field or routine so the
+    UI can point at it.
+    """
+
+    violations: list[dict[str, Any]] = []
+    spec = preview.get("programme_spec") or {}
+    cadence_preview = preview.get("cadence") or {}
+    constraints = spec.get("constraints") or {}
+    if not isinstance(constraints, dict):
+        constraints = {}
+    rotation = cadence_preview.get("rotation") or []
+
+    if not rotation:
+        violations.append(
+            {
+                "code": "no_scheduled_routines",
+                "field": "selected_routine_ids",
+                "routine_id": None,
+                "message": "Select at least one Hevy routine before generating a programme.",
+            }
+        )
+        return violations
+
+    unscheduled = [
+        entry
+        for entry in rotation
+        if not entry.get("scheduled") and entry.get("role") == "required"
+    ]
+    for entry in unscheduled:
+        violations.append(
+            {
+                "code": "routine_not_scheduled",
+                "field": "cadence.weekdays",
+                "routine_id": entry.get("routine_id"),
+                "message": (
+                    f"The routine '{entry.get('title')}' is required but has no "
+                    "training day. Add a weekday or change its role."
+                ),
+            }
+        )
+
+    sessions_per_week = int(cadence_preview.get("sessions_per_week") or 0)
+    limit = constraints.get("max_sessions_per_week")
+    if limit is not None and sessions_per_week > int(limit):
+        violations.append(
+            {
+                "code": "session_limit_exceeded",
+                "field": "constraints.max_sessions_per_week",
+                "routine_id": None,
+                "message": (
+                    f"The programme schedules {sessions_per_week} sessions per week "
+                    f"but the confirmed limit is {limit}."
+                ),
+            }
+        )
+
+    start_value = spec.get("start_date")
+    event_value = spec.get("event_date")
+    if start_value and event_value:
+        try:
+            start_date = date.fromisoformat(str(start_value))
+            event_date = date.fromisoformat(str(event_value))
+        except ValueError:
+            start_date = None
+            event_date = None
+        if start_date and event_date and event_date < start_date:
+            violations.append(
+                {
+                    "code": "event_before_start",
+                    "field": "event_date",
+                    "routine_id": None,
+                    "message": (
+                        "The test or competition date is before the programme "
+                        "start date."
+                    ),
+                }
+            )
+        elif (
+            start_date
+            and event_date
+            and spec.get("goal") == "strength_test"
+            and preview.get("cycle_weeks")
+        ):
+            programme_end = start_date + timedelta(weeks=int(preview["cycle_weeks"]))
+            if event_date > programme_end:
+                violations.append(
+                    {
+                        "code": "event_outside_programme",
+                        "field": "event_date",
+                        "routine_id": None,
+                        "message": (
+                            "The test date falls after the programme ends. Extend "
+                            "the duration or choose a different date."
+                        ),
+                    }
+                )
+
+    return violations
+
+
+def _priority_coverage(
+    priority_muscles: list[str],
+    priority_exercises: list[str],
+    source_snapshots: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Report whether the selected routines cover the stated priorities."""
+
+    muscles = {
+        str(exercise.get("primary_muscle_group") or "").casefold()
+        for snapshot in source_snapshots
+        for exercise in snapshot.get("exercises") or []
+    }
+    titles = {
+        str(exercise.get("title") or "").casefold()
+        for snapshot in source_snapshots
+        for exercise in snapshot.get("exercises") or []
+    }
+    missing_muscles = [
+        muscle
+        for muscle in priority_muscles
+        if muscle.casefold() not in muscles
+    ]
+    missing_exercises = [
+        exercise
+        for exercise in priority_exercises
+        if exercise.casefold() not in titles
+    ]
+    return {
+        "priority_muscles": list(priority_muscles),
+        "priority_exercises": list(priority_exercises),
+        "missing_muscles": missing_muscles,
+        "missing_exercises": missing_exercises,
+    }
+
+
 def build_programme_preview(
     data: HevyTrainingData,
     request: ProgrammePreviewRequest,
+    *,
+    active_definition: dict[str, Any] | None = None,
     profile_rules: Any = None,
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
@@ -832,6 +1571,11 @@ def build_programme_preview(
             + ", ".join(missing)
         )
 
+    structured_constraints = (
+        request.constraints
+        if isinstance(request.constraints, ProgrammeConstraints)
+        else ProgrammeConstraints()
+    )
     selected = [
         routine_by_id[routine_id] for routine_id in request.selected_routine_ids
     ]
@@ -851,6 +1595,25 @@ def build_programme_preview(
         request.start_date,
     )
     history = _history_analysis(data, selected)
+    selection = _resolve_selection(request, routine_by_id)
+    cadence_preview = _build_cadence(selection, request.cadence)
+    schedule = _build_schedule(
+        cadence_preview,
+        request.start_date,
+        request.duration_weeks,
+    )
+    muscle_sets = _muscle_set_estimates(
+        source_snapshots,
+        cadence_preview,
+        schedule,
+        request.duration_weeks,
+    )
+    drift = _drift_report(source_snapshots, active_definition)
+    coverage = _priority_coverage(
+        request.priority_muscles,
+        request.priority_exercises,
+        source_snapshots,
+    )
 
     days: list[dict[str, Any]] = []
     for day_number, source_routine in enumerate(source_snapshots, start=1):
@@ -878,6 +1641,7 @@ def build_programme_preview(
                     "rest_seconds": source_exercise["rest_seconds"],
                     "source_sets": source_exercise["sets"],
                     "source_targets": source_exercise["set_targets"],
+                    "unsupported_fields": source_exercise["unsupported_fields"],
                     "prescriptions": prescriptions,
                 }
             )
@@ -895,29 +1659,53 @@ def build_programme_preview(
             }
         )
 
+    cadence_sessions = int(cadence_preview.get("sessions_per_week") or 0)
     if request.sessions_per_week is not None:
         sessions_per_week = request.sessions_per_week
     elif inferred.sessions_per_week > 0:
         sessions_per_week = max(1, round(inferred.sessions_per_week))
     else:
-        sessions_per_week = min(7, len(selected))
+        sessions_per_week = cadence_sessions or min(7, len(selected))
     analysis = {
         **history,
         "split_type": inferred.split_type,
         "observed_sessions_per_week": inferred.sessions_per_week,
         "planned_sessions_per_week": sessions_per_week,
+        "scheduled_sessions_per_week": cadence_sessions,
         "selected_routine_count": len(selected),
         "next_observed_routine": (
             inferred.next_routine.title if inferred.next_routine else None
         ),
+        "exercise_baselines": _exercise_baselines(data, selected),
+        "priority_coverage": coverage,
     }
 
-    warnings: list[str] = []
+    warnings: list[str] = list(cadence_preview["warnings"])
+    warnings.extend(muscle_sets["warnings"])
     assumptions = [
         "Original Hevy routines remain read-only; this preview is a prescription overlay.",
         "Routine identity and activation safety use Hevy provider IDs plus source hashes, never titles alone.",
         "Set changes are bounded to one fewer or two more than the imported source within this first engine version.",
+        (
+            "Weekly muscle-set estimates use the fractional model (direct 1.0, "
+            "secondary 0.5) and are review triggers, not prescriptions."
+        ),
     ]
+    if request.fatigue_management == "adaptive":
+        assumptions.append(
+            "Adaptive fatigue management only adjusts future prescriptions inside "
+            "the configured bounds and never changes completed weeks."
+        )
+    else:
+        assumptions.append(
+            "Planned fatigue management keeps the block structure fixed; no "
+            "automatic recovery week is inserted."
+        )
+    if structured_constraints.concurrent_training:
+        assumptions.append(
+            "Concurrent training is recorded as context only; no automatic volume "
+            "reduction is applied."
+        )
     if history["confidence"] == "low":
         warnings.append(
             "Training-history confidence is low. Opening prescriptions are conservative and should be reviewed after the first two weeks."
@@ -935,7 +1723,46 @@ def build_programme_preview(
             )
     if inferred.sessions_per_week <= 0:
         warnings.append(
-            "No reliable recent frequency was detected; the selected routine count is used as the initial weekly cadence."
+            "No reliable recent frequency was detected; the selected cadence is used as the initial weekly schedule."
+        )
+    if (
+        request.sessions_per_week is not None
+        and cadence_sessions
+        and request.sessions_per_week != cadence_sessions
+    ):
+        warnings.append(
+            f"The requested {request.sessions_per_week} sessions per week differ "
+            f"from the {cadence_sessions} scheduled training days. The selected "
+            "training days are used."
+        )
+    if coverage["missing_muscles"]:
+        warnings.append(
+            "No selected routine trains the priority muscles: "
+            + ", ".join(coverage["missing_muscles"])
+        )
+    if coverage["missing_exercises"]:
+        warnings.append(
+            "No selected routine contains the priority exercises: "
+            + ", ".join(coverage["missing_exercises"])
+        )
+    if request.event_date is not None and request.goal != "strength_test":
+        programme_end = request.start_date + timedelta(
+            weeks=request.duration_weeks
+        )
+        if request.event_date > programme_end:
+            warnings.append(
+                "The test or competition date falls after the programme ends, so "
+                "no taper block is generated for it."
+            )
+    if request.goal == "strength_test" and request.event_date is None:
+        warnings.append(
+            "No test date was supplied for a strength-test goal. The taper block "
+            "is a conservative estimate and not a confirmed peak."
+        )
+    if drift["state"] == "changed":
+        warnings.append(
+            "The active programme uses different Hevy routine revisions. "
+            "Review the source changes before activating a new programme."
         )
 
     blocking_violations: list[dict[str, Any]] = []
@@ -944,8 +1771,8 @@ def build_programme_preview(
         **request.model_dump(mode="json"),
         "selected_routine_ids": list(request.selected_routine_ids),
         "selected_routine_order": [
-            {"routine_id": routine.id, "position": index + 1}
-            for index, routine in enumerate(selected)
+            {"routine_id": entry["routine_id"], "position": entry["position"]}
+            for entry in cadence_preview["rotation"]
         ],
         "goal_label": _GOALS[request.goal]["label"],
     }
@@ -962,7 +1789,7 @@ def build_programme_preview(
     }
     preview_token = _canonical_hash(token_inputs)
 
-    preview_result: dict[str, Any] = {
+    preview: dict[str, Any] = {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",
         "source": "hevy",
         "engine_version": ENGINE_VERSION,
@@ -972,6 +1799,10 @@ def build_programme_preview(
         "programme_spec": programme_spec,
         "source_snapshots": source_snapshots,
         "analysis": analysis,
+        "cadence": cadence_preview,
+        "schedule": schedule,
+        "muscle_sets": muscle_sets,
+        "drift": drift,
         "blocks": blocks,
         "days": days,
         "warnings": warnings,
@@ -984,32 +1815,58 @@ def build_programme_preview(
         ],
     }
 
-    # Stored profile rules and structured training rules always apply; request
-    # constraints may only add rules.
+    request_rules = (
+        request.constraints
+        if request.constraints is not None
+        and not isinstance(request.constraints, ProgrammeConstraints)
+        else None
+    )
+    effective_profile_rules = (
+        profile_rules if profile_rules is not None else request_rules
+    )
+
+    local_violations = validate_programme_preview(preview)
     try:
         validation = validate_programme(
-            preview_result,
-            profile_rules=profile_rules,
+            preview,
+            profile_rules=effective_profile_rules,
             training_rules=request.rules,
         )
-        if request.constraints is not None:
-            extra = validate_programme(preview_result, profile_rules=request.constraints)
+        if (
+            request_rules is not None
+            and profile_rules is not None
+            and request_rules is not effective_profile_rules
+        ):
+            extra = validate_programme(preview, profile_rules=request_rules)
             validation.blocking_violations.extend(
-                v for v in extra.blocking_violations if v not in validation.blocking_violations
+                violation
+                for violation in extra.blocking_violations
+                if violation not in validation.blocking_violations
             )
-            validation.warnings.extend(w for w in extra.warnings if w not in validation.warnings)
+            validation.warnings.extend(
+                warning
+                for warning in extra.warnings
+                if warning not in validation.warnings
+            )
     except ValueError as exc:
         if request.rules is not None:
             raise ValueError(
                 f"Invalid structured training rules; constraint check failed: {exc}"
             ) from exc
         raise
-    preview_result["blocking_violations"] = blocking_violations + [
-        v for v in validation.blocking_violations if v not in blocking_violations
-    ]
-    if validation.warnings:
-        preview_warnings = preview_result.get("warnings")
-        if isinstance(preview_warnings, list):
-            preview_warnings.extend(validation.warnings)
 
-    return preview_result
+    blocking = list(local_violations)
+    blocking.extend(
+        violation
+        for violation in validation.blocking_violations
+        if violation not in blocking
+    )
+    preview["blocking_violations"] = blocking
+    if validation.warnings:
+        preview["warnings"].extend(
+            warning
+            for warning in validation.warnings
+            if warning not in preview["warnings"]
+        )
+
+    return preview
