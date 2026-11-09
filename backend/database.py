@@ -1345,6 +1345,45 @@ def set_meta(
         )
 
 
+def consume_meta(
+    key: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> str | None:
+    """Atomically fetch and delete a metadata value.
+
+    Used for single-use OAuth correlation records. The transaction takes an
+    immediate write lock so two concurrent callbacks cannot both consume the
+    same nonce.
+    """
+
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if user_id is not None:
+            row = conn.execute(
+                "SELECT value FROM hevy_meta WHERE user_id = ? AND key = ?",
+                (user_id, key),
+            ).fetchone()
+            conn.execute(
+                "DELETE FROM hevy_meta WHERE user_id = ? AND key = ?",
+                (user_id, key),
+            )
+        else:
+            row = conn.execute(
+                "SELECT rowid, value FROM hevy_meta WHERE key = ? LIMIT 1",
+                (key,),
+            ).fetchone()
+            if row is not None:
+                conn.execute(
+                    "DELETE FROM hevy_meta WHERE rowid = ?",
+                    (row[0],),
+                )
+    if row is None:
+        return None
+    return str(row[-1])
+
+
 def delete_routine_record(
     routine_key: str,
     db_path: str = DEFAULT_DB_PATH,

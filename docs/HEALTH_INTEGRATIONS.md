@@ -192,6 +192,21 @@ Minimum requirements include:
 - source and consent provenance for every imported record
 - stable external identity mapping during provider migrations
 
+### OAuth correlation requirements
+
+Every user-login and connector authorization flow must use a signed,
+single-use `state` bound to the authenticated user, connector/provider and the
+browser session that started the flow. States expire quickly (currently five
+minutes) and are consumed from shared storage, so a replayed callback fails even
+when the original browser cookie is reused. Provider mix-up is prevented by
+including the provider in the signed state and verifying the expected provider
+at the callback. PKCE S256 is used for Google Health and web login, and the
+`code_verifier` is never placed in the `state` value sent to the provider.
+Redirect URIs must be exact-match allowlisted (`GOOGLE_HEALTH_REDIRECT_URI` or
+`GOOGLE_HEALTH_ALLOWED_REDIRECT_URIS`; `WEB_PUBLIC_URL`/`WEB_OAUTH_ALLOWED_REDIRECT_URIS`
+for login). Production never derives an OAuth redirect URI from an untrusted
+request host. The HMAC key comes from `OAUTH_STATE_SECRET` or `WEB_AUTH_SECRET`.
+
 ## Rollout order
 
 1. Finish provider-neutral connector contract and canonical health data model.

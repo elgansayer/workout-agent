@@ -38,9 +38,19 @@ from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
+from connectors.oauth import (
+    DEFAULT_STATE_TTL_SECONDS,
+    OAuthState,
+    OAuthStateError,
+    code_challenge_for,
+    create_oauth_state,
+    require_redirect_uri,
+    verify_state,
+)
 from database import (
     clear_all_notifications,
     clear_chat_messages,
+    consume_meta,
     delete_notification,
     delete_user_api_key,
     get_active_programme,
@@ -106,7 +116,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -186,11 +195,18 @@ def _check_api_auth(request: Request) -> str:
 GH_CLIENT_ID = os.environ.get("GOOGLE_HEALTH_CLIENT_ID", "").strip()
 GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 # Optional explicit redirect URI (recommended behind a reverse proxy so the
-# scheme/host match exactly what is registered with Google). When unset it is
-# derived from the incoming request.
+# scheme/host match exactly what is registered with Google). The value must be
+# exact-match allowlisted; production never derives it from an untrusted host.
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
 _GH_TOKEN_KEY = "google_health_refresh_token"
-_GH_STATE_KEY = "google_health_oauth_state"
+_GH_PROVIDER = "google_health"
+_GH_PENDING_PREFIX = "oauth_pending:google_health:"
+_OAUTH_STATE_SECRET = (
+    os.environ.get("OAUTH_STATE_SECRET", "").strip()
+    or WEB_AUTH_SECRET
+    or secrets.token_hex(32)
+).encode()
+_LOCAL_OAUTH_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "testserver"})
 
 oauth = OAuth()
 if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
@@ -199,8 +215,44 @@ if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
         client_id=WEB_GOOGLE_CLIENT_ID,
         client_secret=WEB_GOOGLE_CLIENT_SECRET,
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
+        client_kwargs={
+            "scope": "openid email profile",
+            "code_challenge_method": "S256",
+        },
     )
+    oauth.google.framework.expires_in = DEFAULT_STATE_TTL_SECONDS
+
+
+def _split_uri_list(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _is_production() -> bool:
+    return os.environ.get("APP_ENV", "").strip().lower() in {"prod", "production"}
+
+
+def _gh_redirect_uri_allowlist() -> tuple[str, ...]:
+    configured = _split_uri_list(
+        os.environ.get("GOOGLE_HEALTH_ALLOWED_REDIRECT_URIS", "")
+    )
+    if configured:
+        return configured
+    if GH_REDIRECT_URI:
+        return (GH_REDIRECT_URI,)
+    public_url = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+    if public_url:
+        return (f"{public_url}/google-health/callback",)
+    return ()
+
+
+def _login_redirect_uri_allowlist() -> tuple[str, ...]:
+    configured = _split_uri_list(os.environ.get("WEB_OAUTH_ALLOWED_REDIRECT_URIS", ""))
+    if configured:
+        return configured
+    public_url = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+    if public_url:
+        return (f"{public_url}/auth",)
+    return ()
 
 _BASE_DIR = Path(__file__).resolve().parent
 
@@ -321,14 +373,50 @@ app.add_middleware(
 )
 
 
+def _login_redirect_uri(request: Request) -> str:
+    """Return the exact-match allowlisted login callback for this deployment."""
+
+    public_url = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+    candidate = f"{public_url}/auth" if public_url else str(request.url_for("auth"))
+    allowlist = _login_redirect_uri_allowlist()
+    if allowlist:
+        return require_redirect_uri(candidate, allowlist)
+    if _is_production():
+        raise OAuthStateError("redirect URI is not allowlisted")
+    if request.url.hostname not in _LOCAL_OAUTH_HOSTS:
+        raise OAuthStateError("redirect URI is not allowlisted")
+    return candidate
+
+
+def _web_login_state_is_fresh(request: Request, state: str | None) -> bool:
+    """Reject missing, replayed or expired authlib state before token exchange."""
+
+    if not isinstance(state, str) or not state:
+        return False
+    record = request.session.get(f"_state_google_{state}")
+    if not isinstance(record, dict):
+        return False
+    expires_at = record.get("exp")
+    if not isinstance(expires_at, (int, float)):
+        return False
+    return float(expires_at) >= time.time()
+
+
 @app.get("/login/google")
 async def login_google(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
-    redirect_uri = str(request.url_for("auth"))
-    if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
-        redirect_uri = redirect_uri.replace("http://", "https://")
-    return await oauth.google.authorize_redirect(request, redirect_uri)
+    try:
+        redirect_uri = _login_redirect_uri(request)
+    except OAuthStateError:
+        logger.warning("Login redirect URI is not allowlisted.")
+        return RedirectResponse("/login?error=redirect", status_code=303)
+    nonce = secrets.token_urlsafe(32)
+    return await oauth.google.authorize_redirect(
+        request,
+        redirect_uri,
+        nonce=nonce,
+    )
 
 
 @app.get("/logout")
@@ -349,6 +437,9 @@ async def get_current_user_api(request: Request) -> Any:
 async def auth(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return RedirectResponse("/")
+    if not _web_login_state_is_fresh(request, request.query_params.get("state")):
+        logger.warning("Rejected missing, replayed or expired login OAuth state.")
+        return RedirectResponse("/login")
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
@@ -1085,8 +1176,57 @@ Respond naturally as Coach. If the question is about their training data, refere
 
 
 def _gh_redirect_uri(request: Request) -> str:
-    """The OAuth redirect URI, explicit env override or derived from the request."""
-    return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
+    """Return the exact-match allowlisted Google Health callback URI."""
+
+    candidate = GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
+    allowlist = _gh_redirect_uri_allowlist()
+    if allowlist:
+        return require_redirect_uri(candidate, allowlist)
+    if _is_production():
+        raise OAuthStateError("redirect URI is not allowlisted")
+    if request.url.hostname not in _LOCAL_OAUTH_HOSTS:
+        raise OAuthStateError("redirect URI is not allowlisted")
+    return candidate
+
+
+def _oauth_session_id(request: Request) -> str:
+    """Return the stable browser-session binding used by OAuth state."""
+
+    session_id = request.session.get("oauth_session_id")
+    if not isinstance(session_id, str) or not session_id:
+        session_id = secrets.token_urlsafe(32)
+        request.session["oauth_session_id"] = session_id
+    return session_id
+
+
+def _store_pending_oauth_state(user_id: str, state: OAuthState) -> None:
+    set_meta(
+        f"{_GH_PENDING_PREFIX}{state.nonce}",
+        json.dumps(
+            {
+                "redirect_uri": state.redirect_uri,
+                "code_verifier": state.code_verifier,
+                "issued_at": state.issued_at,
+            }
+        ),
+        DB_PATH,
+        user_id=user_id,
+    )
+
+
+def _consume_pending_oauth_state(user_id: str, nonce: str) -> dict[str, Any] | None:
+    raw = consume_meta(
+        f"{_GH_PENDING_PREFIX}{nonce}",
+        DB_PATH,
+        user_id=user_id,
+    )
+    if not raw:
+        return None
+    try:
+        pending = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return pending if isinstance(pending, dict) else None
 
 
 @app.post("/api/settings/key")
@@ -1266,12 +1406,30 @@ def google_health_connect(request: Request) -> RedirectResponse:
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     user_id = _check_api_auth(request)
-    state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
+    try:
+        redirect_uri = _gh_redirect_uri(request)
+        state, signed_state = create_oauth_state(
+            user_id=user_id,
+            provider=_GH_PROVIDER,
+            session_id=_oauth_session_id(request),
+            redirect_uri=redirect_uri,
+            secret=_OAUTH_STATE_SECRET,
+        )
+    except OAuthStateError:
+        logger.warning("Google Health redirect URI is not allowlisted.")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    _store_pending_oauth_state(user_id, state)
+    challenge = (
+        code_challenge_for(state.code_verifier)
+        if state.code_verifier is not None
+        else None
+    )
     url = build_authorize_url(
         GH_CLIENT_ID,
-        state,
-        redirect_uri=_gh_redirect_uri(request),
+        signed_state,
+        redirect_uri=redirect_uri,
+        code_challenge=challenge,
+        code_challenge_method="S256" if challenge else None,
     )
     return RedirectResponse(url, status_code=303)
 
@@ -1284,17 +1442,37 @@ def google_health_callback(request: Request) -> RedirectResponse:
     if request.query_params.get("error"):
         return RedirectResponse("/settings?gh=denied", status_code=303)
     user_id = _check_api_auth(request)
-    code = request.query_params.get("code")
-    state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
-    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
-    if not code or not state or not expected or state != expected:
+    try:
+        redirect_uri = _gh_redirect_uri(request)
+        session_id = request.session.get("oauth_session_id")
+        state = verify_state(
+            request.query_params.get("state"),
+            _OAUTH_STATE_SECRET,
+            expected_user_id=user_id,
+            expected_provider=_GH_PROVIDER,
+            expected_session_id=session_id if isinstance(session_id, str) else "",
+            expected_redirect_uri=redirect_uri,
+            max_age_seconds=DEFAULT_STATE_TTL_SECONDS,
+        )
+    except OAuthStateError:
+        logger.warning("Rejected invalid Google Health OAuth state.")
         return RedirectResponse("/settings?gh=error", status_code=303)
+
+    pending = _consume_pending_oauth_state(user_id, state.nonce)
+    code = request.query_params.get("code")
+    if (
+        pending is None
+        or pending.get("redirect_uri") != redirect_uri
+        or not code
+    ):
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    verifier = pending.get("code_verifier")
     tokens = exchange_code(
         GH_CLIENT_ID,
         GH_CLIENT_SECRET,
         code,
-        redirect_uri=_gh_redirect_uri(request),
+        redirect_uri=redirect_uri,
+        code_verifier=verifier if isinstance(verifier, str) else None,
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
