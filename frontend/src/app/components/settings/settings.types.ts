@@ -39,6 +39,13 @@ export interface SaveKeyResult {
   readonly connection?: HevyConnection;
 }
 
+/** Result of testing a stored or candidate provider credential. */
+export interface CredentialTestResult {
+  readonly status: string;
+  readonly detail?: string;
+  readonly workout_count?: number | null;
+}
+
 /** Result of a history sync request. */
 export interface SyncHistoryResult {
   readonly processed: number;
@@ -175,6 +182,31 @@ export interface TrainingRulesData {
   recovery?: RecoveryRule;
   contextual_notes?: ContextualNoteRule[];
   updated_at?: string | null;
+}
+
+/** A deterministic programme constraint violation with exact remediation. */
+export interface ProgrammeConstraintViolation {
+  exercise: string;
+  prescription: string;
+  rule: string;
+  permitted_remediation: string;
+  remediation?: string;
+  block_number?: number | null;
+  routine?: string | null;
+}
+
+/** Active-programme reconciliation result after profile or rule edits. */
+export interface ProgrammeReconciliation {
+  status: 'reconciled' | 'requires_remediation';
+  message?: string;
+}
+
+/** The `/api/settings/rules` response. */
+export interface TrainingRulesSaveResponse {
+  status: string;
+  rules: TrainingRulesData;
+  blocking_violations?: ProgrammeConstraintViolation[];
+  reconciliation?: ProgrammeReconciliation;
 }
 
 /** The `/api/settings` response. */

@@ -17,7 +17,6 @@ from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
 from programme_validator import validate_programme
 from pydantic import BaseModel, Field
-from training_rules import StructuredTrainingRules
 
 ENGINE_VERSION = "hevy-programme-v1"
 MIN_DURATION_WEEKS = 4
@@ -378,6 +377,7 @@ def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, An
 def serialise_hevy_source(
     data: HevyTrainingData,
     profile_rules: Any = None,
+    training_rules: Any = None,
 ) -> dict[str, Any]:
     """Return the exact selectable Hevy source view used by the builder."""
 
@@ -393,7 +393,11 @@ def serialise_hevy_source(
         ],
         "routines": routines,
     }
-    validation = validate_programme(payload, profile_rules=profile_rules)
+    validation = validate_programme(
+        payload,
+        profile_rules=profile_rules,
+        training_rules=training_rules,
+    )
     payload["blocking_violations"] = validation.blocking_violations
     return payload
 
@@ -754,6 +758,7 @@ def build_programme_preview(
                     "name": source_exercise["title"],
                     "template_id": source_exercise["template_id"],
                     "exercise_type": source_exercise["exercise_type"],
+                    "equipment": source_exercise.get("equipment"),
                     "role": role,
                     "role_reason": role_reason,
                     "sets": opening["sets"],
@@ -823,40 +828,7 @@ def build_programme_preview(
             "No reliable recent frequency was detected; the selected routine count is used as the initial weekly cadence."
         )
 
-    blocking_violations: list[str] = []
-    if request.rules:
-        try:
-            rules_obj = StructuredTrainingRules.from_raw(request.rules)
-            prohib_set = {
-                p.exercise.strip().lower(): p
-                for p in rules_obj.prohibited_exercises
-                if p.exercise.strip()
-            }
-            sub_set = {
-                s.from_exercise.strip().lower(): s
-                for s in rules_obj.substitutions
-                if s.from_exercise.strip()
-            }
-            for source_routine in source_snapshots:
-                for ex in source_routine.get("exercises", []):
-                    name_lower = ex["title"].strip().lower()
-                    if name_lower in sub_set:
-                        sub = sub_set[name_lower]
-                        warnings.append(
-                            f"Routine '{source_routine['title']}' contains '{ex['title']}' "
-                            f"which has a mandatory substitution to '{sub.to_exercise}'."
-                        )
-                    elif name_lower in prohib_set:
-                        p_rule = prohib_set[name_lower]
-                        reason_str = f" ({p_rule.reason})" if p_rule.reason else ""
-                        blocking_violations.append(
-                            f"Routine '{source_routine['title']}' contains prohibited exercise "
-                            f"'{ex['title']}'{reason_str}."
-                        )
-        except Exception as exc:
-            raise ValueError(
-                f"Invalid structured training rules; constraint check failed: {exc}"
-            ) from exc
+    blocking_violations: list[dict[str, Any]] = []
 
     programme_spec = {
         **request.model_dump(mode="json"),
@@ -902,16 +874,26 @@ def build_programme_preview(
         ],
     }
 
-    # Stored profile rules always apply; request constraints may only add rules.
-    # Structured-rule violations found above are preserved alongside the
-    # deterministic profile validator's findings rather than replaced.
-    validation = validate_programme(preview_result, profile_rules=profile_rules)
-    if request.constraints is not None:
-        extra = validate_programme(preview_result, profile_rules=request.constraints)
-        validation.blocking_violations.extend(
-            v for v in extra.blocking_violations if v not in validation.blocking_violations
+    # Stored profile rules and structured training rules always apply; request
+    # constraints may only add rules.
+    try:
+        validation = validate_programme(
+            preview_result,
+            profile_rules=profile_rules,
+            training_rules=request.rules,
         )
-        validation.warnings.extend(w for w in extra.warnings if w not in validation.warnings)
+        if request.constraints is not None:
+            extra = validate_programme(preview_result, profile_rules=request.constraints)
+            validation.blocking_violations.extend(
+                v for v in extra.blocking_violations if v not in validation.blocking_violations
+            )
+            validation.warnings.extend(w for w in extra.warnings if w not in validation.warnings)
+    except ValueError as exc:
+        if request.rules is not None:
+            raise ValueError(
+                f"Invalid structured training rules; constraint check failed: {exc}"
+            ) from exc
+        raise
     preview_result["blocking_violations"] = blocking_violations + [
         v for v in validation.blocking_violations if v not in blocking_violations
     ]

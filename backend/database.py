@@ -16,12 +16,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+import encryption
 from canonical_programme import (
     CANONICAL_SPLIT_NAME,
     CANONICAL_TEMPLATE_KEY,
     get_canonical_programme_definition,
 )
-import encryption
 from program import SPLIT_NAME, TOTAL_DAYS
 from tenancy import (
     LEGACY_TENANT_EMAIL,
@@ -29,12 +29,12 @@ from tenancy import (
     implicit_single_user_allowed,
     normalise_email,
 )
+from training_rules import StructuredTrainingRules
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from hevy_parser import WorkoutSummary
-    from training_rules import StructuredTrainingRules
 
 
 class UserRow(TypedDict):
@@ -3085,6 +3085,7 @@ def save_hevy_connection(
     """
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO hevy_connections
@@ -3184,6 +3185,7 @@ def save_user_preferences(
 
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             INSERT INTO user_preferences
@@ -3212,31 +3214,25 @@ def save_user_preferences(
                 now,
             ),
         )
+        if training_rules is not None:
+            rules_obj = StructuredTrainingRules.from_raw(training_rules)
+            _save_training_rules_with_connection(conn, user_id, rules_obj)
+        if constraints is not None or training_rules is not None:
+            _deactivate_invalid_active_programme(conn, user_id)
 
-    if training_rules is not None:
-        save_training_rules(user_id, training_rules, db_path=db_path)
 
-
-def get_training_rules(
+def _training_rules_from_connection(
+    conn: sqlite3.Connection,
     user_id: str,
-    db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
-    """Return the user's structured training rules, migrating legacy constraints if needed."""
-    from training_rules import StructuredTrainingRules
-
-    try:
-        with _connect(db_path) as conn:
-            row = conn.execute(
-                """
-                SELECT version, rules_json, updated_at
-                FROM training_rules
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            ).fetchone()
-    except sqlite3.OperationalError:
-        return StructuredTrainingRules(version=1).model_dump()
-
+    row = conn.execute(
+        """
+        SELECT version, rules_json, updated_at
+        FROM training_rules
+        WHERE user_id = ?
+        """,
+        (user_id,),
+    ).fetchone()
     if row:
         try:
             data = json.loads(row[1]) if row[1] else {}
@@ -3249,25 +3245,106 @@ def get_training_rules(
                 user_id,
             )
 
-    # Check for legacy free-text constraints in user_preferences to migrate
+    pref_row = conn.execute(
+        "SELECT constraints FROM user_preferences WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if pref_row and pref_row[0]:
+        try:
+            legacy = json.loads(pref_row[0])
+            if isinstance(legacy, list):
+                return StructuredTrainingRules.from_raw(legacy).model_dump()
+        except (ValueError, TypeError, json.JSONDecodeError):
+            logger.debug("Could not parse legacy constraints for %s", user_id)
+    return StructuredTrainingRules(version=1).model_dump()
+
+
+def _profile_constraints_from_connection(
+    conn: sqlite3.Connection,
+    user_id: str,
+) -> Any:
+    row = conn.execute(
+        "SELECT constraints FROM user_preferences WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    if not row or not row[0]:
+        return []
+    try:
+        return json.loads(row[0])
+    except (TypeError, json.JSONDecodeError):
+        return []
+
+
+def _save_training_rules_with_connection(
+    conn: sqlite3.Connection,
+    user_id: str,
+    rules_obj: StructuredTrainingRules,
+) -> dict[str, Any]:
+    from datetime import UTC, datetime
+
+    stored_rules = rules_obj.model_copy(deep=True)
+    existing = conn.execute(
+        "SELECT version FROM training_rules WHERE user_id = ?",
+        (user_id,),
+    ).fetchone()
+    next_version = (existing[0] + 1) if existing else max(1, stored_rules.version)
+    stored_rules.version = next_version
+    now = datetime.now(tz=UTC).isoformat()
+    dump = stored_rules.model_dump()
+    conn.execute(
+        """
+        INSERT INTO training_rules (user_id, version, rules_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            version = excluded.version,
+            rules_json = excluded.rules_json,
+            updated_at = excluded.updated_at
+        """,
+        (user_id, next_version, json.dumps(dump), now),
+    )
+    dump["updated_at"] = now
+    return dump
+
+
+def _deactivate_invalid_active_programme(
+    conn: sqlite3.Connection,
+    user_id: str,
+) -> None:
+    row = conn.execute(
+        "SELECT definition FROM programmes WHERE user_id = ? AND active = 1",
+        (user_id,),
+    ).fetchone()
+    if not row:
+        return
+
+    from programme_validator import validate_programme
+
+    try:
+        definition = json.loads(row[0]) if row[0] else {}
+    except (TypeError, json.JSONDecodeError):
+        definition = {}
+    validation = validate_programme(
+        definition,
+        profile_rules=_profile_constraints_from_connection(conn, user_id),
+        training_rules=_training_rules_from_connection(conn, user_id),
+    )
+    if not definition or validation.blocking_violations:
+        conn.execute(
+            "UPDATE programmes SET active = 0 WHERE user_id = ? AND active = 1",
+            (user_id,),
+        )
+
+
+def get_training_rules(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Return the user's structured training rules, migrating legacy constraints if needed."""
     try:
         with _connect(db_path) as conn:
-            pref_row = conn.execute(
-                "SELECT constraints FROM user_preferences WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-            if pref_row and pref_row[0]:
-                try:
-                    legacy = json.loads(pref_row[0])
-                    if isinstance(legacy, list):
-                        migrated = StructuredTrainingRules.from_raw(legacy)
-                        return migrated.model_dump()
-                except (ValueError, TypeError, json.JSONDecodeError):
-                    logger.debug("Could not parse legacy constraints for %s", user_id)
+            return _training_rules_from_connection(conn, user_id)
     except sqlite3.OperationalError:
-        pass
-
-    return StructuredTrainingRules(version=1).model_dump()
+        return StructuredTrainingRules(version=1).model_dump()
 
 
 def save_training_rules(
@@ -3276,42 +3353,16 @@ def save_training_rules(
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any]:
     """Save or update structured training rules for a user with version bump."""
-    from datetime import UTC, datetime
-
-    from training_rules import StructuredTrainingRules
-
     rules_obj = (
         rules_input
         if isinstance(rules_input, StructuredTrainingRules)
         else StructuredTrainingRules.model_validate(rules_input)
     )
-
-    now = datetime.now(tz=UTC).isoformat()
     with _connect(db_path) as conn:
-        existing = conn.execute(
-            "SELECT version FROM training_rules WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
-        next_version = (existing[0] + 1) if existing else max(1, rules_obj.version)
-        rules_obj.version = next_version
-
-        dump = rules_obj.model_dump()
-        rules_json = json.dumps(dump)
-
-        conn.execute(
-            """
-            INSERT INTO training_rules (user_id, version, rules_json, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(user_id) DO UPDATE SET
-                version = excluded.version,
-                rules_json = excluded.rules_json,
-                updated_at = excluded.updated_at
-            """,
-            (user_id, next_version, rules_json, now),
-        )
-
-    dump["updated_at"] = now
-    return dump
+        conn.execute("BEGIN IMMEDIATE")
+        dump = _save_training_rules_with_connection(conn, user_id, rules_obj)
+        _deactivate_invalid_active_programme(conn, user_id)
+        return dump
 
 
 def get_user_preferences(
@@ -3477,10 +3528,13 @@ def set_active_programme(
             f"violates '{first.get('rule')}'. Permitted remediation: {first.get('permitted_remediation')}"
         )
 
-    prefs = get_user_preferences(user_id, db_path=db_path)
-    assert_programme_activatable(definition, profile_rules=prefs.get("constraints"))
-
     with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        assert_programme_activatable(
+            definition,
+            profile_rules=_profile_constraints_from_connection(conn, user_id),
+            training_rules=_training_rules_from_connection(conn, user_id),
+        )
         conn.execute(
             "UPDATE programmes SET active = 0 WHERE user_id = ?",
             (user_id,),

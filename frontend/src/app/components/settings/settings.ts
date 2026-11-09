@@ -3,16 +3,20 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import {
+  CredentialTestResult,
   EquipmentRule,
   FrequencyRule,
   HevyConnection,
   HevyVerificationResult,
+  ProgrammeConstraintViolation,
+  ProgrammeReconciliation,
   RecoveryRule,
   RepIntensityBoundsRule,
   SaveKeyResult,
   SettingsResponse,
   SyncHistoryResult,
   TrainingRulesData,
+  TrainingRulesSaveResponse,
   VolumeRule,
 } from './settings.types';
 
@@ -82,6 +86,7 @@ export class Settings implements OnInit {
 
   trainingRules = signal<TrainingRulesData | null>(null);
   rulesStatus = signal<string>('');
+  ruleViolations = signal<ProgrammeConstraintViolation[]>([]);
   prohibitedExercises = signal<{ exercise: string; reason?: string }[]>([]);
   substitutions = signal<{ from_exercise: string; to_exercise: string; reason?: string }[]>([]);
   repBounds = signal<{ min_reps: number | null; max_reps: number | null; max_rpe: number | null; min_rir: number | null }>({
@@ -239,13 +244,13 @@ export class Settings implements OnInit {
     const model = (this.aiModelInputs[provider] || '').trim();
     this.setProviderStatus(provider, 'Testing credential...');
     this.http
-      .post('/api/settings/key/test', {
+      .post<CredentialTestResult>('/api/settings/key/test', {
         provider,
         api_key: key || '__stored__',
         model: model || undefined,
       })
       .subscribe({
-        next: (res: any) => {
+        next: (res) => {
           if (res.status === 'ok') {
             const count = typeof res.workout_count === 'number' ? ` ${res.workout_count} workouts found.` : '';
             this.setProviderStatus(provider, `✓ Connected.${count}`);
@@ -442,17 +447,38 @@ export class Settings implements OnInit {
 
   saveTrainingRules() {
     const payload = this.buildTrainingRulesPayload();
-    this.http.post<{ rules: TrainingRulesData }>('/api/settings/rules', payload).subscribe({
-      next: (res: { rules: TrainingRulesData }) => {
-        this.trainingRules.set(res.rules);
-        this.rulesStatus.set(`Rules saved (v${res.rules?.version || payload.version})!`);
-        setTimeout(() => this.rulesStatus.set(''), 4000);
-      },
-      error: (err: HttpErrorResponse) => {
-        const detail = (err.error as { detail?: string } | undefined)?.detail;
-        this.rulesStatus.set(detail || 'Could not save training rules.');
-      },
-    });
+    this.http
+      .post<TrainingRulesSaveResponse>('/api/settings/rules', payload)
+      .subscribe({
+        next: (res: TrainingRulesSaveResponse) => {
+          this.trainingRules.set(res.rules);
+          this.applyReconciliation(res);
+          if (this.ruleViolations().length === 0) {
+            this.rulesStatus.set(
+              `Rules saved (v${res.rules?.version || payload.version})!`,
+            );
+            setTimeout(() => this.rulesStatus.set(''), 4000);
+          }
+        },
+        error: (err: HttpErrorResponse) => {
+          const detail = (err.error as { detail?: string } | undefined)?.detail;
+          this.rulesStatus.set(detail || 'Could not save training rules.');
+        },
+      });
+  }
+
+  private applyReconciliation(res: {
+    blocking_violations?: ProgrammeConstraintViolation[];
+    reconciliation?: ProgrammeReconciliation;
+  }): void {
+    const violations = res.blocking_violations ?? [];
+    this.ruleViolations.set(violations);
+    if (violations.length > 0) {
+      this.rulesStatus.set(
+        res.reconciliation?.message ||
+          'The active programme violates the saved constraints.',
+      );
+    }
   }
 
   savePreferences() {
@@ -472,15 +498,29 @@ export class Settings implements OnInit {
       training_rules: this.buildTrainingRulesPayload(),
     };
 
-    this.http.post<{ status: string }>('/api/settings/preferences', payload).subscribe({
-      next: () => {
-        this.prefStatus.set('Profile saved!');
-        setTimeout(() => this.prefStatus.set(''), 4000);
-      },
-      error: (err: unknown) => {
-        this.prefStatus.set(errorDetail(err) ?? 'Could not save preferences.');
-      },
-    });
+    this.http
+      .post<{
+        status: string;
+        blocking_violations?: ProgrammeConstraintViolation[];
+        reconciliation?: ProgrammeReconciliation;
+      }>('/api/settings/preferences', payload)
+      .subscribe({
+        next: (res) => {
+          this.applyReconciliation(res);
+          if (this.ruleViolations().length === 0) {
+            this.prefStatus.set('Profile saved!');
+            setTimeout(() => this.prefStatus.set(''), 4000);
+          } else {
+            this.prefStatus.set(
+              res.reconciliation?.message ||
+                'The active programme violates the saved constraints.',
+            );
+          }
+        },
+        error: (err: unknown) => {
+          this.prefStatus.set(errorDetail(err) ?? 'Could not save preferences.');
+        },
+      });
   }
 
   disconnectGoogleHealth(): void {
