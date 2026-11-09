@@ -26,10 +26,12 @@ but not ingested, sync history in Settings; refreshing the dashboard reads the
 database but does not perform a provider sync. With no synced completion the
 first routine remains next, with an explicit explanation.
 
-The wider #976 programme improvements continue incrementally: scheduled coaching
-retains its transitional paths, while durable exposure/adaptation records and
-calendar scheduling are deferred to future dedicated slices. The screen displays
-the result as "Next workout" rather than claiming a mandatory workout today.
+The wider #976 programme improvements continue incrementally: durable
+exposure/adaptation records and calendar scheduling are deferred to future
+dedicated slices. The Dashboard, Plan, daily agent and check-ins all read the
+same active programme service. When a user has no active Hevy-native
+programme, the API returns setup guidance and the scheduler records a
+setup-required notification instead of producing a workout.
 
 Verification includes synthetic tests for completion order, duplicate syncs,
 missed days, renamed routines, ambiguous matches, current-block targets,

@@ -54,7 +54,6 @@ from database import (
     get_notifications,
     get_or_create_user,
     get_personal_records,
-    get_programme_start_date,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -98,15 +97,10 @@ from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
-from program import (
-    CYCLE_WEEKS,
-    week_in_cycle,
-)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -375,9 +369,9 @@ async def auth(request: Request) -> Any:
 _QUOTES = [
     "Show up today and the bar gets lighter tomorrow. One more rep than last time.",
     "Strength is a skill you practise. Brace, pull, repeat.",
-    "Small jumps, stacked weekly, become a competition physique. Keep stacking.",
-    "Your future deadlift PR is built on the boring set you log today.",
-    "Discipline now, six-pack later. Hit your protein and your top set.",
+    "Small jumps, stacked weekly, become visible progress. Keep stacking.",
+    "Your future personal best is built on the boring set you log today.",
+    "Discipline now, consistency later. Hit your protein and your planned work.",
     "The last clean rep is where the growth lives. Earn it.",
     "Win the morning weigh-in by winning last night's sleep.",
     "Tight waist, wide back, heavy bar. Stay the course.",
@@ -505,7 +499,6 @@ def _dashboard_context(
     setup_required = runtime.status == "setup_required"
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
-    current_day_number: int | None = None
     is_rest_day = True
     cycle_weeks = 0
     week = 0
@@ -531,7 +524,6 @@ def _dashboard_context(
             week_in_block = week - start_week + 1
         active_day = runtime.next_day
         if active_day:
-            current_day_number = int(active_day.get("number") or 1)
             focus = str(active_day.get("focus") or "Training")
             is_rest_day = False
             for exercise in active_day.get("exercises", []):
@@ -561,7 +553,7 @@ def _dashboard_context(
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(
-        current_day_number,
+        None if is_rest_day else focus,
         is_rest_day,
         recovery_like,
     )
@@ -791,12 +783,6 @@ def activate_programme(
         definition=preview,
         db_path=DB_PATH,
     )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
     save_notification(
         user_id,
         title="Hevy programme activated",
@@ -818,83 +804,6 @@ def activate_programme(
                     user_id,
                     db_path=DB_PATH,
                 ),
-            }
-        )
-    )
-
-
-@app.post("/api/programmes/select")
-async def select_programme(request: Request) -> JSONResponse:
-    """Compatibility adapter for clients using the retired template endpoint."""
-
-    _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, TypeError):
-        body = {}
-
-    template_key = str(body.get("template_key") or "").strip()
-    if template_key == "hybrid_powerbuilding":
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "Hybrid Powerbuilding has been removed. "
-                "Select routines from Hevy and generate a programme preview."
-            ),
-        )
-    if template_key != "infer_from_hevy":
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "Static programme selection has been removed. "
-                "Use /api/programmes/preview and /api/programmes/activate."
-            ),
-        )
-
-    training_data = _load_hevy_training_for_user(user_id)
-    if not training_data.routines:
-        raise HTTPException(
-            status_code=422,
-            detail="No Hevy routines are available for programme generation.",
-        )
-
-    try:
-        preview_request = ProgrammePreviewRequest(
-            selected_routine_ids=[routine.id for routine in training_data.routines],
-            duration_weeks=int(body.get("duration_weeks") or 12),
-            goal=body.get("goal") or "general_fitness",
-            start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
-            sessions_per_week=body.get("sessions_per_week"),
-            experience=body.get("experience") or "intermediate",
-            max_session_minutes=body.get("max_session_minutes"),
-            adaptation_aggressiveness=(
-                body.get("adaptation_aggressiveness") or "balanced"
-            ),
-        )
-        preview = build_programme_preview(training_data, preview_request)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
-    return JSONResponse(
-        jsonable_encoder(
-            {
-                "status": "ok",
-                "source": "hevy",
-                "preview_token": preview["preview_token"],
             }
         )
     )
@@ -1037,7 +946,7 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
-    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
+    prompt = f"""You are Coach, a data-driven AI coach embedded in the user's private training dashboard.
 You have access to this user's training logs, body composition data, personal records, and programme history.
 
 Your personality:
@@ -1362,18 +1271,29 @@ def api_progress(request: Request):
 
 @app.get("/api/stats")
 def api_stats(request: Request):
+    from programme_runtime import local_today, resolve_programme_runtime
+
     user_id = _check_api_auth(request)
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
+    user = get_user_by_id(user_id, DB_PATH)
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    today = local_today(timezone_name)
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
+        today=today,
+        timezone_name=timezone_name,
+    )
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(start, today)
 
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
-    days_on_programme = (today - start).days
+    days_on_programme = (
+        (today - runtime.start_date).days if runtime.start_date else 0
+    )
 
     focus_counts: dict[str, int] = {}
     for log in logs:
@@ -1452,7 +1372,9 @@ def api_stats(request: Request):
         else None
     )
 
-    target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
+    target_ordinal = today.toordinal() + max(
+        0, (runtime.cycle_weeks - runtime.week)
+    ) * 7
     projections = [
         _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
         _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
@@ -1627,7 +1549,6 @@ def api_programmes(request: Request) -> JSONResponse:
             {
                 "active_programme": active,
                 "current_state": active,
-                "templates": [],
                 "connection": connection,
                 "source": source,
                 "duration": {

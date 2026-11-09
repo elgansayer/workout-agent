@@ -52,8 +52,6 @@ class Config:
     gemini_model: str
     health_connect_file: str | None
     database_path: str
-    hevy_sync_routines: bool
-    hevy_prefill_weights: bool
     checkin_enabled: bool
     lifestyle_enabled: bool
     google_health_client_id: str | None
@@ -72,17 +70,6 @@ class Config:
         # it just cannot reference your last logged session.
         hevy_api_key = os.environ.get("HEVY_API_KEY", "").strip() or None
         health_file = os.environ.get("HEALTH_CONNECT_FILE", "").strip() or None
-        sync_routines = os.environ.get(
-            "HEVY_SYNC_ROUTINES", "1"
-        ).strip().lower() not in (
-            "0",
-            "false",
-            "no",
-        )
-        prefill_weights = os.environ.get(
-            "HEVY_PREFILL_WEIGHTS",
-            "1",
-        ).strip().lower() not in ("0", "false", "no")
 
         checkin_enabled = os.environ.get(
             "CHECKIN_ENABLED",
@@ -120,8 +107,6 @@ class Config:
             gemini_model=os.environ.get("GEMINI_MODEL", "gemini-3.8-flash").strip(),
             health_connect_file=health_file,
             database_path=os.environ.get("DATABASE_PATH", "workout_agent.db").strip(),
-            hevy_sync_routines=sync_routines,
-            hevy_prefill_weights=prefill_weights,
             checkin_enabled=checkin_enabled,
             lifestyle_enabled=lifestyle_enabled,
             google_health_client_id=google_health_client_id,

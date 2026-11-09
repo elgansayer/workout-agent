@@ -145,7 +145,7 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     prompt = f"""You are an elite data-driven strength coach and analyst. 
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
-Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
+Your goal is to hunt for invisible bottlenecks. For example, you might identify that a lift's progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume sessions negatively impact sleep.
 
 Here is the data:
 {json.dumps(data, indent=2)}

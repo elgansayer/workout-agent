@@ -9,7 +9,6 @@ import checkin
 from _pytest.monkeypatch import MonkeyPatch
 from config import Config
 from database import get_checkins, get_meta, get_or_create_user, init_db, set_meta
-from program import BLOCKS
 
 
 def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
@@ -21,8 +20,6 @@ def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
         gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
-        hevy_sync_routines=True,
-        hevy_prefill_weights=True,
         checkin_enabled=True,
         lifestyle_enabled=True,
         google_health_client_id=None,
@@ -132,7 +129,7 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
 
 def test_analyse_without_hevy_returns_empty(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
-    assert checkin._analyse(config, BLOCKS[1]) == []
+    assert checkin._analyse(config, []) == []
 
 
 def test_run_checkin_resolves_the_acting_users_provider(
@@ -165,7 +162,21 @@ def test_run_checkin_resolves_the_acting_users_provider(
         config,
         due_info,
         week=4,
-        block=BLOCKS[1],
+        cycle_weeks=12,
+        block={"number": 1, "name": "Foundation"},
+        days=[
+            {
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "template_id": "tmpl-bench",
+                        "sets": 4,
+                        "rep_range": "5-8",
+                    }
+                ]
+            }
+        ],
+        rules=["Progress load safely."],
         user_id="user-a",
     )
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import MagicMock
 
 from gemini_engine import (
@@ -15,7 +16,18 @@ from gemini_engine import (
     generate_next_workout,
     generate_rest_day_message,
 )
-from program import BLOCKS
+
+DAY: dict[str, Any] = {
+    "number": 1,
+    "focus": "Upper Strength",
+    "exercises": [
+        {"name": "Bench Press", "sets": 4, "rep_range": "5-8", "scheme": "4 × 5-8"},
+        {"name": "Row", "sets": 3, "rep_range": "8-12", "scheme": "3 × 8-12"},
+    ],
+}
+BLOCK: dict[str, Any] = {"number": 1, "name": "Foundation", "focus": "Base"}
+RULES = ["Progress load safely.", "Keep selected exercises."]
+
 
 # ---------------------------------------------------------------------------
 # _format_history
@@ -28,9 +40,9 @@ def test_format_history_empty() -> None:
 
 
 def test_format_history_with_weight_and_reps() -> None:
-    history = {"Deadlift (Barbell)": {"top_weight_kg": 140.0, "top_reps": 5}}
+    history = {"Bench Press": {"top_weight_kg": 100.0, "top_reps": 5}}
     result = _format_history(history)
-    assert "Deadlift (Barbell): 140 kg x 5" in result
+    assert "Bench Press: 100 kg x 5" in result
 
 
 def test_format_history_bodyweight_only() -> None:
@@ -46,12 +58,11 @@ def test_format_history_no_weight_no_reps() -> None:
 
 def test_format_history_sorted_by_name() -> None:
     history = {
-        "Deadlift": {"top_weight_kg": 140, "top_reps": 5},
+        "Squat": {"top_weight_kg": 140, "top_reps": 5},
         "Bench Press": {"top_weight_kg": 100, "top_reps": 8},
     }
     result = _format_history(history)
-    # "Bench Press" should come before "Deadlift"
-    assert result.index("Bench Press") < result.index("Deadlift")
+    assert result.index("Bench Press") < result.index("Squat")
 
 
 # ---------------------------------------------------------------------------
@@ -59,54 +70,61 @@ def test_format_history_sorted_by_name() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_build_prompt_includes_focus_and_week() -> None:
+def test_build_prompt_includes_focus_week_and_programme() -> None:
     prompt = _build_prompt(
-        day=1,
+        day=DAY,
         week=3,
-        block=BLOCKS[1],
+        cycle_weeks=12,
+        programme_name="Hypertrophy · Hevy routines",
+        rules=RULES,
         workout_summary=None,
         recovery=None,
         history=None,
-        insights=None,
-        last_plan=None,
     )
-    assert "Week 3 of 12" in prompt
-    assert "Block 1" in prompt
-    assert "Day 1" in prompt
+    assert "Week 3 of" in prompt
+    assert "12" in prompt
+    assert "Upper Strength" in prompt
+    assert "Hypertrophy" in prompt
 
 
-def test_build_prompt_includes_coaching_rules() -> None:
+def test_build_prompt_includes_programme_rules() -> None:
     prompt = _build_prompt(
-        day=1,
+        day=DAY,
         week=1,
-        block=BLOCKS[1],
+        cycle_weeks=8,
+        programme_name="Programme",
+        rules=RULES,
         workout_summary=None,
         recovery=None,
         history=None,
     )
-    assert "Coaching rules" in prompt
+    assert "Progress load safely." in prompt
 
 
 def test_build_prompt_includes_history_and_recovery() -> None:
-    history = {"Deadlift": {"top_weight_kg": 100, "top_reps": 5}}
+    history = {"Bench Press": {"top_weight_kg": 100, "top_reps": 5}}
     recovery = {"sleep_hours": 7.5, "weight_kg": 82}
     prompt = _build_prompt(
-        day=1,
+        day=DAY,
         week=1,
-        block=BLOCKS[1],
+        cycle_weeks=8,
+        programme_name="Programme",
+        rules=RULES,
         workout_summary=None,
         recovery=recovery,
         history=history,
     )
-    assert "Deadlift: 100 kg x 5" in prompt
+    assert "Bench Press: 100 kg x 5" in prompt
     assert '"sleep_hours": 7.5' in prompt
 
 
 def test_build_prompt_includes_last_plan() -> None:
     prompt = _build_prompt(
-        day=1,
+        day=DAY,
         week=1,
-        block=BLOCKS[1],
+        cycle_weeks=8,
+        programme_name="Programme",
+        rules=RULES,
         workout_summary=None,
         recovery=None,
         history=None,
@@ -115,29 +133,44 @@ def test_build_prompt_includes_last_plan() -> None:
     assert "Yesterday's plan was great." in prompt
 
 
+def test_build_prompt_does_not_hardcode_stage_prep_goals() -> None:
+    prompt = _build_prompt(
+        day=DAY,
+        week=1,
+        cycle_weeks=8,
+        programme_name="Programme",
+        rules=RULES,
+        workout_summary=None,
+        recovery=None,
+        history=None,
+    )
+    lowered = prompt.lower()
+    assert "stage-prep" not in lowered
+    assert "powerbuilding" not in lowered
+    assert "six-pack" not in lowered
+
+
 # ---------------------------------------------------------------------------
 # _fallback_plan
 # ---------------------------------------------------------------------------
 
 
 def test_fallback_plan_has_focus_and_week() -> None:
-    plan = _fallback_plan(day=1, week=4, block=BLOCKS[1])
-    assert plan.startswith("Back, Deadlifts & Chest - Week 4")
-    assert "Deadlift" in plan
+    plan = _fallback_plan(day=DAY, week=4)
+    assert plan.startswith("Upper Strength - Week 4")
+    assert "Bench Press" in plan
 
 
 def test_fallback_plan_includes_exercises() -> None:
-    plan = _fallback_plan(day=3, week=2, block=BLOCKS[2])
-    # Should have focus and exercises
-    lines = plan.split("\n")
-    assert len(lines) > 1  # at least one exercise
+    lines = _fallback_plan(day=DAY, week=2).split("\n")
+    assert len(lines) > 1
 
 
 # ---------------------------------------------------------------------------
 # generate_next_workout
 # ---------------------------------------------------------------------------
 
-_fake_gemini_plan = "Back, Deadlifts & Chest - Week 3 (Hypertrophy)\nDeadlift: 4 x 8 (+2.5 kg)\nPull-Up: 3 x 10 (+1 rep)"
+_fake_plan = "Upper Strength - Week 3\nBench Press: 4 x 5-8 (+2.5 kg)\nRow: 3 x 8-12"
 
 
 def _make_mock_provider(response_text: str, *, raise_error: bool = False) -> MagicMock:
@@ -151,15 +184,17 @@ def _make_mock_provider(response_text: str, *, raise_error: bool = False) -> Mag
 
 
 def test_generate_next_workout_success() -> None:
-    mock_provider = _make_mock_provider(_fake_gemini_plan)
+    mock_provider = _make_mock_provider(_fake_plan)
 
     result = generate_next_workout(
         mock_provider,
-        day=1,
+        day=DAY,
         week=3,
-        block=BLOCKS[1],
+        cycle_weeks=12,
+        programme_name="Programme",
+        rules=RULES,
     )
-    assert result == _fake_gemini_plan
+    assert result == _fake_plan
     mock_provider.generate.assert_called_once()
 
 
@@ -168,11 +203,13 @@ def test_generate_next_workout_empty_response_falls_back() -> None:
 
     result = generate_next_workout(
         mock_provider,
-        day=1,
+        day=DAY,
         week=3,
-        block=BLOCKS[1],
+        cycle_weeks=12,
+        programme_name="Programme",
+        rules=RULES,
     )
-    assert "Back, Deadlifts & Chest - Week 3" in result
+    assert "Upper Strength - Week 3" in result
 
 
 def test_generate_next_workout_exception_falls_back() -> None:
@@ -180,11 +217,13 @@ def test_generate_next_workout_exception_falls_back() -> None:
 
     result = generate_next_workout(
         mock_provider,
-        day=1,
+        day=DAY,
         week=3,
-        block=BLOCKS[1],
+        cycle_weeks=12,
+        programme_name="Programme",
+        rules=RULES,
     )
-    assert "Back, Deadlifts & Chest - Week 3" in result
+    assert "Upper Strength - Week 3" in result
 
 
 # ---------------------------------------------------------------------------
@@ -195,13 +234,13 @@ def test_generate_next_workout_exception_falls_back() -> None:
 def test_build_rest_prompt_includes_recovery() -> None:
     recovery = {"sleep_hours": 6.5, "weight_kg": 82}
     prompt = _build_rest_prompt(recovery)
-    assert "recovery is where the muscle is built" in prompt.lower()
+    assert "recovery is where adaptation happens" in prompt.lower()
     assert '"sleep_hours": 6.5' in prompt
 
 
 def test_build_rest_prompt_none_recovery() -> None:
     prompt = _build_rest_prompt(None)
-    assert "recovery is where the muscle is built" in prompt.lower()
+    assert "recovery is where adaptation happens" in prompt.lower()
 
 
 _fake_rest_message = "Rest up, champ. Recovery is key."
@@ -251,18 +290,20 @@ def test_build_checkin_prompt_includes_block_info() -> None:
     prompt = _build_checkin_prompt(
         number=2,
         week=5,
-        block=BLOCKS[2],
+        cycle_weeks=12,
+        block=BLOCK,
+        rules=RULES,
         workouts_done=30,
         weeks=6,
         analysis_text="Bench is stalling.",
     )
-    assert "Check-in number 2" in prompt.lower() or "check-in" in prompt.lower()
+    assert "check-in" in prompt.lower()
     assert "Week 5" in prompt
-    assert "Block 2" in prompt
+    assert "Block 1" in prompt
     assert "Bench is stalling." in prompt
 
 
-_fake_checkin = "Check-in 2: Block 2 (Strength)\nDeadlift progressing well.\nBench stalled.\nAdd 2.5 kg to deadlift.\nKeep pushing!"
+_fake_checkin = "Check-in 2: Block 1 (Foundation)\nBench progressing well.\nKeep pushing!"
 
 
 def test_generate_checkin_message_success() -> None:
@@ -272,7 +313,9 @@ def test_generate_checkin_message_success() -> None:
         mock_provider,
         number=2,
         week=5,
-        block=BLOCKS[2],
+        cycle_weeks=12,
+        block=BLOCK,
+        rules=RULES,
         workouts_done=30,
         weeks=6,
         analysis_text="Bench is stalling.",
@@ -288,7 +331,9 @@ def test_generate_checkin_message_empty_falls_back() -> None:
         mock_provider,
         number=2,
         week=5,
-        block=BLOCKS[2],
+        cycle_weeks=12,
+        block=BLOCK,
+        rules=RULES,
         workouts_done=30,
         weeks=6,
         analysis_text="Bench is stalling.",
@@ -304,7 +349,9 @@ def test_generate_checkin_message_exception_falls_back() -> None:
         mock_provider,
         number=2,
         week=5,
-        block=BLOCKS[2],
+        cycle_weeks=12,
+        block=BLOCK,
+        rules=RULES,
         workouts_done=30,
         weeks=6,
         analysis_text="Bench is stalling.",

@@ -1,9 +1,9 @@
 """Read-first Hevy integration: understand what the user actually trains.
 
-Instead of pushing a static programme TO Hevy (the old ``hevy_sync.py`` flow),
-this module pulls the user's routines, recent workouts, and exercise templates
-FROM Hevy, then distills them into a structured ``HevyTrainingData`` object
-that the rest of the system can reason about.
+The retired flow pushed a static programme TO Hevy. This module instead pulls
+the user's routines, recent workouts, and exercise templates FROM Hevy, then
+distils them into a structured ``HevyTrainingData`` object that the rest of the
+system can reason about.
 
 The data is fetched per-user using their stored API key (from Sprint 1).
 """

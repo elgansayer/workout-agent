@@ -1,12 +1,12 @@
-"""Stage-prep lifestyle guidance: the pillars around the training.
+"""Daily lifestyle guidance: the pillars around the training.
 
-The gym is only part of the battle. This module turns the day's training focus
-into concrete daily actions across the supporting pillars so the agent can
-deliver, and log, a complete "what to do today" plan:
+The gym is only part of the battle. This module turns the active programme's
+training focus into concrete daily actions across the supporting pillars so the
+agent can deliver, and log, a complete "what to do today" plan:
 
-1. Strategic nutrition (carb cycling around training load, static protein).
-2. Joint-friendly cardio and NEAT (steps plus low-impact Zone 2).
-3. CNS recovery (sleep and targeted supplementation).
+1. Strategic nutrition (protein held static, carbohydrates timed around load).
+2. Joint-friendly cardio and NEAT.
+3. Recovery (sleep and general recovery habits).
 """
 
 from __future__ import annotations
@@ -14,24 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from program import day_focus
-
-# Pillar 1: nutrition. Protein is held static; carbohydrates cycle with load.
+# Protein is held static; carbohydrates are adjusted around training load.
 PROTEIN_G_PER_KG = 2.2
 
-# Carb tiers by cycle day. Heavy pulling days are fully fuelled, leg days run
-# moderate, and the lighter upper days and rest days run low carb / higher fats.
-_HIGH_CARB_DAYS = {1, 4}  # Back & Deadlift: glycogen for heavy pulls
-_MODERATE_CARB_DAYS = {3, 6}  # Legs & Abs: the leg press still needs fuel
-
-# Pillar 2: cardio and NEAT.
+# Cardio and NEAT.
 STEP_TARGET = "10,000 to 12,000 steps"
-# Joint-friendly Zone 2 only on the lighter upper days and rest days, to spare
-# the heavy lower-body and pulling sessions. Bad toes rule out the stair-master
-# and running, so steady-state means the stationary bike or swimming.
-_LISS_DAYS = {2, 5}
 
-# Pillar 3: CNS recovery. Heavy deadlifts tax the nervous system.
+# Recovery.
 SLEEP_TARGET_HOURS = 8
 
 
@@ -40,7 +29,7 @@ class DailyGuidance:
     """The lifestyle pillars resolved for a single day."""
 
     training: str  # which session to train today
-    carb_tier: str  # "high" | "moderate" | "low"
+    carb_tier: str  # "moderate" | "low"
     nutrition: str
     cardio: str
     recovery: str
@@ -62,45 +51,29 @@ class DailyGuidance:
         return "Today's lifestyle:\n" + body
 
 
-def _carb_tier(day: int | None) -> str:
-    if day in _HIGH_CARB_DAYS:
-        return "high"
-    if day in _MODERATE_CARB_DAYS:
-        return "moderate"
-    return "low"
-
-
 def _nutrition(tier: str) -> str:
-    if tier == "high":
-        return (
-            "Heavy pulling day. Put about 70% of your carbs in the pre- and "
-            "post-workout meals to fuel the pulls and refill glycogen."
-        )
     if tier == "moderate":
         return (
-            "Leg day. Keep carbs moderate and timed around the session so the "
-            "leg press has fuel, leaner the rest of the day."
+            "Time most of your carbs around today's session to fuel the work "
+            "and refill glycogen, keeping the rest of the day leaner."
         )
     return (
-        "Lower carb today. Drop the carbs and lean on healthy fats (avocado, "
-        "nuts, salmon) to support the joints and hormones."
+        "Lower carb today. Lean on healthy fats and protein to support "
+        "recovery without overshooting energy intake."
     )
 
 
-def _cardio(day: int | None, is_rest: bool) -> str:
+def _cardio(is_rest: bool) -> str:
     base = f"Hit {STEP_TARGET} (NEAT)."
-    if is_rest or day in _LISS_DAYS:
-        return (
-            base + " Add 20 to 30 min Zone 2 on the stationary bike or in the "
-            "pool. No stair-master or running (toes and leg recovery)."
-        )
-    return base + " Skip steady-state cardio today and protect leg and pull recovery."
+    if is_rest:
+        return base + " Add 20 to 30 min of easy Zone 2 if it feels good."
+    return base + " Add optional easy Zone 2 if it does not compromise recovery."
 
 
 def _recovery() -> str:
     return (
-        f"{SLEEP_TARGET_HOURS} h sleep minimum. Omega-3 with a meal for the "
-        "joints, Magnesium Glycinate before bed to settle the nervous system."
+        f"{SLEEP_TARGET_HOURS} h sleep minimum. Prioritise hydration, a protein "
+        "target, and light mobility on rest days."
     )
 
 
@@ -118,27 +91,24 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    day: int | None,
+    focus: str | None,
     is_rest: bool,
     recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
-    """Resolve the lifestyle pillars for the given cycle day.
+    """Resolve the lifestyle pillars for the active programme's training focus.
 
-    `day` is the cycle day (1-6) or None on a rest day. `recovery` may carry a
-    `weight_kg` reading used to compute the daily protein target.
+    ``focus`` is the selected Hevy routine title, or ``None`` on a rest day.
+    ``recovery`` may carry a ``weight_kg`` reading used to compute the daily
+    protein target.
     """
-    rest = is_rest or day is None
-    tier = _carb_tier(None if rest else day)
-    if rest:
-        training = "Rest and recovery, no lifting today"
-    else:
-        # day is guaranteed non-None when not rest
-        training = day_focus(day)  # type: ignore[arg-type]
+    rest = is_rest or not focus
+    tier = "low" if rest else "moderate"
+    training = "Rest and recovery, no lifting today" if rest else str(focus)
     return DailyGuidance(
         training=training,
         carb_tier=tier,
         nutrition=_nutrition(tier),
-        cardio=_cardio(day, is_rest),
+        cardio=_cardio(rest),
         recovery=_recovery(),
         protein_target=_protein_target(recovery),
     )

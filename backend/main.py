@@ -1,8 +1,9 @@
 """Entry point: orchestrates the early-morning agent run.
 
-Each morning it works out what you should train today from the real calendar day
-(Monday to Saturday follow the 6-day split; Sunday is a rest day), applies
-progressive overload from your latest Hevy session, and messages you the plan.
+Each morning it resolves the authenticated user's active Hevy-native programme,
+applies progressive overload from the latest Hevy session, and messages the
+plan. When no programme is active it records a setup-required skip instead of
+fabricating a workout.
 
 Run manually with `python main.py`, or schedule via cron for 07:00 daily.
 Use `python main.py --preview` for a dry run that prints today's plan to stdout
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -27,15 +29,17 @@ from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
+    get_active_programme,
     get_body_metrics,
     get_daily_logs,
     get_legacy_user_id,
     get_or_create_user,
-    get_programme_start_date,
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
+    get_recent_hevy_logs,
     get_user_api_key,
+    get_user_by_id,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -43,20 +47,11 @@ from database import (
     save_progress,
     save_workout,
 )
-from gemini_engine import generate_next_workout, generate_rest_day_message
+from gemini_engine import generate_next_workout
 from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
-from hevy_parser import parse_workout
-from hevy_sync import sync_routines
-from program import (
-    REST_DAY_FOCUS,
-    Block,
-    block_for_week,
-    day_focus,
-    rep_targets,
-    today_day,
-    week_in_cycle,
-)
+from hevy_parser import normalise_name, parse_workout
+from programme_runtime import local_today, resolve_programme_runtime
 from push_notifier import send_push_notification
 
 logging.basicConfig(
@@ -117,40 +112,13 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
     return 0
 
 
-def _sync_hevy_routines(
-    config: Config,
-    *,
-    user_id: str,
-) -> list[str]:
-    """Keep the acting user's Hevy routines ready to start."""
-    if not config.hevy_api_key or not config.hevy_sync_routines:
-        return []
-    try:
-        statuses = sync_routines(config, user_id=user_id)
-        for status in statuses:
-            logger.info("Hevy routine %s", status)
-        return statuses
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Hevy routine sync failed: %s", exc)
-        return []
-
-
-def _changes_footer(statuses: list[str]) -> str:
-    """Build a short footer naming any routines that changed in this sync."""
-    changed = [
-        status.split(":", 1)[0]
-        for status in statuses
-        if status.endswith((": updated", ": created"))
-    ]
-    if not changed:
-        return ""
-    return "\n\nHevy routines refreshed: " + ", ".join(changed) + "."
-
-
 def _maybe_check_in(
     config: Config,
     week: int,
-    block: Block,
+    cycle_weeks: int,
+    block: dict[str, Any],
+    days: list[dict[str, Any]],
+    rules: list[str],
     preview: bool,
     *,
     user_id: str,
@@ -171,7 +139,16 @@ def _maybe_check_in(
         due_info.workouts_done,
         due_info.weeks_elapsed,
     )
-    message = checkin.run_checkin(config, due_info, week, block, user_id=user_id)
+    message = checkin.run_checkin(
+        config,
+        due_info,
+        week,
+        cycle_weeks,
+        block,
+        days,
+        rules,
+        user_id=user_id,
+    )
     _deliver(config, message, preview, user_id)
     if not preview:
         checkin.record(config, due_info, message, user_id=user_id)
@@ -181,7 +158,7 @@ def _maybe_self_review(
     config: Config,
     recovery: dict[str, Any] | None,
     week: int,
-    block: Block,
+    block: dict[str, Any],
     preview: bool,
     *,
     user_id: str,
@@ -200,7 +177,8 @@ def _maybe_self_review(
         logger.info("Self-review skipped: not enough logged history yet.")
         return
     logger.info("Self-review due: %s", review.headline)
-    _deliver(config, review.as_message(week, block.name), preview, user_id)
+    block_name = str(block.get("name") or "Programme")
+    _deliver(config, review.as_message(week, block_name), preview, user_id)
 
 
 def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -> str:
@@ -262,6 +240,20 @@ def _scope_config_to_user(config: Config, user_id: str) -> Config:
     )
 
 
+def _rep_targets_from_days(days: list[dict[str, Any]]) -> dict[str, int]:
+    """Return top-of-range rep targets for the active programme's exercises."""
+    targets: dict[str, int] = {}
+    for day in days:
+        for exercise in day.get("exercises", []):
+            name = str(exercise.get("name") or "")
+            if not name:
+                continue
+            numbers = re.findall(r"\d+", str(exercise.get("rep_range") or ""))
+            if numbers:
+                targets[normalise_name(name)] = int(numbers[-1])
+    return targets
+
+
 def run(preview: bool = False, user_id: str | None = None) -> int:
     try:
         config = Config.load()
@@ -276,18 +268,65 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 
-    statuses = _sync_hevy_routines(config, user_id=user_id)
-    footer = _changes_footer(statuses)
-
-    today = datetime.now(tz=timezone.utc).date()
+    user = get_user_by_id(user_id, config.database_path)
+    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    today = local_today(timezone_name)
     when = today.isoformat()
-    week = week_in_cycle(
-        get_programme_start_date(config.database_path, user_id=user_id), today
-    )
-    block = block_for_week(week)
-    logger.info("Week %s of 12, Block %s: %s.", week, block.number, block.name)
 
-    _maybe_check_in(config, week, block, preview, user_id=user_id)
+    active = get_active_programme(user_id, db_path=config.database_path)
+    runtime = resolve_programme_runtime(
+        active,
+        get_recent_hevy_logs(
+            limit=56,
+            db_path=config.database_path,
+            user_id=user_id,
+        ),
+        today=today,
+        timezone_name=timezone_name,
+    )
+    if runtime.status != "active" or runtime.next_day is None:
+        message = runtime.message or "Connect Hevy and select routines to begin."
+        logger.info("Skipping daily workout for user %s: %s", user_id, message)
+        if not preview:
+            save_notification(
+                user_id,
+                title="Programme setup required",
+                message=message,
+                type="programme",
+                link="/programmes",
+                db_path=config.database_path,
+            )
+        return 0
+
+    definition = (active or {}).get("definition") or {}
+    if not isinstance(definition, dict):
+        definition = {}
+    programme_name = str(definition.get("name") or "Hevy programme")
+    rules = [str(rule) for rule in definition.get("rules") or []]
+    days = runtime.days
+    week = runtime.week
+    cycle_weeks = runtime.cycle_weeks
+    block = runtime.block
+    day = runtime.next_day
+    focus = str(day.get("focus") or "Training")
+    logger.info(
+        "Week %s of %s, Block %s: %s.",
+        week,
+        cycle_weeks,
+        block.get("number") or 0,
+        block.get("name") or "Programme",
+    )
+
+    _maybe_check_in(
+        config,
+        week,
+        cycle_weeks,
+        block,
+        days,
+        rules,
+        preview,
+        user_id=user_id,
+    )
 
     recovery = read_recovery_metrics(config.health_connect_file)
     synced = google_health_client.sync_body_metrics(
@@ -321,35 +360,13 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     except (ImportError, ValueError) as exc:
         logger.error("AI provider configuration failed: %s", exc)
         return 1
-    day = today_day(today)
 
-    if day is None:
-        logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
-        message = generate_rest_day_message(provider, recovery=recovery)
-        guidance = (
-            lifestyle.daily_guidance(None, True, recovery)
-            if config.lifestyle_enabled
-            else None
-        )
-        if not preview:
-            save_daily_log(
-                when,
-                None,
-                REST_DAY_FOCUS,
-                guidance.carb_tier if guidance else "",
-                message,
-                guidance.as_text() if guidance else "",
-                config.database_path,
-                user_id=user_id,
-            )
-        return _deliver(config, _compose(message, guidance, footer), preview, user_id)
-
-    logger.info("Today is %s: day %s, %s.", today.strftime("%A"), day, day_focus(day))
+    logger.info("Today is %s: %s.", today.strftime("%A"), focus)
 
     recent_workout = (
         fetch_latest_workout(config.hevy_api_key) if config.hevy_api_key else None
     )
-    summary = parse_workout(recent_workout, rep_targets(block))
+    summary = parse_workout(recent_workout, _rep_targets_from_days(days))
     if not preview:
         save_workout(recent_workout, config.database_path, user_id=user_id)
         save_progress(summary, config.database_path, user_id=user_id)
@@ -374,7 +391,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         provider,
         day=day,
         week=week,
-        block=block,
+        cycle_weeks=cycle_weeks,
+        programme_name=programme_name,
+        rules=rules,
         workout_summary=summary,
         recovery=recovery,
         history=history,
@@ -382,22 +401,22 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         last_plan=last_plan,
     )
     guidance = (
-        lifestyle.daily_guidance(day, False, recovery)
+        lifestyle.daily_guidance(focus, False, recovery)
         if config.lifestyle_enabled
         else None
     )
     if not preview:
         save_daily_log(
             when,
-            day,
-            day_focus(day),
+            int(day.get("number") or 1),
+            focus,
             guidance.carb_tier if guidance else "",
             plan,
             guidance.as_text() if guidance else "",
             config.database_path,
             user_id=user_id,
         )
-    return _deliver(config, _compose(plan, guidance, footer), preview, user_id)
+    return _deliver(config, _compose(plan, guidance, ""), preview, user_id)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

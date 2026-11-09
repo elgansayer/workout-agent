@@ -1,7 +1,7 @@
 """SQLite persistence for the workout agent.
 
-Stores the current position in the 6-day cycle and a history of the raw Hevy
-payloads so progress can be reviewed over time.
+Stores tenant-scoped programme revisions, workout history, progress and the
+supporting coaching records so progress can be reviewed over time.
 """
 
 from __future__ import annotations
@@ -11,12 +11,11 @@ import json
 import logging
 import sqlite3
 from collections.abc import Iterator
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
-from program import SPLIT_NAME, TOTAL_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +60,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT NOT NULL,
                 hevy_payload TEXT NOT NULL
-            )
-            """,
-        )
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS programme_state (
-                user_id TEXT PRIMARY KEY REFERENCES users(id),
-                current_day INTEGER NOT NULL DEFAULT 1,
-                split_name TEXT NOT NULL
             )
             """,
         )
@@ -179,14 +169,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO hevy_meta (key, value)
-            VALUES ('programme_start_date', ?)
-            """,
-            (datetime.now(tz=timezone.utc).date().isoformat(),),
-        )
-
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS chat_messages (
@@ -430,14 +412,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_daily_log_date ON daily_log (date)"
         )
 
-        cursor.execute(
-            """
-            INSERT OR IGNORE INTO hevy_meta (key, value)
-            VALUES ('programme_start_date', ?)
-            """,
-            (datetime.now(tz=timezone.utc).date().isoformat(),),
-        )
-
         # Migration: Add user_id column to workout_history for multi-tenancy
         cursor.execute("PRAGMA table_info(workout_history)")
         woh_columns = {row[1] for row in cursor.fetchall()}
@@ -515,7 +489,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Archive any previously active static template. Existing history stays
         # intact, but the user must explicitly activate a Hevy-native programme.
-        cursor.execute(
+        archived = cursor.execute(
             """
             UPDATE programmes
             SET active = 0,
@@ -526,6 +500,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """,
             (datetime.now(tz=timezone.utc).isoformat(),),
         )
+        if archived.rowcount:
+            logger.info(
+                "Archived %d legacy static programme revision(s); "
+                "history is retained and a Hevy-native programme must be activated.",
+                archived.rowcount,
+            )
 
         # ---- Multi-tenant migration helper ----
         def _ensure_legacy_user(cur: sqlite3.Cursor) -> str:
@@ -680,46 +660,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON check_ins (user_id, id DESC)",
         )
 
-        # Migration: Migrate programme_state from singleton to user_id-scoped
-        cursor.execute("PRAGMA table_info(programme_state)")
-        ps_columns = {row[1] for row in cursor.fetchall()}
-        if "id" in ps_columns:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS programme_state_new (
-                    user_id TEXT NOT NULL REFERENCES users(id),
-                    current_day INTEGER NOT NULL DEFAULT 1,
-                    split_name TEXT NOT NULL,
-                    PRIMARY KEY (user_id)
-                )
-                """,
-            )
-            old_row = cursor.execute(
-                "SELECT current_day, split_name FROM programme_state WHERE id = 1",
-            ).fetchone()
-            if old_row:
-                ps_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO programme_state_new "
-                    "(user_id, current_day, split_name) VALUES (?, ?, ?)",
-                    (ps_legacy_id, old_row[0], old_row[1]),
-                )
-            else:
-                # Brand-new database: seed a default row for the legacy user
-                ps_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO programme_state_new "
-                    "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-                    (ps_legacy_id, SPLIT_NAME),
-                )
-            cursor.execute("DROP TABLE programme_state")
-            cursor.execute("ALTER TABLE programme_state_new RENAME TO programme_state")
-        cursor.execute(
-            "INSERT OR IGNORE INTO programme_state "
-            "(user_id, current_day, split_name) VALUES (?, 1, ?)",
-            (legacy, SPLIT_NAME),
-        )
-
         # Migration: Migrate hevy_meta from key PK to (user_id, key) composite PK
         cursor.execute("PRAGMA table_info(hevy_meta)")
         hm_columns = {row[1] for row in cursor.fetchall()}
@@ -745,22 +685,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                         "(user_id, key, value) VALUES (?, ?, ?)",
                         (hm_legacy_id, row[0], row[1]),
                     )
-            else:
-                # Brand-new database: seed programme_start_date for legacy user
-                hm_legacy_id = _ensure_legacy_user(cursor)
-                cursor.execute(
-                    "INSERT OR REPLACE INTO hevy_meta_new (user_id, key, value) "
-                    "VALUES (?, 'programme_start_date', ?)",
-                    (hm_legacy_id, datetime.now(tz=timezone.utc).date().isoformat()),
-                )
             cursor.execute("DROP TABLE hevy_meta")
             cursor.execute("ALTER TABLE hevy_meta_new RENAME TO hevy_meta")
-
-        cursor.execute(
-            "INSERT OR IGNORE INTO hevy_meta (user_id, key, value) "
-            "VALUES (?, 'programme_start_date', ?)",
-            (legacy, datetime.now(tz=timezone.utc).date().isoformat()),
-        )
 
         # Migration: Migrate hevy_routines to a tenant-scoped composite key.
         cursor.execute("PRAGMA table_info(hevy_routines)")
@@ -806,10 +732,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON deep_correlations (user_id)"
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_programme_state_user "
-            "ON programme_state (user_id)"
-        )
-        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_hevy_meta_user "
             "ON hevy_meta (user_id, key)"
         )
@@ -852,33 +774,6 @@ def get_legacy_user_id(db_path: str = DEFAULT_DB_PATH) -> str:
     if not row:
         raise RuntimeError("Legacy user not found — run init_db first.")
     return row[0]
-
-
-def get_current_day(
-    db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
-) -> int:
-    """Return the current day in the cycle (1-6)."""
-    uid = user_id or get_legacy_user_id(db_path)
-    with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT current_day FROM programme_state WHERE user_id = ?",
-            (uid,),
-        ).fetchone()
-    return int(row[0]) if row else 1
-
-
-def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
-    """Move to the next day, wrapping from TOTAL_DAYS back to 1."""
-    uid = user_id or get_legacy_user_id(db_path)
-    current = get_current_day(db_path, user_id=uid)
-    nxt = current + 1 if current < TOTAL_DAYS else 1
-    with _connect(db_path) as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
-            "VALUES (?, ?, COALESCE((SELECT split_name FROM programme_state WHERE user_id = ?), ?))",
-            (uid, nxt, uid, SPLIT_NAME),
-        )
-    return nxt
 
 
 def save_workout(
@@ -1367,24 +1262,6 @@ def delete_routine_record(
                 "DELETE FROM hevy_routines WHERE routine_key = ?",
                 (routine_key,),
             )
-
-
-def get_programme_start_date(
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
-) -> date:
-    """Return the programme start date, defaulting to today if unset.
-
-    When *user_id* is provided, the lookup is scoped to that user.
-    """
-    value = get_meta("programme_start_date", db_path, user_id=user_id)
-    if value:
-        try:
-            return date.fromisoformat(value)
-        except ValueError:
-            pass
-    return datetime.now(tz=timezone.utc).date()
 
 
 def save_checkin(
@@ -2211,17 +2088,6 @@ def delete_push_subscription(
 # ---------------------------------------------------------------------------
 # Programme management & templates
 # ---------------------------------------------------------------------------
-
-
-def get_programme_templates() -> list[dict[str, Any]]:
-    """Deprecated compatibility shim.
-
-    Programme creation is exclusively Hevy-native.  Returning an empty list
-    prevents older clients from rendering or activating built-in templates
-    while they migrate to the preview/activate contract.
-    """
-
-    return []
 
 
 def get_active_programme(

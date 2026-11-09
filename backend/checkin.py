@@ -17,14 +17,12 @@ from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
-    get_programme_start_date,
     save_checkin,
     save_notification,
     set_meta,
 )
 from gemini_engine import generate_checkin_message
 from hevy_client import get_exercise_history, get_workout_count
-from program import Block, day_exercises
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +73,7 @@ def _last_checkin_date(config: Config, *, user_id: str | None = None) -> date:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return get_programme_start_date(config.database_path, user_id=user_id)
+    return datetime.now(tz=timezone.utc).date()
 
 
 def _seed_baseline_if_missing(
@@ -204,27 +202,30 @@ def _review_exercise(
 
 def _analyse(
     config: Config,
-    block: Block,
+    days: list[dict[str, Any]],
     *,
     user_id: str | None = None,
 ) -> list[LiftReview]:
-    """Compare planned targets to logged data for each lift in the block."""
+    """Compare planned targets to logged data for each planned exercise."""
     if not config.hevy_api_key:
         return []
     start_iso = _last_checkin_date(config, user_id=user_id).isoformat()
     reviews: list[LiftReview] = []
     seen: set[str] = set()
-    for day in (1, 2, 3):
-        for ex in day_exercises(day, block):
-            if ex.name in seen or ex.template_id is None:
+    for day in days:
+        for ex in day.get("exercises", []):
+            name = str(ex.get("name") or "")
+            template_id = ex.get("template_id")
+            if not name or name in seen or template_id is None:
                 continue
-            seen.add(ex.name)
+            seen.add(name)
             history = (
-                get_exercise_history(config.hevy_api_key, ex.template_id, start_iso)
+                get_exercise_history(config.hevy_api_key, template_id, start_iso)
                 or []
             )
-            planned = f"{ex.sets} x {ex.rep_range}"
-            reviews.append(_review_exercise(ex.name, planned, ex.rep_range, history))
+            rep_range = str(ex.get("rep_range") or "")
+            planned = f"{ex.get('sets', '?')} x {rep_range}"
+            reviews.append(_review_exercise(name, planned, rep_range, history))
     return reviews
 
 
@@ -247,10 +248,12 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+    due_info: CheckinDue, block: dict[str, Any], reviews: list[LiftReview]
 ) -> str:
+    block_number = block.get("number") or 0
+    block_name = block.get("name") or "Programme"
     lines = [
-        f"Check-in {due_info.number}: Block {block.number} ({block.name})",
+        f"Check-in {due_info.number}: Block {block_number} ({block_name})",
         (
             f"{due_info.workouts_done} sessions logged over "
             f"{due_info.weeks_elapsed} weeks."
@@ -266,7 +269,7 @@ def _fallback_message(
                 note = f" - up {r.change_kg:+g} kg, keep pushing"
             lines.append(f"{r.name}: {r.planned}, now {r.latest}{note}")
     lines.append("")
-    lines.append("Keep logging every set and filming your top deadlift and pull-up.")
+    lines.append("Keep logging every set so the next check-in can compare the data.")
     return "\n".join(lines)
 
 
@@ -274,12 +277,15 @@ def run_checkin(
     config: Config,
     due_info: CheckinDue,
     week: int,
-    block: Block,
+    cycle_weeks: int,
+    block: dict[str, Any],
+    days: list[dict[str, Any]],
+    rules: list[str],
     *,
     user_id: str | None = None,
 ) -> str:
     """Build the acting user's check-in with their selected AI provider."""
-    reviews = _analyse(config, block, user_id=user_id)
+    reviews = _analyse(config, days, user_id=user_id)
     fallback = _fallback_message(due_info, block, reviews)
     provider = resolve_provider(
         user_id=user_id,
@@ -291,7 +297,9 @@ def run_checkin(
         provider,
         number=due_info.number,
         week=week,
+        cycle_weeks=cycle_weeks,
         block=block,
+        rules=rules,
         workouts_done=due_info.workouts_done,
         weeks=due_info.weeks_elapsed,
         analysis_text=_analysis_text(reviews),

@@ -1,8 +1,7 @@
 """Infer a user's training programme from their Hevy data.
 
-Instead of a static ``program.py`` that hardcodes a 6-day powerbuilding split,
-this module analyses the user's actual Hevy routines and workout history to
-understand:
+Rather than relying on a hardcoded static split, this module analyses the
+user's actual Hevy routines and workout history to understand:
 
 - What split they run (push/pull/legs, upper/lower, full body, bro split, etc.)
 - How many training days per week

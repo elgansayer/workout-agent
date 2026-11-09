@@ -5,16 +5,13 @@ from __future__ import annotations
 from typing import Any
 
 from database import (
-    advance_day,
     delete_routine_record,
     get_body_metrics,
-    get_current_day,
     get_daily_logs,
     get_exercise_volumes,
     get_meta,
     get_or_create_user,
     get_personal_records,
-    get_programme_start_date,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -37,33 +34,29 @@ def _db(tmp_path: Any) -> str:
     return str(tmp_path / "test.db")
 
 
-def test_init_seeds_day_one(tmp_path: Any) -> None:
-    db = _db(tmp_path)
-    init_db(db)
-    assert get_current_day(db) == 1
+def _table_names(db: str) -> set[str]:
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        return {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
 
 
 def test_init_is_idempotent(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    advance_day(db)
-    init_db(db)  # must not reset the stored day
-    assert get_current_day(db) == 2
+    init_db(db)
+    assert "programmes" in _table_names(db)
 
 
-def test_advance_increments(tmp_path: Any) -> None:
+def test_init_does_not_seed_static_programme_state(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
-    assert advance_day(db) == 2
-    assert advance_day(db) == 3
-    assert get_current_day(db) == 3
-
-
-def test_advance_wraps_at_six(tmp_path: Any) -> None:
-    db = _db(tmp_path)
-    init_db(db)
-    days = [advance_day(db) for _ in range(6)]
-    assert days == [2, 3, 4, 5, 6, 1]
+    assert "programme_state" not in _table_names(db)
 
 
 def test_save_workout_ignores_none(tmp_path: Any) -> None:
@@ -1051,126 +1044,6 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
     assert get_deep_correlation(db_path=db, user_id=None) is None
 
 
-# ---------------------------------------------------------------------------
-# Multi-tenant isolation tests: programme_state user_id scoping
-# ---------------------------------------------------------------------------
-
-
-def test_programme_state_migration_and_isolation(tmp_path: Any) -> None:
-    """programme_state is migrated from singleton to user_id-scoped."""
-    db = _db(tmp_path)
-    import sqlite3
-
-    # Simulate pre-migration singleton table
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS programme_state (
-            id INTEGER PRIMARY KEY CHECK (id = 1),
-            current_day INTEGER NOT NULL,
-            split_name TEXT NOT NULL
-        )
-        """,
-    )
-    conn.execute(
-        "INSERT OR IGNORE INTO programme_state (id, current_day, split_name) "
-        "VALUES (1, 3, 'Legacy Split')",
-    )
-    conn.commit()
-    conn.close()
-
-    init_db(db)
-
-    with sqlite3.connect(db, timeout=10) as conn2:
-        cols = {
-            row[1]
-            for row in conn2.execute("PRAGMA table_info(programme_state)").fetchall()
-        }
-        assert "user_id" in cols
-        assert "id" not in cols  # old singleton id column is gone
-        rows = conn2.execute(
-            "SELECT user_id, current_day, split_name FROM programme_state",
-        ).fetchall()
-        assert len(rows) == 1
-        assert rows[0][1] == 3  # current_day preserved
-        assert rows[0][2] == "Legacy Split"  # split_name preserved
-        assert rows[0][0] is not None  # user_id backfilled
-
-
-def test_programme_state_user_isolation(tmp_path: Any) -> None:
-    """Two users have independent programme_state rows."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    user_a = "user-a-123"
-    user_b = "user-b-456"
-
-    # Seed rows for both users directly
-    import sqlite3
-
-    from database import advance_day, get_current_day
-
-    conn = sqlite3.connect(db, timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute(
-        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
-        "VALUES (?, 2, ?)",
-        (user_a, "Test Split"),
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
-        "VALUES (?, 5, ?)",
-        (user_b, "Test Split"),
-    )
-    conn.commit()
-    conn.close()
-
-    assert get_current_day(db, user_id=user_a) == 2
-    assert get_current_day(db, user_id=user_b) == 5
-
-    # Advancing one user does not affect the other
-    assert advance_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_a) == 3
-    assert get_current_day(db, user_id=user_b) == 5
-
-
-def test_programme_state_backward_compat(tmp_path: Any) -> None:
-    """get_current_day / advance_day without user_id still work."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    # Without user_id, the legacy user's row should exist and work
-    day = get_current_day(db)
-    assert isinstance(day, int)
-    assert 1 <= day <= 6
-
-    nxt = advance_day(db)
-    assert nxt == get_current_day(db)
-    assert nxt != day
-
-
-def test_programme_state_brand_new_db_seeds_legacy(tmp_path: Any) -> None:
-    """A brand-new database seeds a programme_state row for the legacy user."""
-    db = _db(tmp_path)
-    init_db(db)
-
-    assert get_current_day(db) == 1
-
-    import sqlite3
-
-    with sqlite3.connect(db, timeout=10) as conn:
-        rows = conn.execute(
-            "SELECT user_id, current_day FROM programme_state",
-        ).fetchall()
-        legacy_user_id = conn.execute(
-            "SELECT id FROM users WHERE email = ?",
-            ("legacy@local",),
-        ).fetchone()[0]
-
-    assert rows == [(legacy_user_id, 1)]
-
-
 # ---------- hevy_meta migration tests ----------
 
 
@@ -1196,20 +1069,6 @@ def test_hevy_meta_user_isolation(tmp_path: Any) -> None:
     set_meta("x", "val_b", db, user_id=u2["id"])
     assert get_meta("x", db, user_id=u1["id"]) == "val_a"
     assert get_meta("x", db, user_id=u2["id"]) == "val_b"
-
-
-def test_hevy_meta_programme_start_date_scoped(tmp_path: Any) -> None:
-    """get_programme_start_date is scoped per user."""
-    db = _db(tmp_path)
-    init_db(db)
-    u1 = get_or_create_user("a@example.com", "A", db)
-    u2 = get_or_create_user("b@example.com", "B", db)
-    set_meta("programme_start_date", "2025-01-01", db, user_id=u1["id"])
-    set_meta("programme_start_date", "2025-06-15", db, user_id=u2["id"])
-    from datetime import date
-
-    assert get_programme_start_date(db, user_id=u1["id"]) == date(2025, 1, 1)
-    assert get_programme_start_date(db, user_id=u2["id"]) == date(2025, 6, 15)
 
 
 # ---------- hevy_routines migration tests ----------
@@ -1421,7 +1280,6 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             "deep_correlations": "SELECT user_id FROM deep_correlations",
             "reasoning_logs": "SELECT user_id FROM reasoning_logs",
             "chat_messages": "SELECT user_id FROM chat_messages",
-            "programme_state": "SELECT user_id FROM programme_state",
         }
         for table, query in migrated_queries.items():
             assert conn.execute(query).fetchall() == [(legacy_user_id,)], table
@@ -1453,10 +1311,6 @@ def test_complete_legacy_schema_migration_is_idempotent_and_indexed(
             "SELECT routine_key, routine_id, content_hash FROM hevy_routines",
         ).fetchone()
         assert routine == ("synthetic-routine", "routine-1", "hash-1")
-        state = conn.execute(
-            "SELECT current_day, split_name FROM programme_state",
-        ).fetchone()
-        assert state == (3, "Synthetic Legacy Split")
 
 
 def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
@@ -1601,7 +1455,6 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
 
     user_owned_tables = (
         "workout_history",
-        "programme_state",
         "exercise_progress",
         "hevy_routines",
         "hevy_meta",
