@@ -504,6 +504,44 @@ def test_the_owners_existing_rows_win_and_conflicting_legacy_rows_stay_behind(
     assert summary["left_behind"] == result.left_behind
 
 
+def test_programme_revisions_move_without_losing_their_immutability_guard(
+    legacy_db: str,
+) -> None:
+    owner = _sign_in(legacy_db)
+    placeholder = _placeholder_id(legacy_db)
+    with sqlite3.connect(legacy_db) as conn:
+        programme_id = conn.execute(
+            "INSERT INTO programmes "
+            "(user_id, source, template_key, definition, active, created_at, updated_at) "
+            "VALUES (?, 'inferred', 'legacy-revision', '{}', 0, 'now', 'now')",
+            (placeholder,),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO programme_revisions "
+            "(user_id, programme_id, revision_number, reason, engine_version, "
+            "settings_json, source_summary_json, created_at) "
+            "VALUES (?, ?, 1, 'legacy_migration', 'test', '{}', '{}', 'now')",
+            (placeholder, programme_id),
+        )
+
+    plan = plan_legacy_ownership(legacy_db, owner_email=_OWNER_EMAIL)
+    result = apply_legacy_ownership(
+        legacy_db,
+        owner_email=_OWNER_EMAIL,
+        confirm_digest=plan.digest,
+        applied_by="operator",
+        backup_verified=True,
+    )
+
+    assert result.moved["programme_revisions"] == 1
+    with sqlite3.connect(legacy_db) as conn:
+        assert conn.execute(
+            "SELECT user_id FROM programme_revisions"
+        ).fetchone() == (owner,)
+        with pytest.raises(sqlite3.DatabaseError):
+            conn.execute("UPDATE programme_revisions SET reason = 'tampered'")
+
+
 def test_stored_credentials_move_with_their_owner_unless_the_owner_has_one(
     legacy_db: str,
 ) -> None:

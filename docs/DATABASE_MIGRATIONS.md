@@ -105,6 +105,10 @@ The user-model migration, tenant policy and ownership assignment are covered by
   and `test_account_policy_epoch_survives_repeated_initialisation` cover the
   account access policy schema described above.
 
+`backend/tests/test_programme_domain.py` additionally covers the additive
+Hevy-first programme domain migration, legacy static archive preservation,
+partial domain-schema replay, and immutable revision triggers.
+
 Run the focused migration gate from the repository root:
 
 ```bash

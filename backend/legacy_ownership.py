@@ -99,6 +99,13 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("user_api_keys", ("provider",)),
     OwnedTable("push_subscriptions", ("endpoint",)),
     OwnedTable("programmes", ("template_key",), single_active=True),
+    OwnedTable("programme_revisions"),
+    OwnedTable("programme_routines"),
+    OwnedTable("programme_blocks"),
+    OwnedTable("exercise_prescriptions"),
+    OwnedTable("programme_week_states"),
+    OwnedTable("adaptation_decisions"),
+    OwnedTable("routine_workout_matches", ("programme_id", "workout_id")),
     OwnedTable("programme_decisions"),
     OwnedTable("hevy_connections", ("provider",)),
     OwnedTable("training_rules", ()),
@@ -460,11 +467,28 @@ def apply_legacy_ownership(
             if table.name == "user_api_keys":
                 moved[table.name] = _transfer_credentials(conn, table, entry, params)
                 continue
-            cursor = conn.execute(
-                f"UPDATE {table.name} SET user_id = :owner WHERE rowid IN ("
-                f"SELECT t.rowid FROM {table.name} t WHERE {_movable_clause(table)})",
-                params,
-            )
+            # Content-immutability guards (for example programme revisions) also
+            # forbid the ownership UPDATE. This audited, transactional assignment
+            # lifts them for its own move and recreates them before returning.
+            guards = [
+                (name, sql)
+                for name, sql in conn.execute(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
+                    "AND tbl_name = ? AND name LIKE '%\\_no\\_update' ESCAPE '\\'",
+                    (table.name,),
+                ).fetchall()
+            ]
+            for name, _sql in guards:
+                conn.execute(f'DROP TRIGGER "{name}"')
+            try:
+                cursor = conn.execute(
+                    f"UPDATE {table.name} SET user_id = :owner WHERE rowid IN ("
+                    f"SELECT t.rowid FROM {table.name} t WHERE {_movable_clause(table)})",
+                    params,
+                )
+            finally:
+                for _name, sql in guards:
+                    conn.execute(sql)
             if cursor.rowcount != entry.movable:
                 raise OwnershipPlanMismatchError(
                     f"{table.name} changed while the assignment was running."

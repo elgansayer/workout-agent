@@ -83,6 +83,13 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "notifications",
     "user_preferences",
     "programmes",
+    "programme_revisions",
+    "programme_routines",
+    "programme_blocks",
+    "exercise_prescriptions",
+    "programme_week_states",
+    "adaptation_decisions",
+    "routine_workout_matches",
     "programme_decisions",
     "reasoning_logs",
     "dashboard_insights",
@@ -255,6 +262,11 @@ def _unique_keys(conn: sqlite3.Connection, table: str) -> list[list[str]]:
     keys: list[list[str]] = []
     for index in conn.execute(f"PRAGMA index_list({_quote(table)})").fetchall():
         if not index["unique"]:
+            continue
+        # Partial unique indexes (e.g. one active programme per user) do not
+        # describe a collision key for every row; the caller handles that
+        # invariant explicitly.
+        if index["partial"]:
             continue
         columns = [
             column["name"]
@@ -453,7 +465,9 @@ def _reassign(
             (name, sql)
             for name, sql in conn.execute(
                 "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
-                "AND tbl_name = ? AND name LIKE '%\\_user\\_immutable' ESCAPE '\\'",
+                "AND tbl_name = ? AND ("
+                "name LIKE '%\\_user\\_immutable' ESCAPE '\\' OR "
+                "name LIKE '%\\_no\\_update' ESCAPE '\\')",
                 (table,),
             ).fetchall()
         ]
@@ -484,7 +498,9 @@ def _supersede_legacy_programmes(
         return 0
     condition, params = _scope_condition(legacy_id)
     cursor = conn.execute(
-        f"UPDATE programmes SET active = 0 WHERE {condition} AND active = 1", params
+        "UPDATE programmes SET active = 0, status = 'archived' "
+        f"WHERE {condition} AND active = 1",
+        params,
     )
     return max(cursor.rowcount, 0)
 
