@@ -1,0 +1,102 @@
+# app.py (L520-L620 of 3061)
+ 520 |     FRONTEND_DIST = (
+ 521 |         _BASE_DIR.parent.parent / "frontend/dist/frontend/browser"
+ 522 |     )  # Local dev
+ 523 | app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
+ 524 | # Read by the authentication boundary when it builds its middleware stack, so the
+ 525 | # per-request session check uses the same policy and database as login does.
+ 526 | app.state.access_policy = ACCESS_POLICY
+ 527 | app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
+ 528 | app.mount(
+ 529 |     "/assets",
+ 530 |     StaticFiles(directory=str(FRONTEND_DIST), check_dir=False),
+ 531 |     name="angular_assets",
+ 532 | )
+ 533 | 
+ 534 | # Enable CORS for external/remote frontend hosting
+ 535 | _cors_origins_raw = os.environ.get("ALLOWED_ORIGINS", "").strip()
+ 536 | _cors_origins = (
+ 537 |     [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
+ 538 |     if _cors_origins_raw
+ 539 |     else [
+ 540 |         "http://localhost:4200",
+ 541 |         "http://127.0.0.1:4200",
+ 542 |         "http://localhost:8770",
+ 543 |         "http://127.0.0.1:8770",
+ 544 |         "http://localhost:8080",
+ 545 |         "http://127.0.0.1:8080",
+ 546 |         "http://localhost:3000",
+ 547 |     ]
+ 548 | )
+ 549 | 
+ 550 | app.add_middleware(
+ 551 |     CORSMiddleware,
+ 552 |     allow_origins=_cors_origins,
+ 553 |     allow_credentials=True,
+ 554 |     allow_methods=["*"],
+ 555 |     allow_headers=["*"],
+ 556 | )
+ 557 | 
+ 558 | if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
+ 559 | 
+ 560 |     class AuthMiddleware(BaseHTTPMiddleware):
+ 561 |         async def dispatch(self, request: Request, call_next: Any) -> Any:
+ 562 |             path = request.url.path
+ 563 |             # Allow static files, assets, JS/CSS/image/font assets, and auth endpoints
+ 564 |             if (
+ 565 |                 path.startswith(("/static", "/assets"))
+ 566 |                 or path.endswith(
+ 567 |                     (
+ 568 |                         ".js",
+ 569 |                         ".css",
+ 570 |                         ".png",
+ 571 |                         ".jpg",
+ 572 |                         ".jpeg",
+ 573 |                         ".svg",
+ 574 |                         ".ico",
+ 575 |                         ".woff",
+ 576 |                         ".woff2",
+ 577 |                         ".ttf",
+ 578 |                         ".map",
+ 579 |                         ".json",
+ 580 |                         ".webmanifest",
+ 581 |                     )
+ 582 |                 )
+ 583 |                 or path
+ 584 |                 in [
+ 585 |                     "/login",
+ 586 |                     "/login/google",
+ 587 |                     "/logout",
+ 588 |                     "/auth",
+ 589 |                     
+ 590 |                     "/favicon.ico",
+ 591 |                     "/sw.js",
+ 592 |                 ]
+ 593 |             ):
+ 594 |                 return await call_next(request)
+ 595 |             if not request.session.get("user"):
+ 596 |                 # API routes: return 401 JSON instead of a redirect so fetch()
+ 597 |                 # callers get a clear error instead of the login page HTML.
+ 598 |                 if path.startswith("/api/"):
+ 599 |                     return HTMLResponse(
+ 600 |                         '{"detail":"Not authenticated"}',
+ 601 |                         status_code=401,
+ 602 |                         media_type="application/json",
+ 603 |                     )
+ 604 |                 return RedirectResponse("/login")
+ 605 |             return await call_next(request)
+ 606 | 
+ 607 |     app.add_middleware(AuthMiddleware)
+ 608 | 
+ 609 | # Always mount the session middleware so templates and routes can safely access
+ 610 | # request.session even when web auth is disabled. Without it, any access to
+ 611 | # request.session raises an AssertionError -> 500 Internal Server Error.
+ 612 | # When WEB_AUTH_SECRET is unset we fall back to a per-process random key; this
+ 613 | # is fine because there is nothing sensitive to protect when auth is off.
+ 614 | #
+ 615 | # The cookie is HttpOnly (Starlette default), host-only, SameSite=Lax and bounded
+ 616 | # to the same 14-day lifetime the CSRF token signer accepts. In production the
+ 617 | # runtime boundary requires HTTPS, so the cookie is also marked Secure and can
+ 618 | # never be sent over a plaintext connection.
+ 619 | # HardenedSessionMiddleware is Starlette's SessionMiddleware with a Secure /
+ 620 | # HttpOnly / SameSite / host-only cookie and a server-side registry: a session

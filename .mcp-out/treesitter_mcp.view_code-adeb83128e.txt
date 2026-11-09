@@ -1,0 +1,73 @@
+# app.py (L329-L400 of 3061)
+ 329 | def _rate_limit_key(request: Request) -> str:
+ 330 |     """Return the throttle bucket for *request*.
+ 331 | 
+ 332 |     A signed-in request is throttled per owner, so one tenant's traffic (or a
+ 333 |     spoofed ``X-Forwarded-For``) cannot exhaust a neighbour's quota behind the
+ 334 |     same proxy or NAT. Only a request with no session identity falls back to
+ 335 |     the client address.
+ 336 |     """
+ 337 |     session = request.session if hasattr(request, "session") else {}
+ 338 |     user = session.get("user")
+ 339 |     candidate = session.get("user_id") or (
+ 340 |         user.get("id") if isinstance(user, dict) else None
+ 341 |     )
+ 342 |     if candidate:
+ 343 |         try:
+ 344 |             return owner_scoped_key(OwnerIdentity(str(candidate)), "rate-limit")
+ 345 |         except OwnershipError:
+ 346 |             logger.warning("Throttling a malformed session identity by address.")
+ 347 | 
+ 348 |     forwarded = request.headers.get("x-forwarded-for")
+ 349 |     if forwarded:
+ 350 |         ip = forwarded.split(",")[0].strip()
+ 351 |     elif request.headers.get("x-real-ip"):
+ 352 |         ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
+ 353 |     else:
+ 354 |         ip = request.client.host if request.client else "unknown"
+ 355 |     return f"rate-limit-ip:{ip}"
+ 356 | 
+ 357 | 
+ 358 | def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
+ 359 |     now = time.time()
+ 360 |     key = _rate_limit_key(request)
+ 361 | 
+ 362 |     if key not in _RATE_LIMITS:
+ 363 |         _RATE_LIMITS[key] = []
+ 364 |     _RATE_LIMITS[key] = [t for t in _RATE_LIMITS[key] if now - t < window]
+ 365 |     if len(_RATE_LIMITS[key]) >= limit:
+ 366 |         raise HTTPException(status_code=429, detail="Rate limit exceeded")
+ 367 | 
+ 368 |     _RATE_LIMITS[key].append(now)
+ 369 | 
+ 370 | 
+ 371 | WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
+ 372 | WEB_GOOGLE_CLIENT_SECRET = os.environ.get("WEB_GOOGLE_CLIENT_SECRET", "").strip()
+ 373 | WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
+ 374 | ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
+ 375 | 
+ 376 | # The one place the deployment's access policy (ALLOWED_EMAILS, INVITE_ONLY and
+ 377 | # the stored account status) is composed. Login completion below and the global
+ 378 | # authentication boundary both decide through this object; an invalid setting
+ 379 | # raises here so the server refuses to start rather than run unrestricted.
+ 380 | ACCESS_POLICY = AccessPolicy(
+ 381 |     AccessPolicyConfig.from_environ(
+ 382 |         {
+ 383 |             "ALLOWED_EMAILS": os.environ.get("ALLOWED_EMAILS", ""),
+ 384 |             "INVITE_ONLY": os.environ.get("INVITE_ONLY", ""),
+ 385 |         }
+ 386 |     ),
+ 387 |     DB_PATH,
+ 388 | )
+ 389 | 
+ 390 | # Canonical allow-list addresses, or ``None`` when no allowlist is configured.
+ 391 | # Derived from the composed policy so login and the per-request session check
+ 392 | # never disagree about which addresses are admitted.
+ 393 | ALLOWED_EMAILS = ACCESS_POLICY.config.allowed_emails
+ 394 | 
+ 395 | # Fixed, content-free destinations for a refused sign-in. They are identical for
+ 396 | # every denial reason so a response cannot reveal why an address was refused.
+ 397 | _LOGIN_DENIED_URL = "/login?error=access_denied"
+ 398 | _LOGIN_UNAVAILABLE_URL = "/login?error=unavailable"
+ 399 | 
+ 400 | # Cookie attributes, idle/absolute lifetimes and the server-side session

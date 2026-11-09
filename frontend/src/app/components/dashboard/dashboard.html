@@ -30,6 +30,12 @@
       </p>
       <a class="btn" href="/programmes">Open programme builder</a>
     </section>
+  } @else if (data.programme_status && data.programme_status !== 'active') {
+    <section class="panel">
+      <h2>Programme {{ data.programme_status | titlecase }}</h2>
+      <p class="muted">{{ data.rotation_message }}</p>
+      <a class="btn" href="/programmes">Review programme</a>
+    </section>
   } @else {
     <details class="panel programme-overview">
       <summary>

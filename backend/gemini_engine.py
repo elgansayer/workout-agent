@@ -1,5 +1,9 @@
-"""Uses the user's preferred AI provider to apply progressive overload and
-write today's plan."""
+"""Uses the user's preferred AI provider to explain a validated prescription.
+
+The deterministic programme runtime is the source of truth.  The model may only
+explain, summarise, format, or answer questions about that validated output; it
+must never invent or replace a set, rep, load, exercise, or constraint.
+"""
 
 from __future__ import annotations
 
@@ -10,13 +14,11 @@ from typing import Any
 from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
-from program import (
-    COACHING_RULES,
-    SPLIT_NAME,
-    Block,
-    day_exercises,
-    day_focus,
-    format_day,
+from programme_runtime import ProgrammeRuntime
+from training_rules import (
+    StructuredTrainingRules,
+    enforce_rules_on_plan_text,
+    format_rules_for_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,87 +39,111 @@ def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
     return "\n".join(lines) if lines else "None on record yet."
 
 
+def _programme_header(runtime: ProgrammeRuntime) -> str:
+    name = runtime.name or "the active programme"
+    goal = f" Goal: {runtime.goal}." if runtime.goal else ""
+    dates = ""
+    if runtime.start_date and runtime.end_date:
+        dates = (
+            f" Dates: {runtime.start_date.isoformat()} to "
+            f"{runtime.end_date.isoformat()}."
+        )
+    block = ""
+    if runtime.block:
+        block = (
+            f" Current block: {runtime.block.get('name', '')}"
+            f" (weeks {runtime.block.get('start_week')}-"
+            f"{runtime.block.get('end_week')})."
+        )
+    return (
+        f"Programme: {name}.{goal} Week {runtime.week} of "
+        f"{runtime.cycle_weeks}.{block}{dates}"
+    )
+
+
+def _exercise_lines(day: dict[str, Any]) -> list[str]:
+    lines = []
+    for exercise in day.get("exercises") or []:
+        name = str(exercise.get("name") or "Exercise")
+        scheme = str(
+            exercise.get("scheme")
+            or f"{exercise.get('sets', '')} x {exercise.get('rep_range', '')}"
+        ).strip()
+        note = str(exercise.get("note") or "").strip()
+        lines.append(f"{name}: {scheme}" + (f" ({note})" if note else ""))
+    return lines
+
+
+def _baseline_plan(runtime: ProgrammeRuntime, day: dict[str, Any]) -> str:
+    focus = str(day.get("focus") or "Training")
+    lines = [f"{focus} - Week {runtime.week}"]
+    lines.extend(_exercise_lines(day))
+    return "\n".join(lines)
+
+
 def _build_prompt(
-    day: int,
-    week: int,
-    block: Block,
+    runtime: ProgrammeRuntime,
+    day: dict[str, Any],
     workout_summary: WorkoutSummary | None,
     recovery: dict[str, Any] | None,
     history: dict[str, dict[str, Any]] | None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
 ) -> str:
-    baseline = format_day(day, block)
-    focus = day_focus(day)
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+    focus = str(day.get("focus") or "Training")
+    baseline = _baseline_plan(runtime, day)
+    structured_rules_str = format_rules_for_prompt(rules)
     workout_text = workout_summary.as_text() if workout_summary else "None available."
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
     history_text = _format_history(history)
     insights_text = insights.as_text() if insights else "Not enough history yet."
     last_plan_text = last_plan if last_plan else "None available."
 
-    return f"""You are an elite powerbuilding and stage-prep coach for Elgan.
+    return f"""You are the user's training coach. Explain and format the validated prescription below.
 
-His goals are a competition-level physique, a visible six-pack, and rising
-strength on the deadlift and weighted pull-up, without wrecking his joints.
+{_programme_header(runtime)}
 
-The programme is the periodised "{SPLIT_NAME}". Today is Week {week} of 12,
-in Block {block.number}: {block.name} ({block.focus}).
-- Deadlift this block: {block.deadlift.sets} sets x {block.deadlift.rep_range} reps. {block.deadlift.note}
-- Pull-ups this block: {block.pullups.sets} sets x {block.pullups.rep_range} reps. {block.pullups.note}
-- Accessory emphasis this block: {block.accessory_emphasis}
+Today's routine: {focus}.
 
-Today is Day {day}: {focus}.
+The deterministic prescription is the source of truth. Do NOT add, remove, swap,
+re-order, or change any exercise, set, rep target, load, tempo, or rest period.
+Do not infer a load that is not in the prescription. If you mention an
+adjustment, it must already be present in the prescription or the structured
+rules.
 
-Coaching rules you must always respect:
-{rules}
+{structured_rules_str}
 
-The baseline plan for today (already block-adjusted) is:
+Validated prescription:
 {baseline}
 
-The PLANNED routine you generated for the last session:
+The plan shown last session:
 {last_plan_text}
 
-Compact summary of his most recent logged Hevy session (EXECUTED routine):
+Most recent logged session (actual execution, for context only):
 {workout_text}
 
-Per-exercise bests on record (most recent logged top set for each lift):
+Per-exercise bests on record:
 {history_text}
 
-Recovery metrics from Health Connect/Fitbit (sleep, bodyweight, resting heart rate, hrv):
+Recovery metrics (optional; may be absent or stale):
 {recovery_json}
 
-Self-review of how the coaching is actually working (trends across recent
-sessions, stalls, and recovery direction). Treat this as your memory and act on
-it:
+Recent trend context:
 {insights_text}
 
 Your task:
-Compare the EXECUTED routine against the PLANNED routine and identify any manual adjustments the user made. Apply the following rules when generating the next workout:
-- Exercise Swaps: If an exercise was substituted, assume this was intentional (due to equipment availability, injury, or preference). Update the master template to use this new exercise for the remainder of the current block. Do not revert to the original movement.
-- Volume and RPE Overrides: If the user completed fewer sets or dropped the load significantly below the plan, treat this as a manual auto-regulation for fatigue. Maintain this lower volume baseline for the next session before attempting progressive overload again.
-- Exercise Reordering: If the order of movements was changed, respect the new sequence for future routines.
-- Added Exercises: If the user added new accessory work, append it to the routine template for this specific training day.
-- Recovery Metrics: If recovery metrics (e.g., HRV or resting HR) drop below baseline average, auto-suggest a lighter variation or force a deload day.
+- Output the validated prescription in the same order, with the same exercises,
+  sets, and rep targets.
+- You may add a short parenthetical note only when it explains an existing
+  prescribed adjustment or a structured-rule substitution.
+- Act on the recovery and trend context only to the extent allowed by the
+  structured rules; never invent extra volume or load.
 
-Other rules:
-- Keep the main lifts (deadlift, pull-up) in this block's prescribed scheme unless overriden or recovery is poor.
-- Apply progressive overload from the Hevy data: where the last session hit the
-  top of a rep range with good form, add a rep or a small load increase; where
-  recovery looks poor (short sleep, elevated resting heart rate, dropped HRV), trim volume
-  slightly.
-- Act on the self-review: for any lift flagged as stalling or regressing, apply
-  its suggested intervention (deload, change rep range, or swap the movement)
-  rather than blindly adding load. Follow the recovery directive for overall
-  volume today.
-- Output ONLY today's workout, nothing else.
-
-Strict output format (this is read on a phone push notification, keep it minimal):
+Strict output format:
 - Plain text only. No markdown, no asterisks, no bold, no headings.
-- First line exactly: "{focus} - Week {week} ({block.name})".
-- Then one exercise per line, in the form "Name: sets x reps".
-- Add a short note in round brackets ONLY when you change something from the
-  baseline, e.g. "(+2.5 kg)" or "(+1 rep)". Otherwise add no note.
+- First line exactly: "{focus} - Week {runtime.week}".
+- Then one exercise per line as "Name: sets x reps".
 - No intro, no assessment, no motivation, no tips, no closing line.
 
 Use British English. Never use the em dash."""
@@ -125,89 +151,131 @@ Use British English. Never use the em dash."""
 
 def generate_next_workout(
     provider: AIProvider,
-    day: int,
-    week: int,
-    block: Block,
     *,
+    runtime: ProgrammeRuntime,
+    day: dict[str, Any],
     workout_summary: WorkoutSummary | None = None,
     recovery: dict[str, Any] | None = None,
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
     **_kwargs: Any,
 ) -> str:
-    """Generate today's plan, falling back to the baseline plan on error.
+    """Format the deterministic prescription, falling back to the baseline."""
+    effective_rules = rules or _kwargs.get("rules")
+    rules_obj = (
+        StructuredTrainingRules.from_raw(effective_rules)
+        if effective_rules
+        else None
+    )
 
-    Args:
-        provider: A resolved AI provider instance from
-            :func:`ai_resolver.resolve_provider`.
-    """
     try:
         prompt = _build_prompt(
+            runtime,
             day,
-            week,
-            block,
             workout_summary,
             recovery,
             history,
             insights,
             last_plan,
+            rules=rules_obj,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
-        logger.warning("AI provider returned an empty response; using baseline plan.")
+            baseline = _baseline_plan(runtime, day)
+            if _prescription_preserved(baseline, text) and rules_obj:
+                enforced, _ = enforce_rules_on_plan_text(
+                    text, rules_obj, recovery=recovery
+                )
+                return enforced
+            if _prescription_preserved(baseline, text):
+                return text
+            logger.warning(
+                "AI output changed the validated prescription; using baseline."
+            )
+        else:
+            logger.warning("AI provider returned an empty response; using baseline plan.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
-    return _fallback_plan(day, week, block)
+    fallback = _baseline_plan(runtime, day)
+    if rules_obj:
+        fallback, _ = enforce_rules_on_plan_text(
+            fallback, rules_obj, recovery=recovery
+        )
+    return fallback
 
 
-def _fallback_plan(day: int, week: int, block: Block) -> str:
-    lines = [f"{day_focus(day)} - Week {week} ({block.name})"]
-    lines.extend(
-        f"{ex.name}: {ex.sets} x {ex.rep_range}" for ex in day_exercises(day, block)
-    )
-    return "\n".join(lines)
+def _prescription_preserved(baseline: str, candidate: str) -> bool:
+    """Reject generated prose that drops or rewrites a prescribed exercise/scheme."""
+
+    def parse(text: str) -> list[tuple[str, str]]:
+        parsed: list[tuple[str, str]] = []
+        for line in text.splitlines()[1:]:
+            if ":" not in line:
+                continue
+            name, scheme = line.split(":", 1)
+            scheme = scheme.split("(", 1)[0].strip()
+            scheme = " ".join(scheme.replace("×", "x").lower().split())
+            parsed.append((name.strip().lower(), scheme))
+        return parsed
+
+    expected = parse(baseline)
+    actual = parse(candidate)
+    return bool(expected) and actual == expected
 
 
-def _build_rest_prompt(recovery: dict[str, Any] | None) -> str:
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
+def _fallback_plan(runtime: ProgrammeRuntime, day: dict[str, Any]) -> str:
+    return _baseline_plan(runtime, day)
+
+
+baseline_plan = _baseline_plan
+
+
+def _build_rest_prompt(
+    runtime: ProgrammeRuntime,
+    recovery: dict[str, Any] | None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
+) -> str:
+    structured_rules_str = format_rules_for_prompt(rules)
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
 
-    return f"""You are an elite bodybuilding and stage-prep coach for Elgan.
+    return f"""You are the user's training coach.
 
-Today is a scheduled rest day in his 6-day "{SPLIT_NAME}".
+{_programme_header(runtime)}
 
-Coaching rules you must always respect:
-{rules}
+Today has no prescribed training exposure in the active programme, so this is a
+recovery day. Do not invent a workout.
 
-Recovery metrics from Health Connect (sleep, bodyweight, resting heart rate):
+{structured_rules_str}
+
+Recovery metrics (optional; may be absent or stale):
 {recovery_json}
 
 Your task:
-1. Briefly reassure him that recovery is where the muscle is built.
-2. Give two or three short, specific recovery actions for today, drawing on the
-   recovery metrics if available (sleep, light mobility, hydration, hitting his
-   protein target of around 2 g per kg of bodyweight, gentle movement only).
-3. Keep it short and motivating.
+1. Briefly affirm that recovery supports the programme.
+2. Give two or three short, specific recovery actions, drawing on the recovery
+   metrics only where they are present and fresh.
+3. Keep it short and practical.
 
 Use British English. Never use the em dash."""
 
 
 def generate_rest_day_message(
     provider: AIProvider,
+    runtime: ProgrammeRuntime | None = None,
     recovery: dict[str, Any] | None = None,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
     **_kwargs: Any,
 ) -> str:
-    """Generate a short rest-day recovery message, falling back on error.
-
-    Args:
-        provider: A resolved AI provider instance from
-            :func:`ai_resolver.resolve_provider`.
-    """
+    """Generate a short recovery message, falling back on error."""
+    effective_rules = rules or _kwargs.get("rules")
     try:
-        prompt = _build_rest_prompt(recovery)
+        runtime = runtime or _kwargs.get("runtime")
+        if runtime is None:
+            return _fallback_rest_message()
+        prompt = _build_rest_prompt(runtime, recovery, rules=effective_rules)
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
@@ -222,71 +290,69 @@ def generate_rest_day_message(
 
 def _fallback_rest_message() -> str:
     return (
-        "Today is your scheduled rest day. Recovery is where the muscle is built.\n\n"
-        "- Aim for around 8 hours of sleep tonight.\n"
-        "- Hit your protein target (around 2 g per kg of bodyweight).\n"
-        "- Keep it gentle: light mobility or an easy walk, nothing heavy.\n"
-        "- Stay hydrated and let the joints recover for tomorrow."
+        "Today is a rest day with no prescribed training. Recovery supports the programme.\n\n"
+        "- Prioritise sleep tonight.\n"
+        "- Stay hydrated and eat enough protein.\n"
+        "- Keep movement gentle: light mobility or an easy walk.\n"
     )
 
 
 def _build_checkin_prompt(
+    runtime: ProgrammeRuntime,
     number: int,
-    week: int,
-    block: Block,
     workouts_done: int,
     weeks: int,
     analysis_text: str,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
 ) -> str:
-    rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
-    return f"""You are an elite powerbuilding and stage-prep coach for Elgan.
+    structured_rules_str = format_rules_for_prompt(rules)
+    return f"""You are the user's training coach.
 
-This is programme check-in number {number}. He has logged {workouts_done}
-sessions over the last {weeks} weeks, and is in Week {week} of 12, Block
-{block.number}: {block.name} ({block.focus}).
+{_programme_header(runtime)}
 
-Coaching rules you must always respect:
-{rules}
+This is programme check-in number {number}. The user logged {workouts_done}
+sessions over the last {weeks} weeks.
 
-Here is the data: planned targets versus what he actually logged this block.
+{structured_rules_str}
+
+Planned versus actual materialised prescriptions:
 {analysis_text}
 
-Your task: write a short, motivating check-in he reads on his phone.
+Your task: write a short, factual check-in.
 - Plain text only. No markdown, no asterisks, no headings.
-- First line exactly: "Check-in {number}: Block {block.number} ({block.name})".
-- Then 3 to 5 short lines: what is progressing, what has stalled, and where he
-  is versus the plan. Reference the real numbers.
-- Then 1 to 3 concrete adjustments for the next stretch (load, reps, or swapping
-  a stalled lift), consistent with the coaching rules.
-- End with one short line of genuine encouragement.
+- First line exactly: "Check-in {number}".
+- Then 3 to 5 short lines: what is progressing, what has stalled, and where the
+  user is versus the plan. Reference the real numbers.
+- Then 1 to 3 concrete adjustments for the next stretch that are already
+  consistent with the structured programme and adaptation decisions.
+- Never invent exercises, loads, or programme changes.
+- End with one short line of encouragement.
 
 Use British English. Never use the em dash."""
 
 
 def generate_checkin_message(
     provider: AIProvider,
+    *,
+    runtime: ProgrammeRuntime,
     number: int,
-    week: int,
-    block: Block,
     workouts_done: int,
     weeks: int,
     analysis_text: str,
     fallback: str,
+    rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    **_kwargs: Any,
 ) -> str:
-    """Generate a periodic check-in message, falling back on error.
-
-    Args:
-        provider: A resolved AI provider instance from
-            :func:`ai_resolver.resolve_provider`.
-    """
+    """Generate a periodic check-in message, falling back on error."""
+    effective_rules = rules or _kwargs.get("rules")
     try:
         prompt = _build_checkin_prompt(
+            runtime,
             number,
-            week,
-            block,
             workouts_done,
             weeks,
             analysis_text,
+            rules=effective_rules,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -296,3 +362,17 @@ def generate_checkin_message(
         logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
     return fallback
+
+
+__all__ = [
+    "_build_checkin_prompt",
+    "_build_prompt",
+    "_build_rest_prompt",
+    "_fallback_plan",
+    "_fallback_rest_message",
+    "_format_history",
+    "baseline_plan",
+    "generate_checkin_message",
+    "generate_next_workout",
+    "generate_rest_day_message",
+]

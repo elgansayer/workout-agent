@@ -19,6 +19,13 @@
       </p>
       <a class="btn" href="/programmes">Open programme builder</a>
     </section>
+  } @else if (data.programme_status && data.programme_status !== 'active') {
+    <section class="panel" style="text-align: center; padding: 2rem">
+      <p class="muted">No active programme</p>
+      <h1>Programme {{ data.programme_status | titlecase }}</h1>
+      <p class="muted">{{ data.rotation_message }}</p>
+      <a class="btn" href="/programmes">Review programme</a>
+    </section>
   } @else {
     <header>
       <p class="muted">Active Hevy programme</p>

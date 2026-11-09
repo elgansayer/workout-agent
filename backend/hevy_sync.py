@@ -1,9 +1,12 @@
-"""Builds and syncs the training programme as ready-to-use Hevy routines.
+"""Publish the tenant's active dynamic programme as managed Hevy routines.
 
-Each unique session in the split is pushed to a dedicated "Workout Agent" folder
-in Hevy so that, every day, the right routine is already there to start. When the
-programme in program.py changes, re-running the sync updates the routines in
-place (matched by a content hash, so unchanged routines are left untouched).
+Each routine of the active programme is mirrored to a dedicated "Workout Agent"
+folder in Hevy so that, every day, the right session is already there to start.
+Publishing runs only behind the explicit ``HEVY_SYNC_ROUTINES`` opt-in and only
+for an ``active`` programme; when the programme changes, re-running the sync
+updates the managed copies in place (matched by a content hash, so unchanged
+routines are left untouched). Only routines already inside this tenant's
+managed folder are updated, so the user's source routines are never overwritten.
 """
 
 from __future__ import annotations
@@ -18,7 +21,6 @@ from config import Config
 from database import (
     delete_routine_record,
     get_meta,
-    get_programme_start_date,
     get_routine_record,
     save_routine_record,
     set_meta,
@@ -31,14 +33,7 @@ from hevy_client import (
     get_routines,
     update_routine,
 )
-from program import (
-    Block,
-    Exercise,
-    block_for_week,
-    day_exercises,
-    day_focus,
-    week_in_cycle,
-)
+from programme_runtime import ACTIVE, load_programme_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +42,6 @@ FOLDER_META_KEY = "routine_folder_id"
 DEFAULT_REST_SECONDS = 90
 # Smallest plate jump to apply once the top of the rep range is reached.
 WEIGHT_INCREMENT_KG = 2.5
-
-# The three distinct sessions in the 6-day split (days 1-3 repeat as 4-6).
-_SESSION_DAYS = (1, 2, 3)
 
 # Routines whose titles changed; the existing Hevy routine is renamed in place.
 _TITLE_MIGRATIONS = {"Chest & Back": "Back, Deadlifts & Chest"}
@@ -77,34 +69,48 @@ def _build_set(rep_range: str, weight_kg: float | None = None) -> dict[str, Any]
     return {"type": "normal", "weight_kg": weight_kg, "reps": start}
 
 
+def _field(exercise: Any, key: str, default: Any = None) -> Any:
+    """Read an exercise field from a runtime dict or a legacy dataclass."""
+    if isinstance(exercise, dict):
+        value = exercise.get(key, default)
+    else:
+        value = getattr(exercise, key, default)
+    return default if value is None else value
+
+
 def _build_exercise(
-    exercise: Exercise,
+    exercise: Any,
     weight_kg: float | None = None,
 ) -> dict[str, Any] | None:
-    template_id = exercise.template_id
-    if template_id is None:
+    template_id = _field(exercise, "template_id", "")
+    if not template_id:
         logger.warning(
             "No Hevy template mapped for '%s'; skipping it in the routine.",
-            exercise.name,
+            _field(exercise, "name", "?"),
         )
         return None
+    rest_seconds = _field(exercise, "rest_seconds", DEFAULT_REST_SECONDS)
     return {
-        "exercise_template_id": template_id,
+        "exercise_template_id": str(template_id),
         "superset_id": None,
-        "rest_seconds": DEFAULT_REST_SECONDS,
-        "notes": exercise.note or None,
+        "rest_seconds": int(rest_seconds or DEFAULT_REST_SECONDS),
+        "notes": _field(exercise, "note") or None,
         "sets": [
-            _build_set(exercise.rep_range, weight_kg) for _ in range(exercise.sets)
+            _build_set(str(_field(exercise, "rep_range", "")), weight_kg)
+            for _ in range(int(_field(exercise, "sets", 0) or 0))
         ],
     }
 
 
 def _build_exercises(
-    exercises: list[Exercise],
+    exercises: list[Any],
     weights: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
     weights = weights or {}
-    built = [_build_exercise(ex, weights.get(ex.name)) for ex in exercises]
+    built = [
+        _build_exercise(ex, weights.get(str(_field(ex, "name", ""))))
+        for ex in exercises
+    ]
     return [ex for ex in built if ex is not None]
 
 
@@ -120,7 +126,7 @@ def _latest_top_set(history: list[dict[str, Any]]) -> dict[str, Any] | None:
     )
 
 
-def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float | None:
+def _target_weight(exercise: Any, history: list[dict[str, Any]]) -> float | None:
     """Double progression: bump weight once the top of the rep range was hit."""
     best = _latest_top_set(history)
     if best is None:
@@ -129,34 +135,36 @@ def _target_weight(exercise: Exercise, history: list[dict[str, Any]]) -> float |
     if not isinstance(weight, (int, float)):
         return None
     reps = best.get("reps")
-    start, end = _parse_rep_range(exercise.rep_range)
+    start, end = _parse_rep_range(str(_field(exercise, "rep_range", "") or ""))
     top = end if end is not None else start
     if reps is not None and top is not None and reps >= top:
         return round(weight + WEIGHT_INCREMENT_KG, 2)
     return float(weight)
 
 
-def _compute_target_weights(config: Config, block: Block) -> dict[str, float]:
-    """Fetch Hevy history per exercise and compute today's target weights."""
+def _compute_target_weights(
+    config: Config, exercises: list[Any]
+) -> dict[str, float]:
+    """Fetch Hevy history per exercise and compute target weights."""
     api_key = config.hevy_api_key
     if api_key is None:
         return {}
     weights: dict[str, float] = {}
     seen: set[str] = set()
-    for day in _SESSION_DAYS:
-        for exercise in day_exercises(day, block):
-            if exercise.name in seen:
-                continue
-            seen.add(exercise.name)
-            template_id = exercise.template_id
-            if template_id is None:
-                continue
-            history = get_exercise_history(api_key, template_id)
-            if not history:
-                continue
-            target = _target_weight(exercise, history)
-            if target is not None:
-                weights[exercise.name] = target
+    for exercise in exercises:
+        name = str(_field(exercise, "name", "") or _field(exercise, "title", ""))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        template_id = _field(exercise, "template_id", "")
+        if not template_id:
+            continue
+        history = get_exercise_history(api_key, str(template_id))
+        if not history:
+            continue
+        target = _target_weight(exercise, history)
+        if target is not None:
+            weights[name] = target
     return weights
 
 
@@ -225,15 +233,48 @@ def _ensure_folder(
     return folder_id
 
 
-def _find_existing_routine_id(api_key: str, title: str) -> str | None:
-    """Look up a routine id by title (recovers if the local DB was lost)."""
+def _find_existing_routine_id(
+    api_key: str,
+    title: str,
+    *,
+    folder_id: int | None = None,
+) -> str | None:
+    """Look up a routine id by title (recovers if the local DB was lost).
+
+    When ``folder_id`` is supplied only routines already in that managed folder
+    match, so a same-titled source routine is never selected by mistake.
+    """
     routines = get_routines(api_key)
     if not routines:
         return None
     for routine in routines:
-        if routine.get("title") == title:
-            return str(routine["id"])
+        if routine.get("title") != title:
+            continue
+        if folder_id is not None and routine.get("folder_id") != folder_id:
+            continue
+        return str(routine["id"])
     return None
+
+
+def _managed_routine_ids(
+    api_key: str,
+    folder_id: int,
+) -> set[str] | None:
+    """Return the routine ids inside this tenant's managed folder.
+
+    ``None`` means the routine list could not be fetched, so callers should
+    fall back to the tracked database records instead of assuming no copies.
+    """
+    routines = get_routines(api_key)
+    if routines is None:
+        return None
+    return {
+        str(routine["id"])
+        for routine in routines
+        if isinstance(routine, dict)
+        and routine.get("id") is not None
+        and routine.get("folder_id") == folder_id
+    }
 
 
 def _migrate_titles(
@@ -281,6 +322,7 @@ def _sync_session(
     notes: str,
     *,
     user_id: str | None = None,
+    managed_ids: set[str] | None = None,
 ) -> str:
     """Create or update one tenant-scoped routine."""
     api_key = config.hevy_api_key
@@ -293,8 +335,20 @@ def _sync_session(
         config.database_path,
         user_id=user_id,
     )
+    if (
+        record is not None
+        and managed_ids is not None
+        and str(record[0]) not in managed_ids
+    ):
+        # The tracked id belongs to a source routine or another folder; never
+        # overwrite it. Recover the managed copy by title inside our folder.
+        record = None
     if record is None:
-        existing_id = _find_existing_routine_id(api_key, title)
+        existing_id = _find_existing_routine_id(
+            api_key,
+            title,
+            folder_id=folder_id,
+        )
         if existing_id is not None:
             record = (existing_id, "")
 
@@ -348,31 +402,59 @@ def sync_routines(
     *,
     user_id: str,
 ) -> list[str]:
-    """Sync deterministic routine payloads for only the acting user."""
-    _migrate_titles(config, user_id=user_id)
-    start = get_programme_start_date(config.database_path, user_id=user_id)
-    week = week_in_cycle(start)
-    block = block_for_week(week)
-    notes = (
-        f"Week {week} of 12, Block {block.number}: {block.name} "
-        f"(weeks {block.weeks}). {block.focus} "
-        "Built and kept in sync by your workout agent."
-    )
-    folder_id = _ensure_folder(config, user_id=user_id)
-    weights = (
-        _compute_target_weights(config, block) if config.hevy_prefill_weights else {}
-    )
-    routines: dict[str, list[dict[str, Any]]] = {}
-    for day in _SESSION_DAYS:
-        title = day_focus(day)
-        exercises = day_exercises(day, block)
-        routines[title] = _build_exercises(exercises, weights)
+    """Mirror the active programme's routines into managed Hevy copies.
 
-    # Free-form LLM output must not write directly into active Hevy
-    # prescriptions. Adaptation belongs behind the dynamic programme
-    # validator and explicit activation flow.
+    Mutation requires the explicit ``HEVY_SYNC_ROUTINES`` opt-in and an active
+    programme. Copies live in the tenant's dedicated folder and are matched by
+    content hash, so unchanged routines are left untouched and source routines
+    are never overwritten. When publishing is disabled or no programme is
+    active this is a no-op; completed workouts are ingested separately through
+    the canonical reader.
+    """
+    if not config.hevy_api_key or not config.hevy_sync_routines:
+        return []
+    runtime = load_programme_runtime(user_id, config.database_path)
+    if runtime.status != ACTIVE or not runtime.days:
+        return []
+
+    api_key = config.hevy_api_key
+    folder_id = _ensure_folder(config, user_id=user_id)
+    if folder_id is None:
+        logger.warning("Could not resolve the managed Hevy routine folder.")
+        return []
+    managed_ids = _managed_routine_ids(api_key, folder_id)
+    _migrate_titles(config, user_id=user_id)
+
+    exercises = [
+        exercise
+        for day in runtime.days
+        for exercise in (day.get("exercises") or [])
+    ]
+    weights = (
+        _compute_target_weights(config, exercises)
+        if config.hevy_prefill_weights
+        else {}
+    )
+    block = runtime.block or {}
+    block_text = (
+        f" Block {block.get('number')}: {block.get('name')}."
+        if block
+        else ""
+    )
+    notes = (
+        f"{runtime.name or 'Active programme'}: week {runtime.week} of "
+        f"{runtime.cycle_weeks}.{block_text} Managed by Workout Agent."
+    )
+
     statuses: list[str] = []
-    for title, built in routines.items():
+    for day in runtime.days:
+        title = str(day.get("focus") or "").strip()
+        if not title:
+            continue
+        built = _build_exercises(day.get("exercises") or [], weights)
+        if not built:
+            statuses.append(f"{title}: skipped (no publishable exercises)")
+            continue
         statuses.append(
             _sync_session(
                 config,
@@ -381,6 +463,7 @@ def sync_routines(
                 folder_id,
                 notes,
                 user_id=user_id,
-            ),
+                managed_ids=managed_ids,
+            )
         )
     return statuses

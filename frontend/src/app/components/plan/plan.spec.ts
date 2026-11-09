@@ -49,4 +49,34 @@ describe('Plan', () => {
     expect(text).not.toContain('Õ');
     expect(text).not.toContain("¡'");
   });
+
+  it('shows an explicit state when the programme is completed', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Plan],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+
+    const fixture = TestBed.createComponent(Plan);
+    fixture.detectChanges();
+    TestBed.inject(HttpTestingController)
+      .expectOne('/api/plan')
+      .flush({
+        setup_required: false,
+        programme_status: 'completed',
+        rotation_message:
+          'This programme is complete. Review it before starting a new programme.',
+        split_name: 'Imported rotation',
+        week: 8,
+        cycle_weeks: 8,
+        blocks: [],
+        days: [],
+      });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Programme Completed');
+    expect(text).toContain('This programme is complete.');
+    expect(text).toContain('Review programme');
+  });
 });

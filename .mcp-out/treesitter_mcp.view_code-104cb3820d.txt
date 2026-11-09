@@ -1,0 +1,81 @@
+# security_headers.py (L140-L219 of 219)
+ 140 | def _transform_html(raw_body: bytes, nonce: str) -> bytes:
+ 141 |     try:
+ 142 |         return inject_csp_nonce(raw_body.decode("utf-8"), nonce).encode("utf-8")
+ 143 |     except UnicodeDecodeError:
+ 144 |         return raw_body
+ 145 | 
+ 146 | 
+ 147 | class SecurityHeadersMiddleware:
+ 148 |     """Apply security headers and a request-specific CSP nonce to HTTP responses."""
+ 149 | 
+ 150 |     def __init__(self, app: ASGIApp) -> None:
+ 151 |         self.app = app
+ 152 | 
+ 153 |     async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+ 154 |         if scope.get("type") != "http":
+ 155 |             await self.app(scope, receive, send)
+ 156 |             return
+ 157 | 
+ 158 |         nonce = generate_csp_nonce()
+ 159 |         scope.setdefault("state", {})["csp_nonce"] = nonce
+ 160 |         pending_start: dict[str, Any] | None = None
+ 161 |         buffer_html = False
+ 162 |         body_chunks: list[bytes] = []
+ 163 | 
+ 164 |         async def send_transformed_html(raw_body: bytes, body_message: dict[str, Any]) -> None:
+ 165 |             nonlocal pending_start
+ 166 |             transformed = _transform_html(raw_body, nonce)
+ 167 |             assert pending_start is not None
+ 168 |             pending_start["headers"] = _replace_content_length(
+ 169 |                 pending_start.get("headers", []), len(transformed)
+ 170 |             )
+ 171 |             await send(pending_start)
+ 172 |             pending_start = None
+ 173 |             await send(
+ 174 |                 {
+ 175 |                     "type": "http.response.body",
+ 176 |                     "body": transformed,
+ 177 |                     "more_body": False,
+ 178 |                 }
+ 179 |             )
+ 180 | 
+ 181 |         async def secure_send(message: dict[str, Any]) -> None:
+ 182 |             nonlocal pending_start, buffer_html
+ 183 | 
+ 184 |             if message["type"] == "http.response.start":
+ 185 |                 headers = _replace_headers(
+ 186 |                     message.get("headers", []), security_headers(nonce)
+ 187 |                 )
+ 188 |                 pending_start = {**message, "headers": headers}
+ 189 |                 content_type = (_header_value(headers, b"content-type") or b"").lower()
+ 190 |                 content_encoding = _header_value(headers, b"content-encoding")
+ 191 |                 buffer_html = (
+ 192 |                     scope.get("method", "GET").upper() != "HEAD"
+ 193 |                     and content_type.startswith(b"text/html")
+ 194 |                     and content_encoding is None
+ 195 |                 )
+ 196 |                 if not buffer_html:
+ 197 |                     await send(pending_start)
+ 198 |                     pending_start = None
+ 199 |                 return
+ 200 | 
+ 201 |             if buffer_html and message["type"] == "http.response.pathsend":
+ 202 |                 # Starlette can use the ASGI pathsend extension for FileResponse.
+ 203 |                 # Read only HTML here so the nonce can be injected before bytes
+ 204 |                 # leave the process; non-HTML FileResponses are never buffered.
+ 205 |                 raw_body = Path(message["path"]).read_bytes()
+ 206 |                 await send_transformed_html(raw_body, message)
+ 207 |                 return
+ 208 | 
+ 209 |             if message["type"] != "http.response.body" or not buffer_html:
+ 210 |                 await send(message)
+ 211 |                 return
+ 212 | 
+ 213 |             body_chunks.append(message.get("body", b""))
+ 214 |             if message.get("more_body", False):
+ 215 |                 return
+ 216 | 
+ 217 |             await send_transformed_html(b"".join(body_chunks), message)
+ 218 | 
+ 219 |         await self.app(scope, receive, secure_send)
