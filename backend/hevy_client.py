@@ -15,6 +15,8 @@ Nothing here logs or returns the API key.
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 from typing import Any
 
 import requests
@@ -23,6 +25,48 @@ logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.hevyapp.com/v1"
 REQUEST_TIMEOUT = 15  # seconds
+# Credential checks must fail fast: they run inside a user-facing request.
+CREDENTIAL_TEST_TIMEOUT = 10  # seconds
+# The version segment of the API base URL, used when the API does not report
+# its own version in a response header.
+API_VERSION = "v1"
+_VERSION_HEADERS = ("x-api-version", "api-version", "x-hevy-api-version")
+# An API key is an opaque token. Only printable ASCII can be placed in an
+# HTTP header value, and the transport quotes the offending value back in some
+# of its error messages, so anything else is refused before a request is made.
+MAX_CREDENTIAL_LENGTH = 512
+_CREDENTIAL_PATTERN = re.compile(r"\A[\x21-\x7e][\x20-\x7e]*\Z")
+
+
+def is_transmittable_credential(value: str) -> bool:
+    """True when the value can be sent as an HTTP header value.
+
+    Control characters and non-ASCII bytes either break the header framing or
+    make the transport raise an error whose message quotes the credential
+    back. Such a value is never a usable key, so it is rejected up front
+    instead of being transmitted and reported.
+    """
+    if not value or len(value) > MAX_CREDENTIAL_LENGTH:
+        return False
+    return bool(_CREDENTIAL_PATTERN.match(value))
+
+
+def _redact_credential(message: str, api_key: str) -> str:
+    """Remove the credential from a transport error message before logging.
+
+    The transport echoes the offending header value in some of its errors, so
+    the raw message must never reach the log.
+    """
+    if not api_key:
+        return message
+    # The transport usually quotes the value with repr(), which escapes
+    # control characters, so both the escaped and the raw form are removed.
+    escaped = repr(api_key)[1:-1]
+    pattern = re.escape(api_key)
+    if escaped and escaped != api_key:
+        pattern = f"(?:{re.escape(escaped)}|{re.escape(api_key)})"
+    # A single pass keeps the replacement marker from being matched again.
+    return re.sub(pattern, "[redacted]", message)
 
 
 class HevyError(RuntimeError):
@@ -116,6 +160,136 @@ def _request_json(
             f"Hevy returned invalid JSON while reading {resource}."
         ) from exc
 
+
+
+@dataclass(frozen=True, slots=True)
+class HevyProbe:
+    """Outcome of a single bounded request against the Hevy API.
+
+    Only the request outcome is reported. The API key is transmitted as a
+    request header and is never part of this record.
+    """
+
+    path: str
+    status_code: int | None
+    payload: dict[str, Any] | None
+    api_version: str
+
+    @property
+    def ok(self) -> bool:
+        """True when Hevy answered with a 2xx status."""
+        return self.status_code is not None and 200 <= self.status_code < 300
+
+    @property
+    def rejected(self) -> bool:
+        """True when Hevy refused the credential (401 or 403)."""
+        return self.status_code in (401, 403)
+
+
+def _api_version_from(headers: Any) -> str:
+    """Return the API version reported by Hevy, or the configured default."""
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        for name in _VERSION_HEADERS:
+            try:
+                value = getter(name)
+            except Exception:  # noqa: BLE001 - headers must never break a probe
+                value = None
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return API_VERSION
+
+
+def probe(
+    api_key: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    timeout: int = CREDENTIAL_TEST_TIMEOUT,
+) -> HevyProbe:
+    """Perform one bounded GET request and report the outcome.
+
+    The request is bounded by the caller (single item pages and a short
+    timeout). Transport failures and unusable bodies are reported as
+    ``status_code=None`` so callers can distinguish "could not verify" from
+    "credential refused".
+
+    Redirects are never followed: the transport keeps custom headers such as
+    ``api-key`` when it follows a redirect to another host, so a redirect
+    answer would hand the credential to a host the user never chose. A
+    redirect is therefore reported as an unsuccessful probe.
+    """
+    url = f"{BASE_URL}/{path.lstrip('/')}"
+    try:
+        response = requests.get(
+            url,
+            headers=_headers(api_key),
+            params=params,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        # The transport can quote the offending header value in its error
+        # message, so the credential is removed from the text before the
+        # message is logged.
+        detail = _redact_credential(str(exc), api_key)
+        logger.warning("Hevy request to %s failed: %s", path, detail)
+        return HevyProbe(
+            path=path,
+            status_code=None,
+            payload=None,
+            api_version=API_VERSION,
+        )
+    except (UnicodeError, ValueError) as exc:
+        # Header encoding failures (for example a non-latin-1 key) surface as
+        # plain UnicodeError/ValueError subclasses, which are not
+        # RequestException instances.
+        detail = _redact_credential(str(exc), api_key)
+        logger.warning("Hevy request to %s failed: %s", path, detail)
+        return HevyProbe(
+            path=path,
+            status_code=None,
+            payload=None,
+            api_version=API_VERSION,
+        )
+
+    status_code = int(response.status_code)
+    api_version = _api_version_from(getattr(response, "headers", None))
+    if not 200 <= status_code < 300:
+        # Includes redirects: a 3xx answer is not an API response and must
+        # never be treated as a verified credential.
+        logger.warning("Hevy request to %s returned HTTP %s", path, status_code)
+        return HevyProbe(
+            path=path,
+            status_code=status_code,
+            payload=None,
+            api_version=api_version,
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        logger.warning("Hevy returned invalid JSON for %s", path)
+        return HevyProbe(
+            path=path,
+            status_code=status_code,
+            payload=None,
+            api_version=api_version,
+        )
+    if not isinstance(data, dict):
+        logger.warning("Hevy returned non-object JSON for %s", path)
+        return HevyProbe(
+            path=path,
+            status_code=status_code,
+            payload=None,
+            api_version=api_version,
+        )
+    return HevyProbe(
+        path=path,
+        status_code=status_code,
+        payload=data,
+        api_version=api_version,
+    )
 
 def fetch_latest_workout(api_key: str) -> dict[str, Any] | None:
     """Return the most recent workout as parsed JSON, or None on failure."""

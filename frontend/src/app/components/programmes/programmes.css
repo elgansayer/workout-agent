@@ -236,6 +236,78 @@
   opacity: 0.4;
 }
 
+.settings-panel {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.settings-panel h2,
+.settings-panel .eyebrow {
+  margin-bottom: 0;
+}
+
+.full-width {
+  justify-content: center;
+  width: 100%;
+}
+
+.generated-preview {
+  margin-top: 1.25rem;
+}
+
+.warning-list {
+  background: rgb(245 158 11 / 0.12);
+  border: 1px solid rgb(245 158 11 / 0.55);
+  border-radius: 0.65rem;
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+}
+
+.warning-list p {
+  margin: 0.3rem 0;
+}
+
+.drift-list {
+  display: grid;
+  gap: 0.6rem;
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+
+.drift-list li {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.drift-list li p {
+  flex-basis: 100%;
+}
+
+.drift-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
+.block-timeline,
+.routine-preview-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  margin: 1rem 0 1.5rem;
+}
+
+.block-preview {
+  border: 1px solid var(--border, #374151);
+  border-radius: 0.75rem;
+  padding: 0.9rem;
+}
+
 .cadence-fieldset,
 .weekday-fieldset {
   border: 1px solid var(--border, #374151);

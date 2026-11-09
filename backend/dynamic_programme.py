@@ -28,10 +28,10 @@ import math
 from datetime import date, timedelta
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
-
 from hevy_reader import CompletedWorkout, HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
+from programme_validator import validate_programme
+from pydantic import BaseModel, Field, model_validator
 
 ENGINE_VERSION = "hevy-programme-v2"
 MIN_DURATION_WEEKS = 4
@@ -145,7 +145,8 @@ class ProgrammePreviewRequest(BaseModel):
     priority_exercises: list[str] = Field(default_factory=list)
     event_date: date | None = None
     fatigue_management: FatigueManagement = "planned"
-    constraints: ProgrammeConstraints = Field(default_factory=ProgrammeConstraints)
+    constraints: ProgrammeConstraints | list[Any] | dict[str, Any] | None = None
+    rules: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def _validate_selection(self) -> ProgrammePreviewRequest:
@@ -580,7 +581,11 @@ def _serialise_routine(
     }
 
 
-def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
+def serialise_hevy_source(
+    data: HevyTrainingData,
+    profile_rules: Any = None,
+    training_rules: Any = None,
+) -> dict[str, Any]:
     """Return the exact selectable Hevy source view used by the builder."""
 
     routines = [_serialise_routine(routine, data) for routine in data.routines]
@@ -595,13 +600,130 @@ def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
                 ),
             }
         )
-    return {
+    payload = {
         "username": data.username,
         "workout_count": data.workout_count,
         "routine_count": len(routines),
         "recent_workout_count": len(data.recent_workouts),
         "folders": folders,
         "routines": routines,
+    }
+    validation = validate_programme(
+        payload,
+        profile_rules=profile_rules,
+        training_rules=training_rules,
+    )
+    payload["blocking_violations"] = validation.blocking_violations
+    return payload
+
+
+_DRIFT_EXERCISE_FIELDS = (
+    "template_id",
+    "title",
+    "exercise_type",
+    "sets",
+    "set_targets",
+    "rest_seconds",
+    "notes",
+    "superset_id",
+    "target_weight_kg",
+    "target_reps",
+    "target_rep_range",
+)
+
+
+def _routine_content_signature(view: dict[str, Any]) -> str:
+    """Hash routine content while ignoring provider revision timestamps."""
+    exercises = [
+        {field: exercise.get(field) for field in _DRIFT_EXERCISE_FIELDS}
+        for exercise in view.get("exercises") or []
+        if isinstance(exercise, dict)
+    ]
+    return _canonical_hash(
+        {
+            "folder_id": view.get("folder_id"),
+            "exercises": exercises,
+        }
+    )
+
+
+def detect_source_drift(
+    active_definition: dict[str, Any] | None,
+    live_source: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Compare an active programme's source snapshots with the live Hevy library.
+
+    The activated prescription overlay is never rewritten silently. This report
+    names every selected routine that was renamed, edited or removed in Hevy so
+    the user can compare and deliberately generate a fresh programme version.
+    """
+
+    snapshots = [
+        snapshot
+        for snapshot in (active_definition or {}).get("source_snapshots") or []
+        if isinstance(snapshot, dict) and snapshot.get("id")
+    ]
+    summary = {"renamed": 0, "content_changed": 0, "removed": 0}
+    if not snapshots:
+        return {
+            "status": "no_active_programme",
+            "has_changes": False,
+            "routines": [],
+            "summary": summary,
+        }
+
+    live_by_id = {
+        str(routine.get("id")): routine
+        for routine in (live_source or {}).get("routines") or []
+        if isinstance(routine, dict) and routine.get("id")
+    }
+    routines: list[dict[str, Any]] = []
+    for position, snapshot in enumerate(snapshots, start=1):
+        routine_id = str(snapshot.get("id"))
+        current = live_by_id.get(routine_id)
+        if current is None:
+            state = "removed"
+        elif _routine_content_signature(snapshot) != _routine_content_signature(
+            current
+        ):
+            state = "content_changed"
+        elif snapshot.get("title") != current.get("title"):
+            state = "renamed"
+        else:
+            state = "unchanged"
+        if state != "unchanged":
+            summary[state] += 1
+        routines.append(
+            {
+                "position": position,
+                "routine_id": routine_id,
+                "title": snapshot.get("title"),
+                "current_title": current.get("title") if current else None,
+                "state": state,
+                "source_hash": snapshot.get("source_hash"),
+                "current_hash": current.get("source_hash") if current else None,
+                "source_updated_at": snapshot.get("updated_at"),
+                "current_updated_at": (
+                    current.get("updated_at") if current else None
+                ),
+                "source_exercise_count": snapshot.get("exercise_count"),
+                "current_exercise_count": (
+                    current.get("exercise_count") if current else None
+                ),
+            }
+        )
+
+    if summary["content_changed"] or summary["removed"]:
+        status = "action_required"
+    elif summary["renamed"]:
+        status = "review_recommended"
+    else:
+        status = "unchanged"
+    return {
+        "status": status,
+        "has_changes": status != "unchanged",
+        "routines": routines,
+        "summary": summary,
     }
 
 
@@ -1296,6 +1418,8 @@ def validate_programme_preview(preview: dict[str, Any]) -> list[dict[str, Any]]:
     spec = preview.get("programme_spec") or {}
     cadence_preview = preview.get("cadence") or {}
     constraints = spec.get("constraints") or {}
+    if not isinstance(constraints, dict):
+        constraints = {}
     rotation = cadence_preview.get("rotation") or []
 
     if not rotation:
@@ -1426,6 +1550,7 @@ def build_programme_preview(
     request: ProgrammePreviewRequest,
     *,
     active_definition: dict[str, Any] | None = None,
+    profile_rules: Any = None,
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
 
@@ -1446,6 +1571,11 @@ def build_programme_preview(
             + ", ".join(missing)
         )
 
+    structured_constraints = (
+        request.constraints
+        if isinstance(request.constraints, ProgrammeConstraints)
+        else ProgrammeConstraints()
+    )
     selected = [
         routine_by_id[routine_id] for routine_id in request.selected_routine_ids
     ]
@@ -1501,6 +1631,7 @@ def build_programme_preview(
                     "name": source_exercise["title"],
                     "template_id": source_exercise["template_id"],
                     "exercise_type": source_exercise["exercise_type"],
+                    "equipment": source_exercise.get("equipment"),
                     "role": role,
                     "role_reason": role_reason,
                     "sets": opening["sets"],
@@ -1570,7 +1701,7 @@ def build_programme_preview(
             "Planned fatigue management keeps the block structure fixed; no "
             "automatic recovery week is inserted."
         )
-    if request.constraints.concurrent_training:
+    if structured_constraints.concurrent_training:
         assumptions.append(
             "Concurrent training is recorded as context only; no automatic volume "
             "reduction is applied."
@@ -1634,6 +1765,8 @@ def build_programme_preview(
             "Review the source changes before activating a new programme."
         )
 
+    blocking_violations: list[dict[str, Any]] = []
+
     programme_spec = {
         **request.model_dump(mode="json"),
         "selected_routine_ids": list(request.selected_routine_ids),
@@ -1656,7 +1789,7 @@ def build_programme_preview(
     }
     preview_token = _canonical_hash(token_inputs)
 
-    preview = {
+    preview: dict[str, Any] = {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",
         "source": "hevy",
         "engine_version": ENGINE_VERSION,
@@ -1673,7 +1806,7 @@ def build_programme_preview(
         "blocks": blocks,
         "days": days,
         "warnings": warnings,
-        "blocking_violations": [],
+        "blocking_violations": blocking_violations,
         "assumptions": assumptions,
         "rules": [
             "Progressions are deterministic, modality-aware and bounded.",
@@ -1681,5 +1814,59 @@ def build_programme_preview(
             "Low-confidence or structurally changed source data must be reviewed rather than silently merged.",
         ],
     }
-    preview["blocking_violations"] = validate_programme_preview(preview)
+
+    request_rules = (
+        request.constraints
+        if request.constraints is not None
+        and not isinstance(request.constraints, ProgrammeConstraints)
+        else None
+    )
+    effective_profile_rules = (
+        profile_rules if profile_rules is not None else request_rules
+    )
+
+    local_violations = validate_programme_preview(preview)
+    try:
+        validation = validate_programme(
+            preview,
+            profile_rules=effective_profile_rules,
+            training_rules=request.rules,
+        )
+        if (
+            request_rules is not None
+            and profile_rules is not None
+            and request_rules is not effective_profile_rules
+        ):
+            extra = validate_programme(preview, profile_rules=request_rules)
+            validation.blocking_violations.extend(
+                violation
+                for violation in extra.blocking_violations
+                if violation not in validation.blocking_violations
+            )
+            validation.warnings.extend(
+                warning
+                for warning in extra.warnings
+                if warning not in validation.warnings
+            )
+    except ValueError as exc:
+        if request.rules is not None:
+            raise ValueError(
+                f"Invalid structured training rules; constraint check failed: {exc}"
+            ) from exc
+        raise
+
+    blocking = list(local_violations)
+    blocking.extend(
+        violation
+        for violation in validation.blocking_violations
+        if violation not in blocking
+    )
+    preview["blocking_violations"] = blocking
+    if validation.warnings:
+        preview["warnings"].extend(
+            warning
+            for warning in validation.warnings
+            if warning not in preview["warnings"]
+        )
+
     return preview

@@ -138,7 +138,10 @@ def activate_programme(
     blocking violations.
     """
 
-    violations = validate_programme_preview(preview)
+    violations = list(preview.get("blocking_violations") or [])
+    for violation in validate_programme_preview(preview):
+        if violation not in violations:
+            violations.append(violation)
     if violations:
         raise ProgrammeValidationError(
             "The programme preview violates blocking constraints.",

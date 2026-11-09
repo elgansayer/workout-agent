@@ -116,11 +116,47 @@ export interface GoalOption {
   description?: string;
 }
 
+export type ProgrammeDriftStatus =
+  | 'no_active_programme'
+  | 'unchanged'
+  | 'review_recommended'
+  | 'action_required'
+  | 'source_unavailable';
+
+export type ProgrammeDriftRoutineState =
+  | 'renamed'
+  | 'content_changed'
+  | 'removed'
+  | 'unchanged';
+
+export interface ProgrammeDriftRoutine {
+  position: number;
+  routine_id: string;
+  title: string;
+  current_title: string | null;
+  state: ProgrammeDriftRoutineState;
+  source_exercise_count: number | null;
+  current_exercise_count: number | null;
+}
+
+export interface ProgrammeSourceDrift {
+  status: ProgrammeDriftStatus;
+  has_changes: boolean;
+  routines: ProgrammeDriftRoutine[];
+  summary: {
+    renamed: number;
+    content_changed: number;
+    removed: number;
+  };
+  detail?: string | null;
+}
+
 export interface BuilderData {
   active_programme: ActiveProgramme | null;
   templates: unknown[];
   connection: HevyConnection;
   source: HevySource;
+  source_drift?: ProgrammeSourceDrift | null;
   duration: {
     minimum_weeks: number;
     maximum_weeks: number;
@@ -221,10 +257,14 @@ export interface ProgrammeDay {
 }
 
 export interface ProgrammeViolation {
-  code: string;
+  code?: string;
   field?: string;
   routine_id?: string;
-  message: string;
+  message?: string;
+  exercise?: string;
+  prescription?: string;
+  rule?: string;
+  permitted_remediation?: string;
 }
 
 export interface ProgrammePreview {

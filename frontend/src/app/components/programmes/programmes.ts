@@ -17,6 +17,7 @@ import type {
   ProgrammeErrorDetail,
   ProgrammePreview as ProgrammePreviewData,
   ProgrammePreviewPayload,
+  ProgrammeSourceDrift,
   ProgrammeViolation,
   RefreshResponse,
   RefreshState,
@@ -82,6 +83,7 @@ export class Programmes implements OnInit {
   violations = signal<ProgrammeViolation[]>([]);
   conflict = signal<SourceConflict | null>(null);
   remediation = signal<string[]>([]);
+  driftDismissed = signal(false);
 
   selectedRoutineIds = signal<string[]>([]);
   routineRoles = signal<Record<string, RoutineRole>>({});
@@ -319,6 +321,30 @@ export class Programmes implements OnInit {
     this.page.set(Math.max(1, this.page() - 1));
   }
 
+  sourceDrift(): ProgrammeSourceDrift | null {
+    const drift: ProgrammeSourceDrift | null | undefined = this.data()?.source_drift;
+    if (!drift || this.driftDismissed()) {
+      return null;
+    }
+    return drift;
+  }
+
+  driftNeedsAttention(): boolean {
+    const drift = this.sourceDrift();
+    return !!drift && (drift.has_changes || drift.status === 'source_unavailable');
+  }
+
+  keepCurrentProgramme(): void {
+    this.driftDismissed.set(true);
+    this.status.set(
+      'Keeping the active programme. Hevy source changes are not applied until you generate a new preview.',
+    );
+  }
+
+  reviewSourceChanges(): void {
+    this.generatePreview();
+  }
+
   isSelected(routineId: string): boolean {
     return this.selectedRoutineIds().includes(routineId);
   }
@@ -480,7 +506,13 @@ export class Programmes implements OnInit {
 
   activatePreview(): void {
     const preview = this.preview();
-    if (!preview || this.activating() || this.previewing() || this.refreshing()) {
+    if (
+      !preview ||
+      (preview.blocking_violations && preview.blocking_violations.length > 0) ||
+      this.activating() ||
+      this.previewing() ||
+      this.refreshing()
+    ) {
       return;
     }
     this.error.set(null);

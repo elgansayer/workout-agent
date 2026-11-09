@@ -399,6 +399,73 @@ describe('Hevy-first programme builder', () => {
     expect(component.preview()).not.toBeNull();
   });
 
+  it('surfaces Hevy source drift and lets the user keep the active programme', () => {
+    component.data.set(
+      builderPayload({
+        source_drift: {
+          status: 'action_required',
+          has_changes: true,
+          summary: { renamed: 0, content_changed: 0, removed: 1 },
+          routines: [
+            {
+              position: 1,
+              routine_id: 'routine-a',
+              title: 'Upper A',
+              current_title: null,
+              state: 'removed',
+              source_exercise_count: 2,
+              current_exercise_count: null,
+            },
+          ],
+        },
+      }),
+    );
+    expect(component.driftNeedsAttention()).toBe(true);
+    expect(component.sourceDrift()?.status).toBe('action_required');
+
+    component.keepCurrentProgramme();
+
+    expect(component.sourceDrift()).toBeNull();
+    expect(component.status()).toContain('Keeping the active programme');
+  });
+
+  it('asks the user to reconnect when the Hevy source cannot be verified', () => {
+    component.data.set(
+      builderPayload({
+        source_drift: {
+          status: 'source_unavailable',
+          has_changes: false,
+          summary: { renamed: 0, content_changed: 0, removed: 0 },
+          routines: [],
+        },
+      }),
+    );
+    expect(component.driftNeedsAttention()).toBe(true);
+  });
+
+  it('keeps selections across filtered and paginated routine lists', () => {
+    component.data.set(
+      builderPayload({
+        source: {
+          username: 'tester',
+          workout_count: 0,
+          routine_count: 30,
+          recent_workout_count: 0,
+          folders: [],
+          routines: Array.from({ length: 30 }, (_, i) =>
+            routine(`r${i}`, `Routine ${i}`, i % 2),
+          ),
+        },
+      }),
+    );
+    component.toggleRoutine('r29');
+    component.setSearch('Routine 29');
+    component.filterFolder('1');
+    const visible = component.routineGroups().flatMap((group) => group.routines);
+    expect(visible.map((routine) => routine.id)).toEqual(['r29']);
+    expect(component.isSelected('r29')).toBe(true);
+  });
+
   it('surfaces blocking violations from activation', () => {
     fixture.detectChanges();
     http.expectOne('/api/programmes').flush(builderPayload());
@@ -522,5 +589,23 @@ describe('Hevy-first programme builder', () => {
       'select[aria-label="Role for Upper A"]',
     ) as HTMLSelectElement;
     expect(roleSelect).toBeTruthy();
+  });
+
+  it('blocks activation when preview contains blocking constraint violations', () => {
+    component.preview.set(
+      previewPayload({
+        preview_token: 'violation-token',
+        blocking_violations: [
+          {
+            exercise: 'Bulgarian Split Squats',
+            prescription: '3 x 10',
+            rule: 'No Bulgarian split squats',
+            permitted_remediation: 'Use leg extensions or flat-foot leg press instead.',
+          },
+        ],
+      }),
+    );
+    component.activatePreview();
+    http.expectNone('/api/programmes/activate');
   });
 });

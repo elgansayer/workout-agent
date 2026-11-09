@@ -113,6 +113,32 @@ const settings = {
   vapid_public_key: null,
 };
 const payloads: Record<string, unknown> = {
+  '/api/setup/state': {
+    account: {
+      state: 'ready',
+      label: 'Ready',
+      checks: {},
+      missing: [],
+      last_activity_at: '2026-11-01T10:00:00Z',
+      age_days: 7,
+      stale: false,
+    },
+    surfaces: Object.fromEntries(
+      ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'].map((surface) => [
+        surface,
+        {
+          state: 'ready',
+          label: 'Ready',
+          reason: 'Synthetic account setup is complete.',
+          action: null,
+          missing: [],
+          last_activity_at: '2026-11-01T10:00:00Z',
+          age_days: 7,
+          stale: false,
+        },
+      ]),
+    ),
+  },
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
   },
@@ -186,6 +212,170 @@ const payloads: Record<string, unknown> = {
   },
   '/api/settings': settings,
   '/api/chat/history': { messages: [] },
+  '/api/coach/capability': {
+    provider_name: 'gemini',
+    provider_configured: true,
+    provider_state: 'ready',
+    can_chat: true,
+    status: 'ready',
+    sync_configured: true,
+    sync_state: 'synced',
+    programme_available: true,
+    has_training_data: true,
+    has_fresh_training_data: true,
+    sources: {
+      training_logs: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      body_metrics: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+    },
+  },
+  '/api/coach/capabilities': {
+    provider_ready: true,
+    provider_name: 'gemini',
+    overall_status: 'fully_grounded',
+    disclaimer: 'Coach answers using verified data sources.',
+    welcome_message: 'Coach is ready with your training data.',
+    capabilities: {
+      workout_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Training logs are synced and current.',
+      },
+      recovery_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Recovery data is synced.',
+      },
+      body_composition: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Body composition data is available.',
+      },
+      programme_guidance: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Active programme is connected.',
+      },
+    },
+    suggested_prompts: [
+      {
+        text: 'How is my deadlift progressing?',
+        capability: 'workout_analysis',
+        icon: '📊',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Am I recovering well enough?',
+        capability: 'recovery_analysis',
+        icon: '💤',
+        enabled: true,
+        explanation: 'Recovery data is synced.',
+      },
+      {
+        text: 'Which lifts are stalling?',
+        capability: 'workout_analysis',
+        icon: '📉',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Should I deload this week?',
+        capability: 'workout_analysis',
+        icon: '🔄',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'How is my body composition trending?',
+        capability: 'body_composition',
+        icon: '⚖️',
+        enabled: true,
+        explanation: 'Body composition data is available.',
+      },
+      {
+        text: 'What should I focus on this block?',
+        capability: 'programme_guidance',
+        icon: '🎯',
+        enabled: true,
+        explanation: 'Active programme is connected.',
+      },
+    ],
+  },
+  '/api/chat/capabilities': {
+    provider_ready: true,
+    provider_name: 'gemini',
+    overall_status: 'fully_grounded',
+    disclaimer: 'Coach answers using verified data sources.',
+    welcome_message: 'Coach is ready with your training data.',
+    capabilities: {
+      workout_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Training logs are synced and current.',
+      },
+      recovery_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Recovery data is synced.',
+      },
+      body_composition: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Body composition data is available.',
+      },
+      programme_guidance: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Active programme is connected.',
+      },
+    },
+    suggested_prompts: [
+      {
+        text: 'How is my deadlift progressing?',
+        capability: 'workout_analysis',
+        icon: '📊',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Am I recovering well enough?',
+        capability: 'recovery_analysis',
+        icon: '💤',
+        enabled: true,
+        explanation: 'Recovery data is synced.',
+      },
+      {
+        text: 'Which lifts are stalling?',
+        capability: 'workout_analysis',
+        icon: '📉',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Should I deload this week?',
+        capability: 'workout_analysis',
+        icon: '🔄',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'How is my body composition trending?',
+        capability: 'body_composition',
+        icon: '⚖️',
+        enabled: true,
+        explanation: 'Body composition data is available.',
+      },
+      {
+        text: 'What should I focus on this block?',
+        capability: 'programme_guidance',
+        icon: '🎯',
+        enabled: true,
+        explanation: 'Active programme is connected.',
+      },
+    ],
+  },
   '/api/csrf-token': { token: 'synthetic-csrf', expires_in: 60 },
 };
 
@@ -309,10 +499,10 @@ test('navigation, list paging and settings sections work with keyboard focus', a
   await page.getByRole('button', { name: 'AI coach', exact: true }).click();
   await expect(page.locator('#settings-ai')).toBeVisible();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await page.getByLabel('Constraints (optional)').fill('Synthetic preference');
+  await page.getByLabel('Constraints Notes (optional free-text)').fill('Synthetic preference');
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await expect(page.getByLabel('Constraints (optional)')).toHaveValue('Synthetic preference');
+  await expect(page.getByLabel('Constraints Notes (optional free-text)')).toHaveValue('Synthetic preference');
   await page.getByRole('button', { name: 'Notifications', exact: true }).click();
   await expect(
     page.getByText('Push notifications are not available on this server.'),
