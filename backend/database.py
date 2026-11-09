@@ -10,7 +10,7 @@ import contextlib
 import json
 import logging
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -99,6 +99,88 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 PRIMARY KEY (user_id, routine_key)
             )
             """,
+        )
+        # Hevy history engine: immutable routine snapshots, deterministic
+        # workout matches, tenant-scoped user overrides and derived baselines.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hevy_routine_snapshots (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                snapshot_id TEXT NOT NULL,
+                routine_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                updated_at TEXT,
+                fetched_at TEXT,
+                superseded_snapshot_id TEXT,
+                snapshot_json TEXT NOT NULL,
+                PRIMARY KEY (user_id, snapshot_id)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hevy_routine_snapshots_user_routine "
+            "ON hevy_routine_snapshots (user_id, routine_id, content_hash)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routine_workout_matches (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                workout_id TEXT NOT NULL,
+                routine_snapshot_id TEXT,
+                routine_id TEXT,
+                score REAL NOT NULL,
+                confidence TEXT NOT NULL,
+                features_json TEXT NOT NULL,
+                method TEXT NOT NULL,
+                matcher_version TEXT NOT NULL,
+                is_ambiguous INTEGER NOT NULL DEFAULT 0,
+                user_confirmed INTEGER NOT NULL DEFAULT 0,
+                matched_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, workout_id, matcher_version)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
+            "ON routine_workout_matches (user_id, routine_snapshot_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
+            "ON routine_workout_matches (user_id, confidence)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routine_match_overrides (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                pattern_type TEXT NOT NULL,
+                pattern_value TEXT NOT NULL,
+                routine_id TEXT NOT NULL,
+                routine_snapshot_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, pattern_type, pattern_value)
+            )
+            """,
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exercise_history_baselines (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                template_id TEXT NOT NULL,
+                rule_version TEXT NOT NULL,
+                confidence TEXT NOT NULL,
+                evidence_start TEXT,
+                evidence_end TEXT,
+                baseline_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, template_id, rule_version)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_history_baselines_user "
+            "ON exercise_history_baselines (user_id, confidence)"
         )
         # Note: hevy_meta is migrated from key PK to (user_id, key) composite
         # PK below (see the migration block after user_preferences). In brand-new
@@ -1214,6 +1296,409 @@ def get_personal_records(
         }
         for name, weight, reps, when, e1rm in rows
     ]
+
+
+def _require_history_user_id(user_id: str | None) -> str:
+    """Return a non-empty tenant identifier or fail closed."""
+
+    value = str(user_id or "").strip()
+    if not value:
+        raise ValueError("A tenant user_id is required for history records.")
+    return value
+
+
+def _fresh_matches_payload(matches: Iterable[Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in matches:
+        if isinstance(raw, Mapping):
+            rows.append(dict(raw))
+            continue
+        to_dict = getattr(raw, "to_dict", None)
+        if callable(to_dict):
+            rows.append(dict(to_dict()))
+        else:
+            raise TypeError("History matches must be mappings or typed records.")
+    return rows
+
+
+def save_routine_snapshots(
+    user_id: str,
+    snapshots: Iterable[Mapping[str, Any]],
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Persist immutable routine snapshots for one tenant.
+
+    Existing snapshots are never mutated; a changed routine creates a new
+    content-addressed snapshot ID instead.
+    """
+
+    uid = _require_history_user_id(user_id)
+    saved = 0
+    with _connect(db_path) as conn:
+        for raw in snapshots:
+            snapshot = dict(raw)
+            snapshot_id = str(snapshot.get("id") or "").strip()
+            routine_id = str(snapshot.get("routine_id") or "").strip()
+            content_hash = str(snapshot.get("content_hash") or "").strip()
+            if not snapshot_id or not routine_id or not content_hash:
+                raise ValueError("Snapshot requires id, routine_id and content_hash.")
+            cursor = conn.execute(
+                """
+                INSERT INTO hevy_routine_snapshots
+                    (user_id, snapshot_id, routine_id, title, content_hash,
+                     schema_version, updated_at, fetched_at,
+                     superseded_snapshot_id, snapshot_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, snapshot_id) DO NOTHING
+                """,
+                (
+                    uid,
+                    snapshot_id,
+                    routine_id,
+                    str(snapshot.get("title") or ""),
+                    content_hash,
+                    int(snapshot.get("schema_version") or 1),
+                    snapshot.get("updated_at"),
+                    snapshot.get("fetched_at"),
+                    snapshot.get("superseded_snapshot_id"),
+                    json.dumps(snapshot, sort_keys=True, default=str),
+                ),
+            )
+            saved += max(0, cursor.rowcount)
+    return saved
+
+
+def get_routine_snapshots(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    routine_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return only the requesting tenant's routine snapshots."""
+
+    uid = _require_history_user_id(user_id)
+    query = "SELECT snapshot_json FROM hevy_routine_snapshots WHERE user_id = ?"
+    params: list[Any] = [uid]
+    if routine_id is not None:
+        query += " AND routine_id = ?"
+        params.append(routine_id)
+    query += " ORDER BY fetched_at, snapshot_id"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    snapshots: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row[0])
+        except (TypeError, ValueError):
+            logger.debug("Skipping unparseable routine snapshot row")
+            continue
+        if isinstance(payload, dict):
+            snapshots.append(payload)
+    return snapshots
+
+
+def save_routine_workout_matches(
+    user_id: str,
+    matches: Iterable[Any],
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    matched_at: str | None = None,
+) -> int:
+    """Persist deterministic match results, including user confirmation state."""
+
+    uid = _require_history_user_id(user_id)
+    timestamp = matched_at or datetime.now(tz=timezone.utc).isoformat()
+    rows = _fresh_matches_payload(matches)
+    saved = 0
+    with _connect(db_path) as conn:
+        for match in rows:
+            workout_id = str(match.get("workout_id") or "").strip()
+            if not workout_id:
+                raise ValueError("A routine match requires a workout_id.")
+            cursor = conn.execute(
+                """
+                INSERT INTO routine_workout_matches
+                    (user_id, workout_id, routine_snapshot_id, routine_id,
+                     score, confidence, features_json, method, matcher_version,
+                     is_ambiguous, user_confirmed, matched_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, workout_id, matcher_version) DO UPDATE SET
+                    routine_snapshot_id = excluded.routine_snapshot_id,
+                    routine_id = excluded.routine_id,
+                    score = excluded.score,
+                    confidence = excluded.confidence,
+                    features_json = excluded.features_json,
+                    method = excluded.method,
+                    is_ambiguous = excluded.is_ambiguous,
+                    user_confirmed = excluded.user_confirmed,
+                    matched_at = excluded.matched_at
+                """,
+                (
+                    uid,
+                    workout_id,
+                    match.get("routine_snapshot_id"),
+                    match.get("routine_id"),
+                    float(match.get("score") or 0.0),
+                    str(match.get("confidence") or "unmatched"),
+                    json.dumps(
+                        match.get("features") or {},
+                        sort_keys=True,
+                        default=str,
+                    ),
+                    str(match.get("method") or "feature_similarity"),
+                    str(match.get("matcher_version") or "unknown"),
+                    1 if match.get("is_ambiguous") else 0,
+                    1 if match.get("user_confirmed") else 0,
+                    timestamp,
+                ),
+            )
+            saved += max(0, cursor.rowcount)
+    return saved
+
+
+def get_routine_workout_matches(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    workout_id: str | None = None,
+    routine_snapshot_id: str | None = None,
+    confidence: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return tenant-scoped workout matches with parsed feature scores."""
+
+    uid = _require_history_user_id(user_id)
+    query = "SELECT * FROM routine_workout_matches WHERE user_id = ?"
+    params: list[Any] = [uid]
+    if workout_id is not None:
+        query += " AND workout_id = ?"
+        params.append(workout_id)
+    if routine_snapshot_id is not None:
+        query += " AND routine_snapshot_id = ?"
+        params.append(routine_snapshot_id)
+    if confidence is not None:
+        query += " AND confidence = ?"
+        params.append(confidence)
+    query += " ORDER BY matched_at DESC, workout_id"
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(query, params).fetchall()
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["features"] = json.loads(item.pop("features_json", "{}"))
+        except (TypeError, ValueError):
+            item["features"] = {}
+        item["is_ambiguous"] = bool(item.get("is_ambiguous"))
+        item["user_confirmed"] = bool(item.get("user_confirmed"))
+        results.append(item)
+    return results
+
+
+def save_routine_match_override(
+    user_id: str,
+    *,
+    pattern_type: str,
+    pattern_value: str,
+    routine_id: str,
+    routine_snapshot_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Persist a user correction without mutating historical raw workouts."""
+
+    uid = _require_history_user_id(user_id)
+    allowed = {"workout", "title", "exercise_signature"}
+    kind = pattern_type.strip().lower()
+    if kind not in allowed:
+        raise ValueError(f"Unsupported override pattern: {pattern_type}")
+    value = pattern_value.strip()
+    if kind == "title":
+        from hevy_parser import normalise_name
+
+        value = normalise_name(value)
+    elif kind == "exercise_signature":
+        value = "|".join(
+            sorted(part.strip() for part in value.split("|") if part.strip())
+        )
+    if not value or not routine_id or not routine_snapshot_id:
+        raise ValueError("Override requires a pattern value, routine and snapshot.")
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO routine_match_overrides
+                (user_id, pattern_type, pattern_value, routine_id,
+                 routine_snapshot_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, pattern_type, pattern_value) DO UPDATE SET
+                routine_id = excluded.routine_id,
+                routine_snapshot_id = excluded.routine_snapshot_id,
+                created_at = excluded.created_at
+            """,
+            (
+                uid,
+                kind,
+                value,
+                routine_id,
+                routine_snapshot_id,
+                datetime.now(tz=timezone.utc).isoformat(),
+            ),
+        )
+
+
+def get_routine_match_overrides(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Return tenant-scoped user matching corrections."""
+
+    uid = _require_history_user_id(user_id)
+    with _connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM routine_match_overrides WHERE user_id = ? "
+            "ORDER BY created_at, pattern_type, pattern_value",
+            (uid,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_routine_match_override(
+    user_id: str,
+    *,
+    pattern_type: str,
+    pattern_value: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> None:
+    """Remove one tenant-scoped matching correction."""
+
+    uid = _require_history_user_id(user_id)
+    kind = pattern_type.strip().lower()
+    value = pattern_value.strip()
+    if kind == "title":
+        from hevy_parser import normalise_name
+
+        value = normalise_name(value)
+    elif kind == "exercise_signature":
+        value = "|".join(
+            sorted(part.strip() for part in value.split("|") if part.strip())
+        )
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM routine_match_overrides "
+            "WHERE user_id = ? AND pattern_type = ? AND pattern_value = ?",
+            (uid, kind, value),
+        )
+
+
+def save_exercise_baselines(
+    user_id: str,
+    baselines: Mapping[str, Mapping[str, Any]] | Iterable[Mapping[str, Any]],
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    created_at: str | None = None,
+) -> int:
+    """Persist derived exercise baselines for one tenant and rule version."""
+
+    uid = _require_history_user_id(user_id)
+    timestamp = created_at or datetime.now(tz=timezone.utc).isoformat()
+    if isinstance(baselines, Mapping):
+        rows = [dict(value) for value in baselines.values()]
+    else:
+        rows = [dict(value) for value in baselines]
+    saved = 0
+    with _connect(db_path) as conn:
+        for baseline in rows:
+            template_id = str(baseline.get("template_id") or "").strip()
+            rule_version = str(baseline.get("rule_version") or "unknown")
+            if not template_id:
+                raise ValueError("A baseline requires a template_id.")
+            window = baseline.get("evidence_window") or {}
+            cursor = conn.execute(
+                """
+                INSERT INTO exercise_history_baselines
+                    (user_id, template_id, rule_version, confidence,
+                     evidence_start, evidence_end, baseline_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, template_id, rule_version) DO UPDATE SET
+                    confidence = excluded.confidence,
+                    evidence_start = excluded.evidence_start,
+                    evidence_end = excluded.evidence_end,
+                    baseline_json = excluded.baseline_json,
+                    created_at = excluded.created_at
+                """,
+                (
+                    uid,
+                    template_id,
+                    rule_version,
+                    str(baseline.get("confidence") or "ambiguous"),
+                    window.get("start") if isinstance(window, Mapping) else None,
+                    window.get("end") if isinstance(window, Mapping) else None,
+                    json.dumps(baseline, sort_keys=True, default=str),
+                    timestamp,
+                ),
+            )
+            saved += max(0, cursor.rowcount)
+    return saved
+
+
+def get_exercise_baselines(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    rule_version: str | None = None,
+    template_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return tenant-scoped exercise baselines."""
+
+    uid = _require_history_user_id(user_id)
+    query = "SELECT baseline_json FROM exercise_history_baselines WHERE user_id = ?"
+    params: list[Any] = [uid]
+    if rule_version is not None:
+        query += " AND rule_version = ?"
+        params.append(rule_version)
+    if template_id is not None:
+        query += " AND template_id = ?"
+        params.append(template_id)
+    query += " ORDER BY template_id"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    baselines: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row[0])
+        except (TypeError, ValueError):
+            logger.debug("Skipping unparseable exercise baseline row")
+            continue
+        if isinstance(payload, dict):
+            baselines.append(payload)
+    return baselines
+
+
+def get_cached_workout_payloads(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    since: str | None = None,
+) -> list[Any]:
+    """Return the tenant's incremental local Hevy workout cache payloads."""
+
+    uid = _require_history_user_id(user_id)
+    query = "SELECT hevy_payload FROM workout_history WHERE user_id = ?"
+    params: list[Any] = [uid]
+    if since is not None:
+        query += " AND date >= ?"
+        params.append(since)
+    query += " ORDER BY date ASC, id ASC"
+    with _connect(db_path) as conn:
+        rows = conn.execute(query, params).fetchall()
+    payloads: list[Any] = []
+    for row in rows:
+        try:
+            payloads.append(json.loads(row[0]))
+        except (TypeError, ValueError):
+            logger.debug("Skipping unparseable cached workout row")
+            continue
+    return payloads
 
 
 def get_routine_record(

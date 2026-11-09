@@ -10,12 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Literal
 
+from pydantic import BaseModel, Field
+
+from hevy_history import analyse_history
 from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
-from pydantic import BaseModel, Field
 
 ENGINE_VERSION = "hevy-programme-v1"
 MIN_DURATION_WEEKS = 4
@@ -479,37 +481,66 @@ def _allocate_blocks(
 def _history_analysis(
     data: HevyTrainingData,
     selected: list[Routine],
+    *,
+    programme_weeks: int | None = None,
+    now: datetime | None = None,
+    overrides: Any = (),
 ) -> dict[str, Any]:
-    selected_titles = {routine.title.casefold() for routine in selected}
-    matched_workouts = sum(
-        1
-        for workout in data.recent_workouts
-        if workout.title.casefold() in selected_titles
-    )
-    selected_with_match = sum(
-        1
-        for routine in selected
-        if any(
-            workout.title.casefold() == routine.title.casefold()
-            for workout in data.recent_workouts
-        )
-    )
-    coverage = selected_with_match / len(selected) if selected else 0.0
-    history_count = len(data.recent_workouts)
+    """Run the deterministic history engine for the selected routines."""
 
-    if history_count >= 8 and coverage >= 0.75:
-        confidence = "high"
-    elif history_count >= 3 and coverage >= 0.40:
-        confidence = "medium"
-    else:
-        confidence = "low"
-
+    history = analyse_history(
+        data,
+        [routine.id for routine in selected],
+        programme_weeks=programme_weeks,
+        now=now,
+        overrides=overrides,
+    )
+    counts = history["match_counts"]
+    matched_workouts = counts["high"] + counts["probable"]
+    band = str(history["confidence"])
+    public_confidence = {
+        "high": "high",
+        "probable": "medium",
+    }.get(band, "low")
     return {
-        "history_workouts": history_count,
+        "history_workouts": len(history["matches"]),
         "matched_workouts": matched_workouts,
-        "routine_match_coverage": round(coverage, 2),
-        "confidence": confidence,
+        "routine_match_coverage": history["routine_match_coverage"],
+        "workout_match_coverage": history["workout_match_coverage"],
+        "confidence": public_confidence,
+        "match_confidence": band,
+        "matcher_version": history["rule_versions"]["matcher"],
+        "baseline_version": history["rule_versions"]["baseline"],
+        "rule_versions": history["rule_versions"],
+        "unmatched_workouts": history["unmatched_workout_count"],
+        "ambiguous_workouts": history["ambiguous_workout_count"],
+        "calibration_required": history["calibration_required"],
+        "evidence_window": history["evidence_window"],
+        "routine_coverage": history["routine_coverage"],
+        "exercise_baselines": history["baselines"],
+        "history_warnings": history["warnings"],
+        "matches": history["matches"],
     }
+
+
+def _adaptation_bounds(
+    match_confidence: str,
+    baseline_confidence: str | None,
+) -> dict[str, int]:
+    """Return allowed automatic set change at the inferred confidence level."""
+
+    if baseline_confidence is None:
+        return {"minimum": 0, "maximum": 0}
+    if match_confidence == "high" and baseline_confidence == "high":
+        return {"minimum": -1, "maximum": 2}
+    if match_confidence in {"high", "probable"} and baseline_confidence in {
+        "high",
+        "probable",
+    }:
+        return {"minimum": -1, "maximum": 1}
+    if baseline_confidence == "ambiguous":
+        return {"minimum": 0, "maximum": 1}
+    return {"minimum": 0, "maximum": 0}
 
 
 def _classify_role(
@@ -662,9 +693,12 @@ def _prescriptions_for_exercise(
     position: int,
     goal: str,
     blocks: list[dict[str, Any]],
+    *,
+    adaptation_bounds: dict[str, int] | None = None,
 ) -> tuple[str, str, list[dict[str, Any]]]:
     role, role_reason = _classify_role(source, position, goal)
     progression = _progression_for(role)
+    bounds = adaptation_bounds or {"minimum": -1, "maximum": 2}
     prescriptions = []
     for block in blocks:
         prescriptions.append(
@@ -678,7 +712,7 @@ def _prescriptions_for_exercise(
                 "rep_range": _rep_range_for(role, block["key"], source),
                 "target_rir": block["target_rir"],
                 "progression": progression,
-                "allowed_set_change_from_source": {"minimum": -1, "maximum": 2},
+                "allowed_set_change_from_source": dict(bounds),
             }
         )
     return role, role_reason, prescriptions
@@ -687,6 +721,8 @@ def _prescriptions_for_exercise(
 def build_programme_preview(
     data: HevyTrainingData,
     request: ProgrammePreviewRequest,
+    *,
+    history_overrides: Any = (),
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
 
@@ -725,17 +761,39 @@ def build_programme_preview(
         request.goal,
         request.start_date,
     )
-    history = _history_analysis(data, selected)
+    history_overrides = list(history_overrides or ())
+    history = _history_analysis(
+        data,
+        selected,
+        programme_weeks=request.duration_weeks,
+        now=datetime.combine(
+            request.start_date,
+            time.max,
+            tzinfo=timezone.utc,
+        ),
+        overrides=history_overrides,
+    )
 
     days: list[dict[str, Any]] = []
     for day_number, source_routine in enumerate(source_snapshots, start=1):
         exercises: list[dict[str, Any]] = []
         for position, source_exercise in enumerate(source_routine["exercises"]):
+            baseline = history["exercise_baselines"].get(
+                source_exercise["template_id"]
+            )
+            baseline_confidence = (
+                str(baseline["confidence"]) if baseline else None
+            )
+            bounds = _adaptation_bounds(
+                str(history["match_confidence"]),
+                baseline_confidence,
+            )
             role, role_reason, prescriptions = _prescriptions_for_exercise(
                 source_exercise,
                 position,
                 request.goal,
                 blocks,
+                adaptation_bounds=bounds,
             )
             opening = prescriptions[0]
             exercises.append(
@@ -753,6 +811,11 @@ def build_programme_preview(
                     "source_sets": source_exercise["sets"],
                     "source_targets": source_exercise["set_targets"],
                     "prescriptions": prescriptions,
+                    "baseline_confidence": baseline_confidence,
+                    "baseline": baseline,
+                    "role_features": baseline.get("role_features")
+                    if baseline
+                    else None,
                 }
             )
         days.append(
@@ -796,6 +859,18 @@ def build_programme_preview(
         warnings.append(
             "Training-history confidence is low. Opening prescriptions are conservative and should be reviewed after the first two weeks."
         )
+    if history["ambiguous_workouts"]:
+        warnings.append(
+            "Some completed workouts have ambiguous routine matches. Confirm the routine for those sessions before relying on routine-specific adaptation."
+        )
+    if history["unmatched_workouts"]:
+        warnings.append(
+            "Some completed workouts could not be matched to a selected routine. They remain exercise-level evidence only."
+        )
+    if history["calibration_required"]:
+        warnings.append(
+            "More recent, complete training history is required to calibrate automatic progression confidently."
+        )
     if request.max_session_minutes is not None:
         too_long = [
             routine["title"]
@@ -823,6 +898,10 @@ def build_programme_preview(
     }
     token_inputs = {
         "engine_version": ENGINE_VERSION,
+        "history_rule_version": history["rule_versions"]["history"],
+        "matcher_version": history["rule_versions"]["matcher"],
+        "baseline_version": history["rule_versions"]["baseline"],
+        "history_overrides": _canonical_hash(history_overrides),
         "programme_spec": programme_spec,
         "source_hashes": [
             {
