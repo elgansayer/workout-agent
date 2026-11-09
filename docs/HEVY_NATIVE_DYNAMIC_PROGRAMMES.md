@@ -1019,6 +1019,48 @@ An AI provider may not:
 - silently substitute exercises;
 - write raw free-form output directly into active prescriptions.
 
+### 23.1 Implemented deterministic engine contract
+
+`backend/dynamic_programme.py` implements engine `hevy-programme-v3`. It is a
+pure function of the selected immutable Hevy source, the validated request and
+the engine version, so identical inputs produce an identical preview token.
+
+The preview exposes:
+
+- `goal_profile.target_envelopes` for every supported goal;
+- `blocks` with volume multiplier, rep/RIR intent, specificity, variation policy,
+  progression aggressiveness, fatigue-management mode, review gates and exit
+  criteria;
+- `days[].exercises[]` with a role, classification confidence, classification
+  evidence and user override state;
+- `workload` with warm-up/normal/failure/drop-set counts, direct and secondary
+  muscle exposure, observed baselines, week-one bounds, duplicate work,
+  implausible source volume and uncertainty;
+- `engine_config` with every numeric planning bound used by the run;
+- `blocking_violations` from the shared validator, including routine, exercise,
+  week, rule and remediation where applicable.
+
+Allocator policy in this version:
+
+- durations 4–6 weeks collapse to at most two meaningful phases;
+- a taper/test block is generated only for `strength_test` with an event date;
+- low-confidence history prepends a one-week calibration block;
+- fatigue-management weeks remain reactive candidates unless the user selected
+  planned management;
+- long plans repeat development waves with explicit review gates rather than a
+  single linear ramp;
+- every valid 4–52 week input conserves the requested duration exactly.
+
+Role classification uses exercise type, routine position, muscle contribution,
+source targets, rest, history and priorities. No exercise ID or named lift is
+globally special. User `exercise_overrides` change only the prescription overlay
+and never mutate the imported Hevy source snapshot.
+
+Week-one set changes are bounded to one fewer or two more than the imported
+source. When recent matching history exists, the opening exposure is also bounded
+by recent tolerated sets. Bodyweight, assisted bodyweight, duration and distance
+exercises use modality-specific fields and never receive e1RM/load progression.
+
 ## 24. Initial safety and change bounds
 
 These are conservative product guardrails and must remain configurable/versioned:

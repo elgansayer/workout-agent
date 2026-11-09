@@ -1157,6 +1157,7 @@ def test_settings_credential_save_fails_closed_without_encryption_key(
     assert secret not in str(caught.value.detail)
 
 
+
 def test_catch_all_never_serves_files_outside_the_frontend_bundle(
     client: Any,
     monkeypatch: Any,

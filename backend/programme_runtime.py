@@ -58,6 +58,7 @@ class ProgrammeRuntime:
     days: list[dict[str, Any]] = field(default_factory=list)
     next_day: dict[str, Any] | None = None
     cadence: str = "calendar"
+    next_session_date: str | None = None
     last_completed_at: str | None = None
     review_weeks: list[int] = field(default_factory=list)
     programme_id: int | None = None
@@ -340,6 +341,41 @@ def _rolling_position(
     return 0
 
 
+def _schedule_session(
+    schedule: list[dict[str, Any]],
+    days: list[dict[str, Any]],
+    today: date,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve the scheduled session for today or the next upcoming one.
+
+    Returns the routine entry from ``days`` plus the scheduled date so the
+    caller can report an exact programme date.
+    """
+
+    by_routine = {str(day.get("routine_id")): day for day in days}
+    upcoming: tuple[dict[str, Any], str] | None = None
+    for session in schedule:
+        raw_date = session.get("date")
+        if not isinstance(raw_date, str):
+            continue
+        try:
+            session_date = date.fromisoformat(raw_date)
+        except ValueError:
+            continue
+        day = by_routine.get(str(session.get("routine_id")))
+        if day is None:
+            continue
+        if session_date == today:
+            return day, raw_date
+        if session_date > today and (
+            upcoming is None or raw_date < upcoming[1]
+        ):
+            upcoming = (day, raw_date)
+    if upcoming is not None:
+        return upcoming
+    return None, None
+
+
 def resolve_programme_runtime(
     active: dict[str, Any] | None,
     workouts: list[dict[str, Any]],
@@ -458,8 +494,25 @@ def resolve_programme_runtime(
     else:
         position = elapsed % len(result.days)
 
-    result.message = "Your workout for today."
     result.status = ACTIVE
+    schedule = definition.get("schedule") or []
+    if schedule:
+        scheduled_day, scheduled_date = _schedule_session(
+            schedule,
+            result.days,
+            today,
+        )
+        if scheduled_day is not None:
+            result.next_day = scheduled_day
+            result.next_session_date = scheduled_date
+            result.message = (
+                "Your workout for today."
+                if scheduled_date == today.isoformat()
+                else "Your next scheduled workout."
+            )
+            return result
+
+    result.message = "Your workout for today."
     result.next_day = result.days[position]
     return result
 
