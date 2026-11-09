@@ -46,7 +46,7 @@ Returns the builder state.
     "state": "connected | partial | disconnected | auth_error | rate_limited | error",
     "detail": null,
     "username": "hevy-account-name",
-    "owner": "signed-in-user@example.test",
+    "owner": "signed-in-user@example.com",
     "last_successful_sync": "2026-08-20T09:00:00+00:00",
     "stale": false,
     "warnings": [],

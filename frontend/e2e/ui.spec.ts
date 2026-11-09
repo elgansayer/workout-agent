@@ -569,7 +569,9 @@ test('the Hevy-first builder previews and activates a selected routine', async (
   await expect(page.getByText('Hybrid Powerbuilding')).toHaveCount(0);
   await expect(page.getByText('Active Split Preview')).toHaveCount(0);
 
-  await page.getByRole('checkbox', { name: 'Select routine Routine 1' }).check();
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
   await expect(page.locator('.selected-routines')).toContainText('Routine 1');
 
   await page.getByLabel('Primary goal').selectOption('general_fitness');
@@ -608,7 +610,9 @@ test('a changed Hevy source blocks activation and offers remediation', async ({ 
     }),
   );
   await page.goto('/programmes');
-  await page.getByRole('checkbox', { name: 'Select routine Routine 1' }).check();
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
   await page.getByRole('button', { name: 'Generate programme preview' }).click();
   await page.getByRole('button', { name: 'Activate this programme' }).click();
 
