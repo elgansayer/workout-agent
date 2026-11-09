@@ -62,6 +62,7 @@ from database import (
     delete_notification,
     get_active_programme,
     get_body_metrics,
+    get_cached_workout_payloads,
     get_chat_messages,
     get_checkins,
     get_daily_logs,
@@ -77,6 +78,7 @@ from database import (
     get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
+    get_routine_match_overrides,
     get_session_volumes,
     get_training_rules,
     get_unread_notification_count,
@@ -91,6 +93,9 @@ from database import (
     save_notification,
     save_push_subscription,
     save_reasoning_log,
+    save_routine_match_override,
+    save_routine_snapshots,
+    save_routine_workout_matches,
     save_training_rules,
     save_user_preferences,
     set_meta,
@@ -122,6 +127,7 @@ from hevy_connection import (
     HevyCredentialTest,
     verify_hevy_credentials,
 )
+from hevy_history import analyse_history, build_snapshot
 from hevy_parser import normalise_name
 from hevy_reader import HevySourceSnapshot, HevyTrainingData
 from program import (
@@ -1328,6 +1334,7 @@ def preview_programme(
         preview = build_programme_preview(
             training_data,
             payload,
+            history_overrides=get_routine_match_overrides(user_id, DB_PATH),
             active_definition=active_definition,
             profile_rules=profile_rules,
         )
@@ -1359,6 +1366,7 @@ def activate_programme(
         preview = build_programme_preview(
             training_data,
             preview_request,
+            history_overrides=get_routine_match_overrides(user_id, DB_PATH),
             active_definition=_active_definition(user_id),
             profile_rules=profile_rules,
         )
@@ -1505,6 +1513,7 @@ async def select_programme(request: Request) -> JSONResponse:
         preview = build_programme_preview(
             training_data,
             preview_request,
+            history_overrides=get_routine_match_overrides(user_id, DB_PATH),
             profile_rules=profile_rules,
         )
     except ValueError as exc:
@@ -1571,7 +1580,7 @@ def _load_hevy_snapshot_for_user(
     from hevy_reader import fetch_user_training_snapshot
 
     try:
-        return fetch_user_training_snapshot(
+        snapshot = fetch_user_training_snapshot(
             hevy_key,
             workout_limit=workout_limit,
         )
@@ -1598,6 +1607,25 @@ def _load_hevy_snapshot_for_user(
             status_code=502,
             detail=("Hevy could not be reached. Check the connection and try again."),
         ) from exc
+
+    from hevy_history import merge_workout_history, parse_cached_workouts
+
+    # The incremental local cache from the full-history sync is the canonical
+    # evidence source. Provider calls stay bounded to recent workouts.
+    try:
+        cached = parse_cached_workouts(
+            get_cached_workout_payloads(user_id, db_path=DB_PATH),
+            snapshot.data.exercise_templates,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        logger.warning("Ignoring malformed cached Hevy history for user %s.", user_id)
+        cached = []
+    if cached:
+        snapshot.data.recent_workouts = merge_workout_history(
+            snapshot.data.recent_workouts,
+            cached,
+        )
+    return snapshot
 
 
 def _load_hevy_training_for_user(
@@ -2946,6 +2974,113 @@ def api_programmes_refresh(request: Request) -> JSONResponse:
                 "warnings": list(snapshot.warnings),
                 "last_successful_sync": sync_state.get("synced_at"),
                 "stale": False,
+            }
+        )
+    )
+
+
+@app.get("/api/programmes/history")
+def api_programme_history(
+    request: Request,
+    routine_ids: str | None = None,
+) -> JSONResponse:
+    """Expose deterministic workout matches and exercise baselines."""
+
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    selected = (
+        [item.strip() for item in routine_ids.split(",") if item.strip()]
+        if routine_ids
+        else None
+    )
+    overrides = get_routine_match_overrides(user_id, DB_PATH)
+    try:
+        analysis = analyse_history(
+            training_data,
+            selected,
+            overrides=overrides,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(
+        jsonable_encoder({"history": analysis, "overrides": overrides})
+    )
+
+
+@app.post("/api/programmes/history/override")
+async def api_programme_history_override(request: Request) -> JSONResponse:
+    """Confirm or correct an ambiguous workout-to-routine match."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+
+    pattern_type = str(body.get("pattern_type") or "").strip().lower()
+    pattern_value = str(body.get("pattern_value") or "").strip()
+    routine_id = str(body.get("routine_id") or "").strip()
+    if pattern_type not in {"workout", "title", "exercise_signature"}:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "pattern_type must be one of: workout, title, exercise_signature."
+            ),
+        )
+    if not pattern_value or not routine_id:
+        raise HTTPException(
+            status_code=422,
+            detail="pattern_value and routine_id are required.",
+        )
+
+    training_data = _load_hevy_training_for_user(user_id)
+    routine = next(
+        (item for item in training_data.routines if item.id == routine_id),
+        None,
+    )
+    if routine is None:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected routine is not available in the current Hevy source.",
+        )
+    if pattern_type == "workout" and not any(
+        workout.id == pattern_value for workout in training_data.recent_workouts
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The selected workout is not available in the current history.",
+        )
+
+    snapshot = build_snapshot(
+        routine,
+        training_data.exercise_templates,
+        user_id=user_id,
+    )
+    save_routine_snapshots(user_id, [snapshot.to_dict()], DB_PATH)
+    save_routine_match_override(
+        user_id,
+        pattern_type=pattern_type,
+        pattern_value=pattern_value,
+        routine_id=routine.id,
+        routine_snapshot_id=snapshot.id,
+        db_path=DB_PATH,
+    )
+    overrides = get_routine_match_overrides(user_id, DB_PATH)
+    analysis = analyse_history(
+        training_data,
+        overrides=overrides,
+        user_id=user_id,
+    )
+    save_routine_workout_matches(user_id, analysis["matches"], DB_PATH)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "snapshot": snapshot.to_dict(),
+                "history": analysis,
+                "overrides": overrides,
             }
         )
     )

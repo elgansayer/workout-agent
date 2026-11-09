@@ -590,6 +590,43 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     assert stored["definition"] == definition
 
 
+def test_history_endpoint_exposes_matches_and_accepts_user_override(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+
+    history_response = client.get("/api/programmes/history")
+    assert history_response.status_code == 200
+    history = history_response.json()["history"]
+    assert history["matches"]
+    assert "baselines" in history
+    assert history["rule_versions"]["matcher"]
+
+    override_response = client.post(
+        "/api/programmes/history/override",
+        json={
+            "pattern_type": "workout",
+            "pattern_value": "workout-0",
+            "routine_id": "routine-a",
+        },
+    )
+    assert override_response.status_code == 200
+
+    refreshed = client.get("/api/programmes/history").json()["history"]
+    corrected = next(
+        match
+        for match in refreshed["matches"]
+        if match["workout_id"] == "workout-0"
+    )
+    assert corrected["routine_id"] == "routine-a"
+    assert corrected["user_confirmed"] is True
+    assert corrected["confidence"] == "high"
+
+    user_id = database.get_legacy_user_id(db_file)
+    overrides = database.get_routine_match_overrides(user_id, db_file)
+    assert overrides[0]["pattern_value"] == "workout-0"
+    assert overrides[0]["routine_id"] == "routine-a"
 def _activate(training_data: Any, client: Any, db_file: str) -> None:
     preview = client.post("/api/programmes/preview", json=_payload())
     assert preview.status_code == 200

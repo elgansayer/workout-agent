@@ -380,7 +380,7 @@ def _build_training_data(
     return data
 
 
-def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainingData:
+def fetch_user_training(api_key: str, *, workout_limit: int = 120) -> HevyTrainingData:
     """Pull everything we need from Hevy to understand what this user trains.
 
     This is the single entry point for the read-first flow. It fetches:

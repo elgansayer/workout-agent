@@ -290,6 +290,25 @@ def test_sparse_history_is_labelled_low_confidence(
     assert any("confidence is low" in warning for warning in preview["warnings"])
 
 
+def test_history_confidence_tightens_adaptation_bounds(
+    training_data: HevyTrainingData,
+) -> None:
+    informed = build_programme_preview(training_data, _request())
+    informed_bounds = informed["days"][0]["exercises"][0]["prescriptions"][0][
+        "allowed_set_change_from_source"
+    ]
+    assert informed["days"][0]["exercises"][0]["baseline"] is not None
+    assert informed_bounds["maximum"] >= 1
+
+    training_data.recent_workouts = []
+    cold_start = build_programme_preview(training_data, _request())
+    cold_exercise = cold_start["days"][0]["exercises"][0]
+    assert cold_exercise["baseline"] is None
+    assert cold_exercise["prescriptions"][0]["allowed_set_change_from_source"] == {
+        "minimum": 0,
+        "maximum": 0,
+    }
+    assert cold_start["analysis"]["calibration_required"] is True
 def test_rolling_cadence_keeps_the_selected_order(
     training_data: HevyTrainingData,
 ) -> None:
