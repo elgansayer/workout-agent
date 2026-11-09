@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 ENGINE_VERSION = "hevy-programme-v1"
 MIN_DURATION_WEEKS = 4
@@ -44,9 +44,20 @@ class ProgrammePreviewRequest(BaseModel):
     goal: GoalKey = "general_fitness"
     start_date: date = Field(default_factory=date.today)
     sessions_per_week: int | None = Field(default=None, ge=1, le=14)
+    cadence: Literal["rolling", "calendar"] = "rolling"
+    weekdays: list[int] | None = Field(default=None, max_length=7)
     experience: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     max_session_minutes: int | None = Field(default=None, ge=20, le=240)
     adaptation_aggressiveness: Aggressiveness = "balanced"
+
+    @field_validator("weekdays")
+    @classmethod
+    def _validate_weekdays(cls, value: list[int] | None) -> list[int] | None:
+        if value is None:
+            return value
+        if any(day < 0 or day > 6 for day in value):
+            raise ValueError("Weekdays use 0 (Monday) through 6 (Sunday).")
+        return value
 
 
 class ProgrammeActivationRequest(ProgrammePreviewRequest):
@@ -297,6 +308,28 @@ def goal_options() -> list[dict[str, str]]:
 def _canonical_hash(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_preview_token(
+    programme_spec: dict[str, Any],
+    source_snapshots: list[dict[str, Any]],
+    *,
+    engine_version: str = ENGINE_VERSION,
+) -> str:
+    """Recompute the source-bound activation token from stored inputs."""
+    return _canonical_hash(
+        {
+            "engine_version": engine_version,
+            "programme_spec": programme_spec,
+            "source_hashes": [
+                {
+                    "routine_id": snapshot.get("id"),
+                    "source_hash": snapshot.get("source_hash"),
+                }
+                for snapshot in source_snapshots
+            ],
+        }
+    )
 
 
 def _normalise_set_target(value: Any) -> dict[str, Any]:
@@ -821,18 +854,7 @@ def build_programme_preview(
         ],
         "goal_label": _GOALS[request.goal]["label"],
     }
-    token_inputs = {
-        "engine_version": ENGINE_VERSION,
-        "programme_spec": programme_spec,
-        "source_hashes": [
-            {
-                "routine_id": routine["id"],
-                "source_hash": routine["source_hash"],
-            }
-            for routine in source_snapshots
-        ],
-    }
-    preview_token = _canonical_hash(token_inputs)
+    preview_token = compute_preview_token(programme_spec, source_snapshots)
 
     return {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",

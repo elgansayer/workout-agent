@@ -66,6 +66,10 @@ def resolve_programme_runtime(
         return result
     definition = active["definition"]
     spec = definition.get("programme_spec") or {}
+    if spec.get("paused"):
+        result.status = "paused"
+        result.message = "Your programme is paused. Resume it when you are ready."
+        return result
     start_value = spec.get("start_date")
     if not start_value:
         activated = _timestamp(active.get("updated_at") or active.get("created_at"))

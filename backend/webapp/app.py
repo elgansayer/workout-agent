@@ -73,7 +73,6 @@ from database import (
     save_reasoning_log,
     save_user_api_key,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from dynamic_programme import (
@@ -102,11 +101,29 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from programme_engine import ProgrammeValidationError, RecoveryContext
+from programme_lifecycle import (
+    activate_from_preview,
+    delete_workout_event,
+    diff_active_source,
+    extend_programme,
+    get_active_revision,
+    ingest_workout_event,
+    list_decisions,
+    list_overrides,
+    list_revisions,
+    materialise_week,
+    programme_state,
+    rebase_active_programme,
+    record_override,
+    resolve_decision,
+    revert_override,
+    set_programme_paused,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -784,30 +801,21 @@ def activate_programme(
             ),
         )
 
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
+    try:
+        activation = activate_from_preview(
+            user_id,
+            preview,
+            DB_PATH,
+            expected_token=payload.preview_token,
+        )
+    except ProgrammeValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     set_meta(
         "programme_start_date",
         str(preview["programme_spec"]["start_date"]),
         DB_PATH,
         user_id=user_id,
-    )
-    save_notification(
-        user_id,
-        title="Hevy programme activated",
-        message=(
-            f"{preview['name']} is active for "
-            f"{preview['cycle_weeks']} weeks using "
-            f"{preview['total_days']} selected routines."
-        ),
-        type="programme",
-        link="/plan",
-        db_path=DB_PATH,
     )
 
     return JSONResponse(
@@ -818,6 +826,9 @@ def activate_programme(
                     user_id,
                     db_path=DB_PATH,
                 ),
+                "revision": activation.revision,
+                "week": activation.week,
+                "exposures": activation.exposures,
             }
         )
     )
@@ -876,12 +887,11 @@ async def select_programme(request: Request) -> JSONResponse:
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    set_active_programme(
+    activation = activate_from_preview(
         user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
+        preview,
+        DB_PATH,
+        expected_token=preview["preview_token"],
     )
     set_meta(
         "programme_start_date",
@@ -895,9 +905,265 @@ async def select_programme(request: Request) -> JSONResponse:
                 "status": "ok",
                 "source": "hevy",
                 "preview_token": preview["preview_token"],
+                "revision": activation.revision,
             }
         )
     )
+
+
+@app.get("/api/programmes/state")
+def api_programme_state(request: Request) -> JSONResponse:
+    """Return immutable revision metadata, current week and next exposure."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder(programme_state(user_id, DB_PATH)))
+
+
+@app.get("/api/programmes/revisions")
+def api_programme_revisions(request: Request) -> JSONResponse:
+    """Return this tenant's revision history, newest first."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder({"revisions": list_revisions(user_id, DB_PATH)}))
+
+
+@app.get("/api/programmes/decisions")
+def api_programme_decisions(request: Request) -> JSONResponse:
+    """Return explainable adaptation decisions for this tenant."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder({"decisions": list_decisions(user_id, DB_PATH)})
+    )
+
+
+@app.get("/api/programmes/overrides")
+def api_programme_overrides(request: Request) -> JSONResponse:
+    """Return durable, scoped user overrides for this tenant."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder({"overrides": list_overrides(user_id, DB_PATH)})
+    )
+
+
+@app.post("/api/programmes/overrides")
+async def api_record_programme_override(request: Request) -> JSONResponse:
+    """Pin or override one exercise prescription for a defined week range."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+    revision = get_active_revision(user_id, DB_PATH)
+    if not revision:
+        raise HTTPException(status_code=409, detail="No active programme is available.")
+    try:
+        override = record_override(
+            user_id,
+            int(body.get("revision_id") or revision["id"]),
+            str(body.get("exercise_template_id") or ""),
+            str(body.get("decision_type") or "hold"),
+            dict(body.get("prescription") or {}),
+            DB_PATH,
+            start_week=int(body.get("start_week") or 1),
+            end_week=body.get("end_week"),
+            reason=body.get("reason"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"status": "ok", "override": override}))
+
+
+@app.post("/api/programmes/overrides/{override_id}/revert")
+def api_revert_programme_override(override_id: int, request: Request) -> JSONResponse:
+    """Revert one override without mutating provider history."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    if not revert_override(user_id, override_id, DB_PATH):
+        raise HTTPException(status_code=404, detail="Override not found.")
+    return JSONResponse({"status": "ok"})
+
+
+@app.post("/api/programmes/decisions/{decision_id}/resolve")
+async def api_resolve_programme_decision(
+    decision_id: int, request: Request
+) -> JSONResponse:
+    """Confirm or revert a decision that required user confirmation."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+    resolved = resolve_decision(
+        user_id,
+        decision_id,
+        DB_PATH,
+        confirmed=bool(body.get("confirmed", True)),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="Decision not found.")
+    return JSONResponse(jsonable_encoder({"status": "ok", "decision": resolved}))
+
+
+@app.get("/api/programmes/weeks/{week_number}")
+def api_programme_week(week_number: int, request: Request) -> JSONResponse:
+    """Materialise and return a reproducible dated week state."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    week = materialise_week(user_id, week_number, DB_PATH)
+    if week is None:
+        raise HTTPException(status_code=409, detail="No active programme is available.")
+    return JSONResponse(jsonable_encoder({"week": week}))
+
+
+@app.get("/api/programmes/drift")
+def api_programme_drift(request: Request) -> JSONResponse:
+    """Compare current Hevy routines with the immutable active snapshots."""
+    _check_rate_limit(request)
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    try:
+        diff = diff_active_source(
+            user_id,
+            serialise_hevy_source(training_data),
+            DB_PATH,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"drift": diff}))
+
+
+@app.post("/api/programmes/drift/resolve")
+async def api_resolve_programme_drift(request: Request) -> JSONResponse:
+    """Keep, merge, rebase or replace source drift via a new revision."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+    action = str(body.get("action") or "keep")
+    training_data = _load_hevy_training_for_user(user_id)
+    preview_request = None
+    if body.get("selected_routine_ids"):
+        try:
+            preview_request = ProgrammePreviewRequest(
+                selected_routine_ids=list(body["selected_routine_ids"]),
+                duration_weeks=int(body.get("duration_weeks") or 12),
+                goal=body.get("goal") or "general_fitness",
+                start_date=body.get("start_date") or datetime.now(
+                    tz=timezone.utc
+                ).date(),
+                sessions_per_week=body.get("sessions_per_week"),
+                experience=body.get("experience") or "intermediate",
+                max_session_minutes=body.get("max_session_minutes"),
+                adaptation_aggressiveness=(
+                    body.get("adaptation_aggressiveness") or "balanced"
+                ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        result = rebase_active_programme(
+            user_id,
+            training_data,
+            DB_PATH,
+            action=action,
+            request=preview_request,
+        )
+    except (ValueError, ProgrammeValidationError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"status": "ok", **result}))
+
+
+@app.post("/api/programmes/extend")
+async def api_extend_programme(request: Request) -> JSONResponse:
+    """Extend the active programme through a new immutable revision."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+    try:
+        revision = extend_programme(
+            user_id, int(body.get("additional_weeks") or 0), DB_PATH
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"status": "ok", "revision": revision}))
+
+
+@app.post("/api/programmes/pause")
+def api_pause_programme(request: Request) -> JSONResponse:
+    """Pause the active programme through a new revision."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        revision = set_programme_paused(user_id, True, DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"status": "ok", "revision": revision}))
+
+
+@app.post("/api/programmes/resume")
+def api_resume_programme(request: Request) -> JSONResponse:
+    """Resume a paused programme and shift its start date by the pause length."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        revision = set_programme_paused(user_id, False, DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder({"status": "ok", "revision": revision}))
+
+
+@app.post("/api/programmes/workouts/ingest")
+async def api_ingest_programme_workout(request: Request) -> JSONResponse:
+    """Ingest a completed workout and apply bounded, idempotent adaptation."""
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+    workout = body.get("workout") if isinstance(body.get("workout"), dict) else body
+    if not isinstance(workout, dict) or not workout:
+        raise HTTPException(status_code=422, detail="A completed workout is required.")
+    recovery = None
+    recovery_payload = body.get("recovery")
+    if isinstance(recovery_payload, dict):
+        recovery = RecoveryContext(
+            fresh=bool(recovery_payload.get("fresh", True)),
+            quality=float(recovery_payload.get("quality", 0.5)),
+            source=str(recovery_payload.get("source") or "unknown"),
+            signals=tuple(str(item) for item in recovery_payload.get("signals") or []),
+        )
+    feedback = body.get("feedback") if isinstance(body.get("feedback"), dict) else {}
+    try:
+        result = ingest_workout_event(
+            user_id,
+            workout,
+            DB_PATH,
+            recovery=recovery,
+            feedback=feedback,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@app.delete("/api/programmes/workouts/{workout_id}")
+def api_delete_programme_workout(workout_id: str, request: Request) -> JSONResponse:
+    """Handle a provider workout deletion without erasing decision audit."""
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    if not delete_workout_event(user_id, workout_id, DB_PATH):
+        raise HTTPException(status_code=404, detail="Workout observation not found.")
+    return JSONResponse({"status": "ok"})
 
 
 def _load_hevy_training_for_user(

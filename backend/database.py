@@ -822,6 +822,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # Lifecycle tables (revisions, weeks, exposures, decisions, overrides,
+        # audit) and the one-active-programme-per-tenant guard.
+        from programme_lifecycle import ensure_schema as _ensure_lifecycle_schema
+
+        _ensure_lifecycle_schema(conn)
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:

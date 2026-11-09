@@ -110,6 +110,7 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
     import webapp.app as app_module
 
     importlib.reload(app_module)
+    app_module._RATE_LIMITS.clear()
     monkeypatch.setattr(app_module, "ALLOW_ANONYMOUS_WEB", True)
     monkeypatch.setattr(
         app_module,
@@ -316,3 +317,91 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     stored = database.get_active_programme(user_id, db_file)
     assert stored is not None
     assert stored["definition"] == definition
+
+
+def test_lifecycle_routes_expose_revision_week_and_decisions(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    preview = client.post("/api/programmes/preview", json=_payload()).json()["preview"]
+    activation = client.post(
+        "/api/programmes/activate",
+        json={**_payload(), "preview_token": preview["preview_token"]},
+    )
+    assert activation.status_code == 200
+    revision = activation.json()["revision"]
+
+    state = client.get("/api/programmes/state").json()
+    assert state["setup_required"] is False
+    assert state["revision"]["id"] == revision["id"]
+    assert state["week"]["week_number"] >= 1
+    assert state["next_exposure"]["routine_id"]
+
+    revisions = client.get("/api/programmes/revisions").json()["revisions"]
+    assert [item["id"] for item in revisions] == [revision["id"]]
+
+    week = client.get("/api/programmes/weeks/1").json()["week"]
+    assert week["week_number"] == 1
+
+    workout = {
+        "id": "route-workout-1",
+        "routine_id": "routine-b",
+        "end_time": f"{date(2026, 9, 1).isoformat()}T10:00:00Z",
+        "exercises": [
+            {
+                "exercise_template_id": "bench",
+                "sets": [{"reps": 8, "weight_kg": 60.0}] * 3,
+            }
+        ],
+    }
+    ingested = client.post(
+        "/api/programmes/workouts/ingest", json={"workout": workout}
+    )
+    assert ingested.status_code == 200
+    assert ingested.json()["match_confidence"] == "high"
+
+    decisions = client.get("/api/programmes/decisions").json()["decisions"]
+    assert decisions
+    assert decisions[0]["rationale_codes"]
+
+    override = client.post(
+        "/api/programmes/overrides",
+        json={
+            "exercise_template_id": "bench",
+            "decision_type": "hold",
+            "prescription": {"sets": 4, "rep_range": "6-8"},
+            "start_week": 1,
+            "end_week": 12,
+        },
+    )
+    assert override.status_code == 200
+    override_id = override.json()["override"]["id"]
+    assert client.get("/api/programmes/overrides").json()["overrides"]
+
+    reverted = client.post(f"/api/programmes/overrides/{override_id}/revert")
+    assert reverted.status_code == 200
+    _app_module._RATE_LIMITS.clear()
+    assert client.get("/api/programmes/overrides").json()["overrides"] == []
+
+
+def test_lifecycle_drift_route_keeps_active_revision(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    preview = client.post("/api/programmes/preview", json=_payload()).json()["preview"]
+    client.post(
+        "/api/programmes/activate",
+        json={**_payload(), "preview_token": preview["preview_token"]},
+    )
+    drift = client.get("/api/programmes/drift")
+    assert drift.status_code == 200
+    active_revision_id = drift.json()["drift"]["revision_id"]
+
+    resolved = client.post(
+        "/api/programmes/drift/resolve", json={"action": "keep"}
+    )
+    assert resolved.status_code == 200
+    assert resolved.json()["action"] == "keep"
+    assert resolved.json()["revision"]["id"] == active_revision_id

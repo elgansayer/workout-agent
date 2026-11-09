@@ -21,7 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from config import Config
-from database import init_db, save_progress, save_workout
+from database import get_legacy_user_id, init_db, save_progress, save_workout
 from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
 
@@ -81,6 +81,15 @@ def sync_all(
     # Process from oldest to newest so history is built sequentially.
     workouts.reverse()
 
+    adaptation_user_id = user_id or get_legacy_user_id(db_path)
+    try:
+        from programme_lifecycle import get_active_revision, ingest_workout_event
+
+        adapt_enabled = get_active_revision(adaptation_user_id, db_path) is not None
+    except Exception:  # adaptation must not block a history rebuild
+        logger.debug("Programme adaptation is unavailable.", exc_info=True)
+        adapt_enabled = False
+
     saved_count = 0
     for w in workouts:
         # Wrap it so _first_workout parses it correctly.
@@ -97,6 +106,15 @@ def sync_all(
         if summary:
             save_progress(summary, db_path, user_id=user_id)
             saved_count += 1
+
+        if adapt_enabled:
+            try:
+                ingest_workout_event(adaptation_user_id, w, db_path)
+            except Exception:  # adaptation failure must not abort history rebuild
+                logger.exception(
+                    "Could not adapt programme from Hevy workout %s.",
+                    w.get("id"),
+                )
 
     logger.info("Finished rebuilding history. Processed %d workouts.", saved_count)
     return {"workouts_found": len(workouts), "processed": saved_count}
