@@ -1617,6 +1617,13 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "notifications",
         "user_preferences",
         "programmes",
+        "programme_revisions",
+        "programme_routines",
+        "programme_blocks",
+        "exercise_prescriptions",
+        "programme_week_states",
+        "adaptation_decisions",
+        "routine_workout_matches",
     )
     with sqlite3.connect(db, timeout=10) as conn:
         for table in user_owned_tables:

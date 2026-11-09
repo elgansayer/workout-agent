@@ -37,6 +37,10 @@ session.
 - `test_init_db_migration_idempotent` covers repeated initialization of the
   current schema.
 
+`backend/tests/test_programme_domain.py` additionally covers the additive
+Hevy-first programme domain migration, legacy static archive preservation,
+partial domain-schema replay, and immutable revision triggers.
+
 Run the focused migration gate from the repository root:
 
 ```bash

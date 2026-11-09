@@ -513,18 +513,531 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON programmes (user_id, active)",
         )
 
-        # Archive any previously active static template. Existing history stays
-        # intact, but the user must explicitly activate a Hevy-native programme.
+        # ---- Hevy-first programme domain: additive, idempotent migration ----
+        # The old programmes table remains the programme identity row so that
+        # existing history is preserved.  New normalized revisions and their
+        # child rows are the canonical domain; template_key/definition are only
+        # a temporary compatibility read path for unmigrated runtime callers.
+        cursor.execute("PRAGMA table_info(programmes)")
+        programme_columns = {row[1] for row in cursor.fetchall()}
+        domain_columns = {
+            "name": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'draft'",
+            "goal": "TEXT",
+            "duration_weeks": "INTEGER",
+            "start_date": "TEXT",
+            "end_date": "TEXT",
+            "current_revision_id": "INTEGER",
+            "activated_at": "TEXT",
+            "archived_at": "TEXT",
+            "predecessor_programme_id": "INTEGER REFERENCES programmes(id)",
+        }
+        had_status = "status" in programme_columns
+        had_name = "name" in programme_columns
+        for column, declaration in domain_columns.items():
+            if column not in programme_columns:
+                cursor.execute(
+                    f"ALTER TABLE programmes ADD COLUMN {column} {declaration}"
+                )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_revisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_number INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                engine_version TEXT NOT NULL,
+                settings_json TEXT NOT NULL DEFAULT '{}',
+                source_summary_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                UNIQUE(programme_id, revision_number)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_routines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                position INTEGER NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'hevy',
+                source_routine_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                folder_id TEXT,
+                provider_updated_at TEXT,
+                snapshot_hash TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                participation TEXT NOT NULL DEFAULT 'full',
+                cadence TEXT NOT NULL DEFAULT 'rotation',
+                source_conflict_state TEXT NOT NULL DEFAULT 'unchanged',
+                created_at TEXT NOT NULL,
+                UNIQUE(revision_id, position),
+                UNIQUE(revision_id, source_routine_id)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_blocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                position INTEGER NOT NULL,
+                key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                start_week INTEGER NOT NULL,
+                end_week INTEGER NOT NULL,
+                objective TEXT NOT NULL DEFAULT '',
+                targets_json TEXT NOT NULL DEFAULT '{}',
+                adaptation_policy_json TEXT NOT NULL DEFAULT '{}',
+                exit_criteria_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                UNIQUE(revision_id, position),
+                CHECK(start_week >= 1 AND end_week >= start_week)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS exercise_prescriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                routine_position INTEGER,
+                block_position INTEGER,
+                week_number INTEGER,
+                exercise_template_id TEXT NOT NULL,
+                exercise_title TEXT NOT NULL,
+                role TEXT NOT NULL,
+                set_target_json TEXT NOT NULL DEFAULT '{}',
+                rep_target_json TEXT NOT NULL DEFAULT '{}',
+                effort_target_json TEXT NOT NULL DEFAULT '{}',
+                load_anchor_json TEXT NOT NULL DEFAULT '{}',
+                rest_seconds INTEGER,
+                progression_method TEXT NOT NULL,
+                progression_rules_json TEXT NOT NULL DEFAULT '{}',
+                confidence REAL NOT NULL DEFAULT 0,
+                rule_version TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_week_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                week_number INTEGER NOT NULL,
+                planned_json TEXT NOT NULL DEFAULT '{}',
+                actual_json TEXT NOT NULL DEFAULT '{}',
+                adherence REAL,
+                fatigue REAL,
+                review_state TEXT NOT NULL DEFAULT 'planned',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(revision_id, week_number)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS adaptation_decisions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                from_revision_id INTEGER REFERENCES programme_revisions(id),
+                to_revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                scope_json TEXT NOT NULL DEFAULT '{}',
+                inputs_json TEXT NOT NULL DEFAULT '{}',
+                output_json TEXT NOT NULL DEFAULT '{}',
+                confidence REAL NOT NULL DEFAULT 0,
+                rule_version TEXT NOT NULL,
+                explanation TEXT NOT NULL DEFAULT '',
+                confirmed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS routine_workout_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+                routine_position INTEGER NOT NULL,
+                source_routine_id TEXT NOT NULL,
+                workout_id TEXT NOT NULL,
+                score REAL NOT NULL DEFAULT 0,
+                confidence REAL NOT NULL DEFAULT 0,
+                method TEXT NOT NULL,
+                user_confirmed INTEGER NOT NULL DEFAULT 0,
+                matcher_version TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(user_id, programme_id, workout_id)
+            )
+            """
+        )
+
+        # Complete a partially applied domain upgrade without rebuilding rows.
+        domain_table_columns: dict[str, dict[str, str]] = {
+            "programme_revisions": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_number": "INTEGER NOT NULL DEFAULT 1",
+                "reason": "TEXT NOT NULL DEFAULT 'legacy_migration'",
+                "engine_version": "TEXT NOT NULL DEFAULT 'legacy-json/v0'",
+                "settings_json": "TEXT NOT NULL DEFAULT '{}'",
+                "source_summary_json": "TEXT NOT NULL DEFAULT '{}'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "programme_routines": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_id": "INTEGER",
+                "position": "INTEGER NOT NULL DEFAULT 1",
+                "provider": "TEXT NOT NULL DEFAULT 'hevy'",
+                "source_routine_id": "TEXT NOT NULL DEFAULT ''",
+                "title": "TEXT NOT NULL DEFAULT ''",
+                "folder_id": "TEXT",
+                "provider_updated_at": "TEXT",
+                "snapshot_hash": "TEXT NOT NULL DEFAULT ''",
+                "snapshot_json": "TEXT NOT NULL DEFAULT '{}'",
+                "enabled": "INTEGER NOT NULL DEFAULT 1",
+                "participation": "TEXT NOT NULL DEFAULT 'full'",
+                "cadence": "TEXT NOT NULL DEFAULT 'rotation'",
+                "source_conflict_state": "TEXT NOT NULL DEFAULT 'unknown'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "programme_blocks": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_id": "INTEGER",
+                "position": "INTEGER NOT NULL DEFAULT 1",
+                "key": "TEXT NOT NULL DEFAULT ''",
+                "name": "TEXT NOT NULL DEFAULT ''",
+                "start_week": "INTEGER NOT NULL DEFAULT 1",
+                "end_week": "INTEGER NOT NULL DEFAULT 1",
+                "objective": "TEXT NOT NULL DEFAULT ''",
+                "targets_json": "TEXT NOT NULL DEFAULT '{}'",
+                "adaptation_policy_json": "TEXT NOT NULL DEFAULT '{}'",
+                "exit_criteria_json": "TEXT NOT NULL DEFAULT '{}'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "exercise_prescriptions": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_id": "INTEGER",
+                "routine_position": "INTEGER",
+                "block_position": "INTEGER",
+                "week_number": "INTEGER",
+                "exercise_template_id": "TEXT NOT NULL DEFAULT ''",
+                "exercise_title": "TEXT NOT NULL DEFAULT ''",
+                "role": "TEXT NOT NULL DEFAULT ''",
+                "set_target_json": "TEXT NOT NULL DEFAULT '{}'",
+                "rep_target_json": "TEXT NOT NULL DEFAULT '{}'",
+                "effort_target_json": "TEXT NOT NULL DEFAULT '{}'",
+                "load_anchor_json": "TEXT NOT NULL DEFAULT '{}'",
+                "rest_seconds": "INTEGER",
+                "progression_method": "TEXT NOT NULL DEFAULT 'double_progression'",
+                "progression_rules_json": "TEXT NOT NULL DEFAULT '{}'",
+                "confidence": "REAL NOT NULL DEFAULT 0",
+                "rule_version": "TEXT NOT NULL DEFAULT 'legacy-json/v0'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "programme_week_states": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_id": "INTEGER",
+                "week_number": "INTEGER NOT NULL DEFAULT 1",
+                "planned_json": "TEXT NOT NULL DEFAULT '{}'",
+                "actual_json": "TEXT NOT NULL DEFAULT '{}'",
+                "adherence": "REAL",
+                "fatigue": "REAL",
+                "review_state": "TEXT NOT NULL DEFAULT 'planned'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+                "updated_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "adaptation_decisions": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "from_revision_id": "INTEGER",
+                "to_revision_id": "INTEGER",
+                "scope_json": "TEXT NOT NULL DEFAULT '{}'",
+                "inputs_json": "TEXT NOT NULL DEFAULT '{}'",
+                "output_json": "TEXT NOT NULL DEFAULT '{}'",
+                "confidence": "REAL NOT NULL DEFAULT 0",
+                "rule_version": "TEXT NOT NULL DEFAULT 'legacy-json/v0'",
+                "explanation": "TEXT NOT NULL DEFAULT ''",
+                "confirmed": "INTEGER NOT NULL DEFAULT 0",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+            "routine_workout_matches": {
+                "user_id": "TEXT",
+                "programme_id": "INTEGER",
+                "revision_id": "INTEGER",
+                "routine_position": "INTEGER NOT NULL DEFAULT 1",
+                "source_routine_id": "TEXT NOT NULL DEFAULT ''",
+                "workout_id": "TEXT NOT NULL DEFAULT ''",
+                "score": "REAL NOT NULL DEFAULT 0",
+                "confidence": "REAL NOT NULL DEFAULT 0",
+                "method": "TEXT NOT NULL DEFAULT 'unknown'",
+                "user_confirmed": "INTEGER NOT NULL DEFAULT 0",
+                "matcher_version": "TEXT NOT NULL DEFAULT 'unknown'",
+                "created_at": "TEXT NOT NULL DEFAULT ''",
+            },
+        }
+        for table, column_declarations in domain_table_columns.items():
+            cursor.execute(f"PRAGMA table_info({table})")
+            existing_columns = {row[1] for row in cursor.fetchall()}
+            for column, declaration in column_declarations.items():
+                if column not in existing_columns:
+                    cursor.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+                    )
+
+        migration_now = datetime.now(tz=timezone.utc).isoformat()
+        if not had_name:
+            cursor.execute(
+                """
+                UPDATE programmes
+                SET name = COALESCE(
+                    NULLIF(name, ''),
+                    NULLIF(template_key, ''),
+                    'Programme ' || id
+                )
+                """
+            )
+        # Only infer lifecycle state on an upgrade where the column is new.
+        if not had_status:
+            cursor.execute(
+                """
+                UPDATE programmes
+                SET status = CASE WHEN active = 1 THEN 'active' ELSE 'archived' END
+                """
+            )
+
+        # Archive any previously active static template.  Existing rows stay
+        # inspectable through an immutable legacy_static revision, but no static
+        # programme is offered or seeded for new users.
         cursor.execute(
             """
             UPDATE programmes
             SET active = 0,
                 source = 'legacy_static',
+                status = 'archived',
+                archived_at = COALESCE(archived_at, ?),
                 updated_at = ?
-            WHERE active = 1
-              AND (source = 'template' OR template_key = 'hybrid_powerbuilding')
+            WHERE source = 'template'
+               OR template_key = 'hybrid_powerbuilding'
+               OR source = 'legacy_static'
             """,
-            (datetime.now(tz=timezone.utc).isoformat(),),
+            (migration_now, migration_now),
+        )
+
+        # Keep the domain status and the legacy active flag aligned while both
+        # read paths coexist.  Old callers only touched programmes.active, so a
+        # row can be inactive while its status still says 'active'.  Retire
+        # those stale statuses *before* promoting the newly active row: doing it
+        # the other way round collides with the partial one-active unique index
+        # on the next startup and blocks database initialisation.
+        cursor.execute(
+            """
+            UPDATE programmes
+            SET status = 'archived',
+                archived_at = COALESCE(archived_at, ?)
+            WHERE active = 0 AND status = 'active'
+            """,
+            (migration_now,),
+        )
+
+        # Collapse duplicate legacy active flags before promotion so the
+        # one-active invariant can never be violated by a partially upgraded
+        # database.  Prefer rows the domain already considers active, then the
+        # most recently updated row.
+        active_rows = cursor.execute(
+            """
+            SELECT id, user_id FROM programmes
+            WHERE active = 1
+            ORDER BY user_id ASC, (status = 'active') DESC,
+                     updated_at DESC, id DESC
+            """
+        ).fetchall()
+        seen_active_users: set[str] = set()
+        for programme_id, owner_id in active_rows:
+            if owner_id in seen_active_users:
+                cursor.execute(
+                    """
+                    UPDATE programmes
+                    SET status = 'archived', active = 0,
+                        archived_at = COALESCE(archived_at, ?), updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (migration_now, migration_now, programme_id, owner_id),
+                )
+            else:
+                seen_active_users.add(owner_id)
+
+        cursor.execute(
+            """
+            UPDATE programmes
+            SET status = 'active'
+            WHERE active = 1 AND status <> 'active'
+              AND source <> 'legacy_static'
+            """
+        )
+
+        # Preserve every pre-domain programme as an inspectable first revision.
+        legacy_programmes = cursor.execute(
+            """
+            SELECT p.id, p.user_id, p.source, p.template_key, p.definition,
+                   p.created_at
+            FROM programmes AS p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM programme_revisions AS r
+                WHERE r.programme_id = p.id AND r.user_id = p.user_id
+            )
+            """
+        ).fetchall()
+        for programme_id, owner_id, source, template_key, definition, created_at in (
+            legacy_programmes
+        ):
+            is_static = (
+                source in {"template", "legacy_static"}
+                or template_key == "hybrid_powerbuilding"
+            )
+            try:
+                settings = json.loads(definition) if definition else {}
+            except (TypeError, ValueError):
+                settings = {"legacy_definition": definition}
+            reason = "legacy_static" if is_static else "legacy_migration"
+            engine_version = "legacy-static" if is_static else "legacy-json/v0"
+            source_summary = {
+                "source": source,
+                "template_key": template_key,
+                "migration": reason,
+            }
+            revision_cursor = cursor.execute(
+                """
+                INSERT INTO programme_revisions
+                    (user_id, programme_id, revision_number, reason,
+                     engine_version, settings_json, source_summary_json,
+                     created_at)
+                VALUES (?, ?, 1, ?, ?, ?, ?, ?)
+                """,
+                (
+                    owner_id,
+                    programme_id,
+                    reason,
+                    engine_version,
+                    json.dumps(settings, default=str, sort_keys=True),
+                    json.dumps(source_summary, default=str, sort_keys=True),
+                    created_at or migration_now,
+                ),
+            )
+            cursor.execute(
+                "UPDATE programmes SET current_revision_id = ? "
+                "WHERE id = ? AND user_id = ?",
+                (revision_cursor.lastrowid, programme_id, owner_id),
+            )
+
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_programmes_one_active_per_user "
+            "ON programmes (user_id) WHERE status = 'active'"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programmes_user_status "
+            "ON programmes (user_id, status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_revisions_user_programme "
+            "ON programme_revisions (user_id, programme_id, revision_number)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_routines_user_revision "
+            "ON programme_routines (user_id, revision_id, position)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_blocks_user_revision "
+            "ON programme_blocks (user_id, revision_id, position)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_exercise_prescriptions_user_revision "
+            "ON exercise_prescriptions (user_id, revision_id, week_number)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_week_states_user_revision "
+            "ON programme_week_states (user_id, revision_id, week_number)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_adaptation_decisions_user_programme "
+            "ON adaptation_decisions (user_id, programme_id, id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_programme "
+            "ON routine_workout_matches (user_id, programme_id, id)"
+        )
+        # Recreate unique constraints as named indexes so partially upgraded
+        # databases get the same conflict targets as fresh databases.
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_programme_revisions_programme_number "
+            "ON programme_revisions (programme_id, revision_number)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_programme_routines_revision_position "
+            "ON programme_routines (revision_id, position)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_programme_routines_revision_source "
+            "ON programme_routines (revision_id, source_routine_id)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_programme_blocks_revision_position "
+            "ON programme_blocks (revision_id, position)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_programme_week_states_revision_week "
+            "ON programme_week_states (revision_id, week_number)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "uq_routine_workout_matches_user_programme_workout "
+            "ON routine_workout_matches (user_id, programme_id, workout_id)"
+        )
+
+        # Activated revisions are immutable at the database boundary, not only
+        # through service convention.  New revisions are inserted, never updated.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_programme_revisions_no_update
+            BEFORE UPDATE ON programme_revisions
+            BEGIN
+                SELECT RAISE(ABORT, 'programme revisions are immutable');
+            END
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_programme_revisions_no_delete
+            BEFORE DELETE ON programme_revisions
+            BEGIN
+                SELECT RAISE(ABORT, 'programme revisions are immutable');
+            END
+            """
         )
 
         # ---- Multi-tenant migration helper ----
