@@ -82,6 +82,7 @@ from dynamic_programme import (
     ProgrammeActivationRequest,
     ProgrammePreviewRequest,
     build_programme_preview,
+    detect_source_drift,
     goal_options,
     serialise_hevy_source,
 )
@@ -106,7 +107,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -1622,11 +1622,28 @@ def api_programmes(request: Request) -> JSONResponse:
                 "username": None,
             }
 
+    if active and active.get("source") == "hevy":
+        if connection["state"] == "connected":
+            source_drift = detect_source_drift(active.get("definition"), source)
+        else:
+            source_drift = {
+                "status": "source_unavailable",
+                "has_changes": False,
+                "routines": [],
+                "summary": {"renamed": 0, "content_changed": 0, "removed": 0},
+                "detail": (
+                    "Reconnect Hevy to check whether your selected routines have changed."
+                ),
+            }
+    else:
+        source_drift = detect_source_drift(None, source)
+
     return JSONResponse(
         jsonable_encoder(
             {
                 "active_programme": active,
                 "current_state": active,
+                "source_drift": source_drift,
                 "templates": [],
                 "connection": connection,
                 "source": source,

@@ -222,6 +222,33 @@
   margin: 0.3rem 0;
 }
 
+.drift-list {
+  display: grid;
+  gap: 0.6rem;
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+
+.drift-list li {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.drift-list li p {
+  flex-basis: 100%;
+}
+
+.drift-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
+
 .block-timeline,
 .routine-preview-grid {
   display: grid;
