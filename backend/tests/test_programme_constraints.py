@@ -29,6 +29,8 @@ from hevy_reader import (
     Routine,
     RoutineExercise,
 )
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from itsdangerous import TimestampSigner
 from program import BLOCKS, COACHING_RULES, TOTAL_DAYS, day_exercises
 from programme_inference import infer_programme
@@ -296,7 +298,7 @@ def test_validator_runs_on_import_routines() -> None:
 
 def test_validator_runs_on_edit_preferences(tmp_path: Any, monkeypatch: Any) -> None:
     """Validator runs when user edits preferences/constraints, checking active programme."""
-    client, _app, _db_file = _client(tmp_path, monkeypatch)
+    client, _app, db_file = _client(tmp_path, monkeypatch)
 
     # Activate a programme first
     preview_res = client.post("/api/programmes/preview", json=_payload())
@@ -313,6 +315,9 @@ def test_validator_runs_on_edit_preferences(tmp_path: Any, monkeypatch: Any) -> 
     assert "blocking_violations" in data
     assert len(data["blocking_violations"]) > 0
     assert any(v["exercise"] in {"Bench Press", "Row"} for v in data["blocking_violations"])
+    assert data["reconciliation"]["status"] == "deactivated_requires_remediation"
+    legacy_uid = database.get_legacy_user_id(db_file)
+    assert database.get_active_programme(legacy_uid, db_file) is None
 
 
 def test_validator_runs_on_inference() -> None:
@@ -383,15 +388,22 @@ def test_structured_rules_block_activation_with_readable_detail(
 
     preview_res = client.post("/api/programmes/preview", json=_payload())
     preview = preview_res.json()["preview"]
-    assert any("prohibited exercise 'Bench Press'" in v for v in preview["blocking_violations"])
+    assert any(
+        v["exercise"] == "Bench Press"
+        and "Prohibited exercise" in v["rule"]
+        and v["permitted_remediation"]
+        for v in preview["blocking_violations"]
+    )
 
     activate_res = client.post(
         "/api/programmes/activate",
         json={**_payload(), "preview_token": preview["preview_token"]},
     )
     assert activate_res.status_code == 422
-    assert "Activation blocked by training rules" in activate_res.json()["detail"]
-    assert "Bench Press" in activate_res.json()["detail"]
+    detail = activate_res.json()["detail"]
+    assert "Activation blocked by profile constraint" in detail
+    assert "Bench Press" in detail
+    assert "Permitted remediation:" in detail
 
 
 # ---------------------------------------------------------------------------
@@ -567,3 +579,301 @@ def test_request_constraints_add_to_stored_profile_rules(
     stricter = {**_payload(goal="maximal_strength"), "constraints": ["min_reps: 6"]}
     preview = client.post("/api/programmes/preview", json=stricter).json()["preview"]
     assert any(v["rule"] == "min_reps: 6" for v in preview["blocking_violations"])
+
+
+# ---------------------------------------------------------------------------
+# Structured (versioned) training rules are enforced by the shared validator
+# ---------------------------------------------------------------------------
+
+
+def test_structured_rep_bounds_block_preview_with_exact_fields() -> None:
+    """Versioned rep bounds block preview with exact prescription and remediation."""
+    data = _training_data()
+    rules = {
+        "version": 2,
+        "rep_intensity_bounds": {"min_reps": 6, "max_reps": 20},
+    }
+    req = ProgrammePreviewRequest(
+        selected_routine_ids=["routine-a", "routine-b"],
+        goal="maximal_strength",
+        duration_weeks=12,
+        rules=rules,
+    )
+    preview = build_programme_preview(data, req)
+    assert preview["blocking_violations"]
+    for violation in preview["blocking_violations"]:
+        assert violation["exercise"]
+        assert violation["prescription"]
+        assert violation["rule"]
+        assert violation["permitted_remediation"]
+        assert violation["remediation"] == violation["permitted_remediation"]
+    assert any(
+        "Structured rule" in v["rule"] and "reps" in v["prescription"]
+        for v in preview["blocking_violations"]
+    )
+
+
+def test_structured_volume_frequency_equipment_and_intensity_rules() -> None:
+    """Structured volume, frequency, equipment, and RPE rules all block deterministically."""
+    programme = {
+        "days": [
+            {
+                "focus": "Push",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "equipment": "barbell",
+                        "prescriptions": [
+                            {"sets": 5, "rep_range": "8-12", "target_rpe": 9}
+                        ],
+                    }
+                ],
+            },
+            {
+                "focus": "Pull",
+                "exercises": [
+                    {
+                        "name": "Chest-supported row",
+                        "equipment": "machine",
+                        "prescriptions": [{"sets": 4, "rep_range": "10-12"}],
+                    }
+                ],
+            },
+        ]
+    }
+    rules = {
+        "version": 1,
+        "rep_intensity_bounds": {"max_rpe": 8},
+        "volume": {"max_sets_per_exercise": 3, "max_sets_per_workout": 4},
+        "frequency": {"max_sessions_per_week": 1},
+        "equipment": {"prohibited_equipment": ["machine"]},
+    }
+    result = validate_programme(programme, training_rules=rules)
+    assert result.is_valid is False
+    rules_hit = [v["rule"] for v in result.blocking_violations]
+    assert any("per exercise" in rule for rule in rules_hit)
+    assert any("per workout" in rule for rule in rules_hit)
+    assert any("sessions per week" in rule for rule in rules_hit)
+    assert any("Prohibited equipment" in rule for rule in rules_hit)
+    assert any("maximum RPE" in rule for rule in rules_hit)
+    for violation in result.blocking_violations:
+        assert violation["exercise"]
+        assert violation["prescription"]
+        assert violation["permitted_remediation"]
+
+
+def test_structured_substitution_blocks_until_applied() -> None:
+    """A mandatory substitution blocks activation until the source exercise is replaced."""
+    programme = {
+        "days": [
+            {
+                "focus": "Push",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "prescriptions": [{"sets": 3, "rep_range": "8-12"}],
+                    }
+                ],
+            }
+        ]
+    }
+    rules = {
+        "version": 1,
+        "substitutions": [
+            {"from_exercise": "Bench Press", "to_exercise": "Dumbbell Bench Press"}
+        ],
+        "contextual_notes": [
+            {
+                "category": "joint",
+                "note": "Right shoulder impingement",
+                "severity": "warning",
+            }
+        ],
+    }
+    result = validate_programme(programme, training_rules=rules)
+    assert result.is_valid is False
+    assert result.blocking_violations == [
+        {
+            "exercise": "Bench Press",
+            "prescription": "Prescribed in routine 'Push'",
+            "rule": "Substitute Bench Press with Dumbbell Bench Press",
+            "permitted_remediation": "Replace Bench Press with Dumbbell Bench Press.",
+            "remediation": "Replace Bench Press with Dumbbell Bench Press.",
+            "block_number": None,
+            "routine": "Push",
+        }
+    ]
+    assert any(
+        "Right shoulder impingement" in warning for warning in result.warnings
+    )
+
+
+def test_structured_rules_apply_to_inference_and_source_import() -> None:
+    """The same structured validator runs for inference and source serialisation."""
+    data = _training_data(include_banned=True)
+    rules = {
+        "version": 1,
+        "prohibited_exercises": [
+            {"exercise": "Bulgarian Split Squats", "reason": "Knees"}
+        ],
+    }
+    inferred = infer_programme(data, training_rules=rules)
+    assert inferred.blocking_violations
+    assert inferred.blocking_violations[0]["exercise"] == "Bulgarian Split Squats"
+
+    source = serialise_hevy_source(data, training_rules=rules)
+    assert source["blocking_violations"]
+    assert source["blocking_violations"][0]["exercise"] == "Bulgarian Split Squats"
+    assert source["blocking_violations"][0]["permitted_remediation"]
+
+
+def test_request_structured_rules_cannot_bypass_stored_rules(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """Client-supplied rules cannot clear the user's stored structured rules."""
+    client, _app, db_file = _client(tmp_path, monkeypatch)
+    legacy_uid = database.get_legacy_user_id(db_file)
+    database.save_training_rules(
+        legacy_uid,
+        {
+            "version": 1,
+            "prohibited_exercises": [
+                {"exercise": "Bench Press", "reason": "Shoulder"}
+            ],
+        },
+        db_path=db_file,
+    )
+
+    preview_res = client.post(
+        "/api/programmes/preview",
+        json={**_payload(), "rules": {}},
+    )
+    assert preview_res.status_code == 200
+    preview = preview_res.json()["preview"]
+    assert any(
+        v["exercise"] == "Bench Press"
+        for v in preview["blocking_violations"]
+    )
+
+
+def test_edit_training_rules_reconciles_active_programme(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    """Saving structured rules reconciles the live programme and reports violations."""
+    client, _app, db_file = _client(tmp_path, monkeypatch)
+
+    preview_res = client.post("/api/programmes/preview", json=_payload())
+    token = preview_res.json()["preview"]["preview_token"]
+    activate_res = client.post(
+        "/api/programmes/activate",
+        json={**_payload(), "preview_token": token},
+    )
+    assert activate_res.status_code == 200
+
+    conflict = client.post(
+        "/api/settings/rules",
+        json={
+            "version": 1,
+            "prohibited_exercises": [
+                {"exercise": "Bench Press", "reason": "Shoulder"}
+            ],
+        },
+    )
+    assert conflict.status_code == 200
+    body = conflict.json()
+    assert any(
+        v["exercise"] == "Bench Press" and v["permitted_remediation"]
+        for v in body["blocking_violations"]
+    )
+    assert body["reconciliation"]["status"] == "deactivated_requires_remediation"
+    legacy_uid = database.get_legacy_user_id(db_file)
+    assert database.get_active_programme(legacy_uid, db_file) is None
+
+    reconciled = client.post(
+        "/api/settings/rules",
+        json={"version": 2, "frequency": {"max_sessions_per_week": 7}},
+    )
+    assert reconciled.status_code == 200
+    assert "blocking_violations" not in reconciled.json()
+
+
+def test_seeded_canonical_programme_reconciled_with_structured_rules(
+    tmp_path: Any,
+) -> None:
+    """Seeded canonical defaults pass compatible rules and refuse contradictory ones."""
+    db_file = str(tmp_path / "canonical.db")
+    database.init_db(db_file)
+    legacy_uid = database.get_legacy_user_id(db_file)
+
+    prog_id = database.seed_canonical_programme(legacy_uid, db_file)
+    assert prog_id > 0
+
+    database.save_training_rules(
+        legacy_uid,
+        {"version": 1, "frequency": {"max_sessions_per_week": 1}},
+        db_path=db_file,
+    )
+    assert database.get_active_programme(legacy_uid, db_file) is None
+    with pytest.raises(ValueError, match="Activation blocked by profile constraint"):
+        database.seed_canonical_programme(legacy_uid, db_file)
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    min_reps=st.integers(min_value=1, max_value=20),
+    reps=st.integers(min_value=1, max_value=30),
+    sets=st.integers(min_value=1, max_value=10),
+    max_sets=st.integers(min_value=1, max_value=10),
+)
+def test_validator_property_violations_are_exact_and_deterministic(
+    min_reps: int,
+    reps: int,
+    sets: int,
+    max_sets: int,
+) -> None:
+    """Validator output is deterministic and every violation identifies its prescription."""
+    programme = {
+        "days": [
+            {
+                "focus": "Property day",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "prescriptions": [
+                            {"sets": sets, "rep_range": str(reps)}
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+    rules = {
+        "version": 1,
+        "rep_intensity_bounds": {"min_reps": min_reps},
+        "volume": {"max_sets_per_exercise": max_sets},
+    }
+
+    first = validate_programme(programme, training_rules=rules)
+    second = validate_programme(programme, training_rules=rules)
+    assert first.model_dump() == second.model_dump()
+
+    rep_violated = reps < min_reps
+    sets_violated = sets > max_sets
+    assert first.is_valid is (not rep_violated and not sets_violated)
+
+    for violation in first.blocking_violations:
+        for key in ("exercise", "prescription", "rule", "permitted_remediation"):
+            assert isinstance(violation[key], str) and violation[key]
+
+    if rep_violated:
+        assert any(
+            "reps" in violation["prescription"]
+            and "Structured rule" in violation["rule"]
+            for violation in first.blocking_violations
+        )
+    if sets_violated:
+        assert any(
+            "sets" in violation["prescription"]
+            and "Structured rule" in violation["rule"]
+            for violation in first.blocking_violations
+        )

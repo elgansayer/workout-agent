@@ -293,6 +293,7 @@ def _determine_next_routine(
 def infer_programme(
     hevy_data: HevyTrainingData,
     profile_rules: Any = None,
+    training_rules: Any = None,
 ) -> InferredProgramme:
     """Build an InferredProgramme from the user's Hevy training data.
 
@@ -300,7 +301,11 @@ def infer_programme(
     derived from what the user actually has in their Hevy account.
     """
     programme = InferredProgramme()
-    validation = validate_programme(hevy_data.routines, profile_rules=profile_rules)
+    validation = validate_programme(
+        hevy_data.routines,
+        profile_rules=profile_rules,
+        training_rules=training_rules,
+    )
     programme.blocking_violations = validation.blocking_violations
 
     # Build training days from routines.

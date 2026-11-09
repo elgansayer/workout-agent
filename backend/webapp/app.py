@@ -1193,8 +1193,8 @@ def _block_lift_str(lift: dict | None) -> str:
 def _blocking_violation_detail(violation: Any) -> str:
     """Render a blocking violation for an API error, accepting both shapes.
 
-    Deterministic profile validation emits structured dicts; structured training
-    rules emit plain-text messages. Both must produce a readable 422 detail.
+    The shared validator emits structured dicts; legacy callers may still pass
+    plain-text messages. Both must produce a readable 422 detail.
     """
     if isinstance(violation, dict):
         return (
@@ -1217,8 +1217,7 @@ def preview_programme(
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
     profile_rules = prefs.get("constraints")
-    if not payload.rules:
-        payload.rules = get_training_rules(user_id, DB_PATH)
+    payload.rules = get_training_rules(user_id, DB_PATH)
     try:
         preview = build_programme_preview(
             training_data,
@@ -1242,8 +1241,7 @@ def activate_programme(
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
-    if not payload.rules:
-        payload.rules = get_training_rules(user_id, DB_PATH)
+    payload.rules = get_training_rules(user_id, DB_PATH)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
     )
@@ -1360,6 +1358,7 @@ async def select_programme(request: Request) -> JSONResponse:
                 body.get("adaptation_aggressiveness") or "balanced"
             ),
         )
+        preview_request.rules = get_training_rules(user_id, DB_PATH)
         prefs = get_user_preferences(user_id, DB_PATH)
         profile_rules = prefs.get("constraints")
         preview = build_programme_preview(
@@ -2093,6 +2092,10 @@ async def save_preferences(request: Request) -> dict[str, Any]:
                 status_code=400, detail=f"Invalid training rules: {exc}"
             )
 
+    active_before = None
+    if body.get("constraints") is not None or training_rules_payload is not None:
+        active_before = get_active_programme(user_id, DB_PATH)
+
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
@@ -2106,17 +2109,37 @@ async def save_preferences(request: Request) -> dict[str, Any]:
         db_path=DB_PATH,
     )
 
-    # Edit lifecycle: validate existing active programme against edited profile constraints
+    # Edit lifecycle: validate the existing active programme against the edited
+    # legacy constraints and the versioned structured training rules.
     response: dict[str, Any] = {"status": "ok"}
-    if body.get("constraints") is not None:
-        active = get_active_programme(user_id, DB_PATH)
+    if body.get("constraints") is not None or training_rules_payload is not None:
+        effective_constraints = body.get("constraints")
+        effective_training_rules = training_rules_payload
+        if effective_constraints is None or effective_training_rules is None:
+            stored_prefs = get_user_preferences(user_id, DB_PATH)
+            if effective_constraints is None:
+                effective_constraints = stored_prefs.get("constraints")
+            if effective_training_rules is None:
+                effective_training_rules = get_training_rules(user_id, DB_PATH)
+        active = active_before
         if active and active.get("definition"):
             val = validate_programme(
                 active["definition"],
-                profile_rules=body.get("constraints"),
+                profile_rules=effective_constraints,
+                training_rules=effective_training_rules,
             )
             if val.blocking_violations:
                 response["blocking_violations"] = val.blocking_violations
+                response["reconciliation"] = {
+                    "status": "deactivated_requires_remediation",
+                    "message": (
+                        "The active programme contradicts the updated profile "
+                        "constraints, was deactivated, and must be regenerated "
+                        "before activation."
+                    ),
+                }
+            else:
+                response["reconciliation"] = {"status": "reconciled"}
 
     return response
 
@@ -2137,10 +2160,33 @@ async def save_user_training_rules(request: Request) -> JSONResponse:
     body = await request.json()
     try:
         validated = StructuredTrainingRules.model_validate(body)
-        saved = save_training_rules(user_id, validated, DB_PATH)
-        return JSONResponse(jsonable_encoder({"status": "ok", "rules": saved}))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Invalid training rules: {exc}")
+    active = get_active_programme(user_id, DB_PATH)
+    validation = None
+    if active and active.get("definition"):
+        prefs = get_user_preferences(user_id, DB_PATH)
+        validation = validate_programme(
+            active["definition"],
+            profile_rules=prefs.get("constraints"),
+            training_rules=validated,
+        )
+    saved = save_training_rules(user_id, validated, DB_PATH)
+
+    response: dict[str, Any] = {"status": "ok", "rules": saved}
+    if validation is not None:
+        if validation.blocking_violations:
+            response["blocking_violations"] = validation.blocking_violations
+            response["reconciliation"] = {
+                "status": "deactivated_requires_remediation",
+                "message": (
+                    "The active programme contradicts the saved training rules "
+                    "and was deactivated. Regenerate it before activation."
+                ),
+            }
+        else:
+            response["reconciliation"] = {"status": "reconciled"}
+    return JSONResponse(jsonable_encoder(response))
 
 
 @app.post("/api/settings/push-subscribe")
@@ -2581,6 +2627,7 @@ def api_programmes(request: Request) -> JSONResponse:
             source = serialise_hevy_source(
                 training_data,
                 profile_rules=prefs.get("constraints"),
+                training_rules=get_training_rules(user_id, DB_PATH),
             )
             connection = {
                 "state": "connected",

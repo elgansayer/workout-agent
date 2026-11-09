@@ -1765,6 +1765,56 @@ def test_training_rules_multi_tenant_isolation_and_versioning(tmp_path: Any) -> 
     assert u2_rules["contextual_notes"] == []
 
 
+def test_conflicting_profile_updates_deactivate_only_the_owners_programme(
+    tmp_path: Any,
+) -> None:
+    from database import (
+        get_active_programme,
+        save_training_rules,
+        save_user_preferences,
+        set_active_programme,
+    )
+
+    db = _db(tmp_path)
+    init_db(db)
+    u1 = get_or_create_user("rules-owner@example.com", db_path=db)["id"]
+    u2 = get_or_create_user("other-owner@example.com", db_path=db)["id"]
+    definition = {
+        "name": "Tenant-safe programme",
+        "days": [
+            {
+                "focus": "Push",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "prescriptions": [{"sets": 3, "rep_range": "8-12"}],
+                    }
+                ],
+            }
+        ],
+    }
+    set_active_programme(u1, "hevy", "u1-programme", definition, db_path=db)
+    set_active_programme(u2, "hevy", "u2-programme", definition, db_path=db)
+
+    save_training_rules(
+        u1,
+        {
+            "version": 1,
+            "prohibited_exercises": [
+                {"exercise": "Bench Press", "reason": "Shoulder"}
+            ],
+        },
+        db_path=db,
+    )
+
+    assert get_active_programme(u1, db_path=db) is None
+    assert get_active_programme(u2, db_path=db) is not None
+
+    save_user_preferences(u2, constraints=["min_reps: 20"], db_path=db)
+
+    assert get_active_programme(u2, db_path=db) is None
+
+
 def test_account_policy_schema_is_added_idempotently_to_a_pre_existing_users_table(
     tmp_path: Any,
 ) -> None:

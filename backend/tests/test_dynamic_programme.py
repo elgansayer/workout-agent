@@ -299,8 +299,19 @@ def test_programme_preview_flags_prohibited_exercises(
     preview = build_programme_preview(training_data, request)
 
     assert len(preview["blocking_violations"]) > 0
-    assert any("prohibited exercise 'Squat'" in v for v in preview["blocking_violations"])
-    assert any("mandatory substitution to 'Dumbbell Press'" in w for w in preview["warnings"])
+    assert any(
+        v["exercise"] == "Squat"
+        and "Prohibited exercise" in v["rule"]
+        and "Knee injury" in v["rule"]
+        and v["permitted_remediation"]
+        for v in preview["blocking_violations"]
+    )
+    assert any(
+        "Bench Press" in w
+        and "Dumbbell Press" in w
+        and "Permitted remediation" in w
+        for w in preview["warnings"]
+    )
 
 
 

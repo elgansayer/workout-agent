@@ -241,6 +241,42 @@ describe('Settings AI provider parity', () => {
     expect(component.trainingRules()?.version).toBe(3);
   });
 
+  it('shows active programme violations and remediation after conflicting rules', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+
+    component.saveTrainingRules();
+
+    const request = http.expectOne('/api/settings/rules');
+    request.flush({
+      status: 'ok',
+      rules: {
+        ...request.request.body,
+        version: 3,
+      },
+      blocking_violations: [
+        {
+          exercise: 'Bench Press',
+          prescription: '8-12 reps',
+          rule: 'Structured rule: minimum 12 reps',
+          permitted_remediation: 'Increase prescribed rep range to at least 12 reps.',
+        },
+      ],
+      reconciliation: {
+        status: 'requires_remediation',
+        message: 'The active programme contradicts the saved training rules.',
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(component.ruleViolations().length).toBe(1);
+    expect(component.rulesStatus()).toContain('contradicts the saved training rules');
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.textContent).toContain('Bench Press');
+    expect(element.textContent).toContain('Permitted remediation:');
+  });
+
   it('includes structured rules in savePreferences profile payload', async () => {
     const fixture = await loadSettings();
     const component = fixture.componentInstance;

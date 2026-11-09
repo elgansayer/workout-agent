@@ -694,6 +694,20 @@
           </button>
           <div id="rules-status" class="key-status text-xs" role="status">{{ rulesStatus() }}</div>
         </div>
+
+        @if (ruleViolations().length > 0) {
+          <div class="panel error-panel" role="alert" aria-live="polite">
+            <strong>Active programme violates the saved constraints:</strong>
+            <ul>
+              @for (violation of ruleViolations(); track violation.exercise + violation.prescription + violation.rule) {
+                <li>
+                  <strong>{{ violation.exercise }}:</strong> {{ violation.prescription }} violates <em>{{ violation.rule }}</em>.
+                  <div><strong>Permitted remediation:</strong> {{ violation.permitted_remediation }}</div>
+                </li>
+              }
+            </ul>
+          </div>
+        }
       </fieldset>
 
       <div class="btn-row">
