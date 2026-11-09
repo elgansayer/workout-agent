@@ -193,7 +193,13 @@ export class Programmes implements OnInit {
 
   activatePreview(): void {
     const preview = this.preview();
-    if (!preview || this.activating() || this.previewing() || this.refreshing()) {
+    if (
+      !preview ||
+      (preview.blocking_violations && preview.blocking_violations.length > 0) ||
+      this.activating() ||
+      this.previewing() ||
+      this.refreshing()
+    ) {
       return;
     }
     this.error.set(null);

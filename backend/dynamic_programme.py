@@ -15,7 +15,9 @@ from typing import Any, Literal
 
 from hevy_reader import HevyTrainingData, Routine, RoutineExercise
 from programme_inference import infer_programme
+from programme_validator import validate_programme
 from pydantic import BaseModel, Field
+from training_rules import StructuredTrainingRules
 
 ENGINE_VERSION = "hevy-programme-v1"
 MIN_DURATION_WEEKS = 4
@@ -47,6 +49,8 @@ class ProgrammePreviewRequest(BaseModel):
     experience: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     max_session_minutes: int | None = Field(default=None, ge=20, le=240)
     adaptation_aggressiveness: Aggressiveness = "balanced"
+    constraints: list[Any] | dict[str, Any] | None = None
+    rules: dict[str, Any] | None = None
 
 
 class ProgrammeActivationRequest(ProgrammePreviewRequest):
@@ -371,11 +375,14 @@ def _serialise_routine(routine: Routine, data: HevyTrainingData) -> dict[str, An
     }
 
 
-def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
+def serialise_hevy_source(
+    data: HevyTrainingData,
+    profile_rules: Any = None,
+) -> dict[str, Any]:
     """Return the exact selectable Hevy source view used by the builder."""
 
     routines = [_serialise_routine(routine, data) for routine in data.routines]
-    return {
+    payload = {
         "username": data.username,
         "workout_count": data.workout_count,
         "routine_count": len(routines),
@@ -386,6 +393,9 @@ def serialise_hevy_source(data: HevyTrainingData) -> dict[str, Any]:
         ],
         "routines": routines,
     }
+    validation = validate_programme(payload, profile_rules=profile_rules)
+    payload["blocking_violations"] = validation.blocking_violations
+    return payload
 
 
 def _allocate_phase_weeks(
@@ -687,6 +697,7 @@ def _prescriptions_for_exercise(
 def build_programme_preview(
     data: HevyTrainingData,
     request: ProgrammePreviewRequest,
+    profile_rules: Any = None,
 ) -> dict[str, Any]:
     """Build a deterministic, source-bound programme preview."""
 
@@ -812,6 +823,41 @@ def build_programme_preview(
             "No reliable recent frequency was detected; the selected routine count is used as the initial weekly cadence."
         )
 
+    blocking_violations: list[str] = []
+    if request.rules:
+        try:
+            rules_obj = StructuredTrainingRules.from_raw(request.rules)
+            prohib_set = {
+                p.exercise.strip().lower(): p
+                for p in rules_obj.prohibited_exercises
+                if p.exercise.strip()
+            }
+            sub_set = {
+                s.from_exercise.strip().lower(): s
+                for s in rules_obj.substitutions
+                if s.from_exercise.strip()
+            }
+            for source_routine in source_snapshots:
+                for ex in source_routine.get("exercises", []):
+                    name_lower = ex["title"].strip().lower()
+                    if name_lower in sub_set:
+                        sub = sub_set[name_lower]
+                        warnings.append(
+                            f"Routine '{source_routine['title']}' contains '{ex['title']}' "
+                            f"which has a mandatory substitution to '{sub.to_exercise}'."
+                        )
+                    elif name_lower in prohib_set:
+                        p_rule = prohib_set[name_lower]
+                        reason_str = f" ({p_rule.reason})" if p_rule.reason else ""
+                        blocking_violations.append(
+                            f"Routine '{source_routine['title']}' contains prohibited exercise "
+                            f"'{ex['title']}'{reason_str}."
+                        )
+        except Exception as exc:
+            raise ValueError(
+                f"Invalid structured training rules; constraint check failed: {exc}"
+            ) from exc
+
     programme_spec = {
         **request.model_dump(mode="json"),
         "selected_routine_ids": list(request.selected_routine_ids),
@@ -834,7 +880,7 @@ def build_programme_preview(
     }
     preview_token = _canonical_hash(token_inputs)
 
-    return {
+    preview_result: dict[str, Any] = {
         "name": f"{_GOALS[request.goal]['label']} · Hevy routines",
         "source": "hevy",
         "engine_version": ENGINE_VERSION,
@@ -847,7 +893,7 @@ def build_programme_preview(
         "blocks": blocks,
         "days": days,
         "warnings": warnings,
-        "blocking_violations": [],
+        "blocking_violations": blocking_violations,
         "assumptions": assumptions,
         "rules": [
             "Progressions are deterministic, modality-aware and bounded.",
@@ -855,3 +901,23 @@ def build_programme_preview(
             "Low-confidence or structurally changed source data must be reviewed rather than silently merged.",
         ],
     }
+
+    # Stored profile rules always apply; request constraints may only add rules.
+    # Structured-rule violations found above are preserved alongside the
+    # deterministic profile validator's findings rather than replaced.
+    validation = validate_programme(preview_result, profile_rules=profile_rules)
+    if request.constraints is not None:
+        extra = validate_programme(preview_result, profile_rules=request.constraints)
+        validation.blocking_violations.extend(
+            v for v in extra.blocking_violations if v not in validation.blocking_violations
+        )
+        validation.warnings.extend(w for w in extra.warnings if w not in validation.warnings)
+    preview_result["blocking_violations"] = blocking_violations + [
+        v for v in validation.blocking_violations if v not in blocking_violations
+    ]
+    if validation.warnings:
+        preview_warnings = preview_result.get("warnings")
+        if isinstance(preview_warnings, list):
+            preview_warnings.extend(validation.warnings)
+
+    return preview_result

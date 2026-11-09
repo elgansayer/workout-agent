@@ -2,16 +2,18 @@ import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 @Component({
   selector: 'app-checkins',
   standalone: true,
-  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports],
+  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports, SetupNotice],
   templateUrl: './checkins.html',
   styleUrl: './checkins.css',
 })
@@ -22,6 +24,20 @@ export class Checkins implements OnInit {
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
+  setup = signal<SetupState | null>(null);
+
+  readonly hasData = computed(() => (this.data()?.checkins?.length ?? 0) > 0);
+
+  readonly setupReady = computed(() => (this.setup()?.state ?? 'ready') === 'ready');
+
+  readonly viewState = computed<ViewState>(() =>
+    resolveViewState({
+      loading: this.loading(),
+      error: this.error(),
+      hasData: this.hasData(),
+      stale: this.setup()?.stale ?? false,
+    }),
+  );
 
   readonly entries = new PagedList<any>(
     () => this.data()?.checkins ?? [],
@@ -39,9 +55,10 @@ export class Checkins implements OnInit {
     this.http.get('/api/checkins').subscribe({
       next: (data: any) => {
         this.data.set(data);
+        this.setup.set(data?.setup ?? null);
         this.loading.set(false);
       },
-      error: (err) => {
+      error: () => {
         this.error.set('Failed to load checkins data');
         this.loading.set(false);
       },
