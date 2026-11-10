@@ -49,6 +49,8 @@ Core rules:
 
 The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI.
 
+Sign-ins, failed sign-ins, session revocation, credential and connector changes, deletions and permission changes are recorded in an append-only, hash-chained audit trail, and anomaly alert rules watch it for repeated failures, disabled production authentication, unusual exports and connector abuse. See [Security audit logging](docs/SECURITY_AUDIT_LOGGING.md).
+
 ## Synthetic example programme
 
 The repository includes `current-workout.md` only as a synthetic demonstration of a programme-shaped document. It is not a real person's programme and must remain marked with `synthetic-profile: true`.
@@ -123,6 +125,7 @@ Authentication and integration credentials are configured through environment va
 - `WEB_AUTH_SECRET`
 - `WEB_GOOGLE_CLIENT_ID`
 - `WEB_GOOGLE_CLIENT_SECRET`
+- `AUDIT_LOG_HMAC_KEY` (optional dedicated key for the security audit chain)
 - `ALLOWED_EMAILS` and `INVITE_ONLY` (who may sign in; see below)
 - `HEVY_API_KEY`
 - AI-provider credentials

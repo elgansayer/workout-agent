@@ -115,6 +115,7 @@ EPHEMERAL_TABLES: tuple[str, ...] = (
     "user_sessions",
     "user_identities",
     "credential_audit_events",
+    "security_audit_events",
 )
 
 # ``database.init_db()`` re-creates these two defaults for the legacy tenant on

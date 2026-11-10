@@ -31,3 +31,7 @@ ad3e08a9346d3debaff28f9093a33fbfa65552b2:backend/tests/test_secret_vault.py:gene
 ad3e08a9346d3debaff28f9093a33fbfa65552b2:backend/tests/test_secret_vault.py:generic-api-key:244
 ad3e08a9346d3debaff28f9093a33fbfa65552b2:backend/tests/test_secret_vault.py:generic-api-key:261
 ad3e08a9346d3debaff28f9093a33fbfa65552b2:backend/tests/test_secret_vault.py:generic-api-key:344
+2a58c12d109e8d90b655d08e0f48d9569072b4f4:backend/tests/test_security_audit.py:jwt:211
+2a58c12d109e8d90b655d08e0f48d9569072b4f4:backend/tests/test_security_audit_routes.py:generic-api-key:380
+7534ff6e4890ea673df55a6dfcd09141e89b14a9:backend/tests/test_security_audit.py:jwt:211
+7534ff6e4890ea673df55a6dfcd09141e89b14a9:backend/tests/test_security_audit_routes.py:generic-api-key:320

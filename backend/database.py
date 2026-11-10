@@ -22,6 +22,7 @@ from canonical_programme import (
     CANONICAL_TEMPLATE_KEY,
     get_canonical_programme_definition,
 )
+from security_audit import ensure_schema as ensure_security_audit_schema
 from tenancy import (
     LEGACY_TENANT_EMAIL,
     TenantRequiredError,
@@ -1717,6 +1718,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         _install_owner_guards(cursor)
         if legacy is not None and not implicit:
             _warn_if_legacy_data_unclaimed(cursor, legacy)
+
+        # Append-only, hash-chained security audit trail (see security_audit.py).
+        ensure_security_audit_schema(conn)
 
 
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:

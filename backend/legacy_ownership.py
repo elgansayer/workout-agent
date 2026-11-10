@@ -127,6 +127,9 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
     "csrf_tokens": "ephemeral, session-bound anti-forgery tokens that expire",
     "user_sessions": "ephemeral browser sessions never outlive the account",
     "credential_audit_events": "append-only security audit trail, not tenant data",
+    "security_audit_events": (
+        "append-only, hash-chained security audit trail; attribution is immutable"
+    ),
 }
 
 

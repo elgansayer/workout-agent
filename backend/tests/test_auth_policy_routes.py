@@ -179,7 +179,10 @@ def forge_session(payload: dict[str, Any]) -> str:
 
 def snapshot(response: Any) -> tuple[Any, ...]:
     """Everything an observer of a denied response could use to tell reasons apart."""
-    headers = {k.lower(): v for k, v in response.headers.items() if k.lower() != "date"}
+    # A request correlation id and the date are per-request by design, not
+    # denial reasons, so they are excluded from the comparison.
+    ignored = {"date", "x-request-id"}
+    headers = {k.lower(): v for k, v in response.headers.items() if k.lower() not in ignored}
     return (response.status_code, response.content, tuple(sorted(headers.items())))
 
 

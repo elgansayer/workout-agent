@@ -155,6 +155,12 @@ from secret_vault import (
     migrate_legacy_credentials,
     provider_spec,
 )
+from security_audit import (
+    AuditEventType,
+    AuditOutcome,
+    AuditSubjectType,
+    resolve_audit_key,
+)
 from setup_state import (
     AccountSetup,
     build_account_setup,
@@ -170,6 +176,9 @@ from training_rules import (
 )
 
 from webapp import ai_widgets, charts
+from webapp.audit_events import audit_request_event, audit_runtime_posture
+from webapp.auth_boundary import has_verified_identity
+from webapp.request_correlation import RequestCorrelationMiddleware
 from webapp.runtime_security import validate_web_runtime
 from webapp.session_security import (
     HardenedSessionMiddleware,
@@ -431,6 +440,44 @@ def _identity_allowed(email: object) -> bool:
     return isinstance(email, str) and email in ALLOWED_EMAILS
 
 
+def _audit(
+    request: Request,
+    event_type: AuditEventType,
+    outcome: AuditOutcome,
+    subject_type: AuditSubjectType,
+    subject_id: str | None = None,
+    *,
+    user_id: str | None = None,
+    attempted_identity: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Record a security event for this request; audit failures never reach callers."""
+    audit_request_event(
+        request,
+        DB_PATH,
+        event_type,
+        outcome,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        user_id=user_id,
+        attempted_identity=attempted_identity,
+        metadata=metadata,
+    )
+
+
+def _audit_posture(detected_by: str, request: Request | None = None) -> None:
+    """Alert if a production-configured process is running without complete auth."""
+    audit_runtime_posture(
+        DB_PATH,
+        authentication_enabled=bool(
+            WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET
+        ),
+        anonymous_enabled=ALLOW_ANONYMOUS_WEB,
+        detected_by=detected_by,
+        request=request,
+    )
+
+
 def _check_api_auth(request: Request) -> str:
     """Return the authenticated, active account id for this request.
 
@@ -449,8 +496,12 @@ def _check_api_auth(request: Request) -> str:
             return require_active_user(str(uid), DB_PATH)["id"]
         except AccountError as exc:
             raise HTTPException(status_code=401, detail="Unauthorized") from exc
-    if ALLOW_ANONYMOUS_WEB and implicit_single_user_allowed():
-        return get_legacy_user_id(DB_PATH)
+    if ALLOW_ANONYMOUS_WEB:
+        # Never reachable in a correctly configured production process; if it is,
+        # raise the critical "production auth disabled" alert and fail closed.
+        _audit_posture("anonymous_request", request)
+        if implicit_single_user_allowed():
+            return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
@@ -512,6 +563,10 @@ _ASSET_VERSIONS: dict[str, str] = {}
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
+    # Fail startup on a malformed AUDIT_LOG_HMAC_KEY instead of silently running
+    # without a usable audit chain.
+    resolve_audit_key()
+    _audit_posture("startup")
     # Re-seal any pre-vault Fernet/plaintext rows under per-user encryption.
     migrate_legacy_credentials(DB_PATH)
     if not ALLOW_ANONYMOUS_WEB:
@@ -641,6 +696,9 @@ app.add_middleware(
     store=SESSION_STORE,
     identity_allowed=_identity_allowed,
 )
+# Outermost: every response carries X-Request-ID and every audit event written
+# while serving the request shares that correlation id.
+app.add_middleware(RequestCorrelationMiddleware)
 
 
 @app.get("/login/google")
@@ -664,6 +722,16 @@ async def logout(request: Request) -> RedirectResponse:
     fetch_site = request.headers.get("sec-fetch-site", "").lower()
     if fetch_site and fetch_site not in {"same-origin", "none"}:
         return RedirectResponse("/")
+    # Audit before clearing so the event is attributed to the revoked session's
+    # user. An anonymous visit has nothing to revoke and is not recorded.
+    if has_verified_identity(request.session):
+        _audit(
+            request,
+            AuditEventType.SESSION_REVOKED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.SESSION,
+            metadata={"reason": "logout"},
+        )
     await run_in_threadpool(SESSION_LIFECYCLE.end, request.session)
     return RedirectResponse("/login")
 
@@ -713,6 +781,13 @@ async def auth(request: Request) -> Any:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
         logger.warning("OAuth token exchange failed: %s", e)
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "oauth_exchange_failed", "error_type": type(e).__name__},
+        )
         return RedirectResponse("/login")
     userinfo = token.get("userinfo")
     claims: dict[str, Any] = userinfo if isinstance(userinfo, dict) else {}
@@ -722,6 +797,13 @@ async def auth(request: Request) -> Any:
     subject = str(claims.get("sub") or "").strip()
     if not subject:
         logger.warning("Sign-in rejected: the provider supplied no stable subject.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "missing_subject"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
 
@@ -734,12 +816,27 @@ async def auth(request: Request) -> Any:
         # An unreadable policy store is an outage, not a verdict on the person:
         # refuse the sign-in (fail closed) but say so, and keep no session.
         logger.exception("Account policy lookup failed during login completion.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "policy_lookup_failed"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
 
     if not decision.allowed:
         # Always start from an empty session on denial too: drop leftover
         # pre-login state (OAuth correlation keys, a previous identity).
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            attempted_identity=str(claims.get("email") or "") or None,
+            metadata={"reason": "access_policy_denied"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
 
@@ -759,6 +856,13 @@ async def auth(request: Request) -> Any:
         )
     except sqlite3.Error:
         logger.exception("Identity lookup failed during login completion.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "identity_lookup_failed"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
     except AccountError as exc:
@@ -766,6 +870,13 @@ async def auth(request: Request) -> Any:
         # whose account no longer exists: all refuse the sign-in rather than
         # surfacing a 500. The messages never contain the email or subject.
         logger.warning("Sign-in rejected: %s", exc)
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "invalid_identity"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
 
@@ -773,6 +884,13 @@ async def auth(request: Request) -> Any:
         # The stable subject names a different account than the policy admitted:
         # never mint a session from that mismatch (fail closed).
         logger.warning("Sign-in rejected: identity/policy account mismatch.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "identity_policy_mismatch"},
+        )
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
 
@@ -795,6 +913,15 @@ async def auth(request: Request) -> Any:
     # ``establish`` clears the session, so record the policy epoch (issue #753)
     # after it; the per-request guard compares this against the stored account.
     request.session[SESSION_EPOCH_KEY] = decision.session_epoch
+    _audit(
+        request,
+        AuditEventType.LOGIN,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        user_record["id"],
+        user_id=user_record["id"],
+        metadata={"method": "google_oauth"},
+    )
     return RedirectResponse("/")
 
 
@@ -1789,6 +1916,14 @@ def chat_history(request: Request):
 def chat_clear(request: Request):
     user_id = _check_api_auth(request)
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
+    _audit(
+        request,
+        AuditEventType.DATA_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.DATA,
+        "chat_history",
+        user_id=user_id,
+    )
     return {"status": "ok"}
 
 
@@ -1938,6 +2073,49 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
+def _audit_key_change(
+    request: Request,
+    user_id: str,
+    provider: str,
+    known_providers: set[str],
+    *,
+    saved: bool,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Audit a stored-key change, plus the connector change when it is Hevy's key.
+
+    Only a recognised provider id is recorded; an arbitrary client string is never
+    written to the audit trail. The key itself is never passed to the audit log.
+    """
+    recorded = provider if provider in known_providers else "unknown"
+    is_connector = recorded == "hevy"
+    _audit(
+        request,
+        AuditEventType.CREDENTIAL_SAVED if saved else AuditEventType.CREDENTIAL_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.CREDENTIAL,
+        recorded,
+        user_id=user_id,
+        metadata={
+            "provider": recorded,
+            "credential_kind": "connector" if is_connector else "ai_provider",
+            **(metadata or {}),
+        },
+    )
+    if is_connector:
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_CONNECTED
+            if saved
+            else AuditEventType.CONNECTOR_DISCONNECTED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.CONNECTOR,
+            recorded,
+            user_id=user_id,
+            metadata={"provider": recorded, "method": "api_key"},
+        )
+
+
 def _hevy_verification_status(state: HevyCredentialState) -> int:
     """Map a verification outcome to an HTTP status code."""
     if state is HevyCredentialState.UNVERIFIED:
@@ -2018,6 +2196,14 @@ async def save_api_key(request: Request) -> dict[str, Any]:
             account_id=verification.account_id,
             db_path=DB_PATH,
         )
+        _audit_key_change(
+            request,
+            user_id,
+            provider,
+            {"hevy", *(item["id"] for item in available_providers())},
+            saved=True,
+            metadata={"model_configured": bool(model)},
+        )
         return {
             "status": "ok",
             "provider": provider,
@@ -2036,6 +2222,14 @@ async def save_api_key(request: Request) -> dict[str, Any]:
                 ai_model=model or ai_provider_defaults[provider],
                 db_path=DB_PATH,
             )
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=True,
+        metadata={"model_configured": bool(model)},
+    )
     return {
         "status": "ok",
         "provider": provider,
@@ -2065,6 +2259,14 @@ async def rotate_api_key(request: Request) -> dict[str, Any]:
         summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=True,
+        metadata={"model_configured": bool(model)},
+    )
     return {
         "status": "ok",
         "provider": provider,
@@ -2090,6 +2292,13 @@ async def revoke_api_key(request: Request) -> dict[str, Any]:
         summary = _vault().revoke(user_id, provider)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=False,
+    )
     return {
         "status": "ok",
         "provider": provider,
@@ -2113,10 +2322,30 @@ async def remove_api_key(request: Request) -> dict[str, Any]:
 
     try:
         deleted = _vault().delete(user_id, provider)
+    except UnknownProviderError as exc:
+        # Reject an unrecognised provider id, but keep a safe record of the
+        # attempt. The client-supplied string is never written to the trail.
+        _audit(
+            request,
+            AuditEventType.CREDENTIAL_DELETED,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.CREDENTIAL,
+            "unknown",
+            user_id=user_id,
+            metadata={"provider": "unknown", "credential_kind": "ai_provider"},
+        )
+        raise _vault_http_error(exc) from exc
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
     if provider == "hevy":
         delete_hevy_connection(user_id, db_path=DB_PATH)
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=False,
+    )
     return {"status": "ok", "provider": provider, "deleted": deleted}
 
 
@@ -2189,6 +2418,15 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
                 account_id=verification.account_id,
                 db_path=DB_PATH,
             )
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_TEST,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.CONNECTOR,
+            "hevy",
+            user_id=user_id,
+            metadata={"provider": "hevy"},
+        )
         return {
             "status": "ok",
             **verification.as_public_metadata(),
@@ -2206,6 +2444,15 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
             tested_at=verification.tested_at.isoformat(),
             db_path=DB_PATH,
         )
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_TEST,
+        AuditOutcome.FAILURE,
+        AuditSubjectType.CONNECTOR,
+        "hevy",
+        user_id=user_id,
+        metadata={"provider": "hevy", "reason": "provider_rejected"},
+    )
     raise HTTPException(
         status_code=_hevy_verification_status(verification.state),
         detail=verification.detail,
@@ -2260,6 +2507,7 @@ async def save_preferences(request: Request) -> dict[str, Any]:
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
 
+    previous_ai = get_user_preferences(user_id, DB_PATH).get("preferred_ai")
     training_rules_payload = body.get("training_rules")
     if training_rules_payload is not None:
         try:
@@ -2272,7 +2520,6 @@ async def save_preferences(request: Request) -> dict[str, Any]:
     active_before = None
     if body.get("constraints") is not None or training_rules_payload is not None:
         active_before = get_active_programme(user_id, DB_PATH)
-
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
@@ -2285,6 +2532,19 @@ async def save_preferences(request: Request) -> dict[str, Any]:
         training_rules=training_rules_payload,
         db_path=DB_PATH,
     )
+    if preferred_ai is not None and preferred_ai != previous_ai:
+        # Choosing the AI provider decides which third party receives the user's
+        # coaching context, so a real change is a permission change. Only the
+        # validated provider id is recorded, never goals or constraints.
+        _audit(
+            request,
+            AuditEventType.PERMISSION_CHANGED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.PERMISSION,
+            "ai_processor",
+            user_id=user_id,
+            metadata={"change": "provider_selected", "provider": preferred_ai},
+        )
 
     # Edit lifecycle: validate the existing active programme against the edited
     # legacy constraints and the versioned structured training rules.
@@ -2386,6 +2646,16 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
     save_push_subscription(
         user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
+    # The endpoint and keys are delivery credentials and are never audited.
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        "push_notifications",
+        user_id=user_id,
+        metadata={"change": "granted"},
+    )
     return {"status": "ok"}
 
 
@@ -2411,14 +2681,31 @@ def google_health_callback(request: Request) -> RedirectResponse:
     """Receive Google's redirect, swap the code for a refresh token, store it."""
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
-    if request.query_params.get("error"):
-        return RedirectResponse("/settings?gh=denied", status_code=303)
     user_id = _check_api_auth(request)
+
+    def audit_connect(outcome: AuditOutcome, reason: str | None = None) -> None:
+        details: dict[str, Any] = {"provider": "google_health", "method": "oauth"}
+        if reason:
+            details["reason"] = reason
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_CONNECTED,
+            outcome,
+            AuditSubjectType.CONNECTOR,
+            "google_health",
+            user_id=user_id,
+            metadata=details,
+        )
+
+    if request.query_params.get("error"):
+        audit_connect(AuditOutcome.DENIED, "consent_denied")
+        return RedirectResponse("/settings?gh=denied", status_code=303)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
     set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
+        audit_connect(AuditOutcome.FAILURE, "state_mismatch")
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
         GH_CLIENT_ID,
@@ -2427,6 +2714,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
         redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
+        audit_connect(AuditOutcome.FAILURE, "token_exchange_failed")
         return RedirectResponse("/settings?gh=error", status_code=303)
     try:
         vault = _vault()
@@ -2457,7 +2745,9 @@ def google_health_callback(request: Request) -> RedirectResponse:
                 )
     except VaultError:
         logger.warning("Could not store a Google Health credential.")
+        audit_connect(AuditOutcome.FAILURE, "credential_store_failed")
         return RedirectResponse("/settings?gh=error", status_code=303)
+    audit_connect(AuditOutcome.SUCCESS)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
@@ -2472,7 +2762,25 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
         pass
     except VaultError:
         logger.warning("Could not revoke a Google Health credential.")
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_DISCONNECTED,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.CONNECTOR,
+            "google_health",
+            user_id=user_id,
+            metadata={"provider": "google_health", "method": "oauth"},
+        )
         return RedirectResponse("/settings?gh=error", status_code=303)
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_DISCONNECTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.CONNECTOR,
+        "google_health",
+        user_id=user_id,
+        metadata={"provider": "google_health", "method": "oauth"},
+    )
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
@@ -3257,7 +3565,26 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     from scripts.sync_history import sync_all
 
     result = sync_all(hevy_key, DB_PATH, user_id=user_id)
-    if "error" in result:
+    sync_failed = "error" in result
+    # The provider's error text is never audited; only a fixed reason code.
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_SYNC,
+        AuditOutcome.FAILURE if sync_failed else AuditOutcome.SUCCESS,
+        AuditSubjectType.CONNECTOR,
+        "hevy",
+        user_id=user_id,
+        metadata=(
+            {"provider": "hevy", "reason": "provider_error"}
+            if sync_failed
+            else {
+                "provider": "hevy",
+                "records_found": int(result.get("workouts_found", 0)),
+                "records_processed": int(result.get("processed", 0)),
+            }
+        ),
+    )
+    if sync_failed:
         err_msg = str(result["error"])
         save_notification(
             user_id,

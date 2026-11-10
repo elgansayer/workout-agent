@@ -123,6 +123,8 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "key_hint": DataClass.CREDENTIAL,
     # identifiers
     "user_id": DataClass.IDENTIFIER,
+    "actor_id": DataClass.IDENTIFIER,
+    "source_ref": DataClass.IDENTIFIER,
     "email": DataClass.IDENTIFIER,
     "display_name": DataClass.IDENTIFIER,
     "ip": DataClass.IDENTIFIER,
