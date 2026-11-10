@@ -209,6 +209,12 @@ def _make_config(
     # Patch _resolve_run_user to return a fixed test user_id
     monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
     monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
+    # Consent gates are exercised by their own tests; keep the orchestration
+    # tests focused on delivery behaviour.
+    monkeypatch.setattr("main._ai_processing_allowed", lambda *args, **kw: True)
+    monkeypatch.setattr(
+        "main._notifications_delivery_allowed", lambda *args, **kw: True
+    )
     # Patch _resolve_provider to avoid DB lookups in test
     monkeypatch.setattr(
         "main._resolve_provider",
@@ -857,6 +863,10 @@ def test_run_self_review_on_configured_weekday(
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
     monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
     monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
+    monkeypatch.setattr("main._ai_processing_allowed", lambda *args, **kw: True)
+    monkeypatch.setattr(
+        "main._notifications_delivery_allowed", lambda *args, **kw: True
+    )
     monkeypatch.setattr(
         "main._resolve_provider",
         lambda config, **kw: MagicMock(name="test-provider"),
@@ -914,3 +924,159 @@ def test_run_self_review_on_configured_weekday(
     output = captured.getvalue()
     # Should include self-review message
     assert "Weekly self-review" in output or "Self-review" in output
+
+
+# ---------------------------------------------------------------------------
+# Consented delivery and processing
+# ---------------------------------------------------------------------------
+
+
+def _consent_config(tmp_path: Path) -> Config:
+    from config import Config
+
+    return Config(
+        hevy_api_key=None,
+        gemini_api_key=None,
+        gemini_model="gemini-3.8-flash",
+        health_connect_file=None,
+        database_path=str(tmp_path / "consent-main.db"),
+        hevy_sync_routines=False,
+        hevy_prefill_weights=False,
+        checkin_enabled=False,
+        lifestyle_enabled=False,
+        google_health_client_id=None,
+        google_health_client_secret=None,
+        google_health_refresh_token=None,
+        self_review_enabled=False,
+        self_review_weekday=6,
+    )
+
+
+def test_push_delivery_requires_active_notification_consent(tmp_path: Path) -> None:
+    from consent_ledger import (
+        CURRENT_CONSENT_POLICY_VERSION,
+        ConsentPurpose,
+        grant_consent,
+        revoke_consent,
+    )
+    from database import get_legacy_user_id, get_or_create_user, init_db
+    from main import _notifications_delivery_allowed
+
+    config = _consent_config(tmp_path)
+    init_db(config.database_path)
+    user = get_or_create_user("consent-push@example.com", "Synthetic", config.database_path)
+    user_id = user["id"]
+
+    assert not _notifications_delivery_allowed(config, user_id)
+
+    grant_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.NOTIFICATIONS,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+        actor_id=user_id,
+        scopes=("web_push",),
+        provider="web_push",
+    )
+    assert _notifications_delivery_allowed(config, user_id)
+
+    revoke_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.NOTIFICATIONS,
+        actor_id=user_id,
+        scopes=("web_push",),
+        provider="web_push",
+    )
+    assert not _notifications_delivery_allowed(config, user_id)
+
+    # The legacy compatibility tenant keeps its pre-consent behaviour.
+    assert _notifications_delivery_allowed(
+        config, get_legacy_user_id(config.database_path)
+    )
+
+
+def test_ai_processing_requires_active_consent(tmp_path: Path) -> None:
+    from consent_ledger import (
+        CURRENT_CONSENT_POLICY_VERSION,
+        ConsentPurpose,
+        grant_consent,
+        revoke_consent,
+    )
+    from database import get_legacy_user_id, get_or_create_user, init_db
+    from main import _ai_processing_allowed
+
+    config = _consent_config(tmp_path)
+    init_db(config.database_path)
+    user = get_or_create_user("consent-ai@example.com", "Synthetic", config.database_path)
+    user_id = user["id"]
+
+    assert not _ai_processing_allowed(config, user_id)
+
+    grant_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+        actor_id=user_id,
+        scopes=("gemini",),
+        provider="gemini",
+    )
+    assert _ai_processing_allowed(config, user_id)
+
+    revoke_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        actor_id=user_id,
+        provider="gemini",
+    )
+    assert not _ai_processing_allowed(config, user_id)
+
+    assert _ai_processing_allowed(config, get_legacy_user_id(config.database_path))
+
+
+def test_run_skips_ai_work_when_processing_consent_revoked(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    _make_config(monkeypatch, tmp_path)
+    monkeypatch.setattr("main._ai_processing_allowed", lambda *args, **kw: False)
+
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        "main._maybe_check_in", lambda *args, **kw: invoked.append("checkin")
+    )
+    monkeypatch.setattr(
+        "main._sync_hevy_routines", lambda *args, **kw: invoked.append("hevy") or []
+    )
+
+    assert run(preview=True) == 1
+    assert invoked == []
+
+
+def test_deliver_skips_push_when_notification_consent_is_inactive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from main import _deliver
+
+    config = _consent_config(tmp_path)
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
+    monkeypatch.setattr(
+        "main._notifications_delivery_allowed", lambda *args, **kw: False
+    )
+    monkeypatch.setattr("main.save_notification", lambda *args, **kw: None)
+
+    invoked: list[str] = []
+    monkeypatch.setattr(
+        "main.get_push_subscriptions",
+        lambda *args, **kw: invoked.append("subscriptions") or [{"endpoint": "test"}],
+    )
+    monkeypatch.setattr(
+        "main.send_push_notification",
+        lambda *args, **kw: invoked.append("push") or True,
+    )
+
+    assert _deliver(config, "Plan", False, "non-legacy-user") == 0
+    assert invoked == []

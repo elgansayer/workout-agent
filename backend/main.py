@@ -26,6 +26,11 @@ import lifestyle
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
+from consent_ledger import (
+    CURRENT_CONSENT_POLICY_VERSION,
+    ConsentPurpose,
+    has_active_consent,
+)
 from database import (
     get_body_metrics,
     get_daily_logs,
@@ -89,6 +94,13 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
     if preview:
         print(message)
         logger.info("Preview only: nothing sent.")
+        return 0
+
+    if not _notifications_delivery_allowed(config, user_id):
+        logger.info(
+            "Push delivery skipped for user %s: notification consent is not active.",
+            user_id,
+        )
         return 0
 
     vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
@@ -211,12 +223,56 @@ def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -
     return text + footer
 
 
+def _is_legacy_tenant(db_path: str, user_id: str) -> bool:
+    """Return whether *user_id* is the pre-multi-user compatibility tenant."""
+
+    try:
+        return user_id == get_legacy_user_id(db_path)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ai_processing_allowed(config: Config, user_id: str | None) -> bool:
+    """Return whether scheduled AI processing is permitted for *user_id*."""
+
+    if not user_id:
+        return False
+    if _is_legacy_tenant(config.database_path, user_id):
+        return True
+    return has_active_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+    )
+
+
+def _notifications_delivery_allowed(config: Config, user_id: str) -> bool:
+    """Return whether outbound push delivery is permitted for *user_id*."""
+
+    if not user_id:
+        return False
+    if _is_legacy_tenant(config.database_path, user_id):
+        return True
+    return has_active_consent(
+        config.database_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.NOTIFICATIONS,
+        required_scopes=("web_push",),
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+    )
+
+
 def _resolve_provider(
     config: Config,
     *,
     user_id: str | None = None,
 ) -> AIProvider:
     """Resolve the AI provider for a run, scoping to *user_id* when given."""
+    if user_id and not _ai_processing_allowed(config, user_id):
+        raise ValueError(
+            "AI processing consent is required before coaching can run.",
+        )
     return resolve_provider(
         user_id=user_id,
         db_path=config.database_path,
@@ -275,6 +331,13 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         user_id = _resolve_run_user(config.database_path)
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
+
+    if not _ai_processing_allowed(config, user_id):
+        logger.error(
+            "AI processing consent is not active for user %s; skipping daily run.",
+            user_id,
+        )
+        return 1
 
     statuses = _sync_hevy_routines(config, user_id=user_id)
     footer = _changes_footer(statuses)

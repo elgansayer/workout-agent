@@ -183,6 +183,9 @@ Health data is sensitive product data. Implementation must integrate with the ex
 Minimum requirements include:
 
 - least-privilege scopes and permission explanations
+- append-only consent decisions in `consent_ledger_events`, recording policy version, purpose, provider, scopes, actor, time and withdrawal state
+- a current-consent check before connector sync or any data-derived delivery
+- withdrawal that stops future sync and applies the documented retain-or-purge rule
 - encryption of OAuth secrets and refresh tokens
 - strict `user_id` ownership on connections, raw records and normalized records
 - no health payloads or secrets in application logs

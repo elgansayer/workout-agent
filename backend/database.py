@@ -15,6 +15,7 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from consent_ledger import ensure_consent_schema
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
 
@@ -822,6 +823,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # Append-only consent and permission decisions (issue #776).
+        ensure_consent_schema(conn)
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:

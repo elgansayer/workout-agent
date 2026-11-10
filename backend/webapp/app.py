@@ -38,10 +38,21 @@ from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
+from consent_ledger import (
+    CURRENT_CONSENT_POLICY_VERSION,
+    ConsentDecision,
+    ConsentPurpose,
+    ConsentRetention,
+    current_consents,
+    grant_consent,
+    has_active_consent,
+    revoke_consent,
+)
 from database import (
     clear_all_notifications,
     clear_chat_messages,
     delete_notification,
+    delete_push_subscription,
     delete_user_api_key,
     get_active_programme,
     get_body_metrics,
@@ -50,12 +61,14 @@ from database import (
     get_daily_logs,
     get_dashboard_insight,
     get_exercise_volumes,
+    get_legacy_user_id,
     get_meta,
     get_notifications,
     get_or_create_user,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
+    get_push_subscriptions,
     get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
@@ -96,6 +109,9 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from google_health_client import SCOPE as GOOGLE_HEALTH_SCOPE
+from health_consent import grant_health_consent, revoke_health_consent
+from health_retention import DisconnectMode
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
 from program import (
@@ -107,14 +123,38 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
 
-
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+
+
+def _require_ai_processing_consent(user_id: str) -> None:
+    """Fail closed when a non-legacy tenant has not granted AI processing."""
+
+    try:
+        if user_id == get_legacy_user_id(DB_PATH):
+            return
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not resolve legacy tenant identity.")
+    if not has_active_consent(
+        DB_PATH,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "AI processing consent is required. "
+                "Grant it in Settings -> Privacy & consent."
+            ),
+        )
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     """Resolve the authenticated user's provider without caching credentials."""
     user_id = _check_api_auth(request)
+    if user_id:
+        _require_ai_processing_consent(user_id)
     try:
         return resolve_provider(
             user_id=user_id,
@@ -179,6 +219,22 @@ def _check_api_auth(request: Request) -> str:
 
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _serialise_consent(record: Any) -> dict[str, Any]:
+    """Return the non-secret fields of one consent decision."""
+
+    return {
+        "purpose": record.purpose,
+        "provider": record.provider,
+        "policy_version": record.policy_version,
+        "scopes": sorted(record.scopes),
+        "decision": record.decision,
+        "active": record.active,
+        "revocation_state": record.revocation_state,
+        "occurred_at": record.occurred_at,
+        "retention": record.retention,
+    }
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -1135,6 +1191,19 @@ async def save_api_key(request: Request) -> dict[str, str]:
         db_path=DB_PATH,
     )
     if provider in ai_provider_ids:
+        try:
+            grant_consent(
+                DB_PATH,
+                user_id=user_id,
+                purpose=ConsentPurpose.AI_PROCESSING,
+                policy_version=CURRENT_CONSENT_POLICY_VERSION,
+                actor_id=user_id,
+                scopes=(provider,),
+                provider=provider,
+            )
+        except Exception:
+            logger.exception("Could not record AI processing consent.")
+    if provider in ai_provider_ids:
         preferences = get_user_preferences(user_id, DB_PATH)
         if preferences.get("preferred_ai") == provider:
             save_user_preferences(
@@ -1256,7 +1325,167 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
     save_push_subscription(
         user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
+    try:
+        grant_consent(
+            DB_PATH,
+            user_id=user_id,
+            purpose=ConsentPurpose.NOTIFICATIONS,
+            policy_version=CURRENT_CONSENT_POLICY_VERSION,
+            actor_id=user_id,
+            scopes=("web_push",),
+            provider="web_push",
+        )
+    except Exception:
+        logger.exception("Could not record notification consent.")
     return {"status": "ok"}
+
+
+@app.post("/api/settings/push-unsubscribe")
+async def remove_push_subscription_route(request: Request) -> dict[str, str]:
+    """Stop delivering push notifications and record the withdrawal."""
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    revocation_failed = False
+    try:
+        revoke_consent(
+            DB_PATH,
+            user_id=user_id,
+            purpose=ConsentPurpose.NOTIFICATIONS,
+            actor_id=user_id,
+            scopes=("web_push",),
+            provider="web_push",
+            retention=ConsentRetention.REVOKE_ONLY,
+        )
+    except Exception:
+        logger.exception("Could not record notification consent withdrawal.")
+        revocation_failed = True
+
+    # Stop delivery even if the ledger write failed, then surface the failure so
+    # the user can retry recording the decision.
+    for subscription in get_push_subscriptions(user_id, DB_PATH):
+        endpoint = subscription.get("endpoint")
+        if isinstance(endpoint, str) and endpoint:
+            delete_push_subscription(user_id, endpoint, DB_PATH)
+
+    if revocation_failed:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not record consent withdrawal. Try again.",
+        )
+    return {"status": "ok"}
+
+
+@app.post("/api/settings/consent")
+async def update_consent_route(request: Request) -> dict[str, Any]:
+    """Grant or withdraw a purpose-specific consent decision."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    purpose_value = body.get("purpose")
+    decision_value = body.get("decision")
+    provider_value = body.get("provider")
+    policy_value = body.get("policy_version", CURRENT_CONSENT_POLICY_VERSION)
+    scopes_value = body.get("scopes", [])
+    retention_value = body.get("retention", ConsentRetention.REVOKE_ONLY.value)
+
+    try:
+        purpose = ConsentPurpose(purpose_value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Unknown consent purpose") from None
+    try:
+        decision = ConsentDecision(decision_value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Unknown consent decision") from None
+    try:
+        retention = ConsentRetention(retention_value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Unknown consent retention mode") from None
+    if (
+        retention is ConsentRetention.REVOKE_AND_PURGE
+        and body.get("confirmed") is not True
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Explicit confirmation is required to purge retained data",
+        )
+    if not isinstance(policy_value, str) or not policy_value.strip():
+        raise HTTPException(status_code=400, detail="policy_version is required")
+    if not isinstance(scopes_value, list) or not all(
+        isinstance(scope, str) for scope in scopes_value
+    ):
+        raise HTTPException(status_code=400, detail="scopes must be a list of strings")
+    provider = (
+        provider_value.strip().lower() if isinstance(provider_value, str) else None
+    )
+    if purpose is ConsentPurpose.HEALTH_CONNECTOR and not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+
+    try:
+        if decision is ConsentDecision.GRANTED:
+            record = grant_consent(
+                DB_PATH,
+                user_id=user_id,
+                purpose=purpose,
+                policy_version=policy_value.strip(),
+                actor_id=user_id,
+                scopes=scopes_value,
+                provider=provider,
+            )
+        else:
+            if purpose is ConsentPurpose.HEALTH_CONNECTOR and provider:
+                outcome = revoke_health_consent(
+                    DB_PATH,
+                    user_id=user_id,
+                    provider=provider,
+                    actor_id=user_id,
+                    scopes=tuple(scopes_value),
+                    policy_version=policy_value.strip(),
+                    retention=(
+                        DisconnectMode.REVOKE_AND_PURGE
+                        if retention is ConsentRetention.REVOKE_AND_PURGE
+                        else DisconnectMode.REVOKE_ONLY
+                    ),
+                )
+                record = outcome.record
+            else:
+                record = revoke_consent(
+                    DB_PATH,
+                    user_id=user_id,
+                    purpose=purpose,
+                    policy_version=policy_value.strip(),
+                    actor_id=user_id,
+                    scopes=scopes_value,
+                    provider=provider,
+                    retention=retention,
+                )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except Exception:
+        logger.exception("Could not record consent decision.")
+        raise HTTPException(
+            status_code=503,
+            detail="Could not record consent decision. Try again.",
+        ) from None
+
+    if (
+        purpose is ConsentPurpose.HEALTH_CONNECTOR
+        and provider == "google_health"
+        and decision is ConsentDecision.REVOKED
+    ):
+        set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
+
+    return {
+        "status": "ok",
+        "consent": _serialise_consent(record),
+    }
 
 
 @app.get("/google-health/connect")
@@ -1298,6 +1527,17 @@ def google_health_callback(request: Request) -> RedirectResponse:
     )
     if not tokens or not tokens.get("refresh_token"):
         return RedirectResponse("/settings?gh=error", status_code=303)
+    try:
+        grant_health_consent(
+            DB_PATH,
+            user_id=user_id,
+            provider="google_health",
+            scopes=frozenset({GOOGLE_HEALTH_SCOPE}),
+            actor_id=user_id,
+        )
+    except Exception:
+        logger.exception("Could not record Google Health consent.")
+        return RedirectResponse("/settings?gh=error", status_code=303)
     set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
@@ -1307,6 +1547,19 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    try:
+        revoke_health_consent(
+            DB_PATH,
+            user_id=user_id,
+            provider="google_health",
+            actor_id=user_id,
+            scopes=frozenset({GOOGLE_HEALTH_SCOPE}),
+            retention=DisconnectMode.REVOKE_ONLY,
+        )
+    except Exception:
+        # Removing the credential is the primary stop-processing action; the
+        # failed ledger write stays visible to operators.
+        logger.exception("Could not record Google Health consent withdrawal.")
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
@@ -1670,6 +1923,15 @@ def api_settings(request: Request):
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
 
+    try:
+        consents = [
+            _serialise_consent(item)
+            for item in current_consents(DB_PATH, user_id=user_id)
+        ]
+    except Exception:
+        logger.exception("Could not read consent state.")
+        consents = []
+
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
     connectors_info = []
@@ -1701,6 +1963,7 @@ def api_settings(request: Request):
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
                 "gh_status": gh_status,
+                "consents": consents,
                 "connectors_info": connectors_info,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),

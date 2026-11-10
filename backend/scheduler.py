@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
+from consent_ledger import (
+    CURRENT_CONSENT_POLICY_VERSION,
+    ConsentPurpose,
+    has_active_consent,
+)
 from database import get_all_users, init_db
 
 logging.basicConfig(
@@ -179,6 +184,24 @@ def run_coaching(config: Config) -> int:
     return result
 
 
+def _ai_processing_allowed(db_path: str, user_id: str) -> bool:
+    """Return whether scheduled insight processing is permitted for *user_id*."""
+
+    from database import get_legacy_user_id
+
+    try:
+        if user_id == get_legacy_user_id(db_path):
+            return True
+    except Exception:  # noqa: BLE001
+        return False
+    return has_active_consent(
+        db_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+    )
+
+
 def run_daily_insight(config: Config) -> None:
     """Generate a tenant-scoped daily dashboard insight for every user."""
     from insight_cron import generate_daily_header
@@ -186,6 +209,12 @@ def run_daily_insight(config: Config) -> None:
     logger.info("Generating daily insight headers...")
     for user in get_all_users(config.database_path):
         user_id = user["id"]
+        if not _ai_processing_allowed(config.database_path, user_id):
+            logger.info(
+                "Skipping daily insight for user %s: AI processing consent is not active.",
+                user_id,
+            )
+            continue
         try:
             generate_daily_header(config, user_id=user_id)
         except Exception:
@@ -199,6 +228,12 @@ def run_weekly_correlations(config: Config) -> None:
     logger.info("Generating weekly deep correlations...")
     for user in get_all_users(config.database_path):
         user_id = user["id"]
+        if not _ai_processing_allowed(config.database_path, user_id):
+            logger.info(
+                "Skipping weekly correlations for user %s: AI processing consent is not active.",
+                user_id,
+            )
+            continue
         try:
             generate_weekly_correlations(config, user_id=user_id)
         except Exception:

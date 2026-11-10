@@ -29,6 +29,7 @@ const settingsResponse = {
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
+  consents: [],
   vapid_public_key: null,
 };
 
@@ -101,6 +102,27 @@ describe('Settings AI provider parity', () => {
     await fixture.componentInstance.subscribeToPush();
     expect(fixture.componentInstance.pushStatus()).toContain('not supported');
     expect(fixture.componentInstance.pushBusy()).toBe(false);
+  });
+
+
+  it('withdraws a consent decision through the CSRF-aware HttpClient', async () => {
+    const fixture = await loadSettings();
+    const component = fixture.componentInstance;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    component.revokeConsent('analytics', null);
+
+    const request = http.expectOne('/api/settings/consent');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({
+      purpose: 'analytics',
+      decision: 'revoked',
+      provider: undefined,
+      retention: 'revoke_only',
+    });
+    request.flush({ status: 'ok', consent: { purpose: 'analytics', active: false } });
+    http.expectOne('/api/settings').flush(settingsResponse);
+    expect(component.consentStatus()).toContain('withdrawn');
   });
 
   it('disconnects Google Health through HttpClient so the CSRF interceptor is used', async () => {

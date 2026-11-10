@@ -26,6 +26,8 @@ export class Settings implements OnInit {
   hevyStatus = signal<string>('');
   aiStatus = signal<string>('');
   prefStatus = signal<string>('');
+  consentStatus = signal<string>('');
+  consentBusy = signal<string>('');
   pushSubscribed = signal<boolean>(false);
 
   selectedAiProvider = signal<string>('gemini');
@@ -110,7 +112,7 @@ export class Settings implements OnInit {
           }
           this.loadSettings(false);
         },
-        error: (err: any) => {
+        error: (err: { error?: { detail?: string } }) => {
           const msg = err.error?.detail || 'Error saving key.';
           if (provider === 'hevy') this.hevyStatus.set(msg);
           else this.aiStatus.set(msg);
@@ -124,7 +126,7 @@ export class Settings implements OnInit {
       next: () => {
         this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: { error?: { detail?: string } }) => {
         alert(err.error?.detail || 'Could not delete key.');
       },
     });
@@ -142,7 +144,7 @@ export class Settings implements OnInit {
             this.hevyStatus.set(res.detail || 'Verification failed.');
           }
         },
-        error: (err: any) => {
+        error: (err: { error?: { detail?: string } }) => {
           this.hevyStatus.set(err.error?.detail || 'Verification failed.');
         },
       });
@@ -157,7 +159,7 @@ export class Settings implements OnInit {
           `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
       },
-      error: (err: any) => {
+      error: (err: { error?: { detail?: string } }) => {
         this.hevyStatus.set(err.error?.detail || 'Sync failed.');
       },
     });
@@ -184,7 +186,7 @@ export class Settings implements OnInit {
         this.prefStatus.set('Profile saved!');
         setTimeout(() => this.prefStatus.set(''), 4000);
       },
-      error: (err: any) => {
+      error: (err: { error?: { detail?: string } }) => {
         this.prefStatus.set(err.error?.detail || 'Could not save preferences.');
       },
     });
@@ -204,6 +206,31 @@ export class Settings implements OnInit {
         this.healthStatus.set('Could not disconnect Google Health. Please try again.');
       },
     });
+  }
+
+  revokeConsent(purpose: string, provider: string | null): void {
+    const label = provider ? `${purpose} (${provider})` : purpose;
+    if (!confirm(`Withdraw consent for ${label}?`)) return;
+    if (this.consentBusy()) return;
+    this.consentBusy.set(purpose);
+    this.http
+      .post('/api/settings/consent', {
+        purpose,
+        decision: 'revoked',
+        provider: provider || undefined,
+        retention: 'revoke_only',
+      })
+      .subscribe({
+        next: () => {
+          this.consentBusy.set('');
+          this.consentStatus.set(`${label} consent withdrawn.`);
+          this.loadSettings(false);
+        },
+        error: (err: { error?: { detail?: string } }) => {
+          this.consentBusy.set('');
+          this.consentStatus.set(err.error?.detail || 'Could not withdraw consent.');
+        },
+      });
   }
 
   async checkPushSubscription(): Promise<void> {
@@ -263,8 +290,18 @@ export class Settings implements OnInit {
         if (!(await sub.unsubscribe())) throw new Error('Unsubscribe failed');
       }
       this.pushSubscribed.set(false);
-      this.pushBusy.set(false);
-      this.pushStatus.set('Notifications disabled.');
+      this.http.post('/api/settings/push-unsubscribe', {}).subscribe({
+        next: () => {
+          this.pushBusy.set(false);
+          this.pushStatus.set('Notifications disabled.');
+        },
+        error: () => {
+          this.pushBusy.set(false);
+          this.pushStatus.set(
+            'Notifications are off on this device, but consent could not be updated.',
+          );
+        },
+      });
     } catch {
       this.pushBusy.set(false);
       this.pushStatus.set(

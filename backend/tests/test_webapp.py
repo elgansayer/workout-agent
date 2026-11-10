@@ -694,3 +694,216 @@ def test_chat_clear_returns_ok(client: Any) -> None:
 
 
 # -- settings API-key CRUD ---------------------------------------------
+
+
+# -- consent ledger routes ----------------------------------------------
+
+
+def test_settings_returns_consent_decisions(client: Any) -> None:
+    """The settings payload exposes the tenant's current consent decisions."""
+    import webapp.app as app_module
+    from database import get_legacy_user_id
+    from health_consent import grant_health_consent
+
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+    grant_health_consent(
+        app_module.DB_PATH,
+        user_id=user_id,
+        provider="google_health",
+        scopes={"synthetic.scope.readonly"},
+        actor_id=user_id,
+    )
+
+    response = client.get("/api/settings")
+
+    assert response.status_code == 200
+    consents = response.json()["consents"]
+    assert any(
+        item["purpose"] == "health_connector"
+        and item["provider"] == "google_health"
+        and item["active"] is True
+        and item["scopes"] == ["synthetic.scope.readonly"]
+        for item in consents
+    )
+
+
+def _consent_request(user_id: str, payload: dict[str, Any]) -> Any:
+    from starlette.requests import Request
+
+    body = json.dumps(payload).encode()
+
+    async def receive() -> dict[str, Any]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/settings/consent",
+            "headers": [],
+            "query_string": b"",
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+            "scheme": "http",
+            "session": {"user": {"id": user_id}, "user_id": user_id},
+        },
+        receive,
+    )
+
+
+def test_consent_route_grants_and_withdraws_for_current_tenant(client: Any) -> None:
+    """The consent route records both decisions for the session owner."""
+    import webapp.app as app_module
+    from consent_ledger import ConsentPurpose, has_active_consent
+    from database import get_legacy_user_id
+
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+
+    granted = asyncio.run(
+        app_module.update_consent_route(
+            _consent_request(
+                user_id,
+                {
+                    "purpose": "analytics",
+                    "decision": "granted",
+                    "policy_version": "1.0.0",
+                    "scopes": ["aggregate_usage"],
+                },
+            )
+        )
+    )
+    assert granted["consent"]["active"] is True
+    assert has_active_consent(
+        app_module.DB_PATH,
+        user_id=user_id,
+        purpose=ConsentPurpose.ANALYTICS,
+        required_scopes=["aggregate_usage"],
+    )
+
+    withdrawn = asyncio.run(
+        app_module.update_consent_route(
+            _consent_request(
+                user_id,
+                {
+                    "purpose": "analytics",
+                    "decision": "revoked",
+                    "policy_version": "1.0.0",
+                },
+            )
+        )
+    )
+    assert withdrawn["consent"]["active"] is False
+    assert withdrawn["consent"]["revocation_state"] == "revoked"
+    assert not has_active_consent(
+        app_module.DB_PATH,
+        user_id=user_id,
+        purpose=ConsentPurpose.ANALYTICS,
+    )
+
+
+def test_consent_route_rejects_unknown_purpose_and_missing_health_provider(
+    client: Any,
+) -> None:
+    import webapp.app as app_module
+    from database import get_legacy_user_id
+    from fastapi import HTTPException
+
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+
+    with pytest.raises(HTTPException) as unknown:
+        asyncio.run(
+            app_module.update_consent_route(
+                _consent_request(
+                    user_id,
+                    {"purpose": "marketing", "decision": "granted"},
+                )
+            )
+        )
+    assert unknown.value.status_code == 400
+
+    with pytest.raises(HTTPException) as missing_provider:
+        asyncio.run(
+            app_module.update_consent_route(
+                _consent_request(
+                    user_id,
+                    {
+                        "purpose": "health_connector",
+                        "decision": "granted",
+                        "policy_version": "1.0.0",
+                        "scopes": ["sleep"],
+                    },
+                )
+            )
+        )
+    assert missing_provider.value.status_code == 400
+
+
+def test_ai_processing_consent_is_required_for_non_legacy_tenants(client: Any) -> None:
+    """AI routes fail closed for a tenant that has not granted processing."""
+    import webapp.app as app_module
+    from consent_ledger import ConsentPurpose, grant_consent
+    from database import get_legacy_user_id, get_or_create_user
+    from fastapi import HTTPException
+
+    user = get_or_create_user("consent-ai@example.com", "Synthetic", app_module.DB_PATH)
+    user_id = str(user["id"])
+
+    with pytest.raises(HTTPException) as denied:
+        app_module._require_ai_processing_consent(user_id)
+    assert denied.value.status_code == 403
+
+    grant_consent(
+        app_module.DB_PATH,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version="1.0.0",
+        actor_id=user_id,
+        scopes=["claude"],
+        provider="claude",
+    )
+    app_module._require_ai_processing_consent(user_id)
+
+    app_module._require_ai_processing_consent(get_legacy_user_id(app_module.DB_PATH))
+
+
+def test_consent_route_requires_explicit_confirmation_before_purge(
+    client: Any,
+) -> None:
+    """Destructive health-data purge is refused without an explicit confirmation."""
+    import webapp.app as app_module
+    from database import get_legacy_user_id
+    from fastapi import HTTPException
+
+    user_id = get_legacy_user_id(app_module.DB_PATH)
+
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(
+            app_module.update_consent_route(
+                _consent_request(
+                    user_id,
+                    {
+                        "purpose": "health_connector",
+                        "decision": "revoked",
+                        "provider": "google_health",
+                        "retention": "revoke_and_purge",
+                    },
+                )
+            )
+        )
+    assert denied.value.status_code == 400
+
+    confirmed = asyncio.run(
+        app_module.update_consent_route(
+            _consent_request(
+                user_id,
+                {
+                    "purpose": "health_connector",
+                    "decision": "revoked",
+                    "provider": "google_health",
+                    "retention": "revoke_and_purge",
+                    "confirmed": True,
+                },
+            )
+        )
+    )
+    assert confirmed["consent"]["retention"] == "revoke_and_purge"

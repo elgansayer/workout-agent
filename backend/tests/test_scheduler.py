@@ -266,6 +266,7 @@ def test_active_scheduler_scopes_each_insight_job_to_user(
         "get_all_users",
         lambda _db: [{"id": "user-a"}, {"id": "user-b"}],
     )
+    monkeypatch.setattr(scheduler, "_ai_processing_allowed", lambda *args: True)
     monkeypatch.setattr(
         "insight_cron.generate_daily_header",
         lambda _config, *, user_id=None: daily_calls.append(user_id),
@@ -280,3 +281,91 @@ def test_active_scheduler_scopes_each_insight_job_to_user(
 
     assert daily_calls == ["user-a", "user-b"]
     assert weekly_calls == ["user-a", "user-b"]
+
+
+# ---------------------------------------------------------------------------
+# Consent-gated insight processing
+# ---------------------------------------------------------------------------
+
+
+def test_insight_processing_requires_active_ai_consent(tmp_path) -> None:
+    from consent_ledger import (
+        CURRENT_CONSENT_POLICY_VERSION,
+        ConsentPurpose,
+        grant_consent,
+        revoke_consent,
+    )
+    from database import get_legacy_user_id, get_or_create_user, init_db
+
+    db_path = str(tmp_path / "scheduler-consent.db")
+    init_db(db_path)
+    user = get_or_create_user("scheduler-consent@example.com", "Synthetic", db_path)
+    user_id = user["id"]
+
+    assert not scheduler._ai_processing_allowed(db_path, user_id)
+
+    grant_consent(
+        db_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+        actor_id=user_id,
+        scopes=("gemini",),
+        provider="gemini",
+    )
+    assert scheduler._ai_processing_allowed(db_path, user_id)
+
+    revoke_consent(
+        db_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        actor_id=user_id,
+        provider="gemini",
+    )
+    assert not scheduler._ai_processing_allowed(db_path, user_id)
+
+    assert scheduler._ai_processing_allowed(
+        db_path, get_legacy_user_id(db_path)
+    )
+
+
+def test_active_scheduler_skips_insights_without_ai_consent(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    from consent_ledger import (
+        CURRENT_CONSENT_POLICY_VERSION,
+        ConsentPurpose,
+        grant_consent,
+    )
+    from database import get_or_create_user, init_db
+
+    db_path = str(tmp_path / "scheduler-skip.db")
+    init_db(db_path)
+    user = get_or_create_user("scheduler-skip@example.com", "Synthetic", db_path)
+    user_id = user["id"]
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        scheduler, "get_all_users", lambda _db: [{"id": user_id}]
+    )
+    monkeypatch.setattr(
+        "insight_cron.generate_daily_header",
+        lambda _config, *, user_id=None: calls.append(user_id),
+    )
+
+    config = MagicMock(database_path=db_path)
+    scheduler.run_daily_insight(config)
+    assert calls == []
+
+    grant_consent(
+        db_path,
+        user_id=user_id,
+        purpose=ConsentPurpose.AI_PROCESSING,
+        policy_version=CURRENT_CONSENT_POLICY_VERSION,
+        actor_id=user_id,
+        scopes=("gemini",),
+        provider="gemini",
+    )
+    scheduler.run_daily_insight(config)
+    assert calls == [user_id]

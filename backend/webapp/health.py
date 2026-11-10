@@ -13,10 +13,9 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
+from connectors.builtin import build_builtin_registry
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-
-from connectors.builtin import build_builtin_registry
 
 Receive = Callable[[], Awaitable[dict[str, Any]]]
 Send = Callable[[dict[str, Any]], Awaitable[None]]
@@ -34,6 +33,7 @@ _REQUIRED_TABLES = frozenset(
         "workout_history",
         "notifications",
         "hevy_meta",
+        "consent_ledger_events",
     }
 )
 

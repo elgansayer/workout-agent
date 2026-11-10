@@ -51,6 +51,8 @@ A deployment must not claim that account deletion, backup purging or provider-si
 
 Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export, correction or deletion of their account data and can withdraw consent for optional processing.
 
+Consent and permission decisions are stored in an append-only, tenant-scoped ledger (`consent_ledger_events`). Each entry records the purpose, policy version, granted scopes, actor, decision time and decision. The current state for a purpose is the most recent entry; a withdrawal records a new entry rather than editing history. Features must check the current decision before processing or delivering data, and a withdrawal stops future processing. Health connector withdrawal records whether historical health data is retained for the documented deletion workflow or purged immediately.
+
 Applicable legal rights vary by jurisdiction. The deployment operator is responsible for authenticating a requester before disclosing, changing or deleting account data and for responding within any legally required period.
 
 ## Security

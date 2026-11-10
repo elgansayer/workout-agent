@@ -18,6 +18,7 @@
         ['ai', 'AI coach'],
         ['profile', 'Profile'],
         ['notifications', 'Notifications'],
+        ['privacy', 'Privacy & consent'],
       ];
       track option[0]
     ) {
@@ -307,5 +308,50 @@
       </div>
       <div id="pref-status" class="key-status" role="status">{{ prefStatus() }}</div>
     </div>
+  </section>
+
+  <!-- ──────────── Privacy & Consent ──────────── -->
+  <section class="card" id="settings-privacy" [hidden]="section() !== 'privacy'">
+    <div class="card-head">
+      <h2>Privacy &amp; consent</h2>
+    </div>
+    <p class="muted">
+      Optional features check the current consent decision before processing or delivering
+      data. Withdrawing consent stops future processing and keeps the decision history.
+    </p>
+    @if (data.consents?.length) {
+      @for (c of data.consents; track c.purpose + '-' + c.provider) {
+        <div
+          class="provider-config"
+          style="margin-bottom: 1rem; padding-top: 1rem; border-top: 1px solid var(--border)"
+        >
+          <div class="card-head" style="margin-bottom: 0.5rem">
+            <h3>{{ c.purpose | titlecase }}{{ c.provider ? ' · ' + c.provider : '' }}</h3>
+            @if (c.active) {
+              <span class="status on">Active</span>
+            } @else {
+              <span class="status off">Withdrawn</span>
+            }
+          </div>
+          <p class="muted" style="font-size: 0.85rem; margin-bottom: 0.75rem">
+            Policy {{ c.policy_version }} · {{ c.scopes?.length || 0 }} scope(s) recorded ·
+            {{ c.occurred_at }}
+          </p>
+          @if (c.active) {
+            <button
+              class="btn btn-ghost btn-danger btn-sm"
+              type="button"
+              [disabled]="consentBusy() === c.purpose"
+              (click)="revokeConsent(c.purpose, c.provider)"
+            >
+              Withdraw
+            </button>
+          }
+        </div>
+      }
+    } @else {
+      <p class="panel muted">No consent decisions have been recorded yet.</p>
+    }
+    <p role="status">{{ consentStatus() }}</p>
   </section>
 }
