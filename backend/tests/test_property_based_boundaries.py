@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from copy import deepcopy
 import json
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from math import isfinite
 from pathlib import Path
@@ -11,19 +11,19 @@ from tempfile import TemporaryDirectory
 from typing import Any
 
 import pytest
-from hypothesis import example, given, settings, strategies as st
-from pydantic import ValidationError
-
 from database import get_recent_hevy_logs, init_db, save_workout
 from dynamic_programme import (
     MAX_DURATION_WEEKS,
     MIN_DURATION_WEEKS,
     ProgrammePreviewRequest,
     _allocate_blocks,
+    build_programme_preview,
     serialise_hevy_source,
+    validate_programme_preview,
 )
 from hevy_parser import _top_set, normalise_name, parse_workout
 from hevy_reader import (
+    CompletedWorkout,
     ExerciseTemplate,
     HevyTrainingData,
     Routine,
@@ -31,6 +31,9 @@ from hevy_reader import (
     _parse_routine,
     _parse_workout,
 )
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
+from pydantic import ValidationError
 
 GOALS = (
     "general_fitness",
@@ -459,3 +462,202 @@ def test_equivalent_provider_dict_key_order_has_the_same_source_hash(
         return serialise_hevy_source(data)["routines"][0]["source_hash"]
 
     assert source_hash(first_target) == source_hash(second_target)
+
+
+@settings(max_examples=100, deadline=None)
+@given(
+    st.integers(min_value=MIN_DURATION_WEEKS, max_value=MAX_DURATION_WEEKS),
+    st.sampled_from(GOALS),
+    st.dates(min_value=date(2020, 1, 1), max_value=date(2035, 12, 31)),
+    st.booleans(),
+    st.sampled_from(("low", "medium", "high")),
+    st.sampled_from(("planned", "adaptive")),
+    st.sampled_from(("conservative", "balanced", "aggressive")),
+)
+@example(4, "hypertrophy", date(2026, 1, 1), False, "low", "planned", "balanced")
+@example(6, "strength_test", date(2026, 1, 1), True, "high", "adaptive", "aggressive")
+@example(52, "return_to_training", date(2026, 1, 1), False, "low", "planned", "balanced")
+def test_block_allocator_respects_phase_event_and_confidence_rules(
+    duration_weeks: int,
+    goal: str,
+    start_date: date,
+    has_event: bool,
+    history_confidence: str,
+    fatigue_management: str,
+    aggressiveness: str,
+) -> None:
+    kwargs = {
+        "has_event": has_event,
+        "history_confidence": history_confidence,
+        "fatigue_management": fatigue_management,
+        "aggressiveness": aggressiveness,
+    }
+    first = _allocate_blocks(duration_weeks, goal, start_date, **kwargs)
+    second = _allocate_blocks(duration_weeks, goal, start_date, **kwargs)
+
+    assert first == second
+    assert sum(block["duration_weeks"] for block in first) == duration_weeks
+    assert first[0]["start_week"] == 1
+    assert first[-1]["end_week"] == duration_weeks
+
+    keys = [block["key"] for block in first]
+    if duration_weeks <= 6:
+        assert len({key for key in keys if key != "calibration"}) <= 2
+    if goal != "strength_test" or not has_event:
+        assert "taper_test" not in keys
+    if history_confidence == "low" and goal != "return_to_training":
+        assert keys[0] == "calibration"
+    for block in first:
+        assert 1 <= block["duration_weeks"] <= 6
+        assert block["progression_aggressiveness"] == aggressiveness
+        assert block["fatigue_management"] == (
+            "planned_review_candidate"
+            if fatigue_management == "planned"
+            else "reactive_candidate"
+        )
+        assert block["exit_criteria"]
+        assert isinstance(block["review_gate"], bool)
+
+
+def _generated_programme_fixture() -> HevyTrainingData:
+    templates = {
+        "press": ExerciseTemplate(
+            id="press",
+            title="Press",
+            exercise_type="weight_reps",
+            primary_muscle_group="chest",
+            secondary_muscle_groups=["triceps"],
+            equipment="barbell",
+        ),
+        "row": ExerciseTemplate(
+            id="row",
+            title="Row",
+            exercise_type="weight_reps",
+            primary_muscle_group="upper_back",
+            secondary_muscle_groups=["biceps"],
+            equipment="machine",
+        ),
+        "pullup": ExerciseTemplate(
+            id="pullup",
+            title="Pull-up",
+            exercise_type="bodyweight_reps",
+            primary_muscle_group="lats",
+        ),
+        "bike": ExerciseTemplate(
+            id="bike",
+            title="Bike",
+            exercise_type="duration",
+            primary_muscle_group="cardio",
+        ),
+    }
+    routines = [
+        Routine(
+            id="routine-a",
+            title="A",
+            exercises=[
+                RoutineExercise(
+                    template_id="press",
+                    title="Press",
+                    sets=3,
+                    rest_seconds=120,
+                    target_reps=6,
+                    set_targets=[
+                        {"type": "normal", "reps": 6, "weight_kg": 60.0}
+                        for _ in range(3)
+                    ],
+                ),
+                RoutineExercise(
+                    template_id="pullup",
+                    title="Pull-up",
+                    sets=3,
+                    rest_seconds=90,
+                    set_targets=[{"type": "normal", "reps": 8} for _ in range(3)],
+                ),
+            ],
+        ),
+        Routine(
+            id="routine-b",
+            title="B",
+            exercises=[
+                RoutineExercise(
+                    template_id="row",
+                    title="Row",
+                    sets=3,
+                    rest_seconds=90,
+                    target_reps=10,
+                    set_targets=[
+                        {"type": "normal", "reps": 10, "weight_kg": 50.0}
+                        for _ in range(3)
+                    ],
+                ),
+                RoutineExercise(
+                    template_id="bike",
+                    title="Bike",
+                    sets=1,
+                    rest_seconds=0,
+                    set_targets=[{"type": "normal", "duration_seconds": 600}],
+                ),
+            ],
+        ),
+    ]
+    workouts = [
+        CompletedWorkout(
+            id=f"workout-{index}",
+            title="A" if index % 2 == 0 else "B",
+            start_time=f"2026-08-{10 + index:02d}T10:00:00Z",
+            exercises=[
+                # Deliberately incomplete history: the engine must remain
+                # conservative rather than inventing precise baselines.
+            ],
+        )
+        for index in range(8)
+    ]
+    return HevyTrainingData(
+        exercise_templates=templates,
+        routines=routines,
+        recent_workouts=workouts,
+    )
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    st.integers(min_value=MIN_DURATION_WEEKS, max_value=MAX_DURATION_WEEKS),
+    st.sampled_from(GOALS),
+    st.dates(min_value=date(2020, 1, 1), max_value=date(2035, 12, 31)),
+)
+@example(4, "hypertrophy", date(2026, 1, 1))
+@example(52, "strength_test", date(2026, 12, 31))
+def test_generated_preview_is_deterministic_and_within_bounds(
+    duration_weeks: int,
+    goal: str,
+    start_date: date,
+) -> None:
+    data = _generated_programme_fixture()
+    request = ProgrammePreviewRequest(
+        selected_routine_ids=["routine-a", "routine-b"],
+        duration_weeks=duration_weeks,
+        goal=goal,
+        start_date=start_date,
+    )
+
+    first = build_programme_preview(data, request)
+    second = build_programme_preview(data, request)
+
+    assert first == second
+    assert first["engine_version"] == "hevy-programme-v3"
+    assert sum(block["duration_weeks"] for block in first["blocks"]) == duration_weeks
+    assert validate_programme_preview(first) == []
+    keys = {block["key"] for block in first["blocks"]}
+    if goal != "strength_test":
+        assert "taper_test" not in keys
+
+    for day in first["days"]:
+        for exercise in day["exercises"]:
+            source_sets = exercise["source_sets"]
+            for prescription in exercise["prescriptions"]:
+                assert 1 <= prescription["sets"] <= source_sets + 2
+                rep_target = prescription["rep_target"]
+                if rep_target["min"] is not None:
+                    assert rep_target["min"] >= 1
+                    assert rep_target["min"] <= rep_target["max"]
+                assert prescription["rule_version"] == "hevy-programme-v3"

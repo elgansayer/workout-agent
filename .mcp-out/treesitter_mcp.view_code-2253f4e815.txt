@@ -1,0 +1,65 @@
+# account_policy.py (L330-L393 of 393)
+ 330 |     # ---------------------------------------------------------------- session
+ 331 | 
+ 332 |     def check_session(self, session: Mapping[str, Any]) -> SessionDecision:
+ 333 |         """Re-validate a decoded session against current server-side state.
+ 334 | 
+ 335 |         Raises ``sqlite3.Error`` if the state cannot be read; the caller must
+ 336 |         treat that as "unavailable" (and keep the session), never as "allowed".
+ 337 |         """
+ 338 |         user_id = session.get("user_id")
+ 339 |         if not isinstance(user_id, str) or not user_id:
+ 340 |             return self._deny_session(DenialReason.ACCOUNT_UNKNOWN)
+ 341 |         state = get_account_state(user_id, self.db_path)
+ 342 |         if state is None:
+ 343 |             return self._deny_session(DenialReason.ACCOUNT_UNKNOWN, user_id=user_id)
+ 344 | 
+ 345 |         reason = self._account_denial(state, session)
+ 346 |         if reason is not None:
+ 347 |             return self._deny_session(
+ 348 |                 reason, user_id=state["id"], email=state["email"]
+ 349 |             )
+ 350 |         return SessionDecision(allowed=True, user_id=state["id"])
+ 351 | 
+ 352 |     def _account_denial(
+ 353 |         self, state: AccountState, session: Mapping[str, Any]
+ 354 |     ) -> DenialReason | None:
+ 355 |         status = state["status"]
+ 356 |         if status != ACCOUNT_STATUS_ACTIVE:
+ 357 |             return _STATUS_REASONS.get(status, DenialReason.ACCOUNT_STATE_INVALID)
+ 358 |         if not self.config.allows(state["email"].strip().lower()):
+ 359 |             return DenialReason.NOT_ALLOWLISTED
+ 360 |         # Sessions issued before this feature carry no epoch; they are valid
+ 361 |         # exactly until the first revocation advances the stored epoch.
+ 362 |         issued = session.get(SESSION_EPOCH_KEY, 0)
+ 363 |         if isinstance(issued, bool) or not isinstance(issued, int):
+ 364 |             return DenialReason.SESSION_REVOKED
+ 365 |         if issued != state["session_epoch"]:
+ 366 |             return DenialReason.SESSION_REVOKED
+ 367 |         return None
+ 368 | 
+ 369 |     @staticmethod
+ 370 |     def _deny_session(
+ 371 |         reason: DenialReason,
+ 372 |         *,
+ 373 |         user_id: str | None = None,
+ 374 |         email: str | None = None,
+ 375 |     ) -> SessionDecision:
+ 376 |         log_access_denied("session", reason, user_id=user_id, email=email)
+ 377 |         return SessionDecision(allowed=False, reason=reason)
+ 378 | 
+ 379 |     # -------------------------------------------------------------- lifecycle
+ 380 | 
+ 381 |     def reconcile(self) -> int:
+ 382 |         """Make an allowlist change a durable revocation. Run at startup.
+ 383 | 
+ 384 |         An address removed from ``ALLOWED_EMAILS`` is already refused on its
+ 385 |         next request, but adding it back later would otherwise make a cookie
+ 386 |         issued before the removal valid again. Advancing the epoch of every
+ 387 |         account outside the allowlist ends those sessions for good.
+ 388 |         """
+ 389 |         if self.config.allowed_emails is None:
+ 390 |             return 0
+ 391 |         return revoke_sessions_outside_allowlist(
+ 392 |             self.config.allowed_emails, self.db_path
+ 393 |         )

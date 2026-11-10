@@ -45,7 +45,7 @@ def _verified_session_user(request: Request) -> str | None:
 def _source_ref(request: Request, key: AuditKey) -> str | None:
     # ProxySecurityMiddleware replaces ``client`` with the validated client
     # address, so forwarding headers are never trusted here.
-    client = request.client
+    client = getattr(request, "client", None)
     if client is None or not client.host:
         return None
     return key.pseudonym("ip", client.host)

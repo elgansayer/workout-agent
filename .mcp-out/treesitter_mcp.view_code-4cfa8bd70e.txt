@@ -1,0 +1,96 @@
+# database.py (L4066-L4160 of 4381)
+4066 | def get_active_programme(
+4067 |     user_id: str,
+4068 |     db_path: str = DEFAULT_DB_PATH,
+4069 | ) -> dict[str, Any] | None:
+4070 |     """Return the currently active programme for a user, or None."""
+4071 |     with _connect(db_path) as conn:
+4072 |         row = conn.execute(
+4073 |             """
+4074 |             SELECT id, user_id, source, template_key, definition, active,
+4075 |                    created_at, updated_at
+4076 |             FROM programmes
+4077 |             WHERE user_id = ? AND active = 1
+4078 |             """,
+4079 |             (user_id,),
+4080 |         ).fetchone()
+4081 |     if not row:
+4082 |         return None
+4083 |     return {
+4084 |         "id": row[0],
+4085 |         "user_id": row[1],
+4086 |         "source": row[2],
+4087 |         "template_key": row[3],
+4088 |         "definition": json.loads(row[4]) if row[4] else {},
+4089 |         "active": bool(row[5]),
+4090 |         "created_at": row[6],
+4091 |         "updated_at": row[7],
+4092 |     }
+4093 | 
+4094 | 
+4095 | def set_active_programme(
+4096 |     user_id: str,
+4097 |     source: str,
+4098 |     template_key: str,
+4099 |     definition: dict[str, Any] | None = None,
+4100 |     db_path: str = DEFAULT_DB_PATH,
+4101 | ) -> None:
+4102 |     """Activate a programme for a user, deactivating any previous active one."""
+4103 |     now = datetime.now(tz=timezone.utc).isoformat()
+4104 |     if source == "template":
+4105 |         raise ValueError(
+4106 |             "Static programme templates have been removed; activate a Hevy-derived definition."
+4107 |         )
+4108 |     if not isinstance(definition, dict) or not definition:
+4109 |         raise ValueError("A non-empty Hevy-derived programme definition is required.")
+4110 | 
+4111 |     from programme_validator import assert_programme_activatable
+4112 | 
+4113 |     if definition.get("blocking_violations"):
+4114 |         first = definition["blocking_violations"][0]
+4115 |         raise ValueError(
+4116 |             f"Cannot activate programme with blocking violations: {first.get('exercise')} "
+4117 |             f"violates '{first.get('rule')}'. Permitted remediation: {first.get('permitted_remediation')}"
+4118 |         )
+4119 | 
+4120 |     with _connect(db_path) as conn:
+4121 |         conn.execute("BEGIN IMMEDIATE")
+4122 |         assert_programme_activatable(
+4123 |             definition,
+4124 |             profile_rules=_profile_constraints_from_connection(conn, user_id),
+4125 |             training_rules=_training_rules_from_connection(conn, user_id),
+4126 |         )
+4127 |         conn.execute(
+4128 |             "UPDATE programmes SET active = 0 WHERE user_id = ?",
+4129 |             (user_id,),
+4130 |         )
+4131 |         conn.execute(
+4132 |             """
+4133 |             INSERT INTO programmes
+4134 |                 (user_id, source, template_key, definition, active,
+4135 |                  created_at, updated_at)
+4136 |             VALUES (?, ?, ?, ?, 1, ?, ?)
+4137 |             ON CONFLICT(user_id, template_key) DO UPDATE SET
+4138 |                 source = excluded.source,
+4139 |                 definition = excluded.definition,
+4140 |                 active = 1,
+4141 |                 updated_at = excluded.updated_at
+4142 |             """,
+4143 |             (
+4144 |                 user_id,
+4145 |                 source,
+4146 |                 template_key,
+4147 |                 json.dumps(definition, default=str),
+4148 |                 now,
+4149 |                 now,
+4150 |             ),
+4151 |         )
+4152 |         row = conn.execute(
+4153 |             "SELECT id FROM programmes WHERE user_id = ? AND template_key = ?",
+4154 |             (user_id, template_key),
+4155 |         ).fetchone()
+4156 |         new_id = row[0] if row else None
+4157 |         if new_id is not None:
+4158 |             conn.execute(
+4159 |                 """
+4160 |                 INSERT INTO programme_decisions

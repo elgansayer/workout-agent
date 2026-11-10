@@ -1,0 +1,106 @@
+# programme_runtime.py (L467-L571 of 638)
+ 467 | def _days_for_weeks(weeks: int):
+ 468 |     from datetime import timedelta
+ 469 | 
+ 470 |     return timedelta(weeks=max(0, weeks)) - timedelta(days=1)
+ 471 | 
+ 472 | 
+ 473 | def _one_day():
+ 474 |     from datetime import timedelta
+ 475 | 
+ 476 |     return timedelta(days=1)
+ 477 | 
+ 478 | 
+ 479 | def _workouts_for(user_id: str, db_path: str, limit: int = 56) -> list[dict[str, Any]]:
+ 480 |     from database import get_recent_hevy_logs
+ 481 | 
+ 482 |     try:
+ 483 |         return get_recent_hevy_logs(
+ 484 |             limit=limit, db_path=db_path, user_id=user_id
+ 485 |         )
+ 486 |     except Exception:  # noqa: BLE001 - optional history must not block the plan
+ 487 |         return []
+ 488 | 
+ 489 | 
+ 490 | def _timezone_for(user_id: str, db_path: str) -> str:
+ 491 |     from database import get_user_by_id
+ 492 | 
+ 493 |     try:
+ 494 |         user = get_user_by_id(user_id, db_path)
+ 495 |     except Exception:  # noqa: BLE001 - legacy settings may be unreadable
+ 496 |         user = None
+ 497 |     values: dict[str, Any] = dict(user) if user else {}
+ 498 |     return str(values.get("timezone") or "UTC")
+ 499 | 
+ 500 | 
+ 501 | def load_programme_runtime(
+ 502 |     user_id: str,
+ 503 |     db_path: str,
+ 504 |     *,
+ 505 |     today: date | None = None,
+ 506 |     timezone_name: str | None = None,
+ 507 |     workouts: list[dict[str, Any]] | None = None,
+ 508 | ) -> ProgrammeRuntime:
+ 509 |     """Load the tenant's active programme through the canonical runtime facade.
+ 510 | 
+ 511 |     Resolution order:
+ 512 | 
+ 513 |     1. the normalised programme domain (immutable revision);
+ 514 |     2. the activated Hevy definition while the activation bridge is pending;
+ 515 |     3. an explicit ``setup_required`` state.
+ 516 | 
+ 517 |     Paused and completed programmes are surfaced as such; they never fall back
+ 518 |     to setup or static programme data.
+ 519 |     """
+ 520 | 
+ 521 |     timezone_name = timezone_name or _timezone_for(user_id, db_path)
+ 522 |     today = today or local_today(timezone_name)
+ 523 |     history = workouts if workouts is not None else _workouts_for(user_id, db_path)
+ 524 | 
+ 525 |     domain_programme = None
+ 526 |     domain_revision = None
+ 527 |     try:
+ 528 |         from programme_domain import ProgrammeService
+ 529 | 
+ 530 |         service = ProgrammeService(db_path)
+ 531 |         domain_programme = service.get_active_programme(user_id)
+ 532 |         if domain_programme is not None:
+ 533 |             domain_revision = domain_programme.current_revision
+ 534 |     except Exception:  # noqa: BLE001 - missing domain rows are a setup state
+ 535 |         domain_programme = None
+ 536 | 
+ 537 |     if domain_programme is not None and domain_revision is not None:
+ 538 |         definition = _definition_from_domain(
+ 539 |             domain_programme, domain_revision, timezone_name=timezone_name
+ 540 |         )
+ 541 |         runtime = resolve_programme_runtime(
+ 542 |             {
+ 543 |                 "source": "hevy",
+ 544 |                 "definition": definition,
+ 545 |                 "updated_at": domain_programme.activated_at
+ 546 |                 or domain_programme.updated_at,
+ 547 |                 "name": domain_programme.name,
+ 548 |             },
+ 549 |             history,
+ 550 |             today=today,
+ 551 |             timezone_name=timezone_name,
+ 552 |         )
+ 553 |         runtime.programme_id = domain_programme.id
+ 554 |         runtime.revision_id = domain_revision.id
+ 555 |         runtime.revision_number = domain_revision.revision_number
+ 556 |         return runtime
+ 557 | 
+ 558 |     from database import get_active_programme
+ 559 | 
+ 560 |     active = get_active_programme(user_id, db_path=db_path)
+ 561 |     if active is not None:
+ 562 |         runtime = resolve_programme_runtime(
+ 563 |             active, history, today=today, timezone_name=timezone_name
+ 564 |         )
+ 565 |         runtime.programme_id = int(active["id"])
+ 566 |         return runtime
+ 567 | 
+ 568 |     return _lifecycle_runtime(user_id, db_path, today=today, timezone_name=timezone_name)
+ 569 | 
+ 570 | 
+ 571 | def _lifecycle_runtime(

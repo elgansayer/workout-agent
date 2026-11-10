@@ -7,6 +7,7 @@ fail closed to ``internal`` rather than being treated as public.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -116,7 +117,10 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "p256dh": DataClass.CREDENTIAL,
     "vapid_private_key": DataClass.CREDENTIAL,
     "web_auth_secret": DataClass.CREDENTIAL,
+    "session_token_hash": DataClass.CREDENTIAL,
     "encryption_key": DataClass.CREDENTIAL,
+    # last characters of a stored credential, kept only to render a masked hint
+    "key_hint": DataClass.CREDENTIAL,
     # identifiers
     "user_id": DataClass.IDENTIFIER,
     "actor_id": DataClass.IDENTIFIER,
@@ -127,6 +131,11 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "endpoint": DataClass.IDENTIFIER,
     "device_id": DataClass.IDENTIFIER,
     "external_user_id": DataClass.IDENTIFIER,
+    # ``user_identities.subject`` is the identity provider's stable per-person id
+    # and ``legacy_ownership_migrations.applied_by`` names the operator who ran
+    # an assignment. Neither may reach logs or exports unredacted.
+    "subject": DataClass.IDENTIFIER,
+    "applied_by": DataClass.IDENTIFIER,
     # health
     "weight_kg": DataClass.HEALTH,
     "body_fat_pct": DataClass.HEALTH,
@@ -242,6 +251,26 @@ def safe_log_value(field_name: str, value: Any) -> Any:
     if classification is DataClass.ANALYTICS:
         return "[REDACTED:ANALYTICS]"
     return value
+
+
+_PSEUDONYM_DOMAIN = b"workout-agent/log-pseudonym/v1\x00"
+_PSEUDONYM_HEX_LENGTH = 12
+
+
+def pseudonymise_identifier(value: str) -> str:
+    """Return a short, stable correlation tag for an Identifier-class value.
+
+    Identifier-class values (email addresses, IP addresses, ...) may be logged
+    only when redacted or pseudonymised. The tag lets an operator correlate
+    repeated events for the same identity, or confirm a known address by hashing
+    it with the same function, without placing the address in the log stream.
+
+    This is pseudonymisation, not anonymisation: the hash is unkeyed, so someone
+    who already holds a candidate address can confirm it. It cannot be reversed
+    to recover an unknown address.
+    """
+    digest = hashlib.sha256(_PSEUDONYM_DOMAIN + value.encode("utf-8")).hexdigest()
+    return digest[:_PSEUDONYM_HEX_LENGTH]
 
 
 def redact_for_log(value: Any, *, field_name: str | None = None) -> Any:

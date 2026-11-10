@@ -46,8 +46,10 @@ class RequestCorrelationMiddleware:
 def get_request_id(request: Request) -> str:
     """Return the request's correlation id, minting one if no middleware ran."""
 
-    request_id = getattr(request.state, _STATE_KEY, None)
+    state = getattr(request, "state", None)
+    request_id = getattr(state, _STATE_KEY, None) if state is not None else None
     if not isinstance(request_id, str) or not request_id:
         request_id = uuid.uuid4().hex
-        setattr(request.state, _STATE_KEY, request_id)
+        if state is not None:
+            setattr(state, _STATE_KEY, request_id)
     return request_id

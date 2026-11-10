@@ -1,0 +1,61 @@
+# auth_boundary.py (L1-L60 of 264)
+   1 | """Global authentication boundary for the Workout Agent web application.
+   2 | 
+   3 | Personalised routes fail closed by default.  The only anonymous HTTP surface is
+   4 | an explicit set of login/OAuth/health routes plus narrowly recognised static
+   5 | assets needed to render the login shell.  The boundary is installed at the
+   6 | FastAPI middleware-stack level so future HTML, JSON, streaming, download, or
+   7 | diagnostic routes inherit authentication without route-by-route opt-in.
+   8 | 
+   9 | A signed session cookie only proves who logged in earlier.  In authenticated
+  10 | mode every request is therefore also re-checked against the account's current
+  11 | server-side state (allowlist, suspension, deletion, revoked sessions) through a
+  12 | mandatory *session guard*.  A session the guard refuses is cleared and answered
+  13 | exactly like a request that never had a session, so the response cannot be used
+  14 | to learn why access ended.
+  15 | """
+  16 | 
+  17 | from __future__ import annotations
+  18 | 
+  19 | import logging
+  20 | import re
+  21 | import sqlite3
+  22 | from collections.abc import Callable, Mapping, MutableMapping
+  23 | from typing import TYPE_CHECKING, Any
+  24 | 
+  25 | from fastapi import FastAPI
+  26 | from starlette.concurrency import run_in_threadpool
+  27 | from starlette.middleware import Middleware
+  28 | from starlette.middleware.sessions import SessionMiddleware
+  29 | from starlette.responses import JSONResponse, RedirectResponse, Response
+  30 | from starlette.types import ASGIApp, Receive, Scope, Send
+  31 | 
+  32 | from webapp.runtime_security import validate_web_runtime
+  33 | 
+  34 | if TYPE_CHECKING:
+  35 |     from account_policy import SessionDecision
+  36 | 
+  37 | logger = logging.getLogger(__name__)
+  38 | 
+  39 | SessionGuard = Callable[[Mapping[str, Any]], "SessionDecision"]
+  40 | 
+  41 | # Keep this list intentionally small.  OAuth callbacks must be reachable before
+  42 | # identity is established; liveness/readiness endpoints contain no tenant data.
+  43 | PUBLIC_EXACT_PATHS = frozenset(
+  44 |     {
+  45 |         "/login",
+  46 |         "/login/google",
+  47 |         "/auth",
+  48 |         
+  49 |         "/livez",
+  50 |         "/readyz",
+  51 |         "/favicon.ico",
+  52 |         "/sw.js",
+  53 |     }
+  54 | )
+  55 | 
+  56 | PUBLIC_STATIC_PREFIXES = ("/static/", "/assets/")
+  57 | 
+  58 | # Angular can emit fingerprinted bundles at the web root.  Recognise only a
+  59 | # root-level fingerprinted asset filename.  Never treat a nested path or a
+  60 | # generic suffix such as `.json` as public, because future user exports may use

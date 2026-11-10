@@ -11,6 +11,7 @@ import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,11 @@ pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
 import security_audit as audit
-from database import get_or_create_user, init_db, save_user_api_key, set_meta
+from account_policy import AccessPolicy, AccessPolicyConfig
+from database import get_or_create_user, init_db, set_meta
+from hevy_connection import HevyCredentialState, HevyCredentialTest
 from itsdangerous import TimestampSigner
+from secret_vault import SecretVault
 from security_audit import (
     SecurityAuditConfigurationError,
     resolve_audit_key,
@@ -31,14 +35,36 @@ from security_audit import (
 from starlette.testclient import TestClient
 
 _SECRET = "audit-routes-test-secret-that-is-long-enough"
+_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
 _REQUEST_ID = re.compile(r"[0-9a-f]{32}")
 _HEVY_KEY = "synthetic-hevy-api-key-value-0123456789abcdef"
 _AI_KEY = "synthetic-ai-provider-key-value-0123456789abcdef"
 
 
-def _cookie(user_id: str, email: str) -> str:
-    payload = base64.b64encode(json.dumps({"user": email, "user_id": user_id}).encode())
+def _cookie(user_id: str, email: str, session_id: str | None = None) -> str:
+    claims: dict[str, str] = {"user": email, "user_id": user_id}
+    if session_id is not None:
+        claims["sid"] = session_id
+    payload = base64.b64encode(json.dumps(claims).encode())
     return TimestampSigner(_SECRET).sign(payload).decode()
+
+
+def _connected_hevy() -> HevyCredentialTest:
+    return HevyCredentialTest(
+        state=HevyCredentialState.CONNECTED,
+        tested_at=datetime.now(UTC),
+        account_username="lifter42",
+        account_id="acct-1",
+        workout_count=42,
+    )
+
+
+def _rejected_hevy() -> HevyCredentialTest:
+    return HevyCredentialTest(
+        state=HevyCredentialState.INVALID,
+        tested_at=datetime.now(UTC),
+        detail="Hevy rejected the credential.",
+    )
 
 
 def _events(db: str, *event_types: str) -> list[dict[str, Any]]:
@@ -90,6 +116,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Env:
         "WEB_GOOGLE_CLIENT_ID": "audit-client-id",
         "WEB_GOOGLE_CLIENT_SECRET": "audit-client-secret",
         "WEB_AUTH_SECRET": _SECRET,
+        "ENCRYPTION_KEY": _ENCRYPTION_KEY,
         "GOOGLE_HEALTH_CLIENT_ID": "gh-client-id",
         "GOOGLE_HEALTH_CLIENT_SECRET": "gh-client-secret",
     }.items():
@@ -107,7 +134,10 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Env:
     def client_for(user_id: str | None) -> TestClient:
         client = TestClient(app_module.app)
         if user_id is not None:
-            client.cookies.set("session", _cookie(user_id, emails[user_id]))
+            session_id = app_module.SESSION_STORE.create(user_id)
+            client.cookies.set(
+                "session", _cookie(user_id, emails[user_id], session_id)
+            )
         return client
 
     return _Env(app_module, db, user_a, user_b, client_for)
@@ -129,7 +159,14 @@ def test_successful_login_is_attributed_correlated_and_pseudonymised(
         env,
         monkeypatch,
         _FakeGoogle(
-            {"userinfo": {"email": "new-user@example.com", "name": "New User"}}
+            {
+                "userinfo": {
+                    "sub": "synthetic-subject-new-user",
+                    "email": "new-user@example.com",
+                    "email_verified": True,
+                    "name": "New User",
+                }
+            }
         ),
     )
 
@@ -194,14 +231,32 @@ def test_failed_logins_are_recorded_without_exception_text_and_repeats_alert(
 def test_login_for_an_email_outside_the_allowlist_is_denied_and_only_pseudonymised(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(env.module, "ALLOWED_EMAILS", ["user-a@example.com"])
+    monkeypatch.setattr(
+        env.module,
+        "ACCESS_POLICY",
+        AccessPolicy(
+            AccessPolicyConfig(allowed_emails=frozenset({"user-a@example.com"})),
+            env.db,
+        ),
+    )
     _fake_login(
-        env, monkeypatch, _FakeGoogle({"userinfo": {"email": "Intruder@Example.com"}})
+        env,
+        monkeypatch,
+        _FakeGoogle(
+            {
+                "userinfo": {
+                    "sub": "synthetic-subject-intruder",
+                    "email": "Intruder@Example.com",
+                    "email_verified": True,
+                }
+            }
+        ),
     )
 
     response = env.client_for(None).get("/auth", follow_redirects=False)
 
-    assert response.status_code == 403
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?error=access_denied"
     (event,) = _events(env.db, "auth.login")
     assert (event["outcome"], event["severity"], event["actor_type"]) == (
         "denied",
@@ -213,7 +268,7 @@ def test_login_for_an_email_outside_the_allowlist_is_denied_and_only_pseudonymis
         "identity", "intruder@example.com"
     )
     assert "intruder" not in repr(_events(env.db)).lower()
-    assert _metadata(event) == {"reason": "email_not_allowed"}
+    assert _metadata(event) == {"reason": "access_policy_denied"}
     assert not any(
         row["event_type"] == "auth.login" and row["outcome"] == "success"
         for row in _events(env.db)
@@ -230,7 +285,7 @@ def test_login_without_an_identity_is_a_recorded_failure(
     (event,) = _events(env.db, "auth.login")
     assert (event["outcome"], _metadata(event)) == (
         "failure",
-        {"reason": "missing_identity"},
+        {"reason": "missing_subject"},
     )
 
 
@@ -258,8 +313,13 @@ def test_an_unauthenticated_logout_records_nothing(env: _Env) -> None:
 
 
 def test_saving_and_deleting_a_hevy_key_records_credential_and_connector_changes(
-    env: _Env,
+    env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(
+        env.module,
+        "verify_hevy_credentials",
+        lambda _key: _connected_hevy(),
+    )
     client = env.client_for(env.user_a)
 
     saved = client.post(
@@ -319,14 +379,16 @@ def test_deleting_an_arbitrary_provider_string_is_never_written_to_the_trail(
 ) -> None:
     pasted_secret = "sk-synthetic-pasted-secret-0123456789abcdef"
 
-    env.client_for(env.user_a).post(
+    response = env.client_for(env.user_a).post(
         "/api/settings/key/delete", json={"provider": pasted_secret}
     )
 
+    assert response.status_code == 400
     (event,) = _events(env.db)
-    assert (event["event_type"], event["subject_id"]) == (
+    assert (event["event_type"], event["subject_id"], event["outcome"]) == (
         "credential.deleted",
         "unknown",
+        "failure",
     )
     assert pasted_secret not in repr(event)
 
@@ -334,14 +396,19 @@ def test_deleting_an_arbitrary_provider_string_is_never_written_to_the_trail(
 def test_hevy_connection_tests_are_recorded_for_both_outcomes(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    results = iter([7, None])
-    monkeypatch.setattr("hevy_client.get_workout_count", lambda _key: next(results))
+    results = iter([_connected_hevy(), _rejected_hevy()])
+    monkeypatch.setattr(
+        env.module,
+        "verify_hevy_credentials",
+        lambda _key: next(results),
+    )
     client = env.client_for(env.user_a)
 
     ok = client.post("/api/settings/verify-hevy", json={"api_key": _HEVY_KEY})
     bad = client.post("/api/settings/verify-hevy", json={"api_key": _HEVY_KEY})
 
-    assert ok.json()["status"] == "ok" and bad.json()["status"] == "error"
+    assert ok.status_code == 200 and ok.json()["status"] == "ok"
+    assert bad.status_code == 400
     first, second = _events(env.db, "connector.test")
     assert (first["outcome"], second["outcome"]) == ("success", "failure")
     assert _metadata(second) == {"provider": "hevy", "reason": "provider_rejected"}
@@ -351,7 +418,9 @@ def test_hevy_connection_tests_are_recorded_for_both_outcomes(
 def test_history_sync_records_counts_on_success_and_only_a_reason_on_failure(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    save_user_api_key(env.user_a, "hevy", _HEVY_KEY, db_path=env.db)
+    SecretVault(env.db, environ={"ENCRYPTION_KEY": _ENCRYPTION_KEY}).store(
+        env.user_a, "hevy", api_key=_HEVY_KEY
+    )
     results = iter(
         [
             {"workouts_found": 5, "processed": 4},
@@ -553,7 +622,7 @@ def test_anonymous_access_outside_production_raises_no_alert(
     assert _events(db) == []  # an anonymous logout has no session to revoke
 
 
-def test_anonymous_request_served_under_production_env_raises_a_critical_alert(
+def test_anonymous_request_refused_under_production_env_raises_a_critical_alert(
     anonymous_app: tuple[Any, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module, db = anonymous_app
@@ -564,7 +633,9 @@ def test_anonymous_request_served_under_production_env_raises_a_critical_alert(
     monkeypatch.setenv("APP_ENV", "production")  # the process posture regressed
     response = client.get("/api/notifications")
 
-    assert response.status_code == 200
+    # Fail closed: the local fallback tenant is never served once the process
+    # claims to be production, but the unsafe posture is still alerted on.
+    assert response.status_code == 401
     (alert,) = _events(db, "alert.production_auth_disabled")
     assert (alert["severity"], alert["outcome"], alert["actor_type"]) == (
         "critical",

@@ -1,0 +1,90 @@
+# app.py (L2973-L3061 of 3061)
+2973 | ):
+2974 |     user_id = _check_api_auth(request)
+2975 |     notifs = get_notifications(
+2976 |         user_id, limit=limit, unread_only=unread_only, db_path=DB_PATH
+2977 |     )
+2978 |     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+2979 |     return JSONResponse(
+2980 |         jsonable_encoder(
+2981 |             {
+2982 |                 "notifications": notifs,
+2983 |                 "unread_count": unread_count,
+2984 |             }
+2985 |         )
+2986 |     )
+2987 | 
+2988 | 
+2989 | @app.post("/api/notifications/{notification_id}/read")
+2990 | def api_mark_notification_read(notification_id: int, request: Request):
+2991 |     user_id = _check_api_auth(request)
+2992 |     success = mark_notification_read(notification_id, user_id, db_path=DB_PATH)
+2993 |     if not success:
+2994 |         raise HTTPException(status_code=404, detail="Notification not found")
+2995 |     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+2996 |     return {"status": "ok", "unread_count": unread_count}
+2997 | 
+2998 | 
+2999 | @app.post("/api/notifications/read-all")
+3000 | def api_mark_all_notifications_read(request: Request):
+3001 |     user_id = _check_api_auth(request)
+3002 |     updated = mark_all_notifications_read(user_id, db_path=DB_PATH)
+3003 |     return {"status": "ok", "updated": updated, "unread_count": 0}
+3004 | 
+3005 | 
+3006 | @app.delete("/api/notifications/{notification_id}")
+3007 | def api_delete_notification(notification_id: int, request: Request):
+3008 |     user_id = _check_api_auth(request)
+3009 |     success = delete_notification(notification_id, user_id, db_path=DB_PATH)
+3010 |     if not success:
+3011 |         raise HTTPException(status_code=404, detail="Notification not found")
+3012 |     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+3013 |     return {"status": "ok", "unread_count": unread_count}
+3014 | 
+3015 | 
+3016 | @app.post("/api/notifications/clear")
+3017 | @app.delete("/api/notifications")
+3018 | def api_clear_notifications(request: Request):
+3019 |     user_id = _check_api_auth(request)
+3020 |     cleared = clear_all_notifications(user_id, db_path=DB_PATH)
+3021 |     return {"status": "ok", "cleared": cleared, "unread_count": 0}
+3022 | 
+3023 | 
+3024 | @app.post("/api/notifications/test-coach")
+3025 | def api_test_coach_notification(request: Request):
+3026 |     user_id = _check_api_auth(request)
+3027 |     nid = save_notification(
+3028 |         user_id,
+3029 |         title="✨ Coach Status Update",
+3030 |         message="Coach analysis active: Keep recovery high and log your sets accurately today!",
+3031 |         type="coach",
+3032 |         link="/dashboard",
+3033 |         db_path=DB_PATH,
+3034 |     )
+3035 |     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
+3036 |     return {"status": "ok", "id": nid, "unread_count": unread_count}
+3037 | 
+3038 | 
+3039 | @app.get("/api/chat-history")
+3040 | def api_chat_history(request: Request):
+3041 |     user_id = _check_api_auth(request)
+3042 |     return JSONResponse(
+3043 |         jsonable_encoder(
+3044 |             {"messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)}
+3045 |         )
+3046 |     )
+3047 | 
+3048 | 
+3049 | @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
+3050 | async def catch_all(full_path: str, request: Request):
+3051 |     if full_path.startswith(
+3052 |         ("api/", "static/", "login/google", "auth", "google-health/")
+3053 |     ):
+3054 |         raise HTTPException(status_code=404, detail="Not found")
+3055 | 
+3056 |     if full_path:
+3057 |         file_path = FRONTEND_DIST / full_path
+3058 |         if file_path.is_file():
+3059 |             return FileResponse(file_path)
+3060 | 
+3061 |     return FileResponse(FRONTEND_DIST / "index.html")

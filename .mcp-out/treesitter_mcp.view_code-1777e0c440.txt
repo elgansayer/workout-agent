@@ -1,0 +1,96 @@
+# secret_vault.py (L1406-L1500 of 1644)
+1406 |                     plaintext[name] = encryption.read_legacy_value(master, stored)
+1407 |                     legacy_fields.add(name)
+1408 |             except encryption.DecryptionError as exc:
+1409 |                 logger.warning(
+1410 |                     "A stored %s credential for user %s could not be decrypted (%s).",
+1411 |                     spec.provider,
+1412 |                     _user_ref(uid),
+1413 |                     exc.reason,
+1414 |                 )
+1415 |                 raise CredentialUnavailableError(
+1416 |                     spec.provider, UnavailableReason.DECRYPTION_FAILED
+1417 |                 ) from None
+1418 | 
+1419 |         if legacy_fields:
+1420 |             self._upgrade_in_place(master, row, plaintext)
+1421 | 
+1422 |         def secret(name: str) -> SecretValue | None:
+1423 |             value = plaintext.get(name)
+1424 |             return SecretValue(value) if value else None
+1425 | 
+1426 |         return ResolvedCredential(
+1427 |             provider=spec.provider,
+1428 |             version=row.key_version,
+1429 |             api_key=secret("api_key"),
+1430 |             client_id=row.client_id,
+1431 |             client_secret=secret("client_secret"),
+1432 |             refresh_token=secret("refresh_token"),
+1433 |             model=row.model,
+1434 |         )
+1435 | 
+1436 |     # -- legacy migration --------------------------------------------------
+1437 | 
+1438 |     def _upgrade_in_place(
+1439 |         self,
+1440 |         master: encryption.MasterKey,
+1441 |         row: _Row,
+1442 |         plaintext: Mapping[str, str],
+1443 |     ) -> bool:
+1444 |         """Re-seal a legacy row under per-user encryption (compare-and-swap)."""
+1445 |         sealed = {
+1446 |             name: encryption.seal(
+1447 |                 master,
+1448 |                 user_id=row.user_id,
+1449 |                 provider=row.provider,
+1450 |                 field_name=name,
+1451 |                 plaintext=value,
+1452 |             )
+1453 |             for name, value in plaintext.items()
+1454 |         }
+1455 |         primary = "api_key" if plaintext.get("api_key") else "refresh_token"
+1456 |         hint = _hint_for(plaintext.get(primary, "")) if primary in plaintext else ""
+1457 |         try:
+1458 |             with self._db() as conn:
+1459 |                 updated = conn.execute(
+1460 |                     """
+1461 |                     UPDATE user_api_keys
+1462 |                     SET api_key = ?, client_secret = ?, refresh_token = ?,
+1463 |                         key_hint = COALESCE(key_hint, ?)
+1464 |                     WHERE id = ? AND user_id = ?
+1465 |                       AND api_key = ? AND client_secret IS ? AND refresh_token IS ?
+1466 |                     """,
+1467 |                     (
+1468 |                         sealed.get("api_key", ""),
+1469 |                         sealed.get("client_secret"),
+1470 |                         sealed.get("refresh_token"),
+1471 |                         hint or None,
+1472 |                         row.id,
+1473 |                         row.user_id,
+1474 |                         row.api_key,
+1475 |                         row.client_secret,
+1476 |                         row.refresh_token,
+1477 |                     ),
+1478 |                 )
+1479 |                 if updated.rowcount != 1:
+1480 |                     return False  # another process upgraded it first
+1481 |                 self._insert_audit(
+1482 |                     conn,
+1483 |                     user_id=row.user_id,
+1484 |                     provider=row.provider,
+1485 |                     action=CredentialAction.MIGRATE,
+1486 |                     outcome="success",
+1487 |                     detail="legacy_format",
+1488 |                     actor="system",
+1489 |                     source="migration",
+1490 |                     version=row.key_version,
+1491 |                     now=self._now(),
+1492 |                 )
+1493 |         except VaultError:
+1494 |             return False
+1495 |         return True
+1496 | 
+1497 |     def _count_legacy_fields(self) -> int:
+1498 |         with self._db() as conn:
+1499 |             found = conn.execute(
+1500 |                 """

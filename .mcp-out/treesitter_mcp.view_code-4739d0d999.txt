@@ -1,0 +1,151 @@
+# secret_vault.py (L605-L754 of 1644)
+ 605 | class SecretVault:
+ 606 |     """Tenant-scoped credential service. Construct one per use; it is stateless."""
+ 607 | 
+ 608 |     def __init__(
+ 609 |         self,
+ 610 |         db_path: str = DEFAULT_DB_PATH,
+ 611 |         *,
+ 612 |         environ: Mapping[str, str] | None = None,
+ 613 |         clock: Callable[[], datetime] | None = None,
+ 614 |     ) -> None:
+ 615 |         self._db_path = db_path
+ 616 |         self._environ = environ
+ 617 |         self._clock = clock or (lambda: datetime.now(tz=timezone.utc))
+ 618 | 
+ 619 |     # -- infrastructure ----------------------------------------------------
+ 620 | 
+ 621 |     def _now(self) -> str:
+ 622 |         return self._clock().isoformat()
+ 623 | 
+ 624 |     @contextlib.contextmanager
+ 625 |     def _db(self) -> Iterator[sqlite3.Connection]:
+ 626 |         try:
+ 627 |             with _connect(self._db_path) as conn:
+ 628 |                 yield conn
+ 629 |         except sqlite3.Error as exc:
+ 630 |             logger.warning("Credential storage error (%s).", type(exc).__name__)
+ 631 |             raise VaultUnavailableError("storage_error") from None
+ 632 | 
+ 633 |     def _master(self) -> encryption.MasterKey:
+ 634 |         try:
+ 635 |             return encryption.load_master_key(self._environ)
+ 636 |         except encryption.EncryptionUnavailableError as exc:
+ 637 |             raise VaultUnavailableError(exc.reason) from None
+ 638 | 
+ 639 |     def availability(self) -> VaultAvailability:
+ 640 |         """Report whether credentials can be encrypted here (no secrets, no I/O)."""
+ 641 |         try:
+ 642 |             encryption.load_master_key(self._environ)
+ 643 |         except encryption.EncryptionUnavailableError as exc:
+ 644 |             return VaultAvailability(False, exc.reason)
+ 645 |         return VaultAvailability(True, None)
+ 646 | 
+ 647 |     @staticmethod
+ 648 |     def _fetch(conn: sqlite3.Connection, user_id: str, provider: str) -> _Row | None:
+ 649 |         found = conn.execute(
+ 650 |             _SELECT_ROW + " WHERE user_id = ? AND provider = ?",
+ 651 |             (user_id, provider),
+ 652 |         ).fetchone()
+ 653 |         return _row_from(found) if found else None
+ 654 | 
+ 655 |     @staticmethod
+ 656 |     def _require_user(conn: sqlite3.Connection, user_id: str) -> None:
+ 657 |         if conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone() is None:
+ 658 |             raise UnknownUserError("The account no longer exists.")
+ 659 | 
+ 660 |     @staticmethod
+ 661 |     def _insert_audit(
+ 662 |         conn: sqlite3.Connection,
+ 663 |         *,
+ 664 |         user_id: str,
+ 665 |         provider: str,
+ 666 |         action: CredentialAction,
+ 667 |         outcome: str,
+ 668 |         detail: str | None,
+ 669 |         actor: str,
+ 670 |         source: str,
+ 671 |         version: int | None,
+ 672 |         now: str,
+ 673 |     ) -> None:
+ 674 |         conn.execute(
+ 675 |             """
+ 676 |             INSERT INTO credential_audit_events
+ 677 |                 (user_id, provider, action, outcome, detail, actor, source,
+ 678 |                  credential_version, created_at)
+ 679 |             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ 680 |             """,
+ 681 |             (
+ 682 |                 user_id,
+ 683 |                 provider,
+ 684 |                 action.value,
+ 685 |                 outcome,
+ 686 |                 _safe_detail(detail),
+ 687 |                 actor,
+ 688 |                 source,
+ 689 |                 version,
+ 690 |                 now,
+ 691 |             ),
+ 692 |         )
+ 693 | 
+ 694 |     def _audit_failure(
+ 695 |         self,
+ 696 |         user_id: str,
+ 697 |         provider: str,
+ 698 |         action: CredentialAction,
+ 699 |         exc: VaultError,
+ 700 |         actor: str,
+ 701 |         source: str,
+ 702 |     ) -> None:
+ 703 |         """Best-effort failure record; it can never mask the original error."""
+ 704 |         try:
+ 705 |             with self._db() as conn:
+ 706 |                 self._insert_audit(
+ 707 |                     conn,
+ 708 |                     user_id=user_id,
+ 709 |                     provider=provider,
+ 710 |                     action=action,
+ 711 |                     outcome="failure",
+ 712 |                     detail=_failure_detail(exc),
+ 713 |                     actor=actor,
+ 714 |                     source=source,
+ 715 |                     version=None,
+ 716 |                     now=self._now(),
+ 717 |                 )
+ 718 |         except VaultError:
+ 719 |             logger.warning("Could not record a failed credential %s.", action.value)
+ 720 | 
+ 721 |     # -- display (metadata only, never decrypts) ---------------------------
+ 722 | 
+ 723 |     def describe(self, user_id: str, provider: str) -> CredentialSummary:
+ 724 |         """Return the masked summary for one credential (placeholder if unset)."""
+ 725 |         uid = _clean_identity(user_id)
+ 726 |         spec = provider_spec(provider)
+ 727 |         with self._db() as conn:
+ 728 |             row = self._fetch(conn, uid, spec.provider)
+ 729 |         return _summary_for(spec, row)
+ 730 | 
+ 731 |     def list_credentials(self, user_id: str) -> dict[str, CredentialSummary]:
+ 732 |         """Return a summary for every known provider, keyed by provider id."""
+ 733 |         uid = _clean_identity(user_id)
+ 734 |         with self._db() as conn:
+ 735 |             rows = {
+ 736 |                 row.provider: row
+ 737 |                 for row in (
+ 738 |                     _row_from(found)
+ 739 |                     for found in conn.execute(
+ 740 |                         _SELECT_ROW + " WHERE user_id = ?", (uid,)
+ 741 |                     ).fetchall()
+ 742 |                 )
+ 743 |             }
+ 744 |         summaries: dict[str, CredentialSummary] = {}
+ 745 |         for provider in known_providers():
+ 746 |             spec = provider_spec(provider)
+ 747 |             summaries[provider] = _summary_for(spec, rows.get(provider))
+ 748 |         return summaries
+ 749 | 
+ 750 |     def recent_events(
+ 751 |         self,
+ 752 |         user_id: str,
+ 753 |         *,
+ 754 |         provider: str | None = None,

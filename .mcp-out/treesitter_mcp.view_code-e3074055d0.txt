@@ -1,0 +1,151 @@
+# hevy_connection.py (L91-L240 of 257)
+  91 | def _bounded_page_params() -> dict[str, Any]:
+  92 |     """Page parameters that ask Hevy for a single item."""
+  93 |     return {"page": 1, "pageSize": 1}
+  94 | 
+  95 | 
+  96 | def _resolve_api_version(*probes: HevyProbe) -> str:
+  97 |     """Return the API version Hevy reported, preferring an explicit one."""
+  98 |     for result in probes:
+  99 |         if result.api_version and result.api_version != API_VERSION:
+ 100 |             return result.api_version
+ 101 |     return API_VERSION
+ 102 | 
+ 103 | 
+ 104 | def _account_username(payload: Mapping[str, Any]) -> str | None:
+ 105 |     value = payload.get("username")
+ 106 |     if isinstance(value, str) and value.strip():
+ 107 |         return value.strip()
+ 108 |     return None
+ 109 | 
+ 110 | 
+ 111 | def _account_id(payload: Mapping[str, Any]) -> str | None:
+ 112 |     value = payload.get("id")
+ 113 |     if isinstance(value, (str, int)) and str(value).strip():
+ 114 |         return str(value).strip()
+ 115 |     return None
+ 116 | 
+ 117 | 
+ 118 | def _workout_count(payload: Mapping[str, Any] | None) -> int | None:
+ 119 |     if not payload:
+ 120 |         return None
+ 121 |     value = payload.get("workout_count")
+ 122 |     if isinstance(value, bool):
+ 123 |         return None
+ 124 |     if isinstance(value, (int, float)):
+ 125 |         return int(value)
+ 126 |     if isinstance(value, str) and value.strip().isdigit():
+ 127 |         return int(value.strip())
+ 128 |     return None
+ 129 | 
+ 130 | 
+ 131 | def _optional_capability(
+ 132 |     api_key: str,
+ 133 |     path: str,
+ 134 |     *,
+ 135 |     timeout: int,
+ 136 | ) -> tuple[bool, HevyProbe]:
+ 137 |     """Probe one optional capability with a single bounded request."""
+ 138 |     params = None if path.endswith("/count") else _bounded_page_params()
+ 139 |     result = probe(api_key, path, params=params, timeout=timeout)
+ 140 |     return result.ok, result
+ 141 | 
+ 142 | 
+ 143 | def verify_hevy_credentials(
+ 144 |     api_key: str,
+ 145 |     *,
+ 146 |     timeout: int = CREDENTIAL_TEST_TIMEOUT,
+ 147 | ) -> HevyCredentialTest:
+ 148 |     """Verify a candidate Hevy credential with bounded requests.
+ 149 | 
+ 150 |     The credential is never logged. The returned record contains only safe
+ 151 |     metadata about the connected account and the verified capabilities.
+ 152 |     """
+ 153 |     tested_at = datetime.now(timezone.utc)
+ 154 |     candidate = api_key.strip()
+ 155 |     if not candidate:
+ 156 |         return HevyCredentialTest(
+ 157 |             state=HevyCredentialState.INVALID,
+ 158 |             tested_at=tested_at,
+ 159 |             api_version=API_VERSION,
+ 160 |             detail="No Hevy API key was supplied.",
+ 161 |         )
+ 162 |     if not is_transmittable_credential(candidate):
+ 163 |         # The key cannot be placed in an HTTP header, so it can never
+ 164 |         # authenticate. Reject it without transmitting it.
+ 165 |         logger.warning("Rejected a Hevy API key that cannot be sent to Hevy.")
+ 166 |         return HevyCredentialTest(
+ 167 |             state=HevyCredentialState.INVALID,
+ 168 |             tested_at=tested_at,
+ 169 |             api_version=API_VERSION,
+ 170 |             detail="That API key contains characters Hevy cannot accept.",
+ 171 |         )
+ 172 | 
+ 173 |     identity = probe(candidate, "user/info", timeout=timeout)
+ 174 |     if identity.rejected:
+ 175 |         logger.warning("Hevy rejected the supplied API key.")
+ 176 |         return HevyCredentialTest(
+ 177 |             state=HevyCredentialState.INVALID,
+ 178 |             tested_at=tested_at,
+ 179 |             api_version=identity.api_version,
+ 180 |             detail="Hevy rejected this API key. Generate a new key and try again.",
+ 181 |         )
+ 182 |     if not identity.ok or identity.payload is None:
+ 183 |         logger.warning("Could not confirm the Hevy account for the supplied key.")
+ 184 |         return HevyCredentialTest(
+ 185 |             state=HevyCredentialState.UNVERIFIED,
+ 186 |             tested_at=tested_at,
+ 187 |             api_version=identity.api_version,
+ 188 |             detail="Could not reach Hevy to confirm this API key. Try again shortly.",
+ 189 |         )
+ 190 | 
+ 191 |     payload = identity.payload
+ 192 |     account_username = _account_username(payload)
+ 193 |     account_id = _account_id(payload)
+ 194 | 
+ 195 |     access = probe(
+ 196 |         candidate,
+ 197 |         "workouts",
+ 198 |         params=_bounded_page_params(),
+ 199 |         timeout=timeout,
+ 200 |     )
+ 201 |     if access.status_code == 401:
+ 202 |         logger.warning("Hevy rejected the supplied API key while reading workouts.")
+ 203 |         return HevyCredentialTest(
+ 204 |             state=HevyCredentialState.INVALID,
+ 205 |             tested_at=tested_at,
+ 206 |             api_version=access.api_version,
+ 207 |             account_username=account_username,
+ 208 |             account_id=account_id,
+ 209 |             detail="Hevy rejected this API key. Generate a new key and try again.",
+ 210 |         )
+ 211 |     if access.status_code == 403:
+ 212 |         logger.warning("Hevy denied workout access for the supplied API key.")
+ 213 |         return HevyCredentialTest(
+ 214 |             state=HevyCredentialState.INSUFFICIENT_SCOPE,
+ 215 |             tested_at=tested_at,
+ 216 |             api_version=access.api_version,
+ 217 |             account_username=account_username,
+ 218 |             account_id=account_id,
+ 219 |             detail=(
+ 220 |                 "This API key cannot read your Hevy workouts. "
+ 221 |                 "Check that your Hevy subscription allows API access."
+ 222 |             ),
+ 223 |         )
+ 224 |     if not access.ok:
+ 225 |         logger.warning("Could not confirm Hevy workout access for the supplied key.")
+ 226 |         return HevyCredentialTest(
+ 227 |             state=HevyCredentialState.UNVERIFIED,
+ 228 |             tested_at=tested_at,
+ 229 |             api_version=access.api_version,
+ 230 |             account_username=account_username,
+ 231 |             account_id=account_id,
+ 232 |             detail="Could not reach Hevy to confirm this API key. Try again shortly.",
+ 233 |         )
+ 234 | 
+ 235 |     capabilities: dict[str, bool] = {REQUIRED_CAPABILITY: True}
+ 236 |     workout_count: int | None = None
+ 237 |     api_version = _resolve_api_version(identity, access)
+ 238 |     for capability, path in _OPTIONAL_CAPABILITY_PATHS:
+ 239 |         available, result = _optional_capability(
+ 240 |             candidate,

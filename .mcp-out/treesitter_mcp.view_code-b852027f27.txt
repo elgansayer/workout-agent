@@ -1,0 +1,47 @@
+# database.py (L2060-L2105 of 4381)
+2060 | def _assign_unowned(cursor: sqlite3.Cursor, table: str, legacy: str | None) -> None:
+2061 |     """Give rows with no owner to the holding account (no-op when there is none)."""
+2062 |     if legacy is None:
+2063 |         return
+2064 |     if table not in _UNOWNED_ROW_TABLES:
+2065 |         raise ValueError(f"{table} is not a pre-account table.")
+2066 |     cursor.execute(f"UPDATE {table} SET user_id = ? WHERE user_id IS NULL", (legacy,))
+2067 | 
+2068 | 
+2069 | def get_legacy_user_id(db_path: str = DEFAULT_DB_PATH) -> str:
+2070 |     """Return the local single-user tenant id.
+2071 | 
+2072 |     Only available in the explicit non-production single-user mode. Production
+2073 |     has no shared fallback tenant, so this raises :class:`TenantRequiredError`
+2074 |     there even if a holding row exists.
+2075 |     """
+2076 |     if not implicit_single_user_allowed():
+2077 |         raise TenantRequiredError(
+2078 |             "The legacy single-user tenant is disabled outside an explicit "
+2079 |             "non-production runtime."
+2080 |         )
+2081 |     with _connect(db_path) as conn:
+2082 |         row = conn.execute(
+2083 |             "SELECT id FROM users WHERE email = ?", (LEGACY_TENANT_EMAIL,)
+2084 |         ).fetchone()
+2085 |     if not row:
+2086 |         raise RuntimeError("Legacy user not found — run init_db first.")
+2087 |     return row[0]
+2088 | 
+2089 | 
+2090 | def get_current_day(
+2091 |     db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None
+2092 | ) -> int:
+2093 |     """Return the current day in the cycle (1-6)."""
+2094 |     uid = require_tenant(user_id, db_path)
+2095 |     with _connect(db_path) as conn:
+2096 |         row = conn.execute(
+2097 |             "SELECT current_day FROM programme_state WHERE user_id = ?",
+2098 |             (uid,),
+2099 |         ).fetchone()
+2100 |     return int(row[0]) if row else 1
+2101 | 
+2102 | 
+2103 | def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
+2104 |     """Move to the next legacy rotation day, wrapping after six days."""
+2105 |     uid = require_tenant(user_id, db_path)

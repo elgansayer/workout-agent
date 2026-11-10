@@ -16,14 +16,16 @@
       <div>
         <h1 class="chat-title">Coach</h1>
         <div class="chat-status">
-          <span class="status-dot" [class.thinking]="isStreaming()"></span>
-          <span class="status-text" role="status">{{
-            isStreaming()
-              ? 'Responding...'
-              : error()
-                ? 'Could not connect'
-                : 'Ask about your training'
-          }}</span>
+          <span
+            class="status-dot"
+            [class.thinking]="isStreaming()"
+            [class.online]="capability()?.status === 'ready'"
+            [class.warning]="
+              capabilities()?.overall_status === 'educational_only' ||
+              capabilities()?.overall_status === 'setup_required'
+            "
+          ></span>
+          <span class="status-text" role="status">{{ statusText() }}</span>
         </div>
       </div>
     </div>
@@ -54,6 +56,23 @@
   </div>
 
   <div class="chat-messages" #scrollContainer>
+    @if (historyLoading()) {
+      <p class="loading-state muted" role="status">Loading your conversation…</p>
+    }
+    @if (historyError()) {
+      <div class="panel error-panel" role="alert">
+        {{ historyError() }}
+        <button class="btn btn-ghost" type="button" (click)="loadChatHistory()">Try again</button>
+      </div>
+    }
+    @if (coachNeedsSetup()) {
+      <div class="chat-setup">
+        <app-setup-notice
+          [setup]="setup()"
+          headingOverride="Coach needs setup before it can answer"
+        />
+      </div>
+    }
     @if (messages().length === 0) {
       <div class="chat-welcome">
         <div class="welcome-glow"></div>
@@ -71,38 +90,21 @@
           </svg>
         </div>
         <h2 class="welcome-title">What can I help you with?</h2>
-        <p class="welcome-sub">
-          I have full access to your training logs, body composition, personal records, and
-          programme history.
-        </p>
+        <p class="welcome-sub">{{ welcomeSummary() }}</p>
         <div class="suggested-grid">
-          <button class="suggest-card" (click)="askSuggested('How is my deadlift progressing?')">
-            <span class="suggest-icon">📊</span>
-            <span class="suggest-text">How is my deadlift progressing?</span>
-          </button>
-          <button class="suggest-card" (click)="askSuggested('Am I recovering well enough?')">
-            <span class="suggest-icon">💤</span>
-            <span class="suggest-text">Am I recovering well enough?</span>
-          </button>
-          <button class="suggest-card" (click)="askSuggested('Which lifts are stalling?')">
-            <span class="suggest-icon">📉</span>
-            <span class="suggest-text">Which lifts are stalling?</span>
-          </button>
-          <button class="suggest-card" (click)="askSuggested('Should I deload this week?')">
-            <span class="suggest-icon">🔄</span>
-            <span class="suggest-text">Should I deload this week?</span>
-          </button>
-          <button
-            class="suggest-card"
-            (click)="askSuggested('How is my body composition trending?')"
-          >
-            <span class="suggest-icon">⚖️</span>
-            <span class="suggest-text">How is my body composition trending?</span>
-          </button>
-          <button class="suggest-card" (click)="askSuggested('What should I focus on this block?')">
-            <span class="suggest-icon">🎯</span>
-            <span class="suggest-text">What should I focus on this block?</span>
-          </button>
+          @for (suggest of suggestions(); track suggest.text) {
+            <button
+              class="suggest-card"
+              [class.disabled]="!suggest.enabled"
+              [disabled]="!suggest.enabled"
+              [attr.aria-disabled]="!suggest.enabled"
+              [title]="suggest.enabled ? '' : (getSuggestionExplanation(suggest.text) || 'This question needs data Coach cannot access yet')"
+              (click)="askSuggested(suggest.text)"
+            >
+              <span class="suggest-icon">{{ suggest.icon }}</span>
+              <span class="suggest-text">{{ suggest.text }}</span>
+            </button>
+          }
         </div>
       </div>
     } @else {
@@ -184,7 +186,7 @@
         class="chat-textarea"
         [(ngModel)]="userInput"
         (keydown)="onKeyDown($event)"
-        placeholder="Ask Coach anything about your training, recovery, or split..."
+        [attr.aria-description]="inputHint()"
         rows="1"
       ></textarea>
       <div class="input-actions">
@@ -192,7 +194,7 @@
           <button
             class="chat-send-btn"
             (click)="sendMessage()"
-            [disabled]="!userInput.trim()"
+            [disabled]="!canSend() || !userInput.trim()"
             title="Send message"
             aria-label="Send message"
           >
@@ -223,7 +225,7 @@
       </div>
     </div>
     <p class="chat-disclaimer">
-      Coach answers based on your training logs, recovery data, and programme.
+      {{ disclaimerText() }}
     </p>
   </div>
 </div>
