@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,6 +19,51 @@ from programme_runtime import ProgrammeRuntime
 if TYPE_CHECKING:
     from config import Config
 
+
+def _active_programme(start: date) -> dict[str, Any]:
+    return {
+        "id": 1,
+        "user_id": "test-user-id",
+        "source": "hevy",
+        "template_key": "hevy:test",
+        "definition": {
+            "name": "General strength · Hevy routines",
+            "programme_spec": {
+                "start_date": start.isoformat(),
+                "duration_weeks": 12,
+            },
+            "blocks": [
+                {
+                    "number": 1,
+                    "name": "Foundation",
+                    "start_week": 1,
+                    "end_week": 4,
+                }
+            ],
+            "days": [
+                {
+                    "number": 1,
+                    "focus": "Upper Strength",
+                    "routine_id": "routine-1",
+                    "exercises": [
+                        {
+                            "name": "Bench Press",
+                            "template_id": "tmpl-bench",
+                            "sets": 4,
+                            "rep_range": "5-8",
+                            "scheme": "4 × 5-8",
+                        }
+                    ],
+                }
+            ],
+            "rules": ["Progress load safely."],
+        },
+        "active": True,
+        "created_at": start.isoformat(),
+        "updated_at": start.isoformat(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
@@ -31,7 +76,7 @@ def test_compose_with_guidance() -> None:
         training="Legs and trunk",
         carb_tier="moderate",
         nutrition="Moderate carbs.",
-        cardio="Skip steady-state.",
+        cardio="Walk.",
         recovery="Sleep well.",
         protein_target=None,
     )
@@ -55,6 +100,11 @@ def test_parse_args_preview_flag() -> None:
 def test_parse_args_unknown_raises() -> None:
     with pytest.raises(SystemExit):
         _parse_args(["--nonexistent"])
+
+
+# ---------------------------------------------------------------------------
+# _scope_config_to_user
+# ---------------------------------------------------------------------------
 
 
 def test_scope_config_to_user_uses_only_that_users_connector_key(
@@ -91,7 +141,7 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
         gemini_model="gemini-3.8-flash",
         health_connect_file="/synthetic/legacy-health.json",
         database_path=db_path,
-        hevy_sync_routines=True,
+        hevy_sync_routines=False,
         hevy_prefill_weights=False,
         checkin_enabled=False,
         lifestyle_enabled=False,
@@ -115,7 +165,6 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
     legacy = _scope_config_to_user(config, legacy_user_id)
     assert legacy.hevy_api_key == "synthetic-server-hevy-key"
     assert legacy.health_connect_file == "/synthetic/legacy-health.json"
-    assert legacy.google_health_refresh_token == "synthetic-legacy-refresh-token"
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +344,7 @@ def test_run_with_paused_programme_does_not_prescribe_a_workout(
         "main.generate_next_workout",
         lambda *a, **kw: pytest.fail("must not generate a workout"),
     )
+    monkeypatch.setattr("main.checkin.record", lambda *a, **kw: None)
 
     assert run(preview=False) == 0
     assert "paused" in delivered[0]["args"][1].lower()

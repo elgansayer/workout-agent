@@ -1,7 +1,7 @@
 """SQLite persistence for the workout agent.
 
-Stores the current position in the 6-day cycle and a history of the raw Hevy
-payloads so progress can be reviewed over time.
+Stores tenant-scoped programme revisions, workout history, progress and the
+supporting coaching records so progress can be reviewed over time.
 """
 
 from __future__ import annotations
@@ -1116,7 +1116,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Archive any previously active static template.  Existing rows stay
         # inspectable through an immutable legacy_static revision, but no static
         # programme is offered or seeded for new users.
-        cursor.execute(
+        archived = cursor.execute(
             """
             UPDATE programmes
             SET active = 0,
@@ -1130,6 +1130,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """,
             (migration_now, migration_now),
         )
+        if archived.rowcount:
+            logger.info(
+                "Archived %d legacy static programme revision(s); "
+                "history is retained and a Hevy-native programme must be activated.",
+                archived.rowcount,
+            )
 
         # Keep the domain status and the legacy active flag aligned while both
         # read paths coexist.  Old callers only touched programmes.active, so a
@@ -2197,6 +2203,22 @@ def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -
     return nxt
 
 
+def get_programme_start_date(
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    user_id: str | None = None,
+) -> date:
+    """Return the legacy programme start date, defaulting to today if unset."""
+
+    value = get_meta("programme_start_date", db_path, user_id=user_id)
+    if value:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            pass
+    return datetime.now(tz=timezone.utc).date()
+
+
 def save_workout(
     payload: Any,
     db_path: str = DEFAULT_DB_PATH,
@@ -3031,24 +3053,6 @@ def delete_routine_record(
             "DELETE FROM hevy_routines WHERE user_id = ? AND routine_key = ?",
             (uid, routine_key),
         )
-
-
-def get_programme_start_date(
-    db_path: str = DEFAULT_DB_PATH,
-    *,
-    user_id: str | None = None,
-) -> date:
-    """Return the programme start date, defaulting to today if unset.
-
-    When *user_id* is provided, the lookup is scoped to that user.
-    """
-    value = get_meta("programme_start_date", db_path, user_id=user_id)
-    if value:
-        try:
-            return date.fromisoformat(value)
-        except ValueError:
-            pass
-    return datetime.now(tz=timezone.utc).date()
 
 
 def save_checkin(
@@ -4536,17 +4540,6 @@ def delete_push_subscription(
 # ---------------------------------------------------------------------------
 # Programme management & templates
 # ---------------------------------------------------------------------------
-
-
-def get_programme_templates() -> list[dict[str, Any]]:
-    """Deprecated compatibility shim.
-
-    Programme creation is exclusively Hevy-native.  Returning an empty list
-    prevents older clients from rendering or activating built-in templates
-    while they migrate to the preview/activate contract.
-    """
-
-    return []
 
 
 def get_active_programme(

@@ -28,7 +28,7 @@ This decision supersedes guidance that treats `program.py` as a selectable templ
 
 ## 2. Why the current design must be replaced
 
-The current architecture starts with one fixed 12-week, six-day plan in `program.py`. It then calculates targets and uses `hevy_sync.py` to create or update routines in Hevy. The existing inference path can read routines and recent workouts, but it imports all routines, relies heavily on titles and produces a descriptive split rather than a durable, selectable, adaptive programme.
+The architecture this decision replaced started with one fixed 12-week, six-day plan in `program.py`. It then calculated targets and used `hevy_sync.py` to create or update routines in Hevy. The previous inference path could read routines and recent workouts, but it imported all routines, relied heavily on titles and produced a descriptive split rather than a durable, selectable, adaptive programme. Both modules have since been removed.
 
 That architecture has five structural problems:
 

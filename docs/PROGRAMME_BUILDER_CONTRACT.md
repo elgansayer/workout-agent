@@ -112,10 +112,11 @@ Same payload plus `preview_token` and the `source_hashes` the user previewed.
   `violations`.
 * `200` — the programme was activated atomically.
 
-### `POST /api/programmes/select` (temporary compatibility adapter)
+### `POST /api/programmes/select` (removed)
 
-Retired template clients are rejected with `410`. `hybrid_powerbuilding` is
-never accepted. The endpoint is removed once no client uses it.
+Static programme selection and the template compatibility adapter have been
+removed. Clients must use `/api/programmes/preview` and
+`/api/programmes/activate`.
 
 ## 4. Cadence and roles
 

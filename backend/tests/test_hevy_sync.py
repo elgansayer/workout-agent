@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import hevy_sync
 import pytest
 from config import Config
-from program import BLOCKS, Exercise, day_exercises
 
 
-def test_every_programme_exercise_has_a_template_id() -> None:
-    for day in (1, 2, 3):
-        for exercise in day_exercises(day, BLOCKS[1]):
-            assert exercise.template_id is not None, exercise.name
+@dataclass(frozen=True)
+class Exercise:
+    name: str
+    sets: int
+    rep_range: str
+    note: str = ""
+    template_id: str | None = None
 
 
 def test_parse_rep_range_single_and_range() -> None:
@@ -60,7 +62,9 @@ def test_build_exercises_filters_unmapped() -> None:
 
 
 def test_content_hash_is_stable_and_sensitive() -> None:
-    a = hevy_sync._build_exercises(day_exercises(3, BLOCKS[1]))
+    a = hevy_sync._build_exercises(
+        [Exercise("Leg Press", 3, "10-12", "", "C7973E0E")]
+    )
     h1 = hevy_sync._content_hash("Legs & Abs", a, "notes")
     h2 = hevy_sync._content_hash("Legs & Abs", a, "notes")
     assert h1 == h2

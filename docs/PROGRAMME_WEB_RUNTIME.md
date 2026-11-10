@@ -11,9 +11,15 @@ only the authenticated tenant's active programme.
 2. The activated Hevy definition while activation clients migrate to the domain.
 3. An explicit `setup_required` state.
 
-Paused and completed programmes surface their own state. The runtime never
-falls back to the retired static `program.py` split, a template list, or a
-fabricated workout.
+The wider #976 programme improvements continue incrementally: durable
+exposure/adaptation records and calendar scheduling are deferred to future
+dedicated slices. The Dashboard, Plan, daily agent and check-ins all read the
+same active programme service. When a user has no active Hevy-native
+programme, the API returns setup guidance and the scheduler records a
+setup-required notification instead of producing a workout. Paused and
+completed programmes surface their own state. The runtime never falls back to
+the retired static `program.py` split, a template list, or a fabricated
+workout.
 
 ## Dates, cadence and prescriptions
 

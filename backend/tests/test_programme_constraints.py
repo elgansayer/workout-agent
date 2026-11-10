@@ -32,7 +32,6 @@ from hevy_reader import (
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from itsdangerous import TimestampSigner
-from program import BLOCKS, COACHING_RULES, TOTAL_DAYS, day_exercises
 from programme_inference import infer_programme
 from programme_validator import (
     validate_programme,
@@ -219,21 +218,8 @@ def test_seeded_defaults_pass_current_profile_rules(tmp_path: Any) -> None:
     prefs = database.get_user_preferences(legacy_uid, db_path=db_file)
     assert prefs["constraints"] == []
 
-    # 2. Programme state split passes validation
-    day = database.get_current_day(db_file, user_id=legacy_uid)
-    assert day == 1
+    # 2. A fresh database has no active programme until the user activates one
     assert database.get_active_programme(legacy_uid, db_path=db_file) is None
-
-    # 3. Legacy Hybrid Powerbuilding exercises pass COACHING_RULES
-    exercises = [
-        ex
-        for block in BLOCKS.values()
-        for d in range(1, TOTAL_DAYS + 1)
-        for ex in day_exercises(d, block)
-    ]
-    result = validate_programme(exercises, profile_rules=COACHING_RULES)
-    assert result.is_valid is True
-    assert result.blocking_violations == []
 
 
 def test_active_programme_passes_current_profile_rules(tmp_path: Any, monkeypatch: Any) -> None:
@@ -327,23 +313,6 @@ def test_validator_runs_on_inference() -> None:
     assert hasattr(inferred, "blocking_violations")
     assert len(inferred.blocking_violations) == 1
     assert inferred.blocking_violations[0]["exercise"] == "Bulgarian Split Squats"
-
-
-def test_validator_runs_on_selection_and_blocks(tmp_path: Any, monkeypatch: Any) -> None:
-    """Validator runs on compatibility /api/programmes/select and blocks violating activation."""
-    client, _app, db_file = _client(tmp_path, monkeypatch)
-    legacy_uid = database.get_legacy_user_id(db_file)
-
-    # Set user constraint
-    database.save_user_preferences(legacy_uid, constraints=["min_reps: 6"], db_path=db_file)
-
-    # Try selecting a maximal_strength programme (prescribes 1-4 reps)
-    res = client.post(
-        "/api/programmes/select",
-        json={"template_key": "infer_from_hevy", "goal": "maximal_strength", "duration_weeks": 12},
-    )
-    assert res.status_code == 422
-    assert "Activation blocked by profile constraint" in res.json()["detail"]
 
 
 def test_validator_runs_on_activation_and_blocks(tmp_path: Any, monkeypatch: Any) -> None:

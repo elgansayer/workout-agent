@@ -183,7 +183,6 @@ def test_programme_builder_returns_hevy_source_without_templates(
     assert response.status_code == 200
     data = response.json()
 
-    assert data["templates"] == []
     assert data["connection"]["state"] == "connected"
     assert [routine["id"] for routine in data["source"]["routines"]] == [
         "routine-a",
@@ -491,20 +490,6 @@ def test_preview_rejects_routines_from_another_account(
     assert "not available" in response.json()["detail"]
 
 
-def test_static_template_compatibility_key_is_gone(
-    tmp_path: Any,
-    monkeypatch: Any,
-) -> None:
-    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
-
-    response = client.post(
-        "/api/programmes/select",
-        json={"template_key": "hybrid_powerbuilding"},
-    )
-    assert response.status_code == 410
-    assert "removed" in response.json()["detail"].lower()
-
-
 def test_disconnected_builder_does_not_return_static_fallback(
     tmp_path: Any,
     monkeypatch: Any,
@@ -520,7 +505,6 @@ def test_disconnected_builder_does_not_return_static_fallback(
     assert response.status_code == 200
     data = response.json()
     assert data["connection"]["state"] == "disconnected"
-    assert data["templates"] == []
     assert data["source"]["routines"] == []
 
     plan = client.get("/api/plan").json()
