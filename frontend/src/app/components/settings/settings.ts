@@ -3,6 +3,12 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
+interface ConnectorSummary {
+  connection_id?: string;
+  provider: string;
+  name?: string;
+}
+
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -21,6 +27,8 @@ export class Settings implements OnInit {
   pushStatus = signal('');
   healthStatus = signal('');
   disconnectingHealth = signal(false);
+  retentionMode = signal('revoke_only');
+  connectorRetention: { [provider: string]: string } = {};
   pushBusy = signal(false);
   hevyKeyInput = '';
   hevyStatus = signal<string>('');
@@ -190,20 +198,70 @@ export class Settings implements OnInit {
     });
   }
 
+  private confirmRetention(provider: string, mode: string): boolean {
+    if (mode === 'purge') {
+      return confirm(
+        `Disconnect ${provider} and permanently delete the data it imported plus ` +
+          'insights derived from it? Workouts and check-ins you entered are kept.',
+      );
+    }
+    return true;
+  }
+
   disconnectGoogleHealth(): void {
     if (this.disconnectingHealth()) return;
+    const mode = this.retentionMode();
+    if (!this.confirmRetention('Google Health', mode)) return;
     this.disconnectingHealth.set(true);
-    this.http.post('/google-health/disconnect', {}, { responseType: 'text' }).subscribe({
-      next: () => {
-        this.disconnectingHealth.set(false);
-        this.healthStatus.set('Google Health disconnected.');
-        this.loadSettings(false);
-      },
-      error: () => {
-        this.disconnectingHealth.set(false);
-        this.healthStatus.set('Could not disconnect Google Health. Please try again.');
-      },
-    });
+    this.http
+      .post(
+        '/google-health/disconnect',
+        { mode, confirmed: mode === 'purge' },
+        { responseType: 'text' },
+      )
+      .subscribe({
+        next: () => {
+          this.disconnectingHealth.set(false);
+          this.healthStatus.set(
+            mode === 'purge'
+              ? 'Google Health disconnected and imported data purged.'
+              : 'Google Health disconnected.',
+          );
+          this.loadSettings(false);
+        },
+        error: () => {
+          this.disconnectingHealth.set(false);
+          this.healthStatus.set('Could not disconnect Google Health. Please try again.');
+        },
+      });
+  }
+
+  setConnectorRetention(provider: string, mode: string): void {
+    this.connectorRetention[provider] = mode;
+  }
+
+  disconnectConnector(connector: ConnectorSummary): void {
+    if (!connector?.connection_id) return;
+    const mode = this.connectorRetention[connector.provider] || 'revoke_only';
+    if (!this.confirmRetention(connector.name || connector.provider, mode)) return;
+    this.http
+      .delete(`/api/health/connections/${encodeURIComponent(connector.connection_id)}`, {
+        params: { mode, confirmed: String(mode === 'purge') },
+        responseType: 'text',
+      })
+      .subscribe({
+        next: () => {
+          this.healthStatus.set(
+            mode === 'purge'
+              ? `${connector.name} disconnected and imported data purged.`
+              : `${connector.name} disconnected.`,
+          );
+          this.loadSettings(false);
+        },
+        error: () => {
+          this.healthStatus.set(`Could not disconnect ${connector.name}. Please try again.`);
+        },
+      });
   }
 
   async checkPushSubscription(): Promise<void> {

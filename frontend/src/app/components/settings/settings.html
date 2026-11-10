@@ -169,6 +169,24 @@
       </div>
       @if (data.gh_configured) {
         @if (data.gh_connected) {
+          <fieldset class="retention-options">
+            <legend class="muted">When disconnecting, how should imported data be handled?</legend>
+            @for (option of data.retention_options || []; track option.mode) {
+              <label class="retention-option">
+                <input
+                  type="radio"
+                  name="gh-retention"
+                  [value]="option.mode"
+                  [checked]="retentionMode() === option.mode"
+                  (change)="retentionMode.set(option.mode)"
+                />
+                <span>
+                  <strong>{{ option.label }}</strong>
+                  <span class="muted">{{ option.explanation }}</span>
+                </span>
+              </label>
+            }
+          </fieldset>
           <button
             class="btn btn-ghost btn-danger btn-sm"
             type="button"
@@ -207,6 +225,36 @@
         <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem">
           {{ connector.message || 'Status: ' + connector.state }}
         </p>
+
+        @if (connector.connection_id) {
+          <fieldset class="retention-options">
+            <legend class="muted">When disconnecting, how should imported data be handled?</legend>
+            @for (option of connector.retention_options || []; track option.mode) {
+              <label class="retention-option">
+                <input
+                  type="radio"
+                  [name]="'retention-' + connector.provider"
+                  [value]="option.mode"
+                  [checked]="
+                    (connectorRetention[connector.provider] || 'revoke_only') === option.mode
+                  "
+                  (change)="setConnectorRetention(connector.provider, option.mode)"
+                />
+                <span>
+                  <strong>{{ option.label }}</strong>
+                  <span class="muted">{{ option.explanation }}</span>
+                </span>
+              </label>
+            }
+          </fieldset>
+          <button
+            class="btn btn-ghost btn-danger btn-sm"
+            type="button"
+            (click)="disconnectConnector(connector)"
+          >
+            Disconnect
+          </button>
+        }
       </div>
     }
   </section>

@@ -305,6 +305,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             when,
             config.database_path,
             user_id=user_id,
+            source="google_health" if synced else "health_connect",
         )
 
     _maybe_self_review(

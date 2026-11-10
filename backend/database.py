@@ -147,7 +147,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 body_fat_pct REAL,
                 muscle_pct REAL,
                 resting_hr INTEGER,
-                hrv REAL
+                hrv REAL,
+                source TEXT NOT NULL DEFAULT 'legacy'
             )
             """,
         )
@@ -492,6 +493,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON body_metrics (user_id, date DESC, id DESC)",
         )
 
+        # Migration: Record which connector imported a body-metric reading so a
+        # connector purge can remove only its own data. Existing rows predate
+        # provenance and stay as 'legacy' rather than being guessed.
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        bm_columns = {row[1] for row in cursor.fetchall()}
+        if "source" not in bm_columns:
+            cursor.execute(
+                "ALTER TABLE body_metrics "
+                "ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'",
+            )
+
         # ---- Programme templates table (multi-user) ----
         cursor.execute(
             """
@@ -822,6 +834,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # Additive canonical health schema. Kept here so every deployment has
+        # the provider/connection provenance needed by connector purge.
+        from health_schema import HEALTH_SCHEMA_SQL
+
+        cursor.executescript(HEALTH_SCHEMA_SQL)
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -1523,6 +1540,7 @@ def save_body_metrics(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    source: str = "legacy",
 ) -> None:
     """Persist a body-composition reading (weight, body fat, muscle, resting HR).
 
@@ -1530,7 +1548,9 @@ def save_body_metrics(
     None (a no-op). One row per date per user: a later reading on the same day
     replaces the earlier one, so the morning weigh-in is what gets stored.
 
-    If *user_id* is provided, the metrics are scoped to that user.
+    If *user_id* is provided, the metrics are scoped to that user. *source*
+    records the connecting provider so a connector-specific purge can remove
+    only that connector's imported readings.
     """
     if not metrics:
         return
@@ -1546,8 +1566,9 @@ def save_body_metrics(
         conn.execute(
             """
             INSERT INTO body_metrics
-                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv,
+                 user_id, source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 when,
@@ -1557,6 +1578,7 @@ def save_body_metrics(
                 metrics.get("resting_hr"),
                 metrics.get("hrv"),
                 user_id,
+                source.strip() or "legacy",
             ),
         )
 
