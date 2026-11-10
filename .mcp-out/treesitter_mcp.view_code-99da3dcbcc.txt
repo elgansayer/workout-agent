@@ -1,0 +1,82 @@
+# app.py (L620-L700 of 3061)
+ 620 | # HttpOnly / SameSite / host-only cookie and a server-side registry: a session
+ 621 | # is honoured only while it is unexpired (idle and absolute), unrevoked and
+ 622 | # owned by the user its cookie claims. See docs/SESSION_SECURITY.md.
+ 623 | app.add_middleware(
+ 624 |     HardenedSessionMiddleware,
+ 625 |     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
+ 626 |     config=SESSION_SECURITY,
+ 627 |     store=SESSION_STORE,
+ 628 |     identity_allowed=_identity_allowed,
+ 629 | )
+ 630 | 
+ 631 | 
+ 632 | @app.get("/login/google")
+ 633 | async def login_google(request: Request) -> Any:
+ 634 |     if not WEB_GOOGLE_CLIENT_ID:
+ 635 |         return HTMLResponse("Web auth is not configured.", status_code=500)
+ 636 |     redirect_uri = str(request.url_for("auth"))
+ 637 |     if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
+ 638 |         redirect_uri = redirect_uri.replace("http://", "https://")
+ 639 |     return await oauth.google.authorize_redirect(request, redirect_uri)
+ 640 | 
+ 641 | 
+ 642 | @app.get("/logout")
+ 643 | async def logout(request: Request) -> RedirectResponse:
+ 644 |     # Legacy navigation endpoint, kept for bookmarks. A state change on GET must
+ 645 |     # not be triggerable from another site, so only a browser-reported
+ 646 |     # same-origin or user-typed navigation signs out. Cross-site and same-site
+ 647 |     # (sibling subdomain) navigations are ignored; a browser that sends no
+ 648 |     # Fetch Metadata is allowed. The SPA signs out with POST /api/auth/logout,
+ 649 |     # which is CSRF protected.
+ 650 |     fetch_site = request.headers.get("sec-fetch-site", "").lower()
+ 651 |     if fetch_site and fetch_site not in {"same-origin", "none"}:
+ 652 |         return RedirectResponse("/")
+ 653 |     await run_in_threadpool(SESSION_LIFECYCLE.end, request.session)
+ 654 |     return RedirectResponse("/login")
+ 655 | 
+ 656 | 
+ 657 | @app.post("/api/auth/logout")
+ 658 | def api_logout(request: Request) -> dict[str, str]:
+ 659 |     """Revoke this browser's session server-side and delete its cookie."""
+ 660 |     SESSION_LIFECYCLE.end(request.session)
+ 661 |     return {"status": "ok"}
+ 662 | 
+ 663 | 
+ 664 | @app.post("/api/auth/logout-all")
+ 665 | def api_logout_all(request: Request) -> dict[str, Any]:
+ 666 |     """Revoke every session of the authenticated user, on every device.
+ 667 | 
+ 668 |     The owner comes from the verified session, never from the request, so one
+ 669 |     tenant can never end another tenant's sessions.
+ 670 |     """
+ 671 |     user_id = _check_api_auth(request)
+ 672 |     revoked = SESSION_LIFECYCLE.end_all(request.session, user_id)
+ 673 |     return {"status": "ok", "revoked": revoked}
+ 674 | 
+ 675 | 
+ 676 | @app.get("/api/me")
+ 677 | async def get_current_user_api(request: Request) -> Any:
+ 678 |     user = request.session.get("user")
+ 679 |     if not user:
+ 680 |         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+ 681 |     try:
+ 682 |         # A session whose account was suspended or removed is no longer a login.
+ 683 |         _check_api_auth(request)
+ 684 |     except HTTPException:
+ 685 |         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+ 686 |     return JSONResponse({"user": user})
+ 687 | 
+ 688 | 
+ 689 | def _claim_is_true(value: Any) -> bool:
+ 690 |     """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
+ 691 |     return value is True or (isinstance(value, str) and value.lower() == "true")
+ 692 | 
+ 693 | 
+ 694 | @app.get("/auth")
+ 695 | async def auth(request: Request) -> Any:
+ 696 |     if not WEB_GOOGLE_CLIENT_ID:
+ 697 |         return RedirectResponse("/")
+ 698 |     try:
+ 699 |         token = await oauth.google.authorize_access_token(request)
+ 700 |     except Exception as e:  # noqa: BLE001

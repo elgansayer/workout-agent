@@ -9,7 +9,7 @@ import checkin
 from _pytest.monkeypatch import MonkeyPatch
 from config import Config
 from database import get_checkins, get_meta, get_or_create_user, init_db, set_meta
-from program import BLOCKS
+from programme_runtime import ProgrammeRuntime
 
 
 def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
@@ -30,6 +30,38 @@ def _config(tmp_path: Any, hevy_api_key: str | None = "key") -> Config:
         google_health_refresh_token=None,
         self_review_enabled=True,
         self_review_weekday=6,
+    )
+
+
+def _runtime(*, start: date | None = None, review_weeks=None) -> ProgrammeRuntime:
+    start = start or date(2026, 1, 1)
+    return ProgrammeRuntime(
+        status="active",
+        name="Synthetic programme",
+        start_date=start,
+        end_date=start.replace(year=start.year + 1),
+        week=max(1, ((date(2026, 1, 1) - start).days // 7) + 1),
+        cycle_weeks=8,
+        blocks=[
+            {"number": 1, "name": "Foundation", "start_week": 1, "end_week": 4}
+        ],
+        block={"number": 1, "name": "Foundation", "start_week": 1, "end_week": 4},
+        days=[
+            {
+                "focus": "Chest and back",
+                "exercises": [
+                    {
+                        "name": "Incline press",
+                        "template_id": "press",
+                        "sets": 3,
+                        "rep_range": "8-12",
+                        "scheme": "3 × 8-12",
+                        "role": "primary_strength",
+                    }
+                ],
+            }
+        ],
+        review_weeks=review_weeks if review_weeks is not None else [4],
     )
 
 
@@ -71,9 +103,9 @@ def test_due_seeds_baseline_then_not_due(
     monkeypatch: MonkeyPatch, tmp_path: Any
 ) -> None:
     config = _config(tmp_path)
+    runtime = _runtime()
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
-    # First ever call seeds the baseline at the current total and is not due.
-    assert checkin.due(config) is None
+    assert checkin.due(config, runtime=runtime) is None
     assert get_meta("last_checkin_workout_count", config.database_path) == "40"
     assert get_meta("checkin_number", config.database_path) == "0"
 
@@ -82,11 +114,11 @@ def test_due_fires_after_target_workouts(
     monkeypatch: MonkeyPatch, tmp_path: Any
 ) -> None:
     config = _config(tmp_path)
+    runtime = _runtime()
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 40)
-    checkin.due(config)  # seed at 40
-    # 24 more sessions logged -> due.
+    checkin.due(config, runtime=runtime)  # seed at 40
     monkeypatch.setattr(checkin, "get_workout_count", lambda _key: 64)
-    due_info = checkin.due(config)
+    due_info = checkin.due(config, runtime=runtime)
     assert due_info is not None
     assert due_info.number == 1
     assert due_info.workouts_done == 24
@@ -95,16 +127,24 @@ def test_due_fires_after_target_workouts(
 
 def test_due_calendar_fallback_without_hevy(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
-    checkin.due(config)  # seeds number=0, last date today
-    # Pretend five weeks have passed since the last check-in.
+    runtime = _runtime()
+    checkin.due(config, runtime=runtime)  # seeds number=0, last date today
     five_weeks_ago = (
         datetime.now(tz=timezone.utc).date() - timedelta(weeks=5)
     ).isoformat()
     set_meta("last_checkin_date", five_weeks_ago, config.database_path)
-    due_info = checkin.due(config)
+    due_info = checkin.due(config, runtime=runtime)
     assert due_info is not None
     assert due_info.weeks_elapsed >= 4
     assert due_info.total_count is None
+
+
+def test_due_requires_an_active_programme(tmp_path: Any) -> None:
+    config = _config(tmp_path)
+    assert (
+        checkin.due(config, runtime=ProgrammeRuntime(status="setup_required"))
+        is None
+    )
 
 
 def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
@@ -132,7 +172,7 @@ def test_record_persists_and_resets_baseline(tmp_path: Any) -> None:
 
 def test_analyse_without_hevy_returns_empty(tmp_path: Any) -> None:
     config = _config(tmp_path, hevy_api_key=None)
-    assert checkin._analyse(config, BLOCKS[1]) == []
+    assert checkin._analyse(config, _runtime()) == []
 
 
 def test_run_checkin_resolves_the_acting_users_provider(
@@ -164,8 +204,7 @@ def test_run_checkin_resolves_the_acting_users_provider(
     message = checkin.run_checkin(
         config,
         due_info,
-        week=4,
-        block=BLOCKS[1],
+        _runtime(),
         user_id="user-a",
     )
 

@@ -1,0 +1,92 @@
+# database.py (L510-L600 of 4381)
+ 510 |             CREATE TABLE IF NOT EXISTS user_preferences (
+ 511 |                 user_id TEXT PRIMARY KEY REFERENCES users(id),
+ 512 |                 goals TEXT,
+ 513 |                 constraints TEXT,
+ 514 |                 experience_level TEXT DEFAULT 'intermediate',
+ 515 |                 coaching_style TEXT DEFAULT 'direct',
+ 516 |                 preferred_ai TEXT DEFAULT 'gemini',
+ 517 |                 ai_model TEXT,
+ 518 |                 custom_rules TEXT,
+ 519 |                 updated_at TEXT NOT NULL DEFAULT ''
+ 520 |             )
+ 521 |             """,
+ 522 |         )
+ 523 | 
+ 524 |         cursor.execute(
+ 525 |             """
+ 526 |             CREATE TABLE IF NOT EXISTS programmes (
+ 527 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 528 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 529 |                 source TEXT NOT NULL,
+ 530 |                 template_key TEXT,
+ 531 |                 definition TEXT,
+ 532 |                 active INTEGER NOT NULL DEFAULT 0,
+ 533 |                 created_at TEXT NOT NULL,
+ 534 |                 updated_at TEXT NOT NULL,
+ 535 |                 UNIQUE(user_id, template_key)
+ 536 |             )
+ 537 |             """,
+ 538 |         )
+ 539 |         cursor.execute(
+ 540 |             "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
+ 541 |             "ON programmes (user_id, active)"
+ 542 |         )
+ 543 | 
+ 544 |         cursor.execute(
+ 545 |             """
+ 546 |             CREATE TABLE IF NOT EXISTS training_rules (
+ 547 |                 user_id TEXT PRIMARY KEY REFERENCES users(id),
+ 548 |                 version INTEGER NOT NULL DEFAULT 1,
+ 549 |                 rules_json TEXT NOT NULL DEFAULT '{}',
+ 550 |                 updated_at TEXT NOT NULL DEFAULT ''
+ 551 |             )
+ 552 |             """,
+ 553 |         )
+ 554 |         # Verified Hevy connection metadata. Holds no credential material,
+ 555 |         # only the connected account identity, the last test time, the API
+ 556 |         # version and the capabilities the credential was proven to have.
+ 557 |         cursor.execute(
+ 558 |             """
+ 559 |             CREATE TABLE IF NOT EXISTS hevy_connections (
+ 560 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 561 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 562 |                 provider TEXT NOT NULL DEFAULT 'hevy',
+ 563 |                 state TEXT NOT NULL,
+ 564 |                 account_username TEXT,
+ 565 |                 account_id TEXT,
+ 566 |                 api_version TEXT,
+ 567 |                 capabilities_json TEXT NOT NULL DEFAULT '{}',
+ 568 |                 tested_at TEXT NOT NULL,
+ 569 |                 created_at TEXT NOT NULL,
+ 570 |                 updated_at TEXT NOT NULL,
+ 571 |                 UNIQUE(user_id, provider)
+ 572 |             )
+ 573 |             """,
+ 574 |         )
+ 575 |         cursor.execute(
+ 576 |             "CREATE INDEX IF NOT EXISTS idx_training_rules_user "
+ 577 |             "ON training_rules (user_id)"
+ 578 |         )
+ 579 |         cursor.execute(
+ 580 |             "CREATE INDEX IF NOT EXISTS idx_hevy_connections_user "
+ 581 |             "ON hevy_connections (user_id)"
+ 582 |         )
+ 583 | 
+ 584 |         # ---- Multi-tenant migration: Add user_id to domain tables ----
+ 585 |         cursor.execute("PRAGMA table_info(daily_log)")
+ 586 |         dl_columns = {col[1] for col in cursor.fetchall()}
+ 587 |         if "user_id" not in dl_columns:
+ 588 |             cursor.execute(
+ 589 |                 "ALTER TABLE daily_log ADD COLUMN user_id TEXT REFERENCES users(id)"
+ 590 |             )
+ 591 |         else:
+ 592 |             dl_foreign_keys = cursor.execute(
+ 593 |                 "PRAGMA foreign_key_list(daily_log)"
+ 594 |             ).fetchall()
+ 595 |             has_user_foreign_key = any(
+ 596 |                 row[2] == "users" and row[3] == "user_id" and row[4] == "id"
+ 597 |                 for row in dl_foreign_keys
+ 598 |             )
+ 599 |             if not has_user_foreign_key:
+ 600 |                 # Databases created by the previous schema already have user_id,

@@ -12,15 +12,23 @@
 }
 
 @if (data(); as data) {
-  @if (viewState() === 'empty') {
-    <app-setup-notice [setup]="setup()" />
-  }
+  @if (data.programme_status && data.programme_status !== 'active') {
+    <section class="panel" style="text-align: center; padding: 2rem">
+      <p class="muted">No active programme</p>
+      <h1>Programme {{ data.programme_status | titlecase }}</h1>
+      <p class="muted">{{ data.rotation_message }}</p>
+      <a class="btn" href="/programmes">Review programme</a>
+    </section>
+  } @else {
+    @if (viewState() === 'empty') {
+      <app-setup-notice [setup]="setup()" />
+    }
 
-  @if (viewState() === 'stale') {
-    <app-setup-notice [setup]="setup()" />
-  }
+    @if (viewState() === 'stale') {
+      <app-setup-notice [setup]="setup()" />
+    }
 
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+    @if (viewState() === 'ready' || viewState() === 'stale') {
     <header>
       <p class="muted">Active Hevy programme</p>
       <h1>{{ data.split_name }}</h1>
@@ -127,5 +135,6 @@
         }
       </ul>
     </section>
+  }
   }
 }

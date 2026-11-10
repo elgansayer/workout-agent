@@ -190,6 +190,17 @@ class _ProviderRecorder:
                     "advice": f"model={model}",
                 }
             )
+        if "Validated prescription:" in prompt:
+            baseline = (
+                prompt.split("Validated prescription:", 1)[1]
+                .split("\n\n", 1)[0]
+                .strip()
+                .splitlines()
+            )
+            body = "\n".join(baseline[1:])
+            return (
+                f"REPORT via {api_key} model={model} saw {markers}\n{body}"
+            )
         return f"REPORT via {api_key} model={model} saw {markers}"
 
     def calls_for(self, api_key: str) -> list[_Call]:
@@ -341,6 +352,41 @@ def test_concurrent_weekly_correlations_never_cross_accounts(
 # ---------------------------------------------------------------------------
 
 
+def _active_runtime() -> Any:
+    from programme_runtime import ProgrammeRuntime
+
+    today = datetime.now(tz=UTC).date()
+    day = {
+        "number": 1,
+        "routine_id": "routine-synthetic",
+        "focus": "Synthetic session",
+        "exercises": [
+            {
+                "name": "Incline press",
+                "template_id": "press",
+                "sets": 3,
+                "rep_range": "8-12",
+                "scheme": "3 × 8-12",
+                "role": "primary_strength",
+            }
+        ],
+    }
+    block = {"number": 1, "name": "Foundation", "start_week": 1, "end_week": 4}
+    return ProgrammeRuntime(
+        status="active",
+        name="Synthetic programme",
+        start_date=today,
+        end_date=today,
+        week=1,
+        cycle_weeks=8,
+        blocks=[block],
+        block=block,
+        days=[day],
+        next_day=day,
+    )
+
+
+
 def test_concurrent_daily_runs_isolate_credentials_data_and_output(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -371,10 +417,9 @@ def test_concurrent_daily_runs_isolate_credentials_data_and_output(
     monkeypatch.setattr("main.fetch_latest_workout", fake_fetch)
     monkeypatch.setattr("main.sync_routines", fake_sync_routines)
     monkeypatch.setattr("main.send_push_notification", fake_push)
-    monkeypatch.setattr("main.today_day", lambda today: 1)
     monkeypatch.setattr(
-        "main.get_programme_start_date",
-        lambda *args, **kwargs: datetime.now(tz=UTC).date(),
+        "main.load_programme_runtime",
+        lambda *args, **kwargs: _active_runtime(),
     )
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "synthetic-vapid-key")
 
@@ -427,16 +472,16 @@ def test_run_never_touches_the_keyless_tenant_with_anothers_credentials(
         lambda api_key: fetches.append(api_key) or {"workouts": []},
     )
     monkeypatch.setattr("main.sync_routines", lambda config, *, user_id: [])
-    monkeypatch.setattr("main.today_day", lambda today: 1)
     monkeypatch.setattr(
-        "main.get_programme_start_date",
-        lambda *args, **kwargs: datetime.now(tz=UTC).date(),
+        "main.load_programme_runtime",
+        lambda *args, **kwargs: _active_runtime(),
     )
 
-    # A user with no stored AI key stops with a configuration error ...
-    assert main.run(preview=True, user_id=world.keyless.user_id) == 1
+    # A user with no stored AI key still receives the deterministic plan and
+    # never borrows another tenant's AI credential.
+    assert main.run(preview=True, user_id=world.keyless.user_id) == 0
     assert recorder.calls == []
-    # ... and the next user's run is unaffected by that failure.
+    # The next user's run is unaffected and uses only its own key.
     assert main.run(preview=True, user_id=keyed.user_id) == 0
     assert [call.api_key for call in recorder.calls] == [keyed.ai_key]
 

@@ -335,7 +335,6 @@ def _spy_on_every_main_side_effect(monkeypatch: pytest.MonkeyPatch) -> dict[str,
             "save_notification",
             "save_workout",
             "generate_next_workout",
-            "generate_rest_day_message",
         )
     }
     for name, spy in spies.items():

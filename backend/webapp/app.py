@@ -27,7 +27,7 @@ import sqlite3
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -73,7 +73,6 @@ from database import (
     get_meta,
     get_notifications,
     get_personal_records,
-    get_programme_start_date,
     get_progress_history,
     get_reasoning_log,
     get_recent_bests,
@@ -130,10 +129,6 @@ from hevy_connection import (
 from hevy_history import analyse_history, build_snapshot
 from hevy_parser import normalise_name
 from hevy_reader import HevySourceSnapshot, HevyTrainingData
-from program import (
-    CYCLE_WEEKS,
-    week_in_cycle,
-)
 from programme_service import (
     ProgrammeValidationError,
     conflict_remediation,
@@ -806,17 +801,17 @@ async def auth(request: Request) -> Any:
 # Automated hype lines. One is shown per day, chosen deterministically from the
 # date, so the dashboard always greets you without an API call or a button.
 _QUOTES = [
-    "Show up today and the bar gets lighter tomorrow. One more rep than last time.",
-    "Strength is a skill you practise. Brace, pull, repeat.",
-    "Small jumps, stacked weekly, become a competition physique. Keep stacking.",
-    "Your future deadlift PR is built on the boring set you log today.",
-    "Discipline now, six-pack later. Hit your protein and your top set.",
-    "The last clean rep is where the growth lives. Earn it.",
-    "Win the morning weigh-in by winning last night's sleep.",
-    "Tight waist, wide back, heavy bar. Stay the course.",
+    "Show up today and the work gets easier tomorrow. One more rep than last time.",
+    "Strength is a skill you practise. Brace, control, repeat.",
+    "Small jumps, stacked weekly, become real progress. Keep stacking.",
+    "Your next personal best is built on the boring set you log today.",
+    "Consistency now, results later. Hit your plan and your target.",
+    "The last clean rep is where the adaptation lives. Earn it.",
+    "Win the morning by winning last night's sleep.",
+    "Train with intent, recover with purpose. Stay the course.",
     "You do not need motivation, you need the next set. Go.",
     "Consistency is the cheat code. You already have it.",
-    "Add a kilo or add a rep. Either way, move forward.",
+    "Add a rep or add a little load. Either way, move forward.",
     "Recovery is training too. Eat, sleep, repeat.",
 ]
 
@@ -917,28 +912,32 @@ def _dashboard_context(
     today: date | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a dashboard from the active Hevy programme, or a setup state."""
-    from programme_runtime import local_today, resolve_programme_runtime
+    """Build a dashboard from the active programme, or an explicit setup state."""
+    from programme_runtime import load_programme_runtime, local_today
 
     user = get_user_by_id(user_id, DB_PATH) if user_id else None
     timezone_name = (user.get("timezone") if user else None) or "UTC"
     today = today or local_today(timezone_name)
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    definition = active.get("definition") if active else None
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
-    runtime = resolve_programme_runtime(
-        active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id)
-        if user_id else [],
-        today=today,
-        timezone_name=timezone_name,
+    runtime = (
+        load_programme_runtime(
+            user_id,
+            DB_PATH,
+            today=today,
+            timezone_name=timezone_name,
+        )
+        if user_id
+        else None
     )
-    setup_required = runtime.status == "setup_required"
+    if runtime is None:
+        from programme_runtime import ProgrammeRuntime
+
+        runtime = ProgrammeRuntime()
+    setup_required = runtime.setup_required
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
-    current_day_number: int | None = None
     is_rest_day = True
     cycle_weeks = 0
     week = 0
@@ -964,7 +963,6 @@ def _dashboard_context(
             week_in_block = week - start_week + 1
         active_day = runtime.next_day
         if active_day:
-            current_day_number = int(active_day.get("number") or 1)
             focus = str(active_day.get("focus") or "Training")
             is_rest_day = False
             for exercise in active_day.get("exercises", []):
@@ -994,7 +992,7 @@ def _dashboard_context(
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(
-        current_day_number,
+        None if is_rest_day else focus,
         is_rest_day,
         recovery_like,
     )
@@ -1044,7 +1042,7 @@ def _dashboard_context(
         "setup_required": setup_required,
         "setup": setup_payload,
         "coach_setup": coach_setup_payload,
-        "active_programme_name": (definition.get("name") if definition else None),
+        "active_programme_name": runtime.name or None,
         "quote": _daily_quote(today),
         "week": week,
         "cycle_weeks": cycle_weeks,
@@ -1184,12 +1182,21 @@ def _project_lift(
     projected = analytics.project(points, target_ordinal)
     if projected is None:
         return None
-    projected = max(projected, current)  # never project a regression below today
+    fit = analytics.linear_fit([p[0] for p in points], [p[1] for p in points])
+    uncertainty = None
+    if fit is not None and len(points) >= 3:
+        slope, intercept = fit
+        residuals = [y - (slope * x + intercept) for x, y in points]
+        variance = sum(r * r for r in residuals) / max(1, len(points) - 2)
+        uncertainty = round(variance**0.5, 1)
     return {
         "label": label,
         "current": f"{current:g} {unit}",
         "projected": f"{projected:g} {unit}",
         "metric": "est. 1RM" if use_e1rm else "top reps",
+        "model": "linear trend" if use_e1rm else "linear reps trend",
+        "evidence_sessions": len(points),
+        "uncertainty": f"±{uncertainty:g} {unit}" if uncertainty else "unquantified",
         "gain": round(projected - current, 1),
     }
 
@@ -1681,19 +1688,75 @@ def project_peak(request: Request) -> dict[str, Any]:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    dl_entries = series.get("Deadlift", [])
-    pu_entries = series.get("Pull-ups", [])
+    from programme_runtime import load_programme_runtime
 
-    prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    runtime = load_programme_runtime(user_id, DB_PATH)
+    priority_names: list[str] = []
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            name = str(exercise.get("name") or "")
+            if (
+                name
+                and name in series
+                and exercise.get("role")
+                in {"primary_strength", "secondary_compound"}
+                and name not in priority_names
+            ):
+                priority_names.append(name)
+    target = runtime.end_date or datetime.now(tz=timezone.utc).date()
+    deterministic = []
+    for name in priority_names[:3]:
+        entries = series[name]
+        points = [
+            (
+                float(date.fromisoformat(entry["date"]).toordinal()),
+                float(
+                    analytics.epley_1rm(
+                        entry["top_weight_kg"], entry["top_reps"]
+                    )
+                    or entry["top_reps"]
+                ),
+            )
+            for entry in entries
+            if entry.get("top_reps") is not None
+        ]
+        projected = analytics.project(points, float(target.toordinal()))
+        if projected is not None:
+            deterministic.append(
+                {
+                    "metric": name,
+                    "model": "linear trend",
+                    "evidence_sessions": len(points),
+                    "projected": projected,
+                }
+            )
+    if not deterministic:
+        return {
+            "projections": [],
+            "validation": "Insufficient priority-outcome history to project.",
+        }
+
+    prompt = (
+        "Explain these deterministic programme projections. Do not change any "
+        f"number or invent a metric: {json.dumps(deterministic)}. "
+        "Return JSON with a single 'validation' string."
+    )
     try:
         response = provider.generate(prompt)
         text = (response if isinstance(response, str) else "".join(response)).strip()
         text = text.removeprefix("```json").removeprefix("```")
         text = text.removesuffix("```")
-        return json.loads(text.strip())
+        parsed = json.loads(text.strip())
+        if isinstance(parsed, dict):
+            parsed.setdefault("projections", deterministic)
+            return parsed
+        return {"projections": deterministic}
     except Exception:  # noqa: BLE001
-        return {"error": "Failed to project peak."}
+        return {
+            "projections": deterministic,
+            "validation": "Explanation unavailable; deterministic projections shown.",
+        }
 
 
 @app.get("/api/coach/capabilities")
@@ -2565,21 +2628,63 @@ def api_stats(request: Request):
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    today = datetime.now(tz=UTC).date()
-    week = week_in_cycle(start, today)
+    today = datetime.now(tz=timezone.utc).date()
+
+    from programme_runtime import load_programme_runtime
+
+    runtime = load_programme_runtime(user_id, DB_PATH, today=today)
+    start = runtime.start_date
 
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
-    days_on_programme = (today - start).days
+    days_on_programme = (today - start).days if start else 0
 
+    # Prefer programme routine identifiers over free-text daily-log focus names.
+    routine_focus = {
+        str(day.get("routine_id")): str(day.get("focus") or "")
+        for day in runtime.days
+        if day.get("routine_id")
+    }
+    focus_names = {
+        str(day.get("focus") or "").strip().lower()
+        for day in runtime.days
+        if day.get("focus")
+    }
     focus_counts: dict[str, int] = {}
-    for log in logs:
-        f = log.get("focus") if isinstance(log, dict) else getattr(log, "focus", None)
-        d = log.get("day") if isinstance(log, dict) else getattr(log, "day", None)
-        if d is not None and f:
-            focus_counts[f] = focus_counts.get(f, 0) + 1
+    try:
+        workout_logs = get_recent_hevy_logs(
+            limit=400, db_path=DB_PATH, user_id=user_id
+        )
+    except Exception:  # noqa: BLE001 - history is optional for statistics
+        workout_logs = []
+    for workout in workout_logs:
+        if not isinstance(workout, dict):
+            continue
+        routine_id = str(workout.get("routine_id") or workout.get("routineId") or "")
+        focus = routine_focus.get(routine_id)
+        if not focus:
+            title = str(workout.get("title") or "")
+            if title.strip().lower() in focus_names:
+                focus = title
+        if focus:
+            focus_counts[focus] = focus_counts.get(focus, 0) + 1
+
+    if not focus_counts:
+        # Legacy history without provider routine IDs still gets a distribution.
+        for log in logs:
+            f = (
+                log.get("focus")
+                if isinstance(log, dict)
+                else getattr(log, "focus", None)
+            )
+            d = (
+                log.get("day")
+                if isinstance(log, dict)
+                else getattr(log, "day", None)
+            )
+            if d is not None and f:
+                focus_counts[f] = focus_counts.get(f, 0) + 1
     distribution = (
         charts.donut(
             [{"label": k, "value": v} for k, v in sorted(focus_counts.items())]
@@ -2621,9 +2726,31 @@ def api_stats(request: Request):
     vol_dist_svg = ai_widgets.volume_distribution(groups)
 
     weights = [(m["date"], m["weight_kg"]) for m in biometrics if m["weight_kg"]]
-    _, dl_entries = _find_lift_series(series, "deadlift")
+    priority_names: list[str] = []
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            name = str(exercise.get("name") or "")
+            if (
+                name
+                and name in series
+                and exercise.get("role")
+                in {"primary_strength", "secondary_compound"}
+                and name not in priority_names
+            ):
+                priority_names.append(name)
+    strength_name = priority_names[0] if priority_names else None
+    if strength_name is None:
+        strength_name = next(
+            (
+                name
+                for name, entries in series.items()
+                if any(e.get("top_weight_kg") for e in entries)
+            ),
+            None,
+        )
+    strength_entries = series.get(strength_name, []) if strength_name else []
     dots_points, ratio_points = [], []
-    for e in dl_entries:
+    for e in strength_entries:
         e1rm = analytics.epley_1rm(e["top_weight_kg"], e["top_reps"])
         bw = _weight_on_or_before(weights, e["date"])
         if not e1rm or not bw:
@@ -2651,10 +2778,14 @@ def api_stats(request: Request):
         else None
     )
 
-    target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
+    target_ordinal = (
+        runtime.end_date.toordinal()
+        if runtime.end_date and runtime.status == "active"
+        else today.toordinal()
+    )
     projections = [
-        _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
-        _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
+        _project_lift(name, series[name], target_ordinal)
+        for name in priority_names[:3]
     ]
     projections = [p for p in projections if p]
 
@@ -2712,18 +2843,21 @@ def api_history(request: Request):
 
 @app.get("/api/plan")
 def api_plan(request: Request) -> JSONResponse:
-    """Render only an activated Hevy-native programme; never a static fallback."""
-    from programme_runtime import local_today, resolve_programme_runtime
+    """Render only the tenant's active dynamic programme; never a static fallback."""
+    from programme_runtime import load_programme_runtime
 
     user_id = _check_api_auth(request)
+    runtime = load_programme_runtime(user_id, DB_PATH)
+
+    # Keep the raw activated definition available for backwards-compatible
+    # clients, but every runtime decision below comes from the shared service.
     active = get_active_programme(user_id, db_path=DB_PATH)
     raw_definition = active.get("definition") if active else None
     definition: dict[str, Any] = (
         raw_definition if isinstance(raw_definition, dict) else {}
     )
-    source = active.get("source") if active else None
 
-    if source != "hevy" or not definition:
+    if runtime.setup_required:
         return JSONResponse(
             jsonable_encoder(
                 {
@@ -2741,6 +2875,12 @@ def api_plan(request: Request) -> JSONResponse:
                     "analysis": {},
                     "warnings": [],
                     "programme_spec": {},
+                    "programme_status": runtime.status,
+                    "start_date": None,
+                    "end_date": None,
+                    "requested_duration_weeks": 0,
+                    "rotation_message": runtime.message,
+                    "next_routine_id": None,
                     "setup": _setup_payload(
                         user_id,
                         "plan",
@@ -2750,41 +2890,43 @@ def api_plan(request: Request) -> JSONResponse:
             )
         )
 
-    spec = definition.get("programme_spec") or {}
-    user = get_user_by_id(user_id, DB_PATH)
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
-    runtime = resolve_programme_runtime(
-        active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
-        today=local_today(timezone_name),
-        timezone_name=timezone_name,
+    spec = definition.get("programme_spec") or {
+        "start_date": runtime.start_date.isoformat() if runtime.start_date else None,
+        "duration_weeks": runtime.cycle_weeks,
+        "goal": runtime.goal,
+    }
+    split_name = (
+        runtime.name
+        or definition.get("name")
+        or (active or {}).get("name")
+        or "Hevy programme"
     )
-    cycle_weeks = runtime.cycle_weeks
-    week = runtime.week
-    blocks = runtime.blocks
-    current_block = runtime.block
 
     return JSONResponse(
         jsonable_encoder(
             {
                 "setup_required": False,
-                "is_active_programme": True,
-                "source": "hevy",
+                "is_active_programme": runtime.status == "active",
+                "source": "hevy" if runtime.status != "setup_required" else None,
                 "active_programme": active,
-                "split_name": (
-                    definition.get("name")
-                    or (active or {}).get("name")
-                    or "Hevy programme"
+                "split_name": split_name,
+                "week": runtime.week,
+                "cycle_weeks": runtime.cycle_weeks,
+                "current_block": (
+                    runtime.block.get("name") if runtime.block else None
                 ),
-                "week": week,
-                "cycle_weeks": cycle_weeks,
-                "current_block": (current_block.get("name") if current_block else None),
-                "blocks": blocks,
+                "blocks": runtime.blocks,
                 "days": runtime.days,
                 "programme_status": runtime.status,
                 "rotation_message": runtime.message,
                 "next_session_date": runtime.next_session_date,
-                "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
+                "next_routine_id": (
+                    runtime.next_day.get("routine_id") if runtime.next_day else None
+                ),
+                "start_date": runtime.start_date,
+                "end_date": runtime.end_date,
+                "requested_duration_weeks": runtime.cycle_weeks,
+                "review_weeks": runtime.review_weeks,
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
@@ -3312,6 +3454,25 @@ def api_chat_history(request: Request):
     )
 
 
+def _frontend_asset(full_path: str) -> Path | None:
+    """Return a real file inside the SPA bundle, rejecting path traversal.
+
+    ``full_path`` comes straight from the request target, so ``..`` segments (or
+    an encoded equivalent) must never be allowed to escape the bundled frontend
+    directory. The resolved candidate is checked for containment as well as
+    existence so symlinks cannot be used as an escape hatch.
+    """
+
+    root = FRONTEND_DIST.resolve()
+    try:
+        candidate = (root / full_path).resolve()
+    except (OSError, ValueError):
+        return None
+    if root in candidate.parents and candidate.is_file():
+        return candidate
+    return None
+
+
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
 async def catch_all(full_path: str, request: Request):
     if full_path.startswith(
@@ -3320,8 +3481,8 @@ async def catch_all(full_path: str, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
     if full_path:
-        file_path = FRONTEND_DIST / full_path
-        if file_path.is_file():
+        file_path = _frontend_asset(full_path)
+        if file_path is not None:
             return FileResponse(file_path)
 
     return FileResponse(FRONTEND_DIST / "index.html")

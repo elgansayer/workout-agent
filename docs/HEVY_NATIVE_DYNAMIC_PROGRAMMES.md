@@ -22,7 +22,7 @@ The only programme-creation path is Hevy-native:
 
 The selected Hevy routines are the **exercise and session skeleton**. Workout Agent owns the **programme intent, blocks, weekly dose, progression and bounded adaptations**.
 
-By default, Workout Agent must not mutate the user's original Hevy routines. The first production implementation is read-first and stores its prescriptions locally. A later, explicit opt-in may create managed copies in a dedicated Hevy folder, but it must never silently overwrite source routines.
+By default, Workout Agent must not mutate the user's original Hevy routines. The default scheduler path is read-first and stores its prescriptions locally. The explicit `HEVY_SYNC_ROUTINES` opt-in may create managed copies in a dedicated Hevy folder, but it must never silently overwrite source routines.
 
 This decision supersedes guidance that treats `program.py` as a selectable template or assumes `hevy_sync.py` should push every generated programme back into Hevy.
 

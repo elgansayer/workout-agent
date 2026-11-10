@@ -1,0 +1,123 @@
+# session_security.py (L449-L570 of 570)
+ 449 |         state = self.store.check(session_id, user_id)
+ 450 |         if state is SessionState.OWNER_MISMATCH:
+ 451 |             logger.warning(
+ 452 |                 "Rejected a session cookie whose user does not own its session"
+ 453 |             )
+ 454 |         if state is not SessionState.ACTIVE:
+ 455 |             return False
+ 456 |         if self.identity_allowed is not None and not self.identity_allowed(
+ 457 |             claimed.get("user")
+ 458 |         ):
+ 459 |             self.store.revoke(session_id, user_id, reason=REVOKE_ACCESS_REMOVED)
+ 460 |             return False
+ 461 |         return True
+ 462 | 
+ 463 |     @staticmethod
+ 464 |     async def _unavailable(scope: Scope, receive: Receive, send: Send) -> None:
+ 465 |         if scope["type"] == "websocket":
+ 466 |             await send({"type": "websocket.close", "code": 1013})
+ 467 |             return
+ 468 |         response = JSONResponse(
+ 469 |             {"detail": "Session service unavailable"},
+ 470 |             status_code=503,
+ 471 |             headers={"Retry-After": "5"},
+ 472 |         )
+ 473 |         await response(scope, receive, send)
+ 474 | 
+ 475 | 
+ 476 | class HardenedSessionMiddleware(SessionMiddleware):
+ 477 |     """``SessionMiddleware`` with the hardened cookie policy and a live registry.
+ 478 | 
+ 479 |     It is a drop-in subclass so the repository's stack hooks (authentication
+ 480 |     boundary, mutation guard) and every ``request.session`` consumer keep
+ 481 |     working unchanged.
+ 482 |     """
+ 483 | 
+ 484 |     def __init__(
+ 485 |         self,
+ 486 |         app: ASGIApp,
+ 487 |         secret_key: str | Secret,
+ 488 |         *,
+ 489 |         config: SessionSecurityConfig,
+ 490 |         store: SessionStore,
+ 491 |         identity_allowed: Callable[[object], bool] | None = None,
+ 492 |     ) -> None:
+ 493 |         super().__init__(
+ 494 |             SessionRegistryGuard(app, store=store, identity_allowed=identity_allowed),
+ 495 |             secret_key=secret_key,
+ 496 |             session_cookie=config.cookie.name,
+ 497 |             max_age=config.cookie.max_age,
+ 498 |             path=config.cookie.path,
+ 499 |             same_site=config.cookie.same_site,
+ 500 |             https_only=config.cookie.secure,
+ 501 |             domain=config.cookie.domain,
+ 502 |         )
+ 503 |         self.config = config
+ 504 | 
+ 505 | 
+ 506 | class SessionLifecycle:
+ 507 |     """Login, logout and logout-all operations over ``request.session``."""
+ 508 | 
+ 509 |     def __init__(self, store: SessionStore) -> None:
+ 510 |         self.store = store
+ 511 | 
+ 512 |     def establish(
+ 513 |         self,
+ 514 |         session: MutableMapping[str, Any],
+ 515 |         *,
+ 516 |         user_id: str,
+ 517 |         email: str,
+ 518 |     ) -> None:
+ 519 |         """Sign ``user_id`` in on a brand-new session identifier.
+ 520 | 
+ 521 |         This is the rotation point for every authentication or identity change.
+ 522 |         The new identifier is registered first so a storage failure leaves the
+ 523 |         previous state untouched; then the identifier this browser held is
+ 524 |         revoked (covering re-login and account switching) and *all* previous
+ 525 |         session data, including leftover OAuth state, is discarded.
+ 526 |         """
+ 527 | 
+ 528 |         new_session_id = self.store.create(user_id)
+ 529 |         self._revoke_current(session, REVOKE_REAUTHENTICATED)
+ 530 |         session.clear()
+ 531 |         session.update(
+ 532 |             {"user": email, "user_id": user_id, SESSION_ID_KEY: new_session_id}
+ 533 |         )
+ 534 | 
+ 535 |     def end(self, session: MutableMapping[str, Any]) -> bool:
+ 536 |         """Log out this browser: revoke its session and empty the cookie."""
+ 537 | 
+ 538 |         revoked = self._revoke_current(session, REVOKE_LOGOUT)
+ 539 |         session.clear()
+ 540 |         return revoked
+ 541 | 
+ 542 |     def end_all(self, session: MutableMapping[str, Any], user_id: str) -> int:
+ 543 |         """Log ``user_id`` out of every device, including this browser."""
+ 544 | 
+ 545 |         revoked = self.store.revoke_all(user_id, reason=REVOKE_LOGOUT_ALL)
+ 546 |         session.clear()
+ 547 |         return revoked
+ 548 | 
+ 549 |     def _revoke_current(self, session: Mapping[str, Any], reason: str) -> bool:
+ 550 |         return self.store.revoke(
+ 551 |             session.get(SESSION_ID_KEY), session.get("user_id"), reason=reason
+ 552 |         )
+ 553 | 
+ 554 | 
+ 555 | __all__ = [
+ 556 |     "DEFAULT_ABSOLUTE_TIMEOUT_SECONDS",
+ 557 |     "DEFAULT_IDLE_TIMEOUT_SECONDS",
+ 558 |     "HOST_COOKIE_PREFIX",
+ 559 |     "SESSION_ID_KEY",
+ 560 |     "HardenedSessionMiddleware",
+ 561 |     "SessionCookiePolicy",
+ 562 |     "SessionLifecycle",
+ 563 |     "SessionLifetimePolicy",
+ 564 |     "SessionRegistryGuard",
+ 565 |     "SessionSecurityConfig",
+ 566 |     "SessionSecurityConfigurationError",
+ 567 |     "SessionState",
+ 568 |     "SessionStore",
+ 569 |     "load_session_security_config",
+ 570 | ]

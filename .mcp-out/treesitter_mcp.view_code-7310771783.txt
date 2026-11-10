@@ -1,0 +1,82 @@
+# coaching_capabilities.py (L250-L330 of 539)
+ 250 |                 status="stale_data",
+ 251 |                 explanation=f"Your workout logs are stale (last recorded workout was {latest_workout.isoformat()}). Sync your latest workouts from Hevy to enable current lift analysis.",
+ 252 |             )
+ 253 |         else:
+ 254 |             workout_analysis = CapabilityItem(
+ 255 |                 enabled=True,
+ 256 |                 status="ready",
+ 257 |                 explanation="Workout logs and personal records are connected and current.",
+ 258 |             )
+ 259 | 
+ 260 |     # Recovery analysis capability (health connections, readiness, HRV, resting HR)
+ 261 |     metrics = get_body_metrics(limit=60, db_path=db_path, user_id=user_id)
+ 262 |     recovery_dates: list[date] = []
+ 263 |     for r in metrics:
+ 264 |         if r.get("resting_hr") is not None or r.get("hrv") is not None:
+ 265 |             d = _parse_entry_date(r.get("date"))
+ 266 |             if d:
+ 267 |                 recovery_dates.append(d)
+ 268 | 
+ 269 |     # Check for connected health sources or health_metrics table
+ 270 |     has_connected_source = False
+ 271 |     gh_token = get_meta(_GH_TOKEN_KEY, db_path, user_id=user_id) if user_id else None
+ 272 |     if gh_token:
+ 273 |         has_connected_source = True
+ 274 | 
+ 275 |     try:
+ 276 |         with _connect(db_path) as conn:
+ 277 |             table_check = conn.execute(
+ 278 |                 "SELECT name FROM sqlite_master WHERE type='table' AND name='health_connections'"
+ 279 |             ).fetchone()
+ 280 |             if table_check and user_id is not None:
+ 281 |                 # check integer or string user_id
+ 282 |                 rows = conn.execute(
+ 283 |                     "SELECT state, last_sync_at FROM health_connections WHERE user_id = ? AND state = 'connected'",
+ 284 |                     (user_id,),
+ 285 |                 ).fetchall()
+ 286 |                 if rows:
+ 287 |                     has_connected_source = True
+ 288 |                     for row in rows:
+ 289 |                         d = _parse_entry_date(row[1])
+ 290 |                         if d:
+ 291 |                             recovery_dates.append(d)
+ 292 |             metric_check = conn.execute(
+ 293 |                 "SELECT name FROM sqlite_master WHERE type='table' AND name='health_metrics'"
+ 294 |             ).fetchone()
+ 295 |             if metric_check and user_id is not None:
+ 296 |                 m_rows = conn.execute(
+ 297 |                     "SELECT observed_at FROM health_metrics WHERE user_id = ? ORDER BY observed_at DESC LIMIT 10",
+ 298 |                     (user_id,),
+ 299 |                 ).fetchall()
+ 300 |                 if m_rows:
+ 301 |                     has_connected_source = True
+ 302 |                     for row in m_rows:
+ 303 |                         d = _parse_entry_date(row[0])
+ 304 |                         if d:
+ 305 |                             recovery_dates.append(d)
+ 306 |     except sqlite3.Error:
+ 307 |         pass
+ 308 | 
+ 309 |     if not provider_ready:
+ 310 |         recovery_analysis = CapabilityItem(
+ 311 |             enabled=False,
+ 312 |             status="missing_provider",
+ 313 |             explanation="Configure an AI provider in Settings to enable recovery analysis.",
+ 314 |         )
+ 315 |     elif not has_connected_source and not recovery_dates:
+ 316 |         recovery_analysis = CapabilityItem(
+ 317 |             enabled=False,
+ 318 |             status="missing_source",
+ 319 |             explanation="Connect a health source in Settings to enable recovery-aware coaching.",
+ 320 |         )
+ 321 |     elif not recovery_dates:
+ 322 |         recovery_analysis = CapabilityItem(
+ 323 |             enabled=False,
+ 324 |             status="stale_data",
+ 325 |             explanation="Your health source is connected but does not have fresh data yet. Sync recent recovery data to assess readiness.",
+ 326 |         )
+ 327 |     else:
+ 328 |         latest_recovery = max(recovery_dates)
+ 329 |         age_days = (current_date - latest_recovery).days
+ 330 |         if age_days > 3:  # 72 hours

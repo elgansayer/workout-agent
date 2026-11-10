@@ -198,9 +198,16 @@ def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
 
     db_path = _new_temp_db(tmp_path)
     legacy_id = get_legacy_user_id(db_path)
-    payload = {"workouts": [{"id": "W1", "title": "Test"}]}
-    save_workout(payload, db_path, when="2026-03-01")
-    save_workout(payload, db_path, when="2026-03-02")
+    save_workout(
+        {"workouts": [{"id": "W1", "title": "Test"}]},
+        db_path,
+        when="2026-03-01",
+    )
+    save_workout(
+        {"workouts": [{"id": "W2", "title": "Test"}]},
+        db_path,
+        when="2026-03-02",
+    )
 
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")

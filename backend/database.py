@@ -22,7 +22,6 @@ from canonical_programme import (
     CANONICAL_TEMPLATE_KEY,
     get_canonical_programme_definition,
 )
-from program import SPLIT_NAME, TOTAL_DAYS
 from tenancy import (
     LEGACY_TENANT_EMAIL,
     TenantRequiredError,
@@ -58,6 +57,9 @@ class UserRow(TypedDict):
 
 
 DEFAULT_DB_PATH = "workout_agent.db"
+
+# Legacy rotation length retained only for archived pre-domain state.
+LEGACY_ROUTINE_DAYS = 6
 
 # Account lifecycle vocabulary. ``accounts.AccountStatus`` mirrors this tuple and
 # ``test_user_model`` asserts the CHECK constraint, the enum and the terminal
@@ -1071,7 +1073,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "routine_snapshot_id": "TEXT",
                 "routine_id": "TEXT",
                 "score": "REAL NOT NULL DEFAULT 0",
-                "confidence": "",
+                "confidence": "REAL NOT NULL DEFAULT 0",
                 "features_json": "TEXT NOT NULL DEFAULT '{}'",
                 "method": "TEXT NOT NULL DEFAULT 'unknown'",
                 "matcher_version": "TEXT NOT NULL DEFAULT 'unknown'",
@@ -1694,7 +1696,7 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                         if isinstance(def_obj, dict) and def_obj.get("name"):
                             cursor.execute(
                                 "UPDATE programme_state SET split_name = ? WHERE user_id = ? AND split_name = ?",
-                                (def_obj["name"], uid, SPLIT_NAME),
+                                (def_obj["name"], uid, CANONICAL_SPLIT_NAME),
                             )
                     except (json.JSONDecodeError, TypeError, KeyError) as exc:
                         logger.debug("Failed to decode programme definition for name sync: %s", exc)
@@ -2182,15 +2184,15 @@ def get_current_day(
 
 
 def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -> int:
-    """Move to the next day, wrapping from TOTAL_DAYS back to 1."""
+    """Move to the next legacy rotation day, wrapping after six days."""
     uid = require_tenant(user_id, db_path)
     current = get_current_day(db_path, user_id=uid)
-    nxt = current + 1 if current < TOTAL_DAYS else 1
+    nxt = current + 1 if current < LEGACY_ROUTINE_DAYS else 1
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO programme_state (user_id, current_day, split_name) "
             "VALUES (?, ?, COALESCE((SELECT split_name FROM programme_state WHERE user_id = ?), ?))",
-            (uid, nxt, uid, SPLIT_NAME),
+            (uid, nxt, uid, CANONICAL_SPLIT_NAME),
         )
     return nxt
 
@@ -2207,12 +2209,56 @@ def save_workout(
         return
     today = when or datetime.now(tz=timezone.utc).date().isoformat()
     uid = require_tenant(user_id, db_path)
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+    incoming_ids = _workout_identifiers(payload)
     with _connect(db_path) as conn:
+        # Repeated scheduled runs must not duplicate the same completed workout.
+        # Payloads without a provider workout id keep the legacy append behaviour.
+        if incoming_ids:
+            rows = conn.execute(
+                "SELECT id, hevy_payload FROM workout_history WHERE user_id = ?",
+                (uid,),
+            ).fetchall()
+            for row_id, existing_payload in rows:
+                try:
+                    existing = _workout_identifiers(json.loads(existing_payload))
+                except (TypeError, ValueError):
+                    continue
+                if existing and incoming_ids <= existing:
+                    if existing_payload != encoded:
+                        conn.execute(
+                            "UPDATE workout_history SET date = ?, hevy_payload = ? "
+                            "WHERE id = ? AND user_id = ?",
+                            (today, encoded, row_id, uid),
+                        )
+                    return
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
             "VALUES (?, ?, ?)",
-            (today, json.dumps(payload), uid),
+            (today, encoded, uid),
         )
+
+
+def _workout_identifiers(payload: Any) -> set[str]:
+    """Return Hevy workout ids from a single, list, or wrapped payload."""
+
+    items: list[Any]
+    if isinstance(payload, dict):
+        if isinstance(payload.get("workouts"), list):
+            items = payload["workouts"]
+        elif payload.get("id") is not None:
+            items = [payload]
+        else:
+            items = []
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        items = []
+    identifiers: set[str] = set()
+    for item in items:
+        if isinstance(item, dict) and item.get("id") is not None:
+            identifiers.add(str(item["id"]))
+    return identifiers
 
 
 def get_recent_hevy_logs(
@@ -4730,6 +4776,7 @@ def activate_programme_definition(
                 """,
                 (user_id, "programme_start_date", start_date),
             )
+
 
 
 def save_notification(

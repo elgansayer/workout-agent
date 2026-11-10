@@ -1155,3 +1155,28 @@ def test_settings_credential_save_fails_closed_without_encryption_key(
 
     assert caught.value.status_code == 503
     assert secret not in str(caught.value.detail)
+
+
+
+def test_catch_all_never_serves_files_outside_the_frontend_bundle(
+    client: Any,
+    monkeypatch: Any,
+    tmp_path: Any,
+) -> None:
+    """A traversing request must not escape the bundled SPA directory."""
+    import webapp.app as app_module
+
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "index.html").write_text("SPA-INDEX")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOPSECRET")
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", bundle)
+
+    served = client.get("/index.html")
+    assert served.status_code == 200
+    assert "SPA-INDEX" in served.text
+
+    escaped = client.get("/%2e%2e/secret.txt")
+    assert "TOPSECRET" not in escaped.text
+    assert "SPA-INDEX" in escaped.text
