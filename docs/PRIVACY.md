@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-10  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -42,6 +42,8 @@ Each external provider operates under its own terms and privacy policy. The depl
 ## Retention and deletion
 
 The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser/session data is bounded by session and browser storage behaviour. External providers may retain data under their own policies after receiving a request.
+
+Security audit records (sign-ins, failed sign-ins, session revocation, credential and connector changes, deletions, permission changes and the alerts derived from them) are written to an append-only, tamper-evident table so account and integration changes stay attributable. They hold pseudonymous references to network addresses and attempted sign-in identities, never credentials, health data or prompts, and are not purged by the application; the deployment operator sets and applies their retention. See `docs/SECURITY_AUDIT_LOGGING.md`.
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 

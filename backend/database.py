@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
 from program import SPLIT_NAME, TOTAL_DAYS
+from security_audit import ensure_schema as ensure_security_audit_schema
 
 logger = logging.getLogger(__name__)
 
@@ -821,6 +822,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
             "ON user_api_keys (user_id)"
         )
+
+        # Append-only, hash-chained security audit trail (see security_audit.py).
+        ensure_security_audit_schema(conn)
 
 
 
