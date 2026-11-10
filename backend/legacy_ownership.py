@@ -130,6 +130,12 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
     "security_audit_events": (
         "append-only, hash-chained security audit trail; attribution is immutable"
     ),
+    "account_deletion_requests": (
+        "deletion evidence for a specific account id; never adopted"
+    ),
+    "account_tombstones": (
+        "anonymous deletion evidence for a specific account id; never adopted"
+    ),
 }
 
 

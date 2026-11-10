@@ -196,6 +196,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
     implicit = implicit_single_user_allowed()
     with _connect(db_path) as conn:
         cursor = conn.cursor()
+        # Remove the previous guard before any table rebuild; it is recreated
+        # with a deletion exemption once the deletion ledger exists below.
+        cursor.execute("DROP TRIGGER IF EXISTS trg_programme_revisions_no_delete")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS workout_history (
@@ -1329,16 +1332,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             END
             """
         )
-        cursor.execute(
-            """
-            CREATE TRIGGER IF NOT EXISTS trg_programme_revisions_no_delete
-            BEFORE DELETE ON programme_revisions
-            BEGIN
-                SELECT RAISE(ABORT, 'programme revisions are immutable');
-            END
-            """
-        )
-
         # Migration: Add user_id column to chat_messages
         cursor.execute("PRAGMA table_info(chat_messages)")
         cm_columns = {row[1] for row in cursor.fetchall()}
@@ -1721,6 +1714,88 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Append-only, hash-chained security audit trail (see security_audit.py).
         ensure_security_audit_schema(conn)
+
+        # ---- Account / health-data deletion ledger (see account_deletion.py) ----
+        # These tables deliberately carry no foreign key to users(id): the ledger
+        # must outlive the account it describes. They hold opaque identifiers,
+        # timestamps and row counts only - never personal or health data.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_deletion_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK (scope IN ('account', 'health_data')),
+                state TEXT NOT NULL CHECK (
+                    state IN ('pending', 'in_progress', 'failed', 'completed', 'cancelled')
+                ),
+                requested_at TEXT NOT NULL,
+                execute_after TEXT NOT NULL,
+                next_attempt_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT,
+                cancelled_at TEXT,
+                error_code TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_deletion_open_request "
+            "ON account_deletion_requests (user_id) "
+            "WHERE state IN ('pending', 'in_progress', 'failed')"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_deletion_requests_user "
+            "ON account_deletion_requests (user_id, requested_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_deletion_requests_due "
+            "ON account_deletion_requests (state, next_attempt_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_deletion_steps (
+                request_id TEXT NOT NULL REFERENCES account_deletion_requests(id),
+                step TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('pending', 'done')),
+                rows_affected INTEGER NOT NULL DEFAULT 0,
+                remaining_after INTEGER,
+                completed_at TEXT,
+                PRIMARY KEY (request_id, step)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_tombstones (
+                user_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                retain_until TEXT NOT NULL,
+                policy_version TEXT NOT NULL
+            )
+            """
+        )
+
+        # Keep revisions immutable for the application, but allow the account
+        # deletion engine (and a post-restore reconcile, which writes the
+        # tombstone first) to erase them for the account being deleted. Installed
+        # after the ledger exists so a table rebuild cannot trip over the trigger.
+        cursor.execute("DROP TRIGGER IF EXISTS trg_programme_revisions_no_delete")
+        cursor.execute(
+            """
+            CREATE TRIGGER trg_programme_revisions_no_delete
+            BEFORE DELETE ON programme_revisions
+            WHEN NOT EXISTS (
+                    SELECT 1 FROM account_deletion_requests
+                    WHERE user_id = OLD.user_id AND state = 'in_progress')
+             AND NOT EXISTS (
+                    SELECT 1 FROM account_tombstones WHERE user_id = OLD.user_id)
+            BEGIN
+                SELECT RAISE(ABORT, 'programme revisions are immutable');
+            END
+            """
+        )
 
 
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
@@ -3534,17 +3609,31 @@ def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | No
 
 
 def get_all_users(
-    db_path: str = DEFAULT_DB_PATH, *, include_inactive: bool = False
+    db_path: str = DEFAULT_DB_PATH,
+    *,
+    include_closing: bool = False,
+    include_inactive: bool = False,
 ) -> list[UserRow]:
     """Return the accounts a background job may act for, oldest first.
 
     Only ``active`` accounts are returned by default, so the scheduler never
     processes a suspended, deleted, retired or unclaimed holding account.
-    Pass ``include_inactive=True`` for administrative listings.
+    Accounts with an open deletion request (pending, in progress or failed) are
+    also excluded by default so no coaching run, insight job or sync is
+    dispatched for a user who has asked for their data to be erased. Pass
+    ``include_inactive`` or ``include_closing`` for administrative listings.
     """
     query = f"SELECT {_USER_COLUMNS} FROM users"
+    conditions: list[str] = []
     if not include_inactive:
-        query += " WHERE status = 'active'"
+        conditions.append("status = 'active'")
+    if not include_closing:
+        conditions.append(
+            "id NOT IN (SELECT user_id FROM account_deletion_requests "
+            "WHERE state IN ('pending', 'in_progress', 'failed'))"
+        )
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at, id"
     with _connect(db_path) as conn:
         rows = conn.execute(query).fetchall()

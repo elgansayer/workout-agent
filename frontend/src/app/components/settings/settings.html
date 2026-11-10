@@ -18,6 +18,7 @@
         ['ai', 'AI coach'],
         ['profile', 'Profile'],
         ['notifications', 'Notifications'],
+        ['account', 'Account and data'],
       ];
       track option[0]
     ) {
@@ -25,7 +26,7 @@
         type="button"
         class="btn btn-ghost"
         [attr.aria-pressed]="section() === option[0]"
-        (click)="section.set(option[0])"
+        (click)="selectSection(option[0])"
       >
         {{ option[1] }}
       </button>
@@ -715,5 +716,184 @@
       </div>
       <div id="pref-status" class="key-status" role="status">{{ prefStatus() }}</div>
     </div>
+  </section>
+
+  <!-- ──────────── Account & data deletion ──────────── -->
+  <section class="card" id="settings-account" [hidden]="section() !== 'account'">
+    <div class="card-head">
+      <h2>Account and data</h2>
+      @if (deletion()?.request; as request) {
+        <span
+          class="status"
+          [class.on]="request.state === 'completed'"
+          [class.off]="request.state !== 'completed'"
+        >
+          {{ request.state === 'in_progress' ? 'Erasing' : (request.state | titlecase) }}
+        </span>
+      }
+    </div>
+    <p class="muted">
+      Erase your health data, or close your account and erase everything. Deletion is permanent and
+      cannot be undone once it starts.
+    </p>
+
+    <p id="deletion-status" class="key-status" role="status">{{ deletionStatus() }}</p>
+    @if (deletionError()) {
+      <p id="deletion-error" class="key-status error" role="alert">{{ deletionError() }}</p>
+    }
+
+    @if (deletion(); as info) {
+      @if (!info.eligible) {
+        <p class="panel muted">
+          Deleting data is only available when you are signed in with your own account.
+        </p>
+      } @else {
+        @if (info.request; as request) {
+          @if (isOpen(request)) {
+            <div class="panel" id="deletion-request">
+              <h3>
+                {{ request.scope === 'account' ? 'Account closure' : 'Health data erasure' }}
+              </h3>
+              <p class="muted">
+                Reference: <code>{{ request.request_id }}</code>
+              </p>
+              @if (request.state === 'pending') {
+                <p>
+                  Your data will be erased on
+                  <strong>{{ request.execute_after | date: 'medium' }}</strong
+                  >. Until then Coach, scheduled syncs and notifications are paused. You can cancel
+                  any time before that.
+                </p>
+                <div class="btn-row">
+                  <button
+                    type="button"
+                    class="btn btn-ghost"
+                    id="deletion-cancel"
+                    [disabled]="deletionBusy() || !request.can_cancel"
+                    (click)="cancelDeletion()"
+                  >
+                    Cancel closure
+                  </button>
+                </div>
+              } @else if (request.state === 'failed') {
+                <p>
+                  Erasure hit a problem and is being retried automatically. Your account stays
+                  locked until it finishes<span class="muted">
+                    (code: {{ request.error_code }})</span
+                  >.
+                </p>
+              } @else {
+                <p>Erasing your data. This page updates as each step finishes.</p>
+              }
+              @if (request.state !== 'pending') {
+                <progress
+                  class="deletion-progress"
+                  max="100"
+                  [value]="request.progress_percent"
+                  aria-label="Deletion progress"
+                ></progress>
+                <ol class="deletion-steps" aria-label="Deletion steps">
+                  @for (step of request.steps; track step.step) {
+                    <li [class.done]="step.state === 'done'">
+                      <span aria-hidden="true">{{ step.state === 'done' ? '✓' : '•' }}</span>
+                      {{ step.label }}
+                      <span class="sr-only">{{
+                        step.state === 'done' ? '(done)' : '(waiting)'
+                      }}</span>
+                    </li>
+                  }
+                </ol>
+              }
+            </div>
+          } @else if (request.state === 'completed') {
+            <p class="key-status success">
+              Health data erased on {{ request.completed_at | date: 'medium' }}. Reference:
+              <code>{{ request.request_id }}</code>
+            </p>
+          }
+        }
+
+        @if (!isOpen(info.request)) {
+          <div class="deletion-zone" id="deletion-health">
+            <h3>Erase health data</h3>
+            <p class="muted" id="deletion-health-help">
+              Removes body measurements, data imported from health sources, the insights, Coach chat
+              history and check-ins derived from them, and the credentials used to import health
+              data. Your workouts, programmes and account stay. This happens immediately.
+            </p>
+            <div class="input-row">
+              <label for="deletion-health-input" class="sr-only">Type the phrase to confirm</label>
+              <input
+                id="deletion-health-input"
+                class="key-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                aria-describedby="deletion-health-help deletion-health-hint"
+                [(ngModel)]="healthConfirmation"
+              />
+              <button
+                type="button"
+                class="btn btn-sm btn-danger"
+                id="deletion-health-submit"
+                [disabled]="deletionBusy() || !confirmationMatches('health_data')"
+                (click)="requestDeletion('health_data')"
+              >
+                Erase health data
+              </button>
+            </div>
+            <p class="muted" id="deletion-health-hint">
+              Type <strong>{{ requiredConfirmation('health_data') }}</strong> to confirm.
+            </p>
+          </div>
+
+          <div class="deletion-zone" id="deletion-account">
+            <h3>Close account and erase everything</h3>
+            <p class="muted" id="deletion-account-help">
+              Erases all of the above plus your workouts, programmes, preferences, notifications,
+              push subscriptions, API keys and connector tokens, then closes the account.
+              @if (graceDays() > 0) {
+                Closure is scheduled {{ graceDays() }} days ahead so you can change your mind; Coach
+                and background syncs pause straight away.
+              } @else {
+                Closure starts immediately.
+              }
+              Your Hevy and AI provider accounts, and copies those services already hold, are not
+              touched. An anonymous record that the deletion happened (no personal or health data)
+              is kept, and encrypted backups expire on the operator's backup schedule.
+            </p>
+            <div class="input-row">
+              <label for="deletion-account-input" class="sr-only"
+                >Type your email address to confirm</label
+              >
+              <input
+                id="deletion-account-input"
+                class="key-input"
+                type="text"
+                autocomplete="off"
+                spellcheck="false"
+                aria-describedby="deletion-account-help deletion-account-hint"
+                [(ngModel)]="accountConfirmation"
+              />
+              <button
+                type="button"
+                class="btn btn-sm btn-danger"
+                id="deletion-account-submit"
+                [disabled]="deletionBusy() || !confirmationMatches('account')"
+                (click)="requestDeletion('account')"
+              >
+                Close account
+              </button>
+            </div>
+            <p class="muted" id="deletion-account-hint">
+              Type your email address <strong>{{ requiredConfirmation('account') }}</strong> to
+              confirm.
+            </p>
+          </div>
+        }
+      }
+    } @else {
+      <p class="muted" role="status">Loading…</p>
+    }
   </section>
 }

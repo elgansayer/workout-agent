@@ -102,20 +102,23 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "training_rules",
 )
 
-# Tables that carry ``user_id`` but hold transient session-security state, not
-# user records. ``CSRFMiddleware`` creates ``csrf_tokens`` in the production
-# database on first use. Its single-use rows expire within minutes and are bound
-# to one signed session, so they are never re-owned, counted as ownership
-# evidence or deleted. Every other unlisted ``user_id`` table still refuses.
-# Authentication and audit tables are bound to real accounts (sessions,
-# identities, credential audit trail) and never existed for the single-user
-# deployment, so there is nothing to adopt; they are left untouched.
+# Tables that carry ``user_id`` but are not single-user records to be re-owned.
+# ``CSRFMiddleware`` creates ``csrf_tokens`` in the production database on first
+# use. Its single-use rows expire within minutes and are bound to one signed
+# session, so they are never re-owned, counted as ownership evidence or deleted.
+# Every other unlisted ``user_id`` table still refuses.
+# Authentication, audit and deletion-evidence tables are bound to real accounts
+# (sessions, identities, credential/security audit trails and the deletion
+# ledger) and never existed for the single-user deployment, so there is nothing
+# to adopt; they are left untouched.
 EPHEMERAL_TABLES: tuple[str, ...] = (
     "csrf_tokens",
     "user_sessions",
     "user_identities",
     "credential_audit_events",
     "security_audit_events",
+    "account_deletion_requests",
+    "account_tombstones",
 )
 
 # ``database.init_db()`` re-creates these two defaults for the legacy tenant on

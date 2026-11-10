@@ -438,3 +438,345 @@ describe('Settings AI provider parity', () => {
     ).toContain('Not connected');
   });
 });
+
+const pendingClosure = {
+  request_id: 'req-closure-1',
+  scope: 'account',
+  state: 'pending',
+  requested_at: '2026-11-10T12:00:00+00:00',
+  execute_after: '2026-11-17T12:00:00+00:00',
+  completed_at: null,
+  cancelled_at: null,
+  can_cancel: true,
+  attempts: 0,
+  error_code: null,
+  steps: [
+    {
+      step: 'notifications',
+      label: 'Delete notifications',
+      state: 'pending',
+      rows_affected: 0,
+      remaining_after: null,
+    },
+  ],
+  progress_percent: 0,
+};
+
+const deletionInfo = (request: unknown = null, eligible = true) => ({
+  eligible,
+  reason: eligible ? null : 'not_eligible',
+  scopes: eligible
+    ? [
+        { scope: 'health_data', required_confirmation: 'DELETE HEALTH DATA', grace_days: 0 },
+        { scope: 'account', required_confirmation: 'athlete@example.com', grace_days: 7 },
+      ]
+    : undefined,
+  request,
+});
+
+describe('Settings account and data deletion', () => {
+  let http: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Settings],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    window.history.pushState({}, '', '/');
+    http.verify();
+  });
+
+  async function openAccount(info: object): Promise<ComponentFixture<Settings>> {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    fixture.componentInstance.selectSection('account');
+    http.expectOne('/api/account/deletion').flush(info);
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const query = <T extends Element>(fixture: ComponentFixture<Settings>, selector: string) =>
+    (fixture.nativeElement as HTMLElement).querySelector<T>(selector);
+
+  function type(fixture: ComponentFixture<Settings>, selector: string, value: string): void {
+    const input = query<HTMLInputElement>(fixture, selector)!;
+    input.value = value;
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+  }
+
+  it('does not read deletion status until the Account section is opened', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    http.expectNone('/api/account/deletion');
+    expect(query(fixture, '#settings-account')?.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('opens straight to the section from the Account page deep link', async () => {
+    window.history.pushState({}, '', '/settings?section=account');
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    http.expectOne('/api/account/deletion').flush(deletionInfo());
+    expect(fixture.componentInstance.section()).toBe('account');
+  });
+
+  it('keeps both destructive actions disabled until the exact text is typed', async () => {
+    const fixture = await openAccount(deletionInfo());
+    const health = () => query<HTMLButtonElement>(fixture, '#deletion-health-submit')!;
+    const account = () => query<HTMLButtonElement>(fixture, '#deletion-account-submit')!;
+
+    expect(health().disabled).toBe(true);
+    expect(account().disabled).toBe(true);
+
+    type(fixture, '#deletion-health-input', 'delete health');
+    expect(health().disabled).toBe(true);
+    type(fixture, '#deletion-health-input', '  delete   HEALTH data ');
+    expect(health().disabled).toBe(false);
+
+    type(fixture, '#deletion-account-input', 'someone.else@example.com');
+    expect(account().disabled).toBe(true);
+    type(fixture, '#deletion-account-input', 'Athlete@Example.com');
+    expect(account().disabled).toBe(false);
+    expect(query(fixture, '#deletion-account-help')?.textContent).toContain('7 days');
+  });
+
+  it('labels the confirmation fields and explains what is retained', async () => {
+    const fixture = await openAccount(deletionInfo());
+    for (const id of ['deletion-health-input', 'deletion-account-input']) {
+      expect(query(fixture, `label[for="${id}"]`)).not.toBeNull();
+      expect(query(fixture, `#${id}`)?.getAttribute('aria-describedby')).toContain(
+        id.replace('-input', '-help'),
+      );
+      expect(query(fixture, `#${id}`)?.getAttribute('placeholder')).toBeNull();
+    }
+    expect(query(fixture, '#deletion-health-hint')?.textContent).toContain('DELETE HEALTH DATA');
+    expect(query(fixture, '#deletion-account-hint')?.textContent).toContain('athlete@example.com');
+    expect(query(fixture, '#deletion-status')?.getAttribute('role')).toBe('status');
+    const text = (query(fixture, '#deletion-account') as HTMLElement).textContent ?? '';
+    expect(text).toContain('anonymous record');
+    expect(text).toContain('backups');
+  });
+
+  it('erases health data immediately with the typed confirmation', async () => {
+    const fixture = await openAccount(deletionInfo());
+    type(fixture, '#deletion-health-input', 'DELETE HEALTH DATA');
+
+    fixture.componentInstance.requestDeletion('health_data');
+
+    const request = http.expectOne('/api/account/deletion');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({
+      scope: 'health_data',
+      confirmation: 'DELETE HEALTH DATA',
+    });
+    request.flush({
+      ...pendingClosure,
+      request_id: 'req-health-1',
+      scope: 'health_data',
+      state: 'completed',
+      completed_at: '2026-11-10T12:00:01+00:00',
+      progress_percent: 100,
+    });
+    fixture.detectChanges();
+
+    expect(query(fixture, '.key-status.success')?.textContent).toContain('req-health-1');
+    expect(fixture.componentInstance.healthConfirmation).toBe('');
+    expect(fixture.componentInstance.deletionStatus()).toContain('health data has been erased');
+  });
+
+  it('refuses to send a request whose confirmation does not match', async () => {
+    const fixture = await openAccount(deletionInfo());
+    fixture.componentInstance.accountConfirmation = 'nope';
+    fixture.componentInstance.requestDeletion('account');
+    http.expectNone('/api/account/deletion');
+  });
+
+  it('schedules an account closure, shows the window and lets the user cancel it', async () => {
+    const fixture = await openAccount(deletionInfo());
+    fixture.componentInstance.accountConfirmation = 'athlete@example.com';
+
+    fixture.componentInstance.requestDeletion('account');
+    http
+      .expectOne('/api/account/deletion')
+      .flush(pendingClosure, { status: 202, statusText: 'Accepted' });
+    fixture.detectChanges();
+
+    const panel = query<HTMLElement>(fixture, '#deletion-request')!;
+    expect(panel.textContent).toContain('req-closure-1');
+    expect(panel.textContent).toContain('paused');
+    expect(query(fixture, '#deletion-health')).toBeNull(); // new requests are blocked
+    const cancel = query<HTMLButtonElement>(fixture, '#deletion-cancel')!;
+    expect(cancel.disabled).toBe(false);
+
+    cancel.click();
+    const response = http.expectOne('/api/account/deletion/cancel');
+    expect(response.request.method).toBe('POST');
+    response.flush({ ...pendingClosure, state: 'cancelled', can_cancel: false, steps: [] });
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.deletionStatus()).toContain('cancelled');
+    expect(query(fixture, '#deletion-request')).toBeNull();
+    expect(query(fixture, '#deletion-account-submit')).not.toBeNull();
+  });
+
+  it('disables cancellation once the window has closed', async () => {
+    const fixture = await openAccount(deletionInfo({ ...pendingClosure, can_cancel: false }));
+    expect(query<HTMLButtonElement>(fixture, '#deletion-cancel')!.disabled).toBe(true);
+  });
+
+  it('shows running erasure with per-step progress and keeps polling until it ends', async () => {
+    // Capture only the 2s progress poll; every other timer (Angular's own) runs normally.
+    const realSetTimeout = globalThis.setTimeout;
+    const polls: (() => void)[] = [];
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      ms?: number,
+      ...args: unknown[]
+    ) => {
+      if (ms === 2000 && typeof handler === 'function') {
+        polls.push(handler as () => void);
+        return 0;
+      }
+      return realSetTimeout(handler, ms, ...args);
+    }) as unknown as typeof setTimeout);
+    const running = {
+      ...pendingClosure,
+      state: 'in_progress',
+      can_cancel: false,
+      progress_percent: 50,
+      steps: [
+        {
+          step: 'notifications',
+          label: 'Delete notifications',
+          state: 'done',
+          rows_affected: 2,
+          remaining_after: 0,
+        },
+        {
+          step: 'caches',
+          label: 'Clear server-side caches',
+          state: 'pending',
+          rows_affected: 0,
+          remaining_after: null,
+        },
+      ],
+    };
+    const fixture = await openAccount(deletionInfo(running));
+
+    const bar = query<HTMLProgressElement>(fixture, '.deletion-progress')!;
+    expect(bar.value).toBe(50);
+    expect(bar.getAttribute('aria-label')).toBe('Deletion progress');
+    const steps = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('.deletion-steps li'),
+    );
+    expect(steps.map((item) => item.classList.contains('done'))).toEqual([true, false]);
+    expect(steps[0].textContent).toContain('(done)');
+    expect(query(fixture, '#deletion-cancel')).toBeNull();
+
+    expect(polls).toHaveLength(1);
+    polls[0]();
+    http.expectOne('/api/account/deletion').flush(
+      deletionInfo({
+        ...running,
+        progress_percent: 100,
+        state: 'completed',
+        scope: 'health_data',
+      }),
+    );
+    expect(polls).toHaveLength(1); // finished: no further poll was scheduled
+  });
+
+  it('reports a failed erasure as retrying, not as success', async () => {
+    const fixture = await openAccount(
+      deletionInfo({
+        ...pendingClosure,
+        state: 'failed',
+        can_cancel: false,
+        error_code: 'residual_data',
+      }),
+    );
+    const panel = query<HTMLElement>(fixture, '#deletion-request')!;
+    expect(panel.textContent).toContain('retried automatically');
+    expect(panel.textContent).toContain('residual_data');
+    expect(query(fixture, '#deletion-account-submit')).toBeNull();
+  });
+
+  it('signs out in this browser after the account has been closed', async () => {
+    const fixture = await openAccount(deletionInfo());
+    const navigate = vi
+      .spyOn(fixture.componentInstance as any, 'navigate')
+      .mockImplementation(() => {});
+    fixture.componentInstance.accountConfirmation = 'athlete@example.com';
+
+    fixture.componentInstance.requestDeletion('account');
+    http.expectOne('/api/account/deletion').flush({
+      ...pendingClosure,
+      state: 'completed',
+      progress_percent: 100,
+      completed_at: '2026-11-10T12:00:01+00:00',
+    });
+    await fixture.whenStable();
+    await Promise.resolve();
+
+    expect(navigate).toHaveBeenCalledWith('/logout');
+    expect(fixture.componentInstance.deletionStatus()).toContain('closed');
+  });
+
+  it('treats a refused session on the status endpoint as a completed closure', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    await fixture.whenStable();
+    const navigate = vi
+      .spyOn(fixture.componentInstance as any, 'navigate')
+      .mockImplementation(() => {});
+
+    fixture.componentInstance.selectSection('account');
+    http
+      .expectOne('/api/account/deletion')
+      .flush({ detail: 'Unauthorized' }, { status: 401, statusText: 'Unauthorized' });
+    await fixture.whenStable();
+
+    expect(navigate).toHaveBeenCalledWith('/logout');
+  });
+
+  it.each([
+    [400, 'confirmation_mismatch', 'did not match'],
+    [409, 'already_requested', 'already open'],
+    [403, 'not_eligible', 'cannot be deleted'],
+    [423, 'locked', 'being erased right now'],
+    [500, 'boom', 'could not be completed'],
+  ])('explains a %i response without exposing internals', async (status, detail, expected) => {
+    const fixture = await openAccount(deletionInfo());
+    fixture.componentInstance.healthConfirmation = 'DELETE HEALTH DATA';
+
+    fixture.componentInstance.requestDeletion('health_data');
+    http.expectOne('/api/account/deletion').flush({ detail }, { status, statusText: 'Error' });
+    fixture.detectChanges();
+
+    expect(query(fixture, '#deletion-error')?.getAttribute('role')).toBe('alert');
+    expect(fixture.componentInstance.deletionError()).toContain(expected);
+    expect(fixture.componentInstance.deletionBusy()).toBe(false);
+  });
+
+  it('offers no deletion controls to an account that is not eligible', async () => {
+    const fixture = await openAccount(deletionInfo(null, false));
+    expect(query(fixture, '#deletion-health')).toBeNull();
+    expect(query(fixture, '#deletion-account')).toBeNull();
+    expect((query(fixture, '#settings-account') as HTMLElement).textContent).toContain(
+      'signed in with your own account',
+    );
+  });
+});

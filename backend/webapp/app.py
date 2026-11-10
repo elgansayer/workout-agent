@@ -29,8 +29,9 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import account_deletion
 import analytics
 import insights
 import lifestyle
@@ -138,6 +139,7 @@ from programme_service import (
     activate_programme as activate_generated_programme,
 )
 from programme_validator import validate_programme
+from pydantic import BaseModel, ConfigDict, Field
 from secret_vault import (
     CredentialExistsError,
     CredentialNotFoundError,
@@ -478,7 +480,25 @@ def _audit_posture(detected_by: str, request: Request | None = None) -> None:
     )
 
 
-def _check_api_auth(request: Request) -> str:
+def _enforce_account_gate(request: Request, uid: Any, *, allow_closing: bool) -> None:
+    """Fail closed for accounts that deletion has locked or closed.
+
+    A closed (tombstoned) account's signed cookie is stateless, so it is rejected
+    here on every request and the session is cleared. While erasure runs the
+    account is locked; only the deletion status endpoint may pass
+    ``allow_closing`` so progress stays visible.
+    """
+    if not isinstance(uid, str):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    gate = account_deletion.account_gate(DB_PATH, uid)
+    if gate is account_deletion.AccountGate.CLOSED:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if gate is account_deletion.AccountGate.LOCKED and not allow_closing:
+        raise HTTPException(status_code=423, detail="Account deletion is in progress.")
+
+
+def _check_api_auth(request: Request, *, allow_closing: bool = False) -> str:
     """Return the authenticated, active account id for this request.
 
     A signed session is not enough on its own: the account it names must still
@@ -492,6 +512,7 @@ def _check_api_auth(request: Request) -> str:
     if not uid and isinstance(user, dict) and user.get("id"):
         uid = user["id"]
     if uid:
+        _enforce_account_gate(request, uid, allow_closing=allow_closing)
         try:
             return require_active_user(str(uid), DB_PATH)["id"]
         except AccountError as exc:
@@ -762,7 +783,8 @@ async def get_current_user_api(request: Request) -> Any:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
         # A session whose account was suspended or removed is no longer a login.
-        _check_api_auth(request)
+        # A closing account stays visible so the SPA can show deletion progress.
+        _check_api_auth(request, allow_closing=True)
     except HTTPException:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
@@ -3447,7 +3469,9 @@ async def api_programme_history_override(request: Request) -> JSONResponse:
 
 @app.get("/api/settings")
 def api_settings(request: Request):
-    user_id = _check_api_auth(request)
+    # Read-only and allowed while an account is locked for deletion: the Settings
+    # page hosts the deletion progress view and must stay reachable to show it.
+    user_id = _check_api_auth(request, allow_closing=True)
 
     prefs = get_user_preferences(user_id, DB_PATH)
     ai_providers = available_providers()
@@ -3607,6 +3631,79 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
         db_path=DB_PATH,
     )
     return {"status": "ok", **result}
+
+
+class AccountDeletionBody(BaseModel):
+    """A confirmed deletion request. The owner is always the signed-in session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["account", "health_data"]
+    confirmation: str = Field(min_length=1, max_length=320)
+
+
+_DELETION_HTTP_STATUS = {
+    "invalid_scope": 422,
+    "confirmation_mismatch": 400,
+    "not_eligible": 403,
+    "already_requested": 409,
+    "not_cancellable": 409,
+    "not_found": 404,
+}
+
+
+def _deletion_http_error(exc: account_deletion.DeletionError) -> HTTPException:
+    return HTTPException(
+        status_code=_DELETION_HTTP_STATUS.get(exc.code, 400), detail=exc.code
+    )
+
+
+@app.get("/api/account/deletion")
+def api_account_deletion_status(request: Request) -> JSONResponse:
+    """Eligibility, the exact confirmation text, and the latest deletion request."""
+    user_id = _check_api_auth(request, allow_closing=True)
+    return JSONResponse(jsonable_encoder(account_deletion.describe(DB_PATH, user_id)))
+
+
+@app.post("/api/account/deletion")
+def api_account_deletion_request(
+    body: AccountDeletionBody, request: Request
+) -> JSONResponse:
+    """Confirm and start deleting health data or closing the signed-in account."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        status = account_deletion.request_deletion(
+            DB_PATH, user_id, body.scope, body.confirmation
+        )
+        # Runs now only when the request is already due (health data, or a
+        # zero-day window); otherwise the scheduler executes it after the window.
+        status = (
+            account_deletion.execute_deletion(DB_PATH, status["request_id"]) or status
+        )
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+
+    finished = status["state"] == account_deletion.DeletionState.COMPLETED
+    response = JSONResponse(
+        jsonable_encoder(status), status_code=200 if finished else 202
+    )
+    if finished and status["scope"] == account_deletion.DeletionScope.ACCOUNT:
+        request.session.clear()
+        response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
+    return response
+
+
+@app.post("/api/account/deletion/cancel")
+def api_account_deletion_cancel(request: Request) -> JSONResponse:
+    """Cancel the signed-in user's pending closure while its window is open."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request, allow_closing=True)
+    try:
+        status = account_deletion.cancel_deletion(DB_PATH, user_id)
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+    return JSONResponse(jsonable_encoder(status))
 
 
 @app.get("/api/notifications")
