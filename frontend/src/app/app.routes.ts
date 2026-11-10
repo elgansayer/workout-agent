@@ -10,11 +10,19 @@ import { Login } from './components/login/login';
 import { Plan } from './components/plan/plan';
 import { Programmes } from './components/programmes/programmes';
 import { Progress } from './components/progress/progress';
+import { Recover } from './components/recover/recover';
 import { Settings } from './components/settings/settings';
 import { Stats } from './components/stats/stats';
+import { VerifyEmail } from './components/verify-email/verify-email';
 
 export const routes: Routes = [
   { path: 'login', component: Login, title: 'Sign in · Workout Agent' },
+  { path: 'recover', component: Recover, title: 'Recover access · Workout Agent' },
+  {
+    path: 'verify-email',
+    component: VerifyEmail,
+    title: 'Verify email · Workout Agent',
+  },
   {
     path: 'profile',
     component: UserProfile,

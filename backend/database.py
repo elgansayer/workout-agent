@@ -31,9 +31,48 @@ class UserRow(TypedDict):
     created_at: str
     timezone: str
     units: str
+    status: str
+    email_verified: bool
+    email_verified_at: str | None
+    last_login_at: str | None
+    updated_at: str
 
 
 DEFAULT_DB_PATH = "workout_agent.db"
+
+ACCOUNT_STATUS_ACTIVE = "active"
+ACCOUNT_STATUS_SUSPENDED = "suspended"
+ACCOUNT_STATUS_DELETED = "deleted"
+ACCOUNT_STATUSES = (
+    ACCOUNT_STATUS_ACTIVE,
+    ACCOUNT_STATUS_SUSPENDED,
+    ACCOUNT_STATUS_DELETED,
+)
+
+# Code-owned column list, never user input, so it is safe to interpolate into
+# SELECT statements. Keep in sync with :func:`_user_from_row`.
+_USER_COLUMNS = (
+    "id, email, display_name, created_at, timezone, units, status, "
+    "email_verified, email_verified_at, last_login_at, updated_at"
+)
+
+
+def _user_from_row(row: Any) -> UserRow:
+    """Build a :class:`UserRow` from a ``_USER_COLUMNS`` SELECT row."""
+
+    return UserRow(
+        id=row[0],
+        email=row[1],
+        display_name=row[2],
+        created_at=row[3],
+        timezone=row[4] or "UTC",
+        units=row[5] or "metric",
+        status=row[6] or ACCOUNT_STATUS_ACTIVE,
+        email_verified=bool(row[7]),
+        email_verified_at=row[8],
+        last_login_at=row[9],
+        updated_at=row[10] or row[3],
+    )
 
 
 @contextlib.contextmanager
@@ -266,9 +305,112 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 display_name TEXT,
                 created_at TEXT NOT NULL,
                 timezone TEXT DEFAULT 'UTC',
-                units TEXT DEFAULT 'metric'
+                units TEXT DEFAULT 'metric',
+                status TEXT NOT NULL DEFAULT 'active',
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                email_verified_at TEXT,
+                last_login_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT ''
             )
             """,
+        )
+
+        # Additive, idempotent account-security columns. Existing databases
+        # created before account recovery keep their rows; accounts that were
+        # already admitted through Google are treated as having a verified
+        # address because Google verified it at sign-in.
+        cursor.execute("PRAGMA table_info(users)")
+        user_columns = {row[1] for row in cursor.fetchall()}
+        _user_upgrades = (
+            ("status", "TEXT NOT NULL DEFAULT 'active'"),
+            ("email_verified", "INTEGER NOT NULL DEFAULT 0"),
+            ("email_verified_at", "TEXT"),
+            ("last_login_at", "TEXT"),
+            ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+        )
+        added_email_verified = "email_verified" not in user_columns
+        for column_name, declaration in _user_upgrades:
+            if column_name not in user_columns:
+                cursor.execute(
+                    f"ALTER TABLE users ADD COLUMN {column_name} {declaration}"
+                )
+        if added_email_verified:
+            cursor.execute(
+                "UPDATE users SET email_verified = 1, "
+                "email_verified_at = COALESCE(email_verified_at, created_at) "
+                "WHERE email != ?",
+                ("legacy@local",),
+            )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_identities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                provider TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                email TEXT NOT NULL,
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                last_login_at TEXT,
+                UNIQUE(provider, subject)
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_identities_user "
+            "ON user_identities (user_id, provider)"
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_recovery_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_recovery_user "
+            "ON account_recovery_tokens (user_id, used_at, expires_at)"
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS email_change_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                old_email TEXT NOT NULL,
+                new_email TEXT NOT NULL,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                used_at TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_email_change_user "
+            "ON email_change_requests (user_id, used_at, expires_at)"
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_action_rate_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                action TEXT NOT NULL,
+                subject_hash TEXT NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_action_limits "
+            "ON account_action_rate_limits (action, subject_hash, created_at)"
         )
         cursor.execute(
             """
@@ -1865,6 +2007,8 @@ def get_or_create_user(
     email: str,
     display_name: str | None = None,
     db_path: str = DEFAULT_DB_PATH,
+    *,
+    email_verified: bool = False,
 ) -> UserRow:
     """Return the user row for an email, creating one on first login."""
     import uuid
@@ -1872,28 +2016,32 @@ def get_or_create_user(
 
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units "
-            "FROM users WHERE email = ?",
+            f"SELECT {_USER_COLUMNS} FROM users WHERE email = ?",
             (email,),
         ).fetchone()
         if row:
-            return UserRow(
-                id=row[0],
-                email=row[1],
-                display_name=row[2],
-                created_at=row[3],
-                timezone=row[4],
-                units=row[5],
-            )
+            return _user_from_row(row)
 
         user_id = str(uuid.uuid4())
         now = datetime.now(tz=timezone.utc).isoformat()
         conn.execute(
             """
-            INSERT INTO users (id, email, display_name, created_at)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO users (
+                id, email, display_name, created_at, status,
+                email_verified, email_verified_at, last_login_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, email, display_name, now),
+            (
+                user_id,
+                email,
+                display_name,
+                now,
+                ACCOUNT_STATUS_ACTIVE,
+                1 if email_verified else 0,
+                now if email_verified else None,
+                now if email_verified else None,
+                now,
+            ),
         )
         return UserRow(
             id=user_id,
@@ -1902,6 +2050,11 @@ def get_or_create_user(
             created_at=now,
             timezone="UTC",
             units="metric",
+            status=ACCOUNT_STATUS_ACTIVE,
+            email_verified=email_verified,
+            email_verified_at=now if email_verified else None,
+            last_login_at=now if email_verified else None,
+            updated_at=now,
         )
 
 
@@ -1909,39 +2062,35 @@ def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | No
     """Return the user row for a user_id, or None."""
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units "
-            "FROM users WHERE id = ?",
+            f"SELECT {_USER_COLUMNS} FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
-    if not row:
-        return None
-    return UserRow(
-        id=row[0],
-        email=row[1],
-        display_name=row[2],
-        created_at=row[3],
-        timezone=row[4],
-        units=row[5],
-    )
+    return _user_from_row(row) if row else None
+
+
+def get_user_by_email(
+    email: str, db_path: str = DEFAULT_DB_PATH
+) -> UserRow | None:
+    """Return the user row for a canonical email, or None.
+
+    Matching is case-insensitive so a differently cased address cannot fork a
+    second account for the same mailbox.
+    """
+    canonical = email.strip().lower()
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            f"SELECT {_USER_COLUMNS} FROM users WHERE lower(email) = ? "
+            "ORDER BY created_at, id LIMIT 1",
+            (canonical,),
+        ).fetchone()
+    return _user_from_row(row) if row else None
 
 
 def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
     """Return all user rows, keyed by user_id."""
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units FROM users"
-        ).fetchall()
-    return [
-        UserRow(
-            id=row[0],
-            email=row[1],
-            display_name=row[2],
-            created_at=row[3],
-            timezone=row[4],
-            units=row[5],
-        )
-        for row in rows
-    ]
+        rows = conn.execute(f"SELECT {_USER_COLUMNS} FROM users").fetchall()
+    return [_user_from_row(row) for row in rows]
 
 
 # ---- API key management ----

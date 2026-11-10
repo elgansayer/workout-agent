@@ -141,6 +141,68 @@ def test_invalid_signed_session_cannot_mint_or_spend_tokens(tmp_path: Path) -> N
     )
 
 
+def _public_recovery_client(tmp_path: Path) -> TestClient:
+    app = FastAPI()
+
+    @app.post("/api/account/recovery/complete")
+    def complete() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_middleware(
+        CSRFMiddleware,
+        db_path=str(tmp_path / "public-recovery.db"),
+        session_secret=_SECRET,
+        trusted_origins=(),
+        ttl_seconds=60,
+    )
+    return TestClient(app, base_url="https://workout.example")
+
+
+def test_public_recovery_mutations_reject_explicit_cross_site_browsers(
+    tmp_path: Path,
+) -> None:
+    client = _public_recovery_client(tmp_path)
+
+    cross_origin = client.post(
+        "/api/account/recovery/complete",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert cross_origin.status_code == 403
+    assert cross_origin.json() == {"detail": "CSRF origin rejected"}
+
+    cross_site_metadata = client.post(
+        "/api/account/recovery/complete",
+        headers={"Sec-Fetch-Site": "cross-site"},
+    )
+    assert cross_site_metadata.status_code == 403
+
+    assert client.post("/api/account/recovery/complete").status_code == 200
+    same_origin = client.post(
+        "/api/account/recovery/complete",
+        headers={"Origin": "https://workout.example"},
+    )
+    assert same_origin.status_code == 200
+
+
+def test_public_recovery_mutations_keep_origin_check_with_a_stale_cookie(
+    tmp_path: Path,
+) -> None:
+    client = _public_recovery_client(tmp_path)
+    client.cookies.set("session", "forged-cookie")
+
+    rejected = client.post(
+        "/api/account/recovery/complete",
+        headers={"Origin": "https://evil.example"},
+    )
+    assert rejected.status_code == 403
+
+    allowed = client.post(
+        "/api/account/recovery/complete",
+        headers={"Origin": "https://workout.example"},
+    )
+    assert allowed.status_code == 200
+
+
 def test_production_and_spa_wiring_keep_csrf_boundary_enabled() -> None:
     root = Path(__file__).resolve().parents[2]
     secure_entrypoint = (root / "backend/webapp/secure_app.py").read_text(encoding="utf-8")

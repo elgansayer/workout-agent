@@ -29,6 +29,10 @@
 #   ALLOWED_EMAILS            comma-separated email allowlist
 #   WEB_TRUSTED_PROXY_CIDRS   narrow CIDRs for proxies allowed to set forwarding headers
 #
+# Account recovery email (optional; recovery links cannot be delivered without it):
+#   SMTP_HOST  SMTP_PORT  SMTP_USERNAME  SMTP_PASSWORD  SMTP_FROM
+#   SMTP_USE_TLS (default 1)  SMTP_USE_SSL (default 0)
+#
 # Optional env vars (leave unset to disable that feature):
 #   GEMINI_API_KEY                  server fallback; users can bring their own key
 #   HEVY_API_KEY                    reference your last logged Hevy session
@@ -100,6 +104,13 @@ services:
       WEB_GOOGLE_CLIENT_SECRET: ${WEB_GOOGLE_CLIENT_SECRET:?WEB_GOOGLE_CLIENT_SECRET is required}
       WEB_AUTH_SECRET: ${WEB_AUTH_SECRET:?WEB_AUTH_SECRET is required}
       ALLOWED_EMAILS: ${ALLOWED_EMAILS:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_USE_TLS: ${SMTP_USE_TLS:-1}
+      SMTP_USE_SSL: ${SMTP_USE_SSL:-0}
     ports:
       - "${WEB_PORT:-8088}:8000"
     volumes:

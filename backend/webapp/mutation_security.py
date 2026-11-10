@@ -25,6 +25,8 @@ from starlette.datastructures import Headers
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from webapp.auth_boundary import PUBLIC_MUTATION_PATHS
+
 _MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _OWNER_FIELDS = frozenset(
     {
@@ -41,8 +43,8 @@ _OWNER_HEADERS = {
     "x-account-id": "account_id",
 }
 _MAX_INSPECTABLE_BODY_BYTES = 128 * 1024
-_MULTIPART_BOUNDARY_RE = re.compile(r"(?:^|;)\s*boundary=(?:\"([^\"]+)\"|([^;]+))", re.I)
-_MULTIPART_NAME_RE = re.compile(r'(?:^|;)\s*name="([^"]+)"', re.I)
+_MULTIPART_BOUNDARY_RE = re.compile(r"(?:^|;)\s*boundary=(?:\"([^\"]+)\"|([^;]+))", re.IGNORECASE)
+_MULTIPART_NAME_RE = re.compile(r'(?:^|;)\s*name="([^"]+)"', re.IGNORECASE)
 
 
 def _json_response(status: int, detail: str) -> tuple[Message, Message]:
@@ -115,7 +117,7 @@ def _query_owner_claims(headers: Headers, scope: Scope) -> list[str]:
             if key.strip().lower() in _OWNER_FIELDS:
                 claims.extend(_claim_values(values))
 
-    for header, _field in _OWNER_HEADERS.items():
+    for header in _OWNER_HEADERS:
         if header in headers:
             claims.extend(_claim_values(headers.get(header)))
     return claims
@@ -239,7 +241,16 @@ class MutationSecurityMiddleware:
         receive: Receive,
         send: Send,
     ) -> None:
-        if scope.get("type") != "http" or str(scope.get("method", "")).upper() not in _MUTATION_METHODS:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        method = str(scope.get("method", "")).upper()
+        if method not in _MUTATION_METHODS:
+            await self.app(scope, receive, send)
+            return
+        # Account recovery is a deliberately anonymous, token-protected
+        # surface. Every other mutation still requires a complete session.
+        if method == "POST" and str(scope.get("path") or "") in PUBLIC_MUTATION_PATHS:
             await self.app(scope, receive, send)
             return
 

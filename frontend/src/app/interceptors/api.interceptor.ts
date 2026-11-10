@@ -1,6 +1,6 @@
 import { HttpBackend, HttpClient, HttpInterceptorFn } from '@angular/common/http';
 import { inject } from '@angular/core';
-import { switchMap } from 'rxjs';
+import { catchError, of, switchMap } from 'rxjs';
 
 import { environment } from '../../environments/environment';
 
@@ -10,6 +10,24 @@ interface CsrfTokenResponse {
 }
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+// These account-recovery mutations are intentionally reachable before a
+// session exists. When a session does exist we still attach a CSRF token, but
+// an anonymous token lookup must not prevent the recovery request itself.
+const PUBLIC_MUTATION_PATHS = new Set([
+  '/api/account/recovery/request',
+  '/api/account/recovery/complete',
+  '/api/account/email/confirm',
+]);
+
+function requestPath(url: string, baseUrl: string): string {
+  let path = url.startsWith(baseUrl) && baseUrl ? url.slice(baseUrl.length) : url;
+  const queryIndex = path.indexOf('?');
+  if (queryIndex !== -1) {
+    path = path.slice(0, queryIndex);
+  }
+  return path;
+}
 
 export const apiInterceptor: HttpInterceptorFn = (req, next) => {
   const baseUrl = environment.apiUrl ? environment.apiUrl.replace(/\/$/, '') : '';
@@ -39,14 +57,23 @@ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
   // interceptor; the request URL and credentials are explicit here instead.
   const csrfClient = new HttpClient(inject(HttpBackend));
   const csrfUrl = baseUrl ? `${baseUrl}/api/csrf-token` : '/api/csrf-token';
+  const publicMutation = PUBLIC_MUTATION_PATHS.has(requestPath(req.url, baseUrl));
   return csrfClient
     .get<CsrfTokenResponse>(csrfUrl, { withCredentials: true })
     .pipe(
-      switchMap(({ token }) =>
+      catchError(() => {
+        if (!publicMutation) {
+          throw new Error('CSRF token unavailable');
+        }
+        return of(null);
+      }),
+      switchMap((response) =>
         next(
-          modifiedReq.clone({
-            setHeaders: { 'X-CSRF-Token': token },
-          }),
+          response
+            ? modifiedReq.clone({
+                setHeaders: { 'X-CSRF-Token': response.token },
+              })
+            : modifiedReq,
         ),
       ),
     );

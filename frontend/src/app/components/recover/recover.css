@@ -1,0 +1,12 @@
+.login-container {
+  min-height: 70vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.login-card {
+  width: min(100%, 32rem);
+  display: grid;
+  gap: 0.75rem;
+}

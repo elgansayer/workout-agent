@@ -30,8 +30,29 @@ from pathlib import Path
 from typing import Any
 
 import analytics
+import email_delivery
 import insights
 import lifestyle
+from account_recovery import (
+    EmailAlreadyInUse,
+    EmailUnchanged,
+    IdentityConflictError,
+    IdentityVerificationError,
+    InactiveAccountError,
+    InvalidEmailAddress,
+    InvalidRecoveryToken,
+    canonical_email,
+    consume_action_rate_limit,
+    consume_email_change_request,
+    consume_recovery_token,
+    create_email_change_request,
+    is_recently_authenticated,
+    mark_session_authenticated,
+    record_authentication,
+    request_recovery,
+    resolve_oauth_account,
+    revoke_email_change_requests,
+)
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -52,7 +73,6 @@ from database import (
     get_exercise_volumes,
     get_meta,
     get_notifications,
-    get_or_create_user,
     get_personal_records,
     get_programme_start_date,
     get_progress_history,
@@ -106,7 +126,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -167,10 +186,23 @@ ALLOWED_EMAILS = [
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
 
 
+def _email_is_allowed(email: str | None) -> bool:
+    """Whether *email* passes the optional server-side login allowlist."""
+
+    allowed = {value.strip().lower() for value in ALLOWED_EMAILS if value.strip()}
+    if not allowed:
+        return True
+    return email is not None and email.strip().lower() in allowed
+
+
 def _check_api_auth(request: Request) -> str:
     user = request.session.get("user") if hasattr(request, "session") else None
     uid = request.session.get("user_id") if hasattr(request, "session") else None
     if uid:
+        account = get_user_by_id(uid, DB_PATH)
+        if account is None or account["status"] != "active":
+            request.session.clear()
+            raise HTTPException(status_code=403, detail="Account is not available")
         return uid
     if user and isinstance(user, dict) and user.get("id"):
         return user["id"]
@@ -290,7 +322,11 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
                     "/login/google",
                     "/logout",
                     "/auth",
-                    
+                    "/recover",
+                    "/verify-email",
+                    "/api/account/recovery/request",
+                    "/api/account/recovery/complete",
+                    "/api/account/email/confirm",
                     "/favicon.ico",
                     "/sw.js",
                 ]
@@ -337,12 +373,278 @@ async def logout(request: Request) -> RedirectResponse:
     return RedirectResponse("/login")
 
 
+def _client_address(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _public_origin(request: Request) -> str:
+    configured = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
+async def _json_object(request: Request) -> dict[str, Any]:
+    try:
+        body = await request.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    return body
+
+
+def _mask_email(email: str) -> str:
+    local, _, domain = email.partition("@")
+    if not local or not domain:
+        return "a new address"
+    return f"{local[:1]}***@{domain}"
+
+
+def _send_account_email(message: email_delivery.AccountEmail) -> None:
+    email_delivery.send_email(message)
+
+
+def _recovery_email(recipient: str, token: str, origin: str) -> email_delivery.AccountEmail:
+    return email_delivery.AccountEmail(
+        recipient=recipient,
+        subject="Recover your Workout Agent account",
+        body=(
+            "A request was made to recover access to your Workout Agent account.\n\n"
+            f"Open this single-use link within 15 minutes:\n{origin}/recover#token={token}\n\n"
+            "If you did not request this, you can ignore this message. Your "
+            "account has not been changed."
+        ),
+    )
+
+
+def _email_change_verification_email(
+    recipient: str, token: str, origin: str
+) -> email_delivery.AccountEmail:
+    return email_delivery.AccountEmail(
+        recipient=recipient,
+        subject="Verify your new Workout Agent email address",
+        body=(
+            "Confirm this address for your Workout Agent account by opening "
+            f"the single-use link within 30 minutes:\n{origin}/verify-email#token={token}\n\n"
+            "If you did not request this change, ignore this message and tell "
+            "the operator of your Workout Agent deployment."
+        ),
+    )
+
+
+def _email_change_alert_email(
+    recipient: str, new_email: str, *, completed: bool
+) -> email_delivery.AccountEmail:
+    masked = _mask_email(new_email)
+    if completed:
+        subject = "Your Workout Agent email address was changed"
+        body = (
+            "Your Workout Agent account email address has been changed to "
+            f"{masked}.\n\nIf you did not make this change, sign in and contact "
+            "the operator of your deployment immediately."
+        )
+    else:
+        subject = "Security alert: Workout Agent email change requested"
+        body = (
+            "A request was made to change your Workout Agent account email "
+            f"address to {masked}.\n\nThe change only completes after the new "
+            "address is verified. If you did not request this, you can ignore "
+            "this message; your current address remains active."
+        )
+    return email_delivery.AccountEmail(recipient=recipient, subject=subject, body=body)
+
+
+@app.post("/api/account/recovery/request")
+async def request_account_recovery(request: Request) -> JSONResponse:
+    """Start passwordless recovery without revealing whether an account exists."""
+
+    _check_rate_limit(request, limit=10, window=300)
+    body = await _json_object(request)
+    canonical = canonical_email(body.get("email"))
+    origin = _public_origin(request)
+    client = _client_address(request)
+    allowed = consume_action_rate_limit(
+        "recovery_request_ip",
+        client,
+        DB_PATH,
+        limit=10,
+        window_seconds=15 * 60,
+    )
+    if canonical is not None:
+        allowed = allowed and consume_action_rate_limit(
+            "recovery_request_email",
+            canonical,
+            DB_PATH,
+            limit=3,
+            window_seconds=15 * 60,
+        )
+    token = (
+        request_recovery(canonical, DB_PATH)
+        if allowed and canonical is not None and _email_is_allowed(canonical)
+        else None
+    )
+    if token is not None and canonical is not None:
+        try:
+            _send_account_email(_recovery_email(canonical, token, origin))
+        except email_delivery.EmailDeliveryError:
+            logger.warning("Recovery email delivery failed; SMTP is unavailable.")
+    return JSONResponse(
+        {"status": "accepted"},
+        status_code=202,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/account/recovery/complete")
+async def complete_account_recovery(request: Request) -> JSONResponse:
+    """Consume a single-use recovery token and establish a fresh session."""
+
+    _check_rate_limit(request, limit=10, window=60)
+    body = await _json_object(request)
+    try:
+        login = consume_recovery_token(body.get("token"), DB_PATH)
+    except InactiveAccountError as exc:
+        raise HTTPException(status_code=403, detail="Account is not available") from exc
+    except InvalidRecoveryToken as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired recovery token",
+        ) from exc
+    account = get_user_by_id(login.user_id, DB_PATH)
+    if account is None or not _email_is_allowed(account["email"]):
+        raise HTTPException(status_code=400, detail="Invalid or expired recovery token")
+    request.session.clear()
+    request.session["user"] = account["email"]
+    request.session["user_id"] = account["id"]
+    mark_session_authenticated(request.session)
+    record_authentication(account["id"], DB_PATH)
+    return JSONResponse(
+        {
+            "status": "ok",
+            "user": {
+                "id": account["id"],
+                "email": account["email"],
+                "name": account["display_name"],
+                "email_verified": account["email_verified"],
+            },
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/account/email/request")
+async def request_account_email_change(request: Request) -> JSONResponse:
+    """Verify a new address and alert the previous address before changing it."""
+
+    _check_rate_limit(request, limit=5, window=60)
+    user_id = _check_api_auth(request)
+    if not is_recently_authenticated(request.session):
+        raise HTTPException(
+            status_code=403,
+            detail="Sign in again before changing your email address",
+        )
+    body = await _json_object(request)
+    try:
+        change = create_email_change_request(user_id, body.get("email"), DB_PATH)
+    except InvalidEmailAddress as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EmailUnchanged as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EmailAlreadyInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InactiveAccountError as exc:
+        raise HTTPException(status_code=403, detail="Account is not available") from exc
+
+    origin = _public_origin(request)
+    try:
+        _send_account_email(
+            _email_change_verification_email(change.new_email, change.token, origin)
+        )
+        _send_account_email(
+            _email_change_alert_email(
+                change.old_email,
+                change.new_email,
+                completed=False,
+            )
+        )
+    except email_delivery.EmailDeliveryError as exc:
+        revoke_email_change_requests(user_id, DB_PATH)
+        logger.warning("Email-change delivery failed; request was revoked.")
+        raise HTTPException(
+            status_code=503,
+            detail="Email delivery is not available. Try again later.",
+        ) from exc
+    return JSONResponse(
+        {"status": "accepted", "email": change.new_email},
+        status_code=202,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/account/email/confirm")
+async def confirm_account_email_change(request: Request) -> JSONResponse:
+    """Consume a new-address verification token and alert the old address."""
+
+    _check_rate_limit(request, limit=10, window=60)
+    body = await _json_object(request)
+    try:
+        result = consume_email_change_request(body.get("token"), DB_PATH)
+    except InactiveAccountError as exc:
+        raise HTTPException(status_code=403, detail="Account is not available") from exc
+    except EmailAlreadyInUse as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InvalidRecoveryToken as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired email verification token",
+        ) from exc
+    alerted = True
+    try:
+        _send_account_email(
+            _email_change_alert_email(
+                result.old_email,
+                result.new_email,
+                completed=True,
+            )
+        )
+    except email_delivery.EmailDeliveryError:
+        alerted = False
+        logger.warning("Post-change security alert delivery failed.")
+    return JSONResponse(
+        {
+            "status": "ok",
+            "email": result.new_email,
+            "previous_address_alerted": alerted,
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/api/me")
 async def get_current_user_api(request: Request) -> Any:
     user = request.session.get("user")
-    if not user:
+    user_id = request.session.get("user_id")
+    if not user or not user_id:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    return JSONResponse({"user": user})
+    account = get_user_by_id(user_id, DB_PATH)
+    if account is None or account["status"] != "active":
+        request.session.clear()
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(
+        {
+            "user": {
+                "id": account["id"],
+                "email": account["email"],
+                "name": account["display_name"],
+                "email_verified": account["email_verified"],
+            }
+        }
+    )
 
 
 @app.get("/auth")
@@ -355,18 +657,27 @@ async def auth(request: Request) -> Any:
         logger.warning("OAuth token exchange failed: %s", e)
         return RedirectResponse("/login")
     user = token.get("userinfo")
-    if user:
-        email = user.get("email", "")
-        if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
-            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
-        # Create or retrieve the user record on first login.
-        user_record = get_or_create_user(
-            email,
+    if not user:
+        return RedirectResponse("/login")
+    email = canonical_email(user.get("email"))
+    if not _email_is_allowed(email):
+        return RedirectResponse("/login?error=access_denied", status_code=303)
+    try:
+        account = resolve_oauth_account(
+            provider="google",
+            subject=user.get("sub"),
+            email=email,
+            email_verified=user.get("email_verified"),
             display_name=user.get("name"),
             db_path=DB_PATH,
         )
-        request.session["user"] = email
-        request.session["user_id"] = user_record["id"]
+    except (IdentityVerificationError, IdentityConflictError, InactiveAccountError):
+        logger.warning("Google sign-in was refused by the account policy.")
+        return RedirectResponse("/login?error=access_denied", status_code=303)
+    request.session.clear()
+    request.session["user"] = account.email
+    request.session["user_id"] = account.user_id
+    mark_session_authenticated(request.session)
     return RedirectResponse("/")
 
 

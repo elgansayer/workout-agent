@@ -35,7 +35,8 @@ The application itself processes data in the browser, FastAPI backend and config
 - Google identity and Google Health/Fitbit where configured;
 - Garmin, Oura, Polar and Withings health connectors;
 - Google Gemini, Anthropic Claude, OpenAI and DeepSeek for optional AI coaching;
-- Telegram and browser push infrastructure for optional notifications.
+- Telegram and browser push infrastructure for optional notifications;
+- the deployment's configured SMTP service for account recovery and security notices.
 
 Each external provider operates under its own terms and privacy policy. The deployment operator is responsible for configuring only providers it intends to use and for meeting any contractual or legal requirements that apply to those providers.
 

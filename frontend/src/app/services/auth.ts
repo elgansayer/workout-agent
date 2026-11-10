@@ -7,6 +7,7 @@ export interface User {
   email: string;
   name?: string;
   picture?: string;
+  email_verified?: boolean;
 }
 
 @Injectable({ providedIn: 'root' })

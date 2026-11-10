@@ -1,0 +1,28 @@
+<div class="login-container">
+  <div class="card login-card">
+    <h1>Verify your new email</h1>
+
+    @if (error()) {
+      <div class="panel error-panel" role="alert">{{ error() }}</div>
+    }
+
+    @if (message()) {
+      <p class="panel" role="status">{{ message() }}</p>
+    }
+
+    @if (!verified()) {
+      <p class="muted">
+        Confirm this address to finish changing the email on your Workout Agent account.
+        This link can be used once and expires after 30 minutes.
+      </p>
+      <div class="btn-row">
+        <button class="btn" type="button" [disabled]="submitting()" (click)="confirm()">
+          {{ submitting() ? 'Confirming...' : 'Confirm new email' }}
+        </button>
+        <a class="btn btn-ghost" href="/login">Back to sign in</a>
+      </div>
+    } @else {
+      <a class="btn" href="/profile">Go to your account</a>
+    }
+  </div>
+</div>

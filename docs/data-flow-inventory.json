@@ -25,7 +25,8 @@
     {"id": "polar", "name": "Polar", "role": "health source"},
     {"id": "withings", "name": "Withings", "role": "health source"},
     {"id": "telegram", "name": "Telegram", "role": "notification delivery"},
-    {"id": "push", "name": "Browser push service", "role": "notification delivery"}
+    {"id": "push", "name": "Browser push service", "role": "notification delivery"},
+    {"id": "email", "name": "Configured SMTP service", "role": "account email delivery"}
   ],
   "systems": [
     {"id": "browser", "name": "User browser / Angular UI", "category": "client", "processor": "self", "data_classes": ["identity", "workout", "health", "coaching", "notification"], "purposes": ["user interface", "local session", "user-requested actions"], "retention": "session/browser lifetime; personalised responses must not be persistently cached", "code_refs": ["frontend/src/app", "backend/webapp/static/sw.js"]},
@@ -44,7 +45,8 @@
     {"id": "openai", "name": "OpenAI", "category": "ai-provider", "processor": "openai", "integration_key": "openai", "data_classes": ["coaching", "workout", "health"], "purposes": ["optional AI coaching"], "retention": "request/provider-policy dependent; do not send credentials", "code_refs": ["backend/ai_provider.py"]},
     {"id": "deepseek", "name": "DeepSeek", "category": "ai-provider", "processor": "deepseek", "integration_key": "deepseek", "data_classes": ["coaching", "workout", "health"], "purposes": ["optional AI coaching"], "retention": "request/provider-policy dependent; do not send credentials", "code_refs": ["backend/ai_provider.py"]},
     {"id": "telegram", "name": "Telegram", "category": "notification", "processor": "telegram", "integration_key": "telegram", "data_classes": ["notification", "coaching", "workout"], "purposes": ["optional user notifications"], "retention": "delivery metadata follows application/provider policy", "code_refs": ["backend/telegram_notifier.py"]},
-    {"id": "web_push", "name": "Web Push", "category": "notification", "processor": "push", "integration_key": "web_push", "data_classes": ["notification", "coaching", "workout"], "purposes": ["optional browser notifications"], "retention": "subscription until revoked/expired; delivered messages follow browser push service policy", "code_refs": ["backend/database.py", "backend/webapp/app.py"]}
+    {"id": "web_push", "name": "Web Push", "category": "notification", "processor": "push", "integration_key": "web_push", "data_classes": ["notification", "coaching", "workout"], "purposes": ["optional browser notifications"], "retention": "subscription until revoked/expired; delivered messages follow browser push service policy", "code_refs": ["backend/database.py", "backend/webapp/app.py"]},
+    {"id": "account_email", "name": "Account recovery email", "category": "notification", "processor": "email", "data_classes": ["identity", "notification", "operational"], "purposes": ["account recovery links and security notices"], "retention": "message delivery follows the configured SMTP provider policy; tokens expire after 15-30 minutes", "code_refs": ["backend/email_delivery.py", "backend/account_recovery.py", "backend/webapp/app.py"]}
   ],
   "data_flows": [
     {"id": "ui-api", "source": "browser", "destination": "fastapi", "data_classes": ["identity", "workout", "health", "coaching", "credentials", "notification"], "purpose": "authenticated application use"},
@@ -61,6 +63,7 @@
     {"id": "openai-coaching", "source": "fastapi", "destination": "openai", "data_classes": ["coaching", "workout", "health"], "purpose": "optional AI coaching"},
     {"id": "deepseek-coaching", "source": "fastapi", "destination": "deepseek", "data_classes": ["coaching", "workout", "health"], "purpose": "optional AI coaching"},
     {"id": "telegram-delivery", "source": "fastapi", "destination": "telegram", "data_classes": ["notification", "coaching", "workout"], "purpose": "optional notifications"},
-    {"id": "push-delivery", "source": "fastapi", "destination": "web_push", "data_classes": ["notification", "coaching", "workout"], "purpose": "optional browser notifications"}
+    {"id": "push-delivery", "source": "fastapi", "destination": "web_push", "data_classes": ["notification", "coaching", "workout"], "purpose": "optional browser notifications"},
+    {"id": "account-email-delivery", "source": "fastapi", "destination": "account_email", "data_classes": ["identity", "notification", "operational"], "purpose": "account recovery links and security notices"}
   ]
 }

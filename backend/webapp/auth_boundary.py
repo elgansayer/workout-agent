@@ -28,11 +28,27 @@ PUBLIC_EXACT_PATHS = frozenset(
         "/login",
         "/login/google",
         "/auth",
-        
+        "/recover",
+        "/verify-email",
+        "/api/account/recovery/request",
+        "/api/account/recovery/complete",
+        "/api/account/email/confirm",
         "/livez",
         "/readyz",
         "/favicon.ico",
         "/sw.js",
+    }
+)
+
+#: The only state-changing routes reachable without a session. They are
+#: token- and rate-limit-protected account-recovery primitives, not product
+#: mutations. The mutation guard imports this canonical set instead of keeping
+#: a second copy that could drift.
+PUBLIC_MUTATION_PATHS = frozenset(
+    {
+        "/api/account/recovery/request",
+        "/api/account/recovery/complete",
+        "/api/account/email/confirm",
     }
 )
 
@@ -178,9 +194,10 @@ def install_authentication_boundary() -> None:
 
 
 __all__ = [
-    "AuthenticationBoundaryMiddleware",
     "PUBLIC_EXACT_PATHS",
+    "PUBLIC_MUTATION_PATHS",
     "PUBLIC_STATIC_PREFIXES",
+    "AuthenticationBoundaryMiddleware",
     "has_verified_identity",
     "install_authentication_boundary",
     "is_public_path",

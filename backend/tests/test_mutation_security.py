@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
-
+from webapp.auth_boundary import PUBLIC_MUTATION_PATHS
 from webapp.mutation_security import MutationSecurityMiddleware
 
 _SECRET = "mutation-security-test-secret-that-is-long-enough"
@@ -246,10 +246,24 @@ def test_real_application_has_no_anonymous_mutation_escape_hatch(
         "/api/notifications/{notification_id}/read",
         "/google-health/disconnect",
     } <= discovered_paths
+    assert PUBLIC_MUTATION_PATHS <= discovered_paths
 
     failures: list[str] = []
     with TestClient(actual_anonymous_app) as client:
         for route, method in mutation_routes:
+            if route.path in PUBLIC_MUTATION_PATHS:
+                # Recovery primitives are deliberately anonymous but still
+                # token/rate-limit protected; they must not answer 401.
+                response = client.request(
+                    method,
+                    _representative_path(route.path),
+                    follow_redirects=False,
+                )
+                if response.status_code == 401:
+                    failures.append(
+                        f"{method} {route.path} -> 401; public recovery route was blocked"
+                    )
+                continue
             response = client.request(
                 method,
                 _representative_path(route.path),
