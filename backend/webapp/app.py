@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import secrets
+import sqlite3
 import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
@@ -102,11 +103,21 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from session_registry import (
+    SESSION_COOKIE_KEY,
+    create_session,
+    current_session_row_id,
+    list_user_sessions,
+    request_metadata,
+    revoke_current_session,
+    revoke_other_sessions,
+    revoke_session,
+    rotate_session,
+)
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -179,6 +190,17 @@ def _check_api_auth(request: Request) -> str:
 
         return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _request_session_metadata(request: Request) -> tuple[str, str, str]:
+    validated_ip = getattr(request.state, "validated_client_ip", "")
+    client_ip = str(validated_ip or (request.client.host if request.client else ""))
+    return request_metadata(request.headers, client_ip)
+
+
+def _current_session_id(request: Request) -> str | None:
+    session_id = request.session.get(SESSION_COOKIE_KEY)
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -333,6 +355,16 @@ async def login_google(request: Request) -> Any:
 
 @app.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
+    user_id = request.session.get("user_id")
+    if isinstance(user_id, str) and user_id:
+        try:
+            revoke_current_session(
+                user_id,
+                _current_session_id(request),
+                DB_PATH,
+            )
+        except sqlite3.Error:
+            logger.exception("Could not revoke the current session during logout.")
     request.session.clear()
     return RedirectResponse("/login")
 
@@ -343,6 +375,74 @@ async def get_current_user_api(request: Request) -> Any:
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+@app.get("/api/sessions")
+def api_list_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    sessions = list_user_sessions(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    return {"sessions": sessions}
+
+
+@app.delete("/api/sessions/{session_id}")
+def api_revoke_session(request: Request, session_id: int) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    current_id = current_session_row_id(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    if not revoke_session(user_id, session_id, DB_PATH):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if current_id == session_id:
+        request.session.clear()
+        return {"status": "ok", "logged_out": True}
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        _current_session_id(request),
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "logged_out": False,
+        "current_session_id": rotated["id"] if rotated else current_id,
+    }
+
+
+@app.post("/api/sessions/revoke-others")
+def api_revoke_other_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    session_id = _current_session_id(request)
+    revoked = revoke_other_sessions(user_id, session_id, DB_PATH)
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        session_id,
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "revoked": revoked,
+        "current_session_id": rotated["id"] if rotated else None,
+    }
 
 
 @app.get("/auth")
@@ -365,8 +465,33 @@ async def auth(request: Request) -> Any:
             display_name=user.get("name"),
             db_path=DB_PATH,
         )
+        previous_user_id = request.session.get("user_id")
+        if isinstance(previous_user_id, str) and previous_user_id:
+            try:
+                revoke_current_session(
+                    previous_user_id,
+                    _current_session_id(request),
+                    DB_PATH,
+                )
+            except sqlite3.Error:
+                logger.exception("Could not revoke the previous session during login.")
+        request.session.clear()
         request.session["user"] = email
         request.session["user_id"] = user_record["id"]
+        user_agent, client_ip, country_code = _request_session_metadata(request)
+        try:
+            session_record = create_session(
+                user_record["id"],
+                user_agent=user_agent,
+                client_ip=client_ip,
+                country_code=country_code,
+                db_path=DB_PATH,
+            )
+        except sqlite3.Error:
+            logger.exception("Could not register the new session.")
+            request.session.clear()
+            return RedirectResponse("/login")
+        request.session[SESSION_COOKIE_KEY] = session_record["sid"]
     return RedirectResponse("/")
 
 

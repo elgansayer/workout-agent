@@ -1,22 +1,91 @@
-<div class="profile-container" *ngIf="authService.currentUser() as user">
-  <h1>Account</h1>
+@if (authService.currentUser(); as user) {
+  <div class="profile-container">
+    <h1>Account</h1>
 
-  <div
-    class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4"
-  >
-    <div class="user-info">
-      <h3>{{ user.name || user.email }}</h3>
-      <p class="email">{{ user.email }}</p>
+    <div
+      class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4"
+    >
+      <div class="user-info">
+        <h3>{{ user.name || user.email }}</h3>
+        <p class="email">{{ user.email }}</p>
+      </div>
+
+      <div class="actions">
+        <a href="/settings" class="btn btn-ghost">Edit coaching preferences</a>
+        <button
+          (click)="logout()"
+          class="inline-block bg-gradient-to-br from-green-400 to-[#36c06a] text-[#07210f] font-bold text-[0.9rem] no-underline border border-transparent rounded-lg px-4 py-2 cursor-pointer transition-all duration-300 shadow-[0_2px_8px_rgba(0,0,0,0.15)] hover:brightness-110 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_rgba(74,222,128,0.2)] btn-danger"
+        >
+          Log Out
+        </button>
+      </div>
     </div>
 
-    <div class="actions">
-      <a href="/settings" class="btn btn-ghost">Edit coaching preferences</a>
-      <button
-        (click)="logout()"
-        class="inline-block bg-gradient-to-br from-green-400 to-[#36c06a] text-[#07210f] font-bold text-[0.9rem] no-underline border border-transparent rounded-lg px-4 py-2 cursor-pointer transition-all duration-300 shadow-[0_2px_8px_rgba(0,0,0,0.15)] hover:brightness-110 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_rgba(74,222,128,0.2)] btn-danger"
-      >
-        Log Out
-      </button>
-    </div>
+    <section
+      class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4"
+      aria-labelledby="active-sessions-heading"
+    >
+      <div class="card-head">
+        <h2 id="active-sessions-heading">Active sessions</h2>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm"
+          (click)="revokeOtherSessions()"
+          [disabled]="sessions().length < 2"
+        >
+          Sign out other sessions
+        </button>
+      </div>
+      <p class="muted">
+        These are the browsers and devices currently signed in to your account. Revoking a
+        session signs it out immediately and refreshes this session's credential.
+      </p>
+
+      @if (sessionsLoading()) {
+        <p class="muted" role="status">Loading active sessions...</p>
+      }
+
+      @if (sessionsError()) {
+        <div class="panel error-panel" role="alert">
+          {{ sessionsError() }}
+          <button type="button" class="btn btn-ghost btn-sm" (click)="loadSessions()">
+            Try again
+          </button>
+        </div>
+      }
+
+      @if (!sessionsLoading() && !sessionsError()) {
+        @if (sessions().length === 0) {
+          <p class="muted" role="status">No active sessions found.</p>
+        } @else {
+          <ul class="session-list">
+            @for (session of sessions(); track session.id) {
+              <li class="session-row">
+                <div class="session-info">
+                  <strong>{{ session.device }}</strong>
+                  @if (session.current) {
+                    <span class="status on">This device</span>
+                  }
+                  <p class="muted">{{ session.location }}</p>
+                  <p class="muted">
+                    Created {{ session.created_at | date: 'medium' }} · Last used
+                    {{ session.last_used_at | date: 'medium' }}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm btn-danger"
+                  (click)="revokeSession(session)"
+                >
+                  {{ session.current ? 'Sign out' : 'Revoke' }}
+                </button>
+              </li>
+            }
+          </ul>
+        }
+      }
+
+      <p class="muted" role="status">{{ sessionStatus() }}</p>
+    </section>
   </div>
-</div>
+}

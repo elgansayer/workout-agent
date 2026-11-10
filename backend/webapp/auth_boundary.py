@@ -9,11 +9,14 @@ diagnostic routes inherit authentication without route-by-route opt-in.
 
 from __future__ import annotations
 
+import os
 import re
+import sqlite3
 from collections.abc import Mapping
 from typing import Any
 
 from fastapi import FastAPI
+from starlette.datastructures import Headers
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse
@@ -77,6 +80,76 @@ def has_verified_identity(session: Mapping[str, Any] | None) -> bool:
     return False
 
 
+def _database_path() -> str:
+    return os.environ.get("DATABASE_PATH", "workout_agent.db").strip() or "workout_agent.db"
+
+
+def _client_ip(scope: Scope) -> str:
+    state = scope.get("state")
+    if isinstance(state, dict):
+        validated = state.get("validated_client_ip")
+        if isinstance(validated, str) and validated and validated != "unknown":
+            return validated
+    client = scope.get("client")
+    if isinstance(client, (tuple, list)) and client:
+        return str(client[0])
+    return ""
+
+
+def _active_session(scope: Scope, session: dict[str, Any]) -> bool:
+    """Validate, adopt, or reject the server-side session for this request.
+
+    Sessions created before the registry existed have no ``sid`` yet. They are
+    adopted once so an existing deployment keeps working and then becomes
+    revocable like any new session. Adoption stops once the user has revoked
+    any session, so a copied legacy cookie cannot be replayed after revocation. A present but unknown, revoked, expired, or
+    foreign session id fails closed.
+    """
+
+    from session_registry import (
+        SESSION_COOKIE_KEY,
+        SessionRegistryError,
+        create_session,
+        legacy_session_adoptable,
+        request_metadata,
+        validate_session,
+    )
+
+    user_id = str(session.get("user_id", "")).strip()
+    if not user_id:
+        return False
+
+    session_id = session.get(SESSION_COOKIE_KEY)
+    if isinstance(session_id, str) and session_id:
+        try:
+            return validate_session(user_id, session_id, _database_path())
+        except sqlite3.Error:
+            return False
+
+    try:
+        if not legacy_session_adoptable(user_id, _database_path()):
+            return False
+    except sqlite3.Error:
+        return False
+
+    user_agent, client_ip, country_code = request_metadata(
+        Headers(scope=scope),
+        _client_ip(scope),
+    )
+    try:
+        record = create_session(
+            user_id,
+            user_agent=user_agent,
+            client_ip=client_ip,
+            country_code=country_code,
+            db_path=_database_path(),
+        )
+    except (sqlite3.Error, SessionRegistryError):
+        return False
+    session[SESSION_COOKIE_KEY] = record["sid"]
+    return True
+
+
 class AuthenticationBoundaryMiddleware:
     """Fail closed for every non-public HTTP request without a verified user."""
 
@@ -100,18 +173,21 @@ class AuthenticationBoundaryMiddleware:
             return
 
         session = scope.get("session")
-        if not isinstance(session, Mapping) or not has_verified_identity(session):
-            if path.startswith("/api/"):
-                response = JSONResponse(
-                    {"detail": "Not authenticated"},
-                    status_code=401,
-                )
-            else:
-                response = RedirectResponse("/login", status_code=303)
-            await response(scope, receive, send)
-            return
+        if isinstance(session, dict) and has_verified_identity(session):
+            if _active_session(scope, session):
+                await self.app(scope, receive, send)
+                return
+            session.clear()
 
-        await self.app(scope, receive, send)
+        response: Any
+        if path.startswith("/api/"):
+            response = JSONResponse(
+                {"detail": "Not authenticated"},
+                status_code=401,
+            )
+        else:
+            response = RedirectResponse("/login", status_code=303)
+        await response(scope, receive, send)
 
 
 def _contains_boundary(app: FastAPI) -> bool:
@@ -178,9 +254,9 @@ def install_authentication_boundary() -> None:
 
 
 __all__ = [
-    "AuthenticationBoundaryMiddleware",
     "PUBLIC_EXACT_PATHS",
     "PUBLIC_STATIC_PREFIXES",
+    "AuthenticationBoundaryMiddleware",
     "has_verified_identity",
     "install_authentication_boundary",
     "is_public_path",

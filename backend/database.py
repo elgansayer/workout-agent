@@ -328,6 +328,29 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                session_hash TEXT NOT NULL UNIQUE,
+                device TEXT,
+                location TEXT,
+                created_at TEXT NOT NULL,
+                last_used_at TEXT NOT NULL,
+                revoked_at TEXT
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_sessions_user "
+            "ON user_sessions (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_active "
+            "ON user_sessions (user_id, revoked_at)"
+        )
+
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_preferences (
                 user_id TEXT PRIMARY KEY REFERENCES users(id),
                 goals TEXT,
