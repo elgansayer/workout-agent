@@ -76,3 +76,77 @@ describe('Compact dashboard', () => {
     http.verify();
   });
 });
+
+describe('Programme provenance', () => {
+  it('shows that the active programme is a generated recommendation', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      week: 2,
+      cycle_weeks: 12,
+      block: { number: 1, name: 'Foundation' },
+      focus: 'Upper body',
+      rows: [],
+      review_lifts: [],
+      programme_provenance: {
+        kind: 'derived',
+        label: 'Calculated by rules',
+        authoritative: false,
+        confidence: null,
+        source_timestamp: null,
+        ingested_at: '2026-09-01T10:00:00+00:00',
+        transformation_version: 'hevy-programme-v1',
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const badge = (fixture.nativeElement as HTMLElement).querySelector(
+      '.programme-overview .prov-badge',
+    );
+    expect(badge?.textContent?.trim()).toBe('Calculated by rules');
+    http.verify();
+  });
+});
+
+describe('Coach status provenance', () => {
+  it('labels the coaching insight as a derived recommendation', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      week: 2,
+      cycle_weeks: 12,
+      block: {},
+      focus: 'Upper body',
+      rows: [],
+      review_lifts: [],
+      dashboard_insight: { fatigue: 'Green', wins_stalls: 'Steady', advice: 'Go' },
+      dashboard_insight_provenance: {
+        kind: 'derived',
+        label: 'AI recommendation',
+        authoritative: false,
+        confidence: null,
+        source_timestamp: null,
+        ingested_at: '2026-01-02T03:04:05+00:00',
+        transformation_version: 'dashboard-insight/1',
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const badge = (fixture.nativeElement as HTMLElement).querySelector(
+      '.today-sidebar .prov-badge',
+    );
+    expect(badge?.textContent?.trim()).toBe('AI recommendation');
+    expect(badge?.classList).toContain('prov-derived');
+    http.verify();
+  });
+});

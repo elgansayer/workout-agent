@@ -16,6 +16,25 @@ const names = [
   'Chin up',
   'Hammer curl',
 ];
+const provenance = (kind: string, label: string, extra: Record<string, unknown> = {}) => ({
+  contract_version: 1,
+  kind,
+  source: kind === 'derived' ? 'ai:gemini/synthetic' : 'google_health',
+  source_label: kind === 'derived' ? 'AI coach (Gemini synthetic)' : 'Google Health',
+  label,
+  authoritative: kind !== 'derived',
+  corrected: false,
+  applied: true,
+  revision: 1,
+  supersedes_revision: null,
+  external_id: null,
+  source_timestamp: null,
+  ingested_at: '2026-11-01T07:00:00+00:00',
+  transformation_version: kind === 'derived' ? 'daily-plan/1' : 'google-health-body/1',
+  confidence: null,
+  note: null,
+  ...extra,
+});
 const dashboard = {
   week: 2,
   cycle_weeks: 12,
@@ -124,6 +143,7 @@ const payloads: Record<string, unknown> = {
       focus: `Session ${i + 1}`,
       day: 1,
       plan: 'Training notes\n'.repeat(20),
+      provenance: provenance('derived', 'AI recommendation', { authoritative: false }),
     })),
   },
   '/api/checkins': {
@@ -142,6 +162,32 @@ const payloads: Record<string, unknown> = {
       sessions: 4,
       svg: '<svg class="svg-chart" viewBox="0 0 300 100" aria-label="Progress"><path d="M0 90L100 60L200 40L300 20" stroke="currentColor" fill="none"/></svg>',
     })),
+    body_readings: [
+      {
+        date: '2026-11-02',
+        weight_kg: 81.2,
+        body_fat_pct: 15.1,
+        muscle_pct: null,
+        resting_hr: 58,
+        hrv: null,
+        provenance: provenance('user_entered', 'Corrected by you', {
+          source: 'manual',
+          source_label: 'You',
+          corrected: true,
+          revision: 2,
+          supersedes_revision: 1,
+        }),
+      },
+      {
+        date: '2026-11-01',
+        weight_kg: 81.6,
+        body_fat_pct: null,
+        muscle_pct: null,
+        resting_hr: null,
+        hrv: null,
+        provenance: provenance('imported', 'Imported from Google Health'),
+      },
+    ],
   },
   '/api/stats': {
     total_sessions: 40,

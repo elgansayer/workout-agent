@@ -45,6 +45,8 @@ Core rules:
 - Example email addresses must use reserved example domains.
 - Sensitive examples must be clearly marked as synthetic so they cannot be mistaken for production data.
 
+Every core record carries provenance (imported source data, a user entry or correction, or a derived recommendation) and corrections keep the original in the record's lineage; see [Record provenance and lineage](docs/PROVENANCE.md).
+
 The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI.
 
 ## Synthetic example programme

@@ -37,6 +37,7 @@
               @if (log.carb_tier) {
                 <span class="chip ghost">{{ log.carb_tier }} carb</span>
               }
+              <app-provenance-badge [provenance]="log.provenance" />
             </summary>
             @if (log.plan) {
               <pre class="log-body">{{ log.plan }}</pre>

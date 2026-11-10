@@ -21,6 +21,13 @@ part-way through schema initialization.
 - Seed rows use `INSERT OR IGNORE` or a conflict-safe upsert. Re-running
   `init_db()` must preserve current programme state and existing metadata.
 
+- `record_provenance` (the provenance and lineage ledger) is created by `init_db()`
+  with `CREATE ... IF NOT EXISTS` for the table, its index and an append-only
+  trigger. It needs no backfill: records stored before it existed have no
+  revision, read as "source not recorded", and capture a legacy baseline the
+  first time they are replaced or corrected. Its unique index leads with
+  `user_id`. See `docs/PROVENANCE.md`.
+
 Never use a client-supplied owner identifier to choose the backfill tenant.
 Runtime requests must continue to derive tenant identity from the authenticated
 session.

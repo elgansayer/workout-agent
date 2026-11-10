@@ -18,6 +18,7 @@ from program import (
     day_focus,
     format_day,
 )
+from provenance import GeneratedText
 
 logger = logging.getLogger(__name__)
 
@@ -155,12 +156,12 @@ def generate_next_workout(
         )
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
+            return GeneratedText.from_provider(text, provider)
         logger.warning("AI provider returned an empty response; using baseline plan.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI generation failed (%s); using baseline plan.", exc)
 
-    return _fallback_plan(day, week, block)
+    return GeneratedText.fallback(_fallback_plan(day, week, block))
 
 
 def _fallback_plan(day: int, week: int, block: Block) -> str:
@@ -210,14 +211,14 @@ def generate_rest_day_message(
         prompt = _build_rest_prompt(recovery)
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
+            return GeneratedText.from_provider(text, provider)
         logger.warning(
             "AI provider returned an empty rest-day response; using fallback."
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
-    return _fallback_rest_message()
+    return GeneratedText.fallback(_fallback_rest_message())
 
 
 def _fallback_rest_message() -> str:
@@ -290,9 +291,9 @@ def generate_checkin_message(
         )
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
+            return GeneratedText.from_provider(text, provider)
         logger.warning("AI provider returned an empty check-in; using fallback.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
-    return fallback
+    return GeneratedText.fallback(fallback)

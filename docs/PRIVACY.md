@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-10  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -15,6 +15,7 @@ Depending on the features a user enables, Workout Agent can process:
 - health and wellness data such as body metrics, sleep, recovery, readiness, activity and other records imported from an enabled health connector;
 - coaching data such as goals, constraints, chat messages, prompts, generated recommendations, reasoning records and feedback;
 - connector metadata such as provider account identifiers, sync cursors, connection state and timestamps;
+- record provenance and correction history, meaning where each stored value came from (an import, something the user entered, or a generated recommendation), when it was stored, and the earlier values and optional reasons kept when a user corrects a reading;
 - credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission;
 - notification delivery data such as Telegram chat identifiers or web-push subscriptions when those channels are enabled;
 - operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service.

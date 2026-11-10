@@ -18,6 +18,10 @@ from database import (
     save_deep_correlation,
     save_notification,
 )
+from provenance import RETRIEVAL_GUIDANCE, ai_provenance, annotate_for_retrieval
+
+DASHBOARD_INSIGHT_VERSION = "dashboard-insight/1"
+DEEP_CORRELATION_VERSION = "deep-correlation/1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
@@ -52,20 +56,35 @@ def generate_daily_header(config: Config, user_id: str | None = None) -> None:
 
     metrics = [
         m
-        for m in get_body_metrics(limit=14, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(
+            limit=14,
+            db_path=config.database_path,
+            user_id=uid,
+            include_provenance=uid is not None,
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=14, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(
+            limit=14,
+            db_path=config.database_path,
+            user_id=uid,
+            include_provenance=uid is not None,
+        )
         if log["date"] >= cutoff
     ]
 
-    data = {"metrics": metrics, "logs": logs}
+    data = {
+        "metrics": annotate_for_retrieval(metrics),
+        "logs": annotate_for_retrieval(logs),
+    }
 
     prompt = f"""You are a high-performance strength coach. Analyze the following JSON representing the user's training and recovery data for the last 7 days.
 
 {json.dumps(data, indent=2)}
+
+{RETRIEVAL_GUIDANCE}
 
 Provide a 3-bullet point executive summary for a dashboard header:
 1. Current fatigue state (Green/Yellow/Red) based on training volume vs. sleep/recovery.
@@ -85,7 +104,10 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
             save_dashboard_insight(
-                json.dumps(parsed), db_path=config.database_path, user_id=uid
+                json.dumps(parsed),
+                db_path=config.database_path,
+                user_id=uid,
+                provenance=ai_provenance(provider, DASHBOARD_INSIGHT_VERSION),
             )
             if uid:
                 fatigue = parsed.get("fatigue", "Normal")
@@ -115,12 +137,22 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
 
     metrics = [
         m
-        for m in get_body_metrics(limit=120, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(
+            limit=120,
+            db_path=config.database_path,
+            user_id=uid,
+            include_provenance=uid is not None,
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=120, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(
+            limit=120,
+            db_path=config.database_path,
+            user_id=uid,
+            include_provenance=uid is not None,
+        )
         if log["date"] >= cutoff
     ]
 
@@ -137,9 +169,12 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
             filtered_history[ex] = recent
 
     data = {
-        "body_metrics": metrics,
-        "daily_logs": logs,
+        "body_metrics": annotate_for_retrieval(metrics),
+        "daily_logs": annotate_for_retrieval(logs),
         "exercise_history": filtered_history,
+        "exercise_history_provenance": (
+            "imported: Hevy workout logs (source data, not recommendations)"
+        ),
     }
 
     prompt = f"""You are an elite data-driven strength coach and analyst. 
@@ -150,6 +185,8 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(data, indent=2)}
 
+{RETRIEVAL_GUIDANCE}
+
 Analyze this data and produce a "Deep Correlation Engine" report. 
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
@@ -158,7 +195,12 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path, user_id=uid)
+            save_deep_correlation(
+                text,
+                db_path=config.database_path,
+                user_id=uid,
+                provenance=ai_provenance(provider, DEEP_CORRELATION_VERSION),
+            )
             if uid:
                 save_notification(
                     uid,

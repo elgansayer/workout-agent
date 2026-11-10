@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmBadgeImports } from '@spartan-ng/ui/badge';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
@@ -14,6 +15,7 @@ import { FormsModule } from '@angular/forms';
   standalone: true,
   imports: [
     ListControls,
+    ProvenanceBadge,
     CommonModule,
     FormsModule,
     HlmCardImports,

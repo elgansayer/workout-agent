@@ -49,4 +49,44 @@ describe('Plan', () => {
     expect(text).not.toContain('Õ');
     expect(text).not.toContain("¡'");
   });
+
+  it('labels the active programme as a rules-derived recommendation', () => {
+    TestBed.configureTestingModule({
+      imports: [Plan],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const fixture = TestBed.createComponent(Plan);
+    fixture.detectChanges();
+
+    TestBed.inject(HttpTestingController)
+      .expectOne('/api/plan')
+      .flush({
+        setup_required: false,
+        split_name: 'Imported rotation',
+        week: 1,
+        cycle_weeks: 4,
+        analysis: { confidence: 'medium' },
+        provenance: {
+          kind: 'derived',
+          label: 'Calculated by rules',
+          authoritative: false,
+          confidence: null,
+          confidence_label: 'medium',
+          source_timestamp: '2026-08-20T10:00:00+00:00',
+          ingested_at: '2026-09-01T10:00:00+00:00',
+          transformation_version: 'hevy-programme-v1',
+        },
+        warnings: [],
+        blocks: [],
+        days: [],
+        rules: [],
+      });
+    fixture.detectChanges();
+
+    const badge = (fixture.nativeElement as HTMLElement).querySelector('header .prov-badge');
+    expect(badge?.textContent?.trim()).toBe('Calculated by rules');
+    expect(badge?.classList).toContain('prov-derived');
+    expect((badge as HTMLElement).title).toContain('transformation hevy-programme-v1');
+    expect((badge as HTMLElement).title).toContain('confidence medium');
+  });
 });

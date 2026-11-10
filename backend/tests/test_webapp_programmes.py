@@ -316,3 +316,31 @@ def test_dashboard_and_plan_share_current_prescriptions_and_tenant_rotation(
     stored = database.get_active_programme(user_id, db_file)
     assert stored is not None
     assert stored["definition"] == definition
+
+
+def test_active_programme_is_labelled_as_a_derived_recommendation(
+    tmp_path: Any,
+    monkeypatch: Any,
+) -> None:
+    client, _app_module, _db_file = _client(tmp_path, monkeypatch)
+    assert client.get("/api/plan").json().get("provenance") is None  # nothing active yet
+
+    preview = client.post("/api/programmes/preview", json=_payload()).json()["preview"]
+    activation = client.post(
+        "/api/programmes/activate",
+        json={**_payload(), "preview_token": preview["preview_token"]},
+    )
+    assert activation.status_code == 200
+
+    plan = client.get("/api/plan").json()
+    provenance = plan["provenance"]
+    assert provenance["kind"] == "derived" and provenance["authoritative"] is False
+    assert provenance["source"] == "rules:hevy-programme"
+    assert provenance["transformation_version"] == preview["engine_version"]
+    assert provenance["external_id"] == f"hevy:{preview['preview_token'][:20]}"
+    assert provenance["confidence_label"] == preview["analysis"]["confidence"]
+    assert provenance["confidence"] is None
+
+    dashboard = client.get("/api/dashboard").json()
+    assert dashboard["programme_provenance"]["kind"] == "derived"
+    assert dashboard["programme_provenance"]["transformation_version"] == preview["engine_version"]

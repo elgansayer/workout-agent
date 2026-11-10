@@ -9,14 +9,26 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import sqlite3
-from collections.abc import Iterator
-from datetime import date, datetime, timezone
+from collections.abc import Iterator, Mapping
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+import provenance_ledger as ledger
 from encryption import decrypt, encrypt
+from hevy_parser import HEVY_PARSER_VERSION, workout_identity
 from program import SPLIT_NAME, TOTAL_DAYS
+from provenance import (
+    MANUAL_SOURCE,
+    UNATTRIBUTED_SOURCE,
+    Provenance,
+    RecordKind,
+    RecordType,
+    content_hash,
+    unattributed,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -822,6 +834,9 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # Provenance and lineage ledger (additive, append-only, tenant scoped).
+        ledger.ensure_schema(cursor)
+
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -881,23 +896,110 @@ def advance_day(db_path: str = DEFAULT_DB_PATH, *, user_id: str | None = None) -
     return nxt
 
 
+# ---------------------------------------------------------------------------
+# Provenance and lineage (see docs/PROVENANCE.md)
+# ---------------------------------------------------------------------------
+
+
+def _record_derived(
+    conn: sqlite3.Connection,
+    user_id: str | None,
+    record_type: RecordType,
+    record_key: str,
+    provenance: Provenance | None,
+    content: Any,
+) -> None:
+    """Record a derived artefact's provenance inside the caller's transaction."""
+    ledger.record_revision(
+        conn,
+        user_id=user_id or _get_or_create_legacy_user(conn.cursor()),
+        record_type=record_type,
+        record_key=record_key,
+        provenance=provenance or unattributed(RecordKind.DERIVED),
+        content=content,
+    )
+
+
+def _public_view(entry: ledger.LedgerEntry | None) -> dict[str, Any] | None:
+    """Owner-facing provenance view without the revision's retained content."""
+    if entry is None:
+        return None
+    view = entry.view()
+    view.pop("content", None)
+    return view
+
+
+def get_record_provenance(
+    user_id: str,
+    record_type: RecordType | str,
+    record_key: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any] | None:
+    """Return the current provenance view of one of the user's records."""
+    with _connect(db_path) as conn:
+        entry = ledger.current_entry(conn, user_id, record_type, record_key)
+    return _public_view(entry)
+
+
+def get_record_lineage(
+    user_id: str,
+    record_type: RecordType | str,
+    record_key: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Return every revision of one record, newest first, with retained values."""
+    with _connect(db_path) as conn:
+        entries = ledger.lineage(conn, user_id, record_type, record_key)
+    return [entry.view() for entry in entries]
+
+
+def get_provenance_summary(
+    user_id: str,
+    record_type: RecordType | str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Summarise the current revisions of a record type by kind and source."""
+    with _connect(db_path) as conn:
+        return ledger.summarise(conn, user_id, record_type)
+
+
 def save_workout(
     payload: Any,
     db_path: str = DEFAULT_DB_PATH,
     when: str | None = None,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
-    """Persist a raw Hevy payload for historical reference."""
+    """Persist a raw Hevy payload for historical reference.
+
+    The Hevy workout id and start time become the record's external identifier
+    and source timestamp unless the caller supplies explicit *provenance*.
+    """
     if payload is None:
         return
     today = when or datetime.now(tz=timezone.utc).date().isoformat()
     uid = user_id or get_legacy_user_id(db_path)
+    workout_id, started_at = workout_identity(payload)
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT INTO workout_history (date, hevy_payload, user_id) "
             "VALUES (?, ?, ?)",
             (today, json.dumps(payload), uid),
+        )
+        ledger.record_revision(
+            conn,
+            user_id=uid,
+            record_type=RecordType.WORKOUT,
+            record_key=workout_id or f"{today}:{content_hash(payload)[:12]}",
+            provenance=provenance
+            or Provenance.imported(
+                "hevy",
+                HEVY_PARSER_VERSION,
+                external_id=workout_id,
+                source_timestamp=started_at,
+            ),
+            content=payload,
         )
 
 
@@ -935,10 +1037,12 @@ def save_progress(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     """Persist the per-exercise top sets from a parsed workout summary.
 
-    If *user_id* is provided, the progress is scoped to that user.
+    If *user_id* is provided, the progress is scoped to that user. One
+    provenance revision is recorded per workout (keyed by the Hevy workout id).
     """
     if summary is None:
         return
@@ -964,6 +1068,25 @@ def save_progress(
                     exercise.sets,
                     uid,
                 ),
+            )
+        if summary.exercises:
+            top_sets = [
+                [e.name, e.top_weight_kg, e.top_reps, e.sets] for e in summary.exercises
+            ]
+            ledger.record_revision(
+                conn,
+                user_id=uid,
+                record_type=RecordType.EXERCISE_PROGRESS,
+                record_key=summary.workout_id
+                or f"{today}:{content_hash(top_sets)[:12]}",
+                provenance=provenance
+                or Provenance.imported(
+                    "hevy",
+                    HEVY_PARSER_VERSION,
+                    external_id=summary.workout_id,
+                    source_timestamp=summary.date,
+                ),
+                content=top_sets,
             )
 
 
@@ -1396,10 +1519,12 @@ def save_checkin(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     """Persist a completed programme check-in for later review.
 
-    If *user_id* is provided, the check-in is scoped to that user.
+    If *user_id* is provided, the check-in is scoped to that user. A check-in is
+    a derived coaching summary, so it is recorded with derived provenance.
     """
     with _connect(db_path) as conn:
         conn.execute(
@@ -1408,6 +1533,14 @@ def save_checkin(
             VALUES (?, ?, ?, ?, ?, ?)
             """,
             (number, when, workouts_done, weeks, message, user_id),
+        )
+        _record_derived(
+            conn,
+            user_id,
+            RecordType.CHECK_IN,
+            str(number),
+            provenance,
+            [number, when, workouts_done, weeks, message],
         )
 
 
@@ -1464,16 +1597,27 @@ def save_daily_log(
     lifestyle: str,
     db_path: str = DEFAULT_DB_PATH,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     """Log the full plan and lifestyle guidance issued for a day.
 
     One row per date per user: a re-run on the same day replaces the earlier
-    entry so the log always holds the latest guidance that was sent.
+    entry so the log always holds the latest guidance that was sent. Each
+    generation is a derived-provenance revision, so replacements stay in the
+    record's lineage even though the superseded text is not retained.
 
     If *user_id* is provided, the log is scoped to that user.
     """
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
+        _record_derived(
+            conn,
+            uid,
+            RecordType.DAILY_PLAN,
+            when,
+            provenance,
+            [day, focus, carb_tier, plan, lifestyle],
+        )
         conn.execute(
             "DELETE FROM daily_log WHERE date = ? AND user_id = ?", (when, uid)
         )
@@ -1490,8 +1634,13 @@ def get_daily_logs(
     limit: int = 30,
     db_path: str = DEFAULT_DB_PATH,
     user_id: str | None = None,
+    include_provenance: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return recent daily logs, most recent first."""
+    """Return recent daily logs, most recent first.
+
+    With *include_provenance* each log carries the ``provenance`` view of its
+    current revision (``None`` for logs stored before provenance tracking).
+    """
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
@@ -1504,7 +1653,14 @@ def get_daily_logs(
             """,
             (uid, limit),
         ).fetchall()
-    return [
+        entries = (
+            ledger.current_entries(
+                conn, uid, RecordType.DAILY_PLAN, [row[0] for row in rows]
+            )
+            if include_provenance
+            else {}
+        )
+    logs = [
         {
             "date": when,
             "day": day,
@@ -1515,6 +1671,85 @@ def get_daily_logs(
         }
         for when, day, focus, carb_tier, plan, lifestyle in rows
     ]
+    if include_provenance:
+        for log in logs:
+            log["provenance"] = _public_view(entries.get(log["date"]))
+    return logs
+
+
+BODY_METRIC_FIELDS = ("weight_kg", "body_fat_pct", "muscle_pct", "resting_hr", "hrv")
+# Plausibility bounds for user-entered corrections (inclusive).
+BODY_METRIC_LIMITS: dict[str, tuple[float, float]] = {
+    "weight_kg": (20.0, 400.0),
+    "body_fat_pct": (1.0, 75.0),
+    "muscle_pct": (1.0, 90.0),
+    "resting_hr": (25.0, 220.0),
+    "hrv": (1.0, 400.0),
+}
+
+
+def validate_body_metric_changes(changes: Mapping[str, Any]) -> dict[str, float]:
+    """Return clean, in-range numeric corrections or raise ``ValueError``."""
+    clean: dict[str, float] = {}
+    for field, raw in changes.items():
+        if field not in BODY_METRIC_LIMITS:
+            raise ValueError(f"{field} is not a correctable body metric")
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise ValueError(f"{field} must be a number")  # noqa: TRY004 - API maps ValueError to 422
+        value = float(raw)
+        low, high = BODY_METRIC_LIMITS[field]
+        if not math.isfinite(value) or not low <= value <= high:
+            raise ValueError(f"{field} must be between {low:g} and {high:g}")
+        clean[field] = round(value) if field == "resting_hr" else value
+    if not clean:
+        raise ValueError("at least one body metric is required")
+    return clean
+
+
+def _body_content(
+    values: Mapping[str, Any], sources: Mapping[str, str]
+) -> dict[str, Any]:
+    """Logical value of a body-metric revision, retained for lineage."""
+    return {
+        "values": {k: values[k] for k in BODY_METRIC_FIELDS if values.get(k) is not None},
+        "field_sources": {k: sources[k] for k in BODY_METRIC_FIELDS if k in sources},
+    }
+
+
+def _replace_body_metrics_row(
+    conn: sqlite3.Connection,
+    user_id: str | None,
+    when: str,
+    values: Mapping[str, Any],
+) -> None:
+    """One current row per date and owner; superseded values live in the ledger."""
+    conn.execute(
+        "DELETE FROM body_metrics WHERE date = ? AND user_id IS ?", (when, user_id)
+    )
+    conn.execute(
+        """
+        INSERT INTO body_metrics
+            (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (when, *(values.get(field) for field in BODY_METRIC_FIELDS), user_id),
+    )
+
+
+def _current_body_values(
+    conn: sqlite3.Connection, user_id: str | None, when: str
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+        FROM body_metrics WHERE date = ? AND user_id IS ?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (when, user_id),
+    ).fetchone()
+    if row is None:
+        return None
+    return {f: v for f, v in zip(BODY_METRIC_FIELDS, row) if v is not None}
 
 
 def save_body_metrics(
@@ -1523,42 +1758,136 @@ def save_body_metrics(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
+    field_sources: Mapping[str, str] | None = None,
 ) -> None:
     """Persist a body-composition reading (weight, body fat, muscle, resting HR).
 
     Accepts the dict produced by `health_connect.body_metrics_from_recovery`, or
-    None (a no-op). One row per date per user: a later reading on the same day
-    replaces the earlier one, so the morning weigh-in is what gets stored.
+    None (a no-op). One row per date per owner: a later reading on the same day
+    replaces the earlier one, so the morning weigh-in is what gets stored. The
+    replaced values are never lost: each reading is a provenance revision that
+    retains its values, and a user-entered correction for the date takes
+    precedence over a later automated import (the import is kept as a held
+    revision and the stored row is left untouched).
+
+    *provenance* names the source of the reading and *field_sources* optionally
+    attributes individual fields when a row merges several sources.
 
     If *user_id* is provided, the metrics are scoped to that user.
     """
     if not metrics:
         return
     when = when or datetime.now(tz=timezone.utc).date().isoformat()
+    declared = provenance or unattributed(RecordKind.IMPORTED)
+    values = {f: metrics[f] for f in BODY_METRIC_FIELDS if metrics.get(f) is not None}
+    sources = {f: (field_sources or {}).get(f, declared.source) for f in values}
     with _connect(db_path) as conn:
-        if user_id is not None:
-            conn.execute(
-                "DELETE FROM body_metrics WHERE date = ? AND user_id = ?",
-                (when, user_id),
+        uid = user_id or _get_or_create_legacy_user(conn.cursor())
+        ledger.begin_write(conn)
+        existing = _current_body_values(conn, user_id, when)
+        if existing is not None:
+            ledger.ensure_baseline(
+                conn,
+                user_id=uid,
+                record_type=RecordType.BODY_METRIC,
+                record_key=when,
+                content=_body_content(
+                    existing, {f: UNATTRIBUTED_SOURCE for f in existing}
+                ),
+                retain_content=True,
             )
-        else:
-            conn.execute("DELETE FROM body_metrics WHERE date = ?", (when,))
-        conn.execute(
-            """
-            INSERT INTO body_metrics
-                (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                when,
-                metrics.get("weight_kg"),
-                metrics.get("body_fat_pct"),
-                metrics.get("muscle_pct"),
-                metrics.get("resting_hr"),
-                metrics.get("hrv"),
-                user_id,
-            ),
+        outcome = ledger.record_revision(
+            conn,
+            user_id=uid,
+            record_type=RecordType.BODY_METRIC,
+            record_key=when,
+            provenance=declared,
+            content=_body_content(values, sources),
+            retain_content=True,
         )
+        if not outcome.applied:
+            logger.info(
+                "Kept the user-entered body metrics for %s; automated import held.", when
+            )
+            return
+        _replace_body_metrics_row(conn, user_id, when, values)
+
+
+def correct_body_metrics(
+    user_id: str,
+    when: str,
+    changes: Mapping[str, Any],
+    *,
+    reason: str | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, Any]:
+    """Apply a user correction (or manual entry) to the reading for *when*.
+
+    The changed fields are merged into the current reading, the result becomes
+    a user-entered revision that supersedes the previous one, and the previous
+    values stay in the lineage. Raises ``ValueError`` for invalid input or a
+    correction that would not change the stored reading.
+    """
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise ValueError("user_id is required")
+    try:
+        day = date.fromisoformat(when)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("date must be a YYYY-MM-DD calendar date") from exc
+    if day > datetime.now(tz=timezone.utc).date() + timedelta(days=1):
+        raise ValueError("date cannot be in the future")
+    when = day.isoformat()
+    clean = validate_body_metric_changes(changes)
+
+    with _connect(db_path) as conn:
+        ledger.begin_write(conn)
+        existing = _current_body_values(conn, user_id, when)
+        previous = existing or {}
+        merged = {**previous, **clean}
+        if existing is not None and merged == previous:
+            raise ValueError("The correction does not change the stored reading.")
+        current = ledger.current_entry(conn, user_id, RecordType.BODY_METRIC, when)
+        if existing is not None and current is None:
+            ledger.ensure_baseline(
+                conn,
+                user_id=user_id,
+                record_type=RecordType.BODY_METRIC,
+                record_key=when,
+                content=_body_content(
+                    previous, {f: UNATTRIBUTED_SOURCE for f in previous}
+                ),
+                retain_content=True,
+            )
+            current = ledger.current_entry(conn, user_id, RecordType.BODY_METRIC, when)
+        carried = (
+            dict((current.content or {}).get("field_sources") or {})
+            if current is not None
+            else {}
+        )
+        fallback = current.provenance.source if current is not None else MANUAL_SOURCE
+        sources = {f: carried.get(f, fallback) for f in previous}
+        sources.update({f: MANUAL_SOURCE for f in clean})
+        content = _body_content(merged, sources)
+        content["corrected_fields"] = sorted(clean)
+        outcome = ledger.record_revision(
+            conn,
+            user_id=user_id,
+            record_type=RecordType.BODY_METRIC,
+            record_key=when,
+            provenance=Provenance.user_entered(),
+            content=content,
+            retain_content=True,
+            note=reason,
+        )
+        _replace_body_metrics_row(conn, user_id, when, merged)
+        entry = ledger.current_entry(conn, user_id, RecordType.BODY_METRIC, when)
+    return {
+        "date": when,
+        "reading": {f: merged.get(f) for f in BODY_METRIC_FIELDS},
+        "revision": outcome.revision,
+        "provenance": entry.view() if entry is not None else None,
+    }
 
 
 def get_body_metrics(
@@ -1566,11 +1895,17 @@ def get_body_metrics(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    include_provenance: bool = False,
 ) -> list[dict[str, Any]]:
     """Return recent body-composition readings, oldest first for charting.
 
     If *user_id* is provided, results are scoped to that user.
+    With *include_provenance* (which requires *user_id*) every reading carries a
+    ``provenance`` view of its current revision, or ``None`` when the reading
+    was stored before provenance tracking.
     """
+    if include_provenance and user_id is None:
+        raise ValueError("provenance retrieval requires an authenticated user_id")
     with _connect(db_path) as conn:
         if user_id is not None:
             rows = conn.execute(
@@ -1601,7 +1936,14 @@ def get_body_metrics(
                 """,
                 (limit,),
             ).fetchall()
-    return [
+        entries = (
+            ledger.current_entries(
+                conn, str(user_id), RecordType.BODY_METRIC, [row[0] for row in rows]
+            )
+            if include_provenance
+            else {}
+        )
+    readings = [
         {
             "date": when,
             "weight_kg": weight,
@@ -1612,6 +1954,11 @@ def get_body_metrics(
         }
         for when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
+    if include_provenance:
+        for reading in readings:
+            entry = entries.get(reading["date"])
+            reading["provenance"] = _public_view(entry)
+    return readings
 
 
 def save_dashboard_insight(
@@ -1619,14 +1966,19 @@ def save_dashboard_insight(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     """Save the daily dashboard insight JSON.
 
-    If *user_id* is provided, the insight is scoped to that user.
+    If *user_id* is provided, the insight is scoped to that user. The insight is
+    a derived recommendation; each regeneration is a new provenance revision.
     """
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         uid = user_id or _get_or_create_legacy_user(cursor)
+        _record_derived(
+            conn, uid, RecordType.DASHBOARD_INSIGHT, "current", provenance, insight_json
+        )
         conn.execute(
             """
             INSERT INTO dashboard_insights (user_id, date, insight_json)
@@ -1682,14 +2034,19 @@ def save_reasoning_log(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     """Save an AI reasoning log for an exercise change.
 
-    If *user_id* is provided, the log is scoped to that user.
+    If *user_id* is provided, the log is scoped to that user. The explanation is
+    a derived record; it is never evidence of what the user did.
     """
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         uid = user_id or _get_or_create_legacy_user(cursor)
+        _record_derived(
+            conn, uid, RecordType.REASONING, context_id, provenance, reasoning
+        )
         cursor.execute(
             """
             INSERT INTO reasoning_logs (user_id, context_id, date, exercise_name, reasoning)
@@ -1739,10 +2096,19 @@ def save_deep_correlation(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
     with _connect(db_path) as conn:
         cursor = conn.cursor()
         uid = user_id or _get_or_create_legacy_user(cursor)
+        _record_derived(
+            conn,
+            uid,
+            RecordType.DEEP_CORRELATION,
+            "current",
+            provenance,
+            insight_markdown,
+        )
         conn.execute(
             """
             INSERT INTO deep_correlations (user_id, date, insight_markdown)

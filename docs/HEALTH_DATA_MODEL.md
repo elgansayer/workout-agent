@@ -184,6 +184,8 @@ retry_count
 
 ## Provenance and deduplication
 
+The records the application stores today (`body_metrics`, Hevy workouts and progress, generated plans) already record provenance and correction lineage in the `record_provenance` ledger; see `docs/PROVENANCE.md`. The canonical tables described here should adopt the same kinds (`imported`, `user_entered`, `derived`) when they are connected.
+
 Every normalized record should retain:
 
 - provider

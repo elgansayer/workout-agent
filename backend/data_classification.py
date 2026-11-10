@@ -125,6 +125,8 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "endpoint": DataClass.IDENTIFIER,
     "device_id": DataClass.IDENTIFIER,
     "external_user_id": DataClass.IDENTIFIER,
+    # provenance ledger: upstream record ids identify the user's provider data
+    "external_id": DataClass.IDENTIFIER,
     # health
     "weight_kg": DataClass.HEALTH,
     "body_fat_pct": DataClass.HEALTH,
@@ -145,12 +147,16 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "routine_id": DataClass.WORKOUT,
     "routine_key": DataClass.WORKOUT,
     "plan": DataClass.WORKOUT,
+    # provenance ledger: retained prior values of user-owned health records
+    "retained_content": DataClass.HEALTH,
     # AI prompts / responses
     "prompt": DataClass.PROMPT,
     "user_prompt": DataClass.PROMPT,
     "system_prompt": DataClass.INTERNAL,
     "content": DataClass.PROMPT,
     "reasoning": DataClass.PROMPT,
+    # provenance ledger: user-authored correction reasons and system lineage notes
+    "lineage_note": DataClass.PROMPT,
     "insight_json": DataClass.ANALYTICS,
     "insight_markdown": DataClass.ANALYTICS,
     # analytics / derived metrics

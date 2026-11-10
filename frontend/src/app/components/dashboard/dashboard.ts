@@ -3,12 +3,13 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, ListControls],
+  imports: [CommonModule, ListControls, ProvenanceBadge],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })

@@ -25,8 +25,11 @@ from database import (
 from gemini_engine import generate_checkin_message
 from hevy_client import get_exercise_history, get_workout_count
 from program import Block, day_exercises
+from provenance import Provenance, generated_text_provenance
 
 logger = logging.getLogger(__name__)
+
+CHECKIN_VERSION = "checkin/1"
 
 # One training block is roughly four weeks at six sessions a week.
 CHECKIN_WORKOUT_TARGET = 24
@@ -306,8 +309,13 @@ def record(
     today: date | None = None,
     *,
     user_id: str | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
-    """Persist the completed check-in and reset this user's tracking baseline."""
+    """Persist the completed check-in and reset this user's tracking baseline.
+
+    The check-in is recorded as a derived coaching summary; unless *provenance*
+    is given it is attributed from how *message* was generated (AI or fallback).
+    """
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     set_meta(
@@ -337,6 +345,7 @@ def record(
         message,
         config.database_path,
         user_id=user_id,
+        provenance=provenance or generated_text_provenance(message, CHECKIN_VERSION),
     )
     if user_id:
         save_notification(

@@ -44,7 +44,11 @@ from database import (
     save_workout,
 )
 from gemini_engine import generate_next_workout, generate_rest_day_message
-from health_connect import body_metrics_from_recovery, read_recovery_metrics
+from health_connect import (
+    HEALTH_CONNECT_FILE_VERSION,
+    body_metrics_from_recovery,
+    read_recovery_metrics,
+)
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
@@ -57,6 +61,7 @@ from program import (
     today_day,
     week_in_cycle,
 )
+from provenance import Provenance, generated_text_provenance, normalise_timestamp
 from push_notifier import send_push_notification
 
 logging.basicConfig(
@@ -64,6 +69,52 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("workout_agent")
+
+DAILY_PLAN_VERSION = "daily-plan/1"
+REST_DAY_VERSION = "rest-day/1"
+
+
+def _body_metrics_provenance(
+    file_data: dict[str, Any] | None,
+    synced: dict[str, Any] | None,
+    body: dict[str, Any] | None,
+) -> tuple[Provenance | None, dict[str, str]]:
+    """Attribute each saved body metric to the provider that actually supplied it.
+
+    Live Google Health readings override the exported file field by field, so the
+    row's source is Google Health when any field came from it and the per-field
+    sources record the merge.
+    """
+    if not body:
+        return None, {}
+    from_sync = {key for key in body if synced and key in synced}
+    field_sources = {
+        key: "google_health" if key in from_sync else "health_connect_file"
+        for key in body
+    }
+    if from_sync:
+        sample_times = getattr(synced, "sample_times", {}) or {}
+        stamps = [
+            stamp
+            for key, raw in sample_times.items()
+            if key in from_sync and (stamp := normalise_timestamp(raw))
+        ]
+        return (
+            Provenance.imported(
+                "google_health",
+                google_health_client.GOOGLE_HEALTH_TRANSFORM_VERSION,
+                source_timestamp=max(stamps) if stamps else None,
+            ),
+            field_sources,
+        )
+    return (
+        Provenance.imported(
+            "health_connect_file",
+            HEALTH_CONNECT_FILE_VERSION,
+            source_timestamp=(file_data or {}).get("date"),
+        ),
+        field_sources,
+    )
 
 
 def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
@@ -289,7 +340,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     _maybe_check_in(config, week, block, preview, user_id=user_id)
 
-    recovery = read_recovery_metrics(config.health_connect_file)
+    file_recovery = read_recovery_metrics(config.health_connect_file)
+    recovery = file_recovery
     synced = google_health_client.sync_body_metrics(
         config.google_health_client_id,
         config.google_health_client_secret,
@@ -300,11 +352,17 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         # Live scale readings take precedence over a stale file.
         recovery = {**(recovery or {}), **synced}
     if not preview:
+        body = body_metrics_from_recovery(recovery)
+        body_provenance, body_field_sources = _body_metrics_provenance(
+            file_recovery, synced, body
+        )
         save_body_metrics(
-            body_metrics_from_recovery(recovery),
+            body,
             when,
             config.database_path,
             user_id=user_id,
+            provenance=body_provenance,
+            field_sources=body_field_sources,
         )
 
     _maybe_self_review(
@@ -341,6 +399,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
                 guidance.as_text() if guidance else "",
                 config.database_path,
                 user_id=user_id,
+                provenance=generated_text_provenance(message, REST_DAY_VERSION),
             )
         return _deliver(config, _compose(message, guidance, footer), preview, user_id)
 
@@ -396,6 +455,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             guidance.as_text() if guidance else "",
             config.database_path,
             user_id=user_id,
+            provenance=generated_text_provenance(plan, DAILY_PLAN_VERSION),
         )
     return _deliver(config, _compose(plan, guidance, footer), preview, user_id)
 
