@@ -45,6 +45,7 @@
           <strong>Block {{ data.block?.number }}: {{ data.block?.name }}</strong>
           <span class="muted">Programme details</span>
         </summary>
+        <p><app-provenance-badge [provenance]="data.programme_provenance" /></p>
         <p>{{ data.block?.focus }}</p>
         <div class="schemes">
           <span class="chip">{{ data.block?.rep_emphasis }}</span>
@@ -112,6 +113,7 @@
         <section class="panel">
           <h2>Coach status</h2>
           @if (data.dashboard_insight; as insight) {
+            <p><app-provenance-badge [provenance]="data.dashboard_insight_provenance" /></p>
             @if (insight.fatigue) {
               <p><strong>Fatigue:</strong> {{ insight.fatigue }}</p>
             }

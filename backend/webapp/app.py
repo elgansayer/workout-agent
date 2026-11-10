@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -59,6 +60,7 @@ from connectors.builtin import build_builtin_registry
 from database import (
     clear_all_notifications,
     clear_chat_messages,
+    correct_body_metrics,
     delete_hevy_connection,
     delete_notification,
     get_active_programme,
@@ -75,9 +77,12 @@ from database import (
     get_notifications,
     get_personal_records,
     get_progress_history,
+    get_provenance_summary,
     get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
+    get_record_lineage,
+    get_record_provenance,
     get_routine_match_overrides,
     get_session_volumes,
     get_training_rules,
@@ -139,6 +144,13 @@ from programme_service import (
     activate_programme as activate_generated_programme,
 )
 from programme_validator import validate_programme
+from provenance import (
+    RETRIEVAL_GUIDANCE,
+    RecordType,
+    ai_provenance,
+    annotate_for_retrieval,
+    programme_view,
+)
 from pydantic import BaseModel, ConfigDict, Field
 from secret_vault import (
     CredentialExistsError,
@@ -1226,6 +1238,18 @@ def _dashboard_context(
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
         "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "programme_provenance": (
+            programme_view(get_active_programme(user_id, db_path=DB_PATH))
+            if user_id
+            else None
+        ),
+        "dashboard_insight_provenance": (
+            get_record_provenance(
+                user_id, RecordType.DASHBOARD_INSIGHT, "current", DB_PATH
+            )
+            if user_id
+            else None
+        ),
     }
 
 
@@ -1713,7 +1737,12 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
-        return {"reasoning": existing}
+        return {
+            "reasoning": existing,
+            "provenance": get_record_provenance(
+                user_id, RecordType.REASONING, context_id, DB_PATH
+            ),
+        }
 
     parts = context_id.split("_", 1)
     if len(parts) != 2:
@@ -1735,8 +1764,20 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         logger.exception("AI reasoning generation failed.")
         reasoning = "Could not determine reasoning."
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
-    return {"reasoning": reasoning}
+    save_reasoning_log(
+        context_id,
+        ex_name,
+        reasoning,
+        db_path=DB_PATH,
+        user_id=user_id,
+        provenance=ai_provenance(provider, "xai-reasoning/1"),
+    )
+    return {
+        "reasoning": reasoning,
+        "provenance": get_record_provenance(
+            user_id, RecordType.REASONING, context_id, DB_PATH
+        ),
+    }
 
 
 @app.get("/api/project_peak")
@@ -1949,6 +1990,27 @@ def chat_clear(request: Request):
     return {"status": "ok"}
 
 
+def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
+    """Section-level provenance for AI context where records are not annotated."""
+    summary = get_provenance_summary(user_id, RecordType.EXERCISE_PROGRESS, DB_PATH)
+    history: dict[str, Any] = {
+        "origin": "imported",
+        "source": "Hevy",
+        "authoritative": True,
+    }
+    if summary["total"]:
+        history["sessions_with_provenance"] = summary["total"]
+        history["last_ingested"] = str(summary["latest_ingested_at"])[:10]
+    return {
+        "history": history,
+        "prs": {
+            "origin": "derived",
+            "source": "calculated from the imported Hevy history (Epley estimate)",
+            "authoritative": False,
+        },
+    }
+
+
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
@@ -1959,10 +2021,15 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
     mode, required_cap = classify_coaching_query(q)
 
-    # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    # Gather training context. Every record carries its provenance so the model
+    # can tell source data, user corrections and derived recommendations apart.
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    biometrics = get_body_metrics(
+        db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
     capability = _coach_capability_for_user(
@@ -2030,11 +2097,12 @@ User's question: {q}"""
         rules_text = format_rules_for_prompt(rules)
         context = json.dumps(
             {
-                "logs": logs,
+                "logs": annotate_for_retrieval(logs),
                 "history": history,
-                "biometrics": biometrics[-10:],
+                "biometrics": annotate_for_retrieval(biometrics[-10:]),
                 "prs": prs[:10],
                 "active_programme": prog_name if active_prog else None,
+                "data_sources": _retrieval_data_sources(user_id),
             },
             default=str,
         )
@@ -2056,6 +2124,8 @@ Important constraints:
 
 Conversation so far:
 {conversation_text}
+
+{RETRIEVAL_GUIDANCE}
 
 Verified training data context (recent logs, progress history, biometrics, PRs, active programme):
 {context[:25000]}
@@ -2850,12 +2920,87 @@ def api_progress(request: Request):
                 "sessions": len(entries),
             }
         )
+    body_readings = get_body_metrics(
+        limit=14, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     return JSONResponse(
         jsonable_encoder(
             {
                 "charts": charts_data,
                 "body": _body_charts(user_id=user_id),
+                # Newest first, each with its source / correction provenance.
+                "body_readings": list(reversed(body_readings)),
                 "setup": _setup_payload(user_id, "progress"),
+            }
+        )
+    )
+
+
+class BodyMetricCorrection(BaseModel):
+    """A user correction (or manual entry) for one day's body-metric reading.
+
+    The owner is always the authenticated session; owner claims are rejected.
+    Value bounds are enforced by ``database.validate_body_metric_changes``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    weight_kg: float | None = None
+    body_fat_pct: float | None = None
+    muscle_pct: float | None = None
+    resting_hr: float | None = None
+    hrv: float | None = None
+    reason: str | None = Field(default=None, max_length=280)
+
+
+@app.post("/api/body-metrics/corrections")
+def correct_body_metric(
+    payload: BodyMetricCorrection, request: Request
+) -> JSONResponse:
+    """Correct a body-metric reading while preserving the original in its lineage."""
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    changes = payload.model_dump(exclude={"date", "reason"}, exclude_none=True)
+    try:
+        result = correct_body_metrics(
+            user_id, payload.date, changes, reason=payload.reason, db_path=DB_PATH
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result["lineage"] = get_record_lineage(
+        user_id, RecordType.BODY_METRIC, result["date"], DB_PATH
+    )
+    return JSONResponse(jsonable_encoder(result))
+
+
+_RECORD_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:@+-]{1,200}$")
+
+
+@app.get("/api/provenance/{record_type}/{record_key}")
+def api_record_lineage(
+    record_type: str, record_key: str, request: Request
+) -> JSONResponse:
+    """Return the authenticated user's revision history for one record."""
+    _check_rate_limit(request, limit=60)
+    user_id = _check_api_auth(request)
+    try:
+        family = RecordType(record_type)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Record not found") from None
+    if not _RECORD_KEY_PATTERN.fullmatch(record_key):
+        raise HTTPException(status_code=404, detail="Record not found")
+    revisions = get_record_lineage(user_id, family, record_key, DB_PATH)
+    if not revisions:
+        raise HTTPException(status_code=404, detail="Record not found")
+    current = next((item for item in revisions if item["applied"]), None)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "record_type": family.value,
+                "record_key": record_key,
+                "current": current,
+                "revisions": revisions,
             }
         )
     )
@@ -3067,7 +3212,9 @@ def api_stats(request: Request):
 @app.get("/api/history")
 def api_history(request: Request):
     user_id = _check_api_auth(request)
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     levels = _training_levels(user_id=user_id)
     return JSONResponse(
         jsonable_encoder(
@@ -3166,6 +3313,7 @@ def api_plan(request: Request) -> JSONResponse:
                 "end_date": runtime.end_date,
                 "requested_duration_weeks": runtime.cycle_weeks,
                 "review_weeks": runtime.review_weeks,
+                "provenance": programme_view(active),
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],

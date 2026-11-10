@@ -136,6 +136,10 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
     "account_tombstones": (
         "anonymous deletion evidence for a specific account id; never adopted"
     ),
+    "record_provenance": (
+        "append-only provenance captured per account; re-parenting it would "
+        "rewrite immutable lineage"
+    ),
 }
 
 

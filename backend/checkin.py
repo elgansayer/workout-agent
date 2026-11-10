@@ -28,8 +28,11 @@ from programme_runtime import (
     ProgrammeRuntime,
     load_programme_runtime,
 )
+from provenance import Provenance, generated_text_provenance
 
 logger = logging.getLogger(__name__)
+
+CHECKIN_VERSION = "checkin/1"
 
 # Fallback cadence when a programme defines no explicit review points.
 CHECKIN_MIN_WEEKS = 4
@@ -375,8 +378,13 @@ def record(
     *,
     user_id: str | None = None,
     runtime: ProgrammeRuntime | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
-    """Persist the completed check-in and reset this user's tracking baseline."""
+    """Persist the completed check-in and reset this user's tracking baseline.
+
+    The check-in is recorded as a derived coaching summary; unless *provenance*
+    is given it is attributed from how *message* was generated (AI or fallback).
+    """
     if today is None:
         today = datetime.now(tz=timezone.utc).date()
     set_meta(
@@ -413,6 +421,7 @@ def record(
         message,
         config.database_path,
         user_id=user_id,
+        provenance=provenance or generated_text_provenance(message, CHECKIN_VERSION),
     )
     if user_id:
         save_notification(

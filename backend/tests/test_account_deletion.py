@@ -93,6 +93,14 @@ def _seed(db: str, user_id: str) -> None:
             (user_id,),
         )
         run(
+            "INSERT INTO record_provenance "
+            "(user_id, record_type, record_key, revision, kind, source, "
+            "ingested_at, transformation_version, content_hash) "
+            "VALUES (?, 'body_metrics', '2026-01-01', 1, 'imported', "
+            "'google_health', ?, 'body/1', 'synthetic-hash')",
+            (user_id, stamp),
+        )
+        run(
             "INSERT INTO dashboard_insights (user_id, date, insight_json) VALUES (?, '2026-01-01', '{}')",
             (user_id,),
         )
@@ -471,7 +479,7 @@ def test_evidence_records_per_step_counts_and_verified_zero_remaining(
         by_step["notifications"]["rows_affected"] == 2
     )  # notification + push subscription
     assert by_step["connector_tokens"]["rows_affected"] >= 6
-    assert by_step["derived_insights"]["rows_affected"] == 5
+    assert by_step["derived_insights"]["rows_affected"] == 6
     assert by_step["account_identity"]["rows_affected"] == 1
 
 
@@ -917,7 +925,7 @@ def test_a_row_written_between_sweep_and_close_triggers_another_pass(
     assert status["state"] == "completed"
     assert _row_counts(db, a) == {}
     derived = next(s for s in status["steps"] if s["step"] == "derived_insights")
-    assert derived["rows_affected"] == 6  # the five seeded rows plus the late one
+    assert derived["rows_affected"] == 7  # the six seeded rows plus the late one
 
 
 def test_straggler_sweep_removes_late_writes_for_a_just_closed_account(

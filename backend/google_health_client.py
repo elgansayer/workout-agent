@@ -47,6 +47,28 @@ SCOPE = (
 # How far back to look for the most recent reading.
 _LOOKBACK_DAYS = 35
 
+# Version of the Google Health data point -> body-metric transformation (unit
+# conversion and latest-sample selection), recorded as provenance.
+GOOGLE_HEALTH_TRANSFORM_VERSION = "google-health-body/1"
+
+
+class BodyMetricsReading(dict[str, Any]):
+    """Latest body metrics plus the provider sample time of each metric.
+
+    Behaves exactly like the plain metrics dict it replaces (equality, merging,
+    serialisation); ``sample_times`` carries source-timestamp provenance.
+    """
+
+    def __init__(
+        self,
+        values: dict[str, Any],
+        sample_times: dict[str, str] | None = None,
+    ) -> None:
+        super().__init__(values)
+        self.sample_times: dict[str, str] = dict(sample_times or {})
+
+
+
 def _refresh_tokens(
     client_id: str,
     client_secret: str,
@@ -96,7 +118,18 @@ def _latest_value(
     point_key: str,
     value_field: str,
 ) -> float | None:
-    """Return the most recent numeric value from a Google Health data type.
+    """Return the most recent numeric value from a Google Health data type."""
+    sample = _latest_sample(access_token, data_type, point_key, value_field)
+    return sample[0] if sample else None
+
+
+def _latest_sample(
+    access_token: str,
+    data_type: str,
+    point_key: str,
+    value_field: str,
+) -> tuple[float, str | None] | None:
+    """Return the newest (value, sample time) from a Google Health data type.
 
     data_type is the kebab-case endpoint name (e.g. "body-fat"); point_key is
     the camelCase field on the data point (e.g. "bodyFat"); value_field is the
@@ -134,6 +167,7 @@ def _latest_value(
 
     best_time: str = ""
     best_value: float | None = None
+    found = False
     for point in points:
         if not isinstance(point, dict):
             continue
@@ -156,29 +190,40 @@ def _latest_value(
             except (TypeError, ValueError):
                 continue
             best_time = sample_time
-    return best_value
+            found = True
+    if not found or best_value is None:
+        return None
+    return best_value, best_time or None
 
 
 def fetch_body_metrics(access_token: str) -> dict[str, Any] | None:
-    """Read the latest weight (kg), body fat (%), resting hr, and hrv from Google Health, or None."""
-    weight_grams = _latest_value(access_token, "weight", "weight", "weightGrams")
-    fat = _latest_value(access_token, "body-fat", "bodyFat", "percentage")
-    resting_hr = _latest_value(
+    """Read the latest weight (kg), body fat (%), resting hr, and hrv from Google Health, or None.
+
+    The result is a ``BodyMetricsReading``: a plain metrics dict that also
+    exposes the provider sample time of each metric as ``sample_times``.
+    """
+    weight = _latest_sample(access_token, "weight", "weight", "weightGrams")
+    fat = _latest_sample(access_token, "body-fat", "bodyFat", "percentage")
+    resting_hr = _latest_sample(
         access_token, "resting-heart-rate", "restingHeartRate", "beatsPerMinute"
     )
-    hrv = _latest_value(
+    hrv = _latest_sample(
         access_token, "heart-rate-variability", "heartRateVariability", "rmssd"
     )
     metrics: dict[str, Any] = {}
-    if weight_grams is not None:
-        metrics["weight_kg"] = round(weight_grams / 1000.0, 2)
-    if fat is not None:
-        metrics["body_fat_pct"] = fat
-    if resting_hr is not None:
-        metrics["resting_hr"] = resting_hr
-    if hrv is not None:
-        metrics["hrv"] = hrv
-    return metrics or None
+    sample_times: dict[str, str] = {}
+    for key, sample, convert in (
+        ("weight_kg", weight, lambda grams: round(grams / 1000.0, 2)),
+        ("body_fat_pct", fat, lambda value: value),
+        ("resting_hr", resting_hr, lambda value: value),
+        ("hrv", hrv, lambda value: value),
+    ):
+        if sample is None:
+            continue
+        metrics[key] = convert(sample[0])
+        if sample[1]:
+            sample_times[key] = sample[1]
+    return BodyMetricsReading(metrics, sample_times) if metrics else None
 
 
 def _resolve_refresh_token(

@@ -25,6 +25,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Version of the exported-file -> body-metric transformation, recorded as provenance.
+HEALTH_CONNECT_FILE_VERSION = "health-connect-file/1"
+
 
 def read_recovery_metrics(file_path: str | None) -> dict[str, Any] | None:
     """Return recovery metrics from the exported file, or None if unavailable."""
