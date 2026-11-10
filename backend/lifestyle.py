@@ -1,12 +1,8 @@
-"""Daily lifestyle guidance: the pillars around the training.
+"""Optional lifestyle guidance around the active programme.
 
-The gym is only part of the battle. This module turns the active programme's
-training focus into concrete daily actions across the supporting pillars so the
-agent can deliver, and log, a complete "what to do today" plan:
-
-1. Strategic nutrition (protein held static, carbohydrates timed around load).
-2. Joint-friendly cardio and NEAT.
-3. Recovery (sleep and general recovery habits).
+The module makes no assumptions about a specific split, named lifts, personal
+medical conditions, or a fixed cycle.  Callers supply the day's programme focus
+and optional recovery data; everything else degrades to generic guidance.
 """
 
 from __future__ import annotations
@@ -14,14 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Protein is held static; carbohydrates are adjusted around training load.
+# Pillar 1: nutrition. Protein is held static; carbohydrates can cycle with load.
 PROTEIN_G_PER_KG = 2.2
-
-# Cardio and NEAT.
-STEP_TARGET = "10,000 to 12,000 steps"
-
-# Recovery.
-SLEEP_TARGET_HOURS = 8
 
 
 @dataclass(frozen=True)
@@ -29,7 +19,7 @@ class DailyGuidance:
     """The lifestyle pillars resolved for a single day."""
 
     training: str  # which session to train today
-    carb_tier: str  # "moderate" | "low"
+    carb_tier: str  # "high" | "moderate" | "low"
     nutrition: str
     cardio: str
     recovery: str
@@ -51,29 +41,55 @@ class DailyGuidance:
         return "Today's lifestyle:\n" + body
 
 
+def _focus_text(focus: str | int | None) -> str:
+    if isinstance(focus, int):
+        return ""
+    return " ".join(str(focus or "").lower().split())
+
+
+def _carb_tier(focus: str | int | None, is_rest: bool) -> str:
+    if is_rest:
+        return "low"
+    text = _focus_text(focus)
+    if any(key in text for key in ("leg", "squat", "lower")):
+        return "moderate"
+    if any(key in text for key in ("pull", "back", "posterior", "hinge")):
+        return "high"
+    return "low"
+
+
 def _nutrition(tier: str) -> str:
+    if tier == "high":
+        return (
+            "Fuel the session with most of today's carbohydrates around training, "
+            "then return to your usual balance."
+        )
     if tier == "moderate":
         return (
-            "Time most of your carbs around today's session to fuel the work "
-            "and refill glycogen, keeping the rest of the day leaner."
+            "Keep carbohydrates moderate and timed around the session; keep the "
+            "rest of the day balanced."
         )
-    return (
-        "Lower carb today. Lean on healthy fats and protein to support "
-        "recovery without overshooting energy intake."
+    return "Keep carbohydrates lower today and include healthy fats with meals."
+
+
+def _cardio(focus: str | int | None, is_rest: bool) -> str:
+    base = "Hit your usual daily step target (NEAT)."
+    text = _focus_text(focus)
+    lighter = is_rest or any(
+        key in text for key in ("upper", "arm", "shoulder", "light", "accessory")
     )
-
-
-def _cardio(is_rest: bool) -> str:
-    base = f"Hit {STEP_TARGET} (NEAT)."
-    if is_rest:
-        return base + " Add 20 to 30 min of easy Zone 2 if it feels good."
-    return base + " Add optional easy Zone 2 if it does not compromise recovery."
+    if lighter:
+        return (
+            base
+            + " Add a short, low-impact Zone 2 session if it does not compromise recovery."
+        )
+    return base + " Skip steady-state cardio today and protect recovery."
 
 
 def _recovery() -> str:
     return (
-        f"{SLEEP_TARGET_HOURS} h sleep minimum. Prioritise hydration, a protein "
-        "target, and light mobility on rest days."
+        "Prioritise sleep, hydration, and a balanced intake. Adjust recovery "
+        "actions to how you actually feel rather than a single wearable value."
     )
 
 
@@ -91,24 +107,23 @@ def _protein_target(recovery: dict[str, Any] | None) -> str | None:
 
 
 def daily_guidance(
-    focus: str | None,
+    focus: str | int | None,
     is_rest: bool,
     recovery: dict[str, Any] | None = None,
 ) -> DailyGuidance:
-    """Resolve the lifestyle pillars for the active programme's training focus.
+    """Resolve optional lifestyle pillars for the programme's current focus."""
 
-    ``focus`` is the selected Hevy routine title, or ``None`` on a rest day.
-    ``recovery`` may carry a ``weight_kg`` reading used to compute the daily
-    protein target.
-    """
-    rest = is_rest or not focus
-    tier = "low" if rest else "moderate"
-    training = "Rest and recovery, no lifting today" if rest else str(focus)
+    rest = is_rest or focus is None or focus == ""
+    tier = _carb_tier(focus, rest)
+    if rest:
+        training = "Rest and recovery, no lifting today"
+    else:
+        training = str(focus)
     return DailyGuidance(
         training=training,
         carb_tier=tier,
         nutrition=_nutrition(tier),
-        cardio=_cardio(rest),
+        cardio=_cardio(focus, rest),
         recovery=_recovery(),
         protein_target=_protein_target(recovery),
     )

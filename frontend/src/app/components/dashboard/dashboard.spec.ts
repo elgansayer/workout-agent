@@ -59,6 +59,33 @@ describe('Compact dashboard', () => {
     http.verify();
   });
 
+  it('shows an explicit state instead of a fabricated workout when paused', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: false,
+      programme_status: 'paused',
+      rotation_message: 'This programme is paused. Resume it when you are ready.',
+      week: 3,
+      cycle_weeks: 8,
+      block: {},
+      rows: [],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('Programme Paused');
+    expect(el.textContent).toContain('This programme is paused.');
+    expect(el.querySelector('a[href="/programmes"]')).toBeTruthy();
+    expect(el.querySelectorAll('.exercise')).toHaveLength(0);
+    http.verify();
+  });
+
   it('retains the last workout and provides retry when refreshing fails', () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],

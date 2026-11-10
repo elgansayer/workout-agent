@@ -47,6 +47,19 @@ HYBRID_ALLOWLIST = {
     "docs/HEVY_NATIVE_DYNAMIC_PROGRAMMES.md",
     ".agents/skills/programme-builder-ui/SKILL.md",
     "backend/database.py",  # idempotent archive migration for legacy revisions
+    "backend/tests/test_programme_domain.py",  # legacy-data migration fixture
+    # UI regression assertions that the retired copy must never render.
+    "frontend/src/app/components/programmes/programmes.spec.ts",
+    "frontend/e2e/ui.spec.ts",
+}
+
+# These files deliberately name retired template surfaces to assert their absence
+# or to document the removal.
+TEMPLATE_SURFACE_ALLOWLIST = {
+    "docs/HEVY_NATIVE_DYNAMIC_PROGRAMMES.md",
+    ".agents/skills/programme-builder-ui/SKILL.md",
+    "frontend/src/app/components/programmes/programmes.spec.ts",
+    "frontend/e2e/ui.spec.ts",
 }
 
 GENERIC_RUNTIME_MODULES = [
@@ -95,14 +108,23 @@ def test_static_programme_module_is_deleted() -> None:
     assert not (ROOT / "backend" / "program.py").exists()
 
 
+# Regression guards inspect source text for the forbidden import themselves.
+PROGRAM_IMPORT_ALLOWLIST = {
+    "backend/tests/test_runtime_cutover.py",
+}
+
+
 def test_no_module_imports_static_programme() -> None:
     violations = []
     for path in _iter_text_files():
         if path.suffix != ".py":
             continue
+        relative = _relative(path)
+        if relative == SELF or relative in PROGRAM_IMPORT_ALLOWLIST:
+            continue
         for line_number, line in enumerate(_read(path).splitlines(), start=1):
             if PROGRAM_IMPORT_RE.search(line):
-                violations.append(f"{_relative(path)}:{line_number}: {line.strip()}")
+                violations.append(f"{relative}:{line_number}: {line.strip()}")
     assert violations == []
 
 
@@ -128,7 +150,12 @@ def test_static_template_surfaces_are_gone() -> None:
     code_suffixes = {".py", ".ts", ".html", ".sh", ".yml", ".yaml"}
     violations = []
     for path in _iter_text_files():
-        if _relative(path) == SELF or path.suffix.lower() not in code_suffixes:
+        relative = _relative(path)
+        if (
+            relative == SELF
+            or relative in TEMPLATE_SURFACE_ALLOWLIST
+            or path.suffix.lower() not in code_suffixes
+        ):
             continue
         text = _read(path)
         for marker in forbidden:

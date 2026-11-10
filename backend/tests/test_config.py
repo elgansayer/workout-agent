@@ -135,6 +135,15 @@ class TestConfigLoad:
         assert cfg.lifestyle_enabled is False
         assert cfg.self_review_enabled is False
 
+    def test_hevy_routine_sync_is_opt_in(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "gk")
+        monkeypatch.delenv("HEVY_SYNC_ROUTINES", raising=False)
+        cfg = Config.load()
+        assert cfg.hevy_sync_routines is False
+
     def test_gemini_model_default_and_override(
         self,
         monkeypatch: pytest.MonkeyPatch,

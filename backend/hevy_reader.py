@@ -6,21 +6,36 @@ distils them into a structured ``HevyTrainingData`` object that the rest of the
 system can reason about.
 
 The data is fetched per-user using their stored API key (from Sprint 1).
+
+``fetch_user_training_snapshot`` is the entry point used by the programme
+builder: it classifies provider failures and reports whether the account was
+read completely. ``fetch_user_training`` keeps the older best-effort contract
+for callers that cannot handle a classified error.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from hevy_client import (
+    HevyAuthError,
+    HevyError,
+    HevyRateLimitError,
     get_exercise_templates,
+    get_exercise_templates_strict,
     get_recent_workouts,
+    get_recent_workouts_strict,
     get_routine_folders,
+    get_routine_folders_strict,
     get_routines,
+    get_routines_strict,
     get_user_info,
+    get_user_info_strict,
     get_workout_count,
+    get_workout_count_strict,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +162,28 @@ class HevyTrainingData:
     def latest_workout(self) -> CompletedWorkout | None:
         """Return the most recently completed workout."""
         return self.recent_workouts[0] if self.recent_workouts else None
+
+
+@dataclass
+class HevySourceSnapshot:
+    """One classified read of the authenticated user's Hevy account.
+
+    ``status`` is ``ok`` when every resource was read, ``partial`` when at
+    least one resource failed but the account is still usable, and the fetch
+    raises :class:`hevy_client.HevyError` subclasses when the credential or
+    the provider itself makes the read impossible.
+    """
+
+    data: HevyTrainingData
+    status: str = "ok"
+    fetched_at: str = ""
+    warnings: list[str] = field(default_factory=list)
+    counts: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def is_partial(self) -> bool:
+        """True when some source resources could not be read."""
+        return self.status == "partial"
 
 
 # ---------------------------------------------------------------------------
@@ -307,7 +344,43 @@ def _parse_workout(
 # ---------------------------------------------------------------------------
 
 
-def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainingData:
+def _build_training_data(
+    raw_templates: list[dict[str, Any]] | None,
+    raw_routines: list[dict[str, Any]] | None,
+    raw_workouts: list[dict[str, Any]] | None,
+    raw_folders: list[dict[str, Any]] | None,
+    user_info: dict[str, Any] | None,
+    count: int | None,
+) -> HevyTrainingData:
+    """Normalise raw Hevy payloads into the read-first training structure."""
+
+    data = HevyTrainingData()
+
+    for raw in raw_templates or []:
+        tmpl = _parse_exercise_template(raw)
+        data.exercise_templates[tmpl.id] = tmpl
+
+    data.routines = [
+        _parse_routine(r, data.exercise_templates) for r in raw_routines or []
+    ]
+
+    data.recent_workouts = [
+        _parse_workout(w, data.exercise_templates) for w in raw_workouts or []
+    ]
+
+    data.folders = {
+        int(f["id"]): f.get("title", "") for f in raw_folders or [] if "id" in f
+    }
+
+    if user_info:
+        data.username = user_info.get("username")
+    if count is not None:
+        data.workout_count = count
+
+    return data
+
+
+def fetch_user_training(api_key: str, *, workout_limit: int = 120) -> HevyTrainingData:
     """Pull everything we need from Hevy to understand what this user trains.
 
     This is the single entry point for the read-first flow. It fetches:
@@ -319,49 +392,123 @@ def fetch_user_training(api_key: str, *, workout_limit: int = 15) -> HevyTrainin
 
     All calls are best-effort: a failure in one does not block the others.
     """
-    data = HevyTrainingData()
 
-    # 1. Exercise templates (needed to resolve names in routines/workouts).
-    raw_templates = get_exercise_templates(api_key)
-    if raw_templates:
-        for raw in raw_templates:
-            tmpl = _parse_exercise_template(raw)
-            data.exercise_templates[tmpl.id] = tmpl
-        logger.info(
-            "Fetched %d exercise templates from Hevy.", len(data.exercise_templates)
-        )
-    else:
+    data = _build_training_data(
+        get_exercise_templates(api_key),
+        get_routines(api_key),
+        get_recent_workouts(api_key, limit=workout_limit),
+        get_routine_folders(api_key),
+        get_user_info(api_key),
+        get_workout_count(api_key),
+    )
+
+    if not data.exercise_templates:
         logger.warning("Could not fetch exercise templates from Hevy.")
-
-    # 2. Routines.
-    raw_routines = get_routines(api_key)
-    if raw_routines:
-        data.routines = [
-            _parse_routine(r, data.exercise_templates) for r in raw_routines
-        ]
-        logger.info("Fetched %d routines from Hevy.", len(data.routines))
-
-    # 3. Recent workouts.
-    raw_workouts = get_recent_workouts(api_key, limit=workout_limit)
-    if raw_workouts:
-        data.recent_workouts = [
-            _parse_workout(w, data.exercise_templates) for w in raw_workouts
-        ]
-        logger.info("Fetched %d recent workouts from Hevy.", len(data.recent_workouts))
-
-    # 4. Folders.
-    raw_folders = get_routine_folders(api_key)
-    if raw_folders:
-        data.folders = {
-            int(f["id"]): f.get("title", "") for f in raw_folders if "id" in f
-        }
-
-    # 5. Account info.
-    user_info = get_user_info(api_key)
-    if user_info:
-        data.username = user_info.get("username")
-    count = get_workout_count(api_key)
-    if count is not None:
-        data.workout_count = count
+    if not data.routines:
+        logger.warning("Could not fetch routines from Hevy.")
 
     return data
+
+
+def fetch_user_training_snapshot(
+    api_key: str,
+    *,
+    workout_limit: int = 56,
+) -> HevySourceSnapshot:
+    """Read the user's Hevy account and classify the result.
+
+    Resource level failures degrade the snapshot to ``partial`` so the builder
+    can show exactly what is missing. Credential and rate-limit failures are
+    raised because they affect the whole account.
+    """
+
+    data = HevyTrainingData()
+    warnings: list[str] = []
+
+    def _partial(resource: str, exc: Exception) -> None:
+        warnings.append(f"{resource} could not be read from Hevy: {exc}")
+        logger.warning("%s could not be read from Hevy: %s", resource, exc)
+
+    # 1. Exercise templates (needed to resolve names in routines/workouts).
+    try:
+        raw_templates = get_exercise_templates_strict(api_key)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Exercise templates", exc)
+        raw_templates = []
+
+    # 2. Routines.
+    try:
+        raw_routines = get_routines_strict(api_key)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Routines", exc)
+        raw_routines = []
+
+    # 3. Recent workouts.
+    try:
+        raw_workouts = get_recent_workouts_strict(api_key, limit=workout_limit)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Workout history", exc)
+        raw_workouts = []
+
+    # 4. Folders.
+    try:
+        raw_folders = get_routine_folders_strict(api_key)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Routine folders", exc)
+        raw_folders = []
+
+    # 5. Account info.
+    try:
+        user_info = get_user_info_strict(api_key)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Account information", exc)
+        user_info = {}
+
+    try:
+        count = get_workout_count_strict(api_key)
+    except (HevyAuthError, HevyRateLimitError):
+        raise
+    except HevyError as exc:
+        _partial("Workout count", exc)
+        count = None
+
+    data = _build_training_data(
+        raw_templates,
+        raw_routines,
+        raw_workouts,
+        raw_folders,
+        user_info,
+        count,
+    )
+
+    logger.info(
+        "Read %d routines, %d folders and %d recent workouts from Hevy (%s).",
+        len(data.routines),
+        len(data.folders),
+        len(data.recent_workouts),
+        "partial" if warnings else "complete",
+    )
+
+    return HevySourceSnapshot(
+        data=data,
+        status="partial" if warnings else "ok",
+        fetched_at=datetime.now(tz=timezone.utc).isoformat(),
+        warnings=warnings,
+        counts={
+            "routines": len(data.routines),
+            "folders": len(data.folders),
+            "exercise_templates": len(data.exercise_templates),
+            "recent_workouts": len(data.recent_workouts),
+            "workouts": int(data.workout_count or 0),
+        },
+    )

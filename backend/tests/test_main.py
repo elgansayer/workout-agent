@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
@@ -11,10 +11,10 @@ import pytest
 from main import (
     _compose,
     _parse_args,
-    _rep_targets_from_days,
     _scope_config_to_user,
     run,
 )
+from programme_runtime import ProgrammeRuntime
 
 if TYPE_CHECKING:
     from config import Config
@@ -65,7 +65,7 @@ def _active_programme(start: date) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# _compose
+# Pure helpers
 # ---------------------------------------------------------------------------
 
 
@@ -73,7 +73,7 @@ def test_compose_with_guidance() -> None:
     from lifestyle import DailyGuidance
 
     guidance = DailyGuidance(
-        training="Upper Strength",
+        training="Legs and trunk",
         carb_tier="moderate",
         nutrition="Moderate carbs.",
         cardio="Walk.",
@@ -86,38 +86,20 @@ def test_compose_with_guidance() -> None:
 
 
 def test_compose_without_guidance() -> None:
-    assert _compose("Plan", None, "") == "Plan"
-
-
-# ---------------------------------------------------------------------------
-# _parse_args
-# ---------------------------------------------------------------------------
+    assert _compose("Rest day message", None, "") == "Rest day message"
 
 
 def test_parse_args_default_no_preview() -> None:
-    args = _parse_args([])
-    assert args.preview is False
+    assert _parse_args([]).preview is False
 
 
 def test_parse_args_preview_flag() -> None:
-    args = _parse_args(["--preview"])
-    assert args.preview is True
+    assert _parse_args(["--preview"]).preview is True
 
 
 def test_parse_args_unknown_raises() -> None:
     with pytest.raises(SystemExit):
         _parse_args(["--nonexistent"])
-
-
-# ---------------------------------------------------------------------------
-# _rep_targets_from_days
-# ---------------------------------------------------------------------------
-
-
-def test_rep_targets_from_days_uses_top_of_range() -> None:
-    targets = _rep_targets_from_days(_active_programme(date(2026, 8, 3))["definition"]["days"])
-    assert targets
-    assert list(targets.values()) == [8]
 
 
 # ---------------------------------------------------------------------------
@@ -131,12 +113,8 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
 ) -> None:
     from config import Config
     from cryptography.fernet import Fernet
-    from database import (
-        get_legacy_user_id,
-        get_or_create_user,
-        init_db,
-        save_user_api_key,
-    )
+    from database import get_legacy_user_id, get_or_create_user, init_db
+    from secret_vault import SecretVault
 
     db_path = str(tmp_path / "tenant-config.db")
     init_db(db_path)
@@ -152,11 +130,10 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
         db_path,
     )
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
-    save_user_api_key(
+    SecretVault(db_path).store(
         user["id"],
         "hevy",
-        "synthetic-user-hevy-key",
-        db_path=db_path,
+        api_key="synthetic-user-hevy-key",
     )
     config = Config(
         hevy_api_key="synthetic-server-hevy-key",
@@ -164,6 +141,8 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
         gemini_model="gemini-3.8-flash",
         health_connect_file="/synthetic/legacy-health.json",
         database_path=db_path,
+        hevy_sync_routines=False,
+        hevy_prefill_weights=False,
         checkin_enabled=False,
         lifestyle_enabled=False,
         google_health_client_id="synthetic-client-id",
@@ -176,11 +155,12 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
     scoped = _scope_config_to_user(config, user["id"])
     assert scoped.hevy_api_key == "synthetic-user-hevy-key"
     assert scoped.health_connect_file is None
-    assert scoped.google_health_client_id is None
+    assert scoped.google_health_client_id == "synthetic-client-id"
+    assert scoped.google_health_refresh_token is None
 
     unconfigured = _scope_config_to_user(config, user_without_key["id"])
     assert unconfigured.hevy_api_key is None
-    assert unconfigured.google_health_client_id is None
+    assert unconfigured.google_health_refresh_token is None
 
     legacy = _scope_config_to_user(config, legacy_user_id)
     assert legacy.hevy_api_key == "synthetic-server-hevy-key"
@@ -188,11 +168,17 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
 
 
 # ---------------------------------------------------------------------------
-# run
+# run orchestration
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_ACTIVE = object()
+def _seed_run_user(monkeypatch: pytest.MonkeyPatch, db_path: str) -> str:
+    from database import get_or_create_user, init_db
+
+    init_db(db_path)
+    user = get_or_create_user("synthetic-run@example.com", "Synthetic Runner", db_path)
+    monkeypatch.setattr("main._resolve_run_user", lambda path: user["id"])
+    return user["id"]
 
 
 def _make_config(
@@ -201,297 +187,227 @@ def _make_config(
     *,
     checkin_enabled: bool = False,
     lifestyle_enabled: bool = False,
-    self_review_enabled: bool = False,
-    active: dict[str, Any] | None | object = _DEFAULT_ACTIVE,
-) -> tuple[Config, dict[str, Any] | None, list[dict[str, Any]]]:
-    """Patch Config.load and external boundaries for a controlled run."""
+) -> Config:
     from config import Config
 
     db_path = str(tmp_path / "test_main.db")
-
     config = Config(
         hevy_api_key="hevy-key",
         gemini_api_key="test-gemini-key",
         gemini_model="gemini-3.8-flash",
         health_connect_file=None,
         database_path=db_path,
+        hevy_sync_routines=False,
+        hevy_prefill_weights=False,
         checkin_enabled=checkin_enabled,
         lifestyle_enabled=lifestyle_enabled,
         google_health_client_id=None,
         google_health_client_secret=None,
         google_health_refresh_token=None,
-        self_review_enabled=self_review_enabled,
+        self_review_enabled=False,
         self_review_weekday=6,
     )
-    resolved: Any = (
-        _active_programme(date(2026, 8, 3))
-        if active is _DEFAULT_ACTIVE
-        else active
-    )
-
     monkeypatch.setattr("main.Config.load", lambda: config)
     monkeypatch.setattr("main.init_db", lambda *args, **kw: None)
-    monkeypatch.setattr("main._resolve_run_user", lambda path: "test-user-id")
+    _seed_run_user(monkeypatch, db_path)
     monkeypatch.setattr("main._scope_config_to_user", lambda config, user_id: config)
+    monkeypatch.setattr("main.local_today", lambda *a, **kw: date(2026, 9, 10))
+    return config
+
+
+def _active_runtime() -> ProgrammeRuntime:
+    day = {
+        "number": 1,
+        "routine_id": "routine-chest-back",
+        "focus": "Chest and back",
+        "exercises": [
+            {
+                "name": "Incline press",
+                "template_id": "press",
+                "sets": 3,
+                "rep_range": "8-12",
+                "scheme": "3 × 8-12",
+                "role": "primary_strength",
+                "prescriptions": [
+                    {"block_number": 1, "sets": 3, "rep_range": "8-12"},
+                ],
+            }
+        ],
+    }
+    return ProgrammeRuntime(
+        status="active",
+        message="Your workout for today.",
+        name="Synthetic programme",
+        goal="hypertrophy",
+        source="hevy",
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 10, 26),
+        week=2,
+        cycle_weeks=8,
+        blocks=[
+            {"number": 1, "name": "Foundation", "start_week": 1, "end_week": 4}
+        ],
+        block={"number": 1, "name": "Foundation", "start_week": 1, "end_week": 4},
+        days=[day],
+        next_day=day,
+    )
+
+
+def _patch_optional_io(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "main.google_health_client.sync_body_metrics",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr("main.read_recovery_metrics", lambda *a, **kw: None)
+    monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
+    monkeypatch.setattr("main.save_body_metrics", lambda *a, **kw: None)
+    monkeypatch.setattr("main.fetch_latest_workout", lambda key: None)
+    monkeypatch.setattr("main.parse_workout", lambda raw, targets: None)
+    monkeypatch.setattr("main.save_workout", lambda *a, **kw: None)
+    monkeypatch.setattr("main.save_progress", lambda *a, **kw: None)
+    monkeypatch.setattr("main.get_recent_bests", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        "main.get_progress_history",
+        lambda **kw: {},
+    )
+    monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
+    monkeypatch.setattr("main.get_daily_logs", lambda **kw: [])
+    monkeypatch.setattr("main.get_training_rules", lambda *a, **kw: None)
+    from insights import RecoveryInsight, TrainingInsights
+
+    monkeypatch.setattr(
+        "main.insights_engine.build_insights",
+        lambda *a, **kw: TrainingInsights(
+            lifts=[],
+            recovery=RecoveryInsight(
+                sleep_hours=None,
+                resting_hr=None,
+                resting_hr_trend=None,
+                weight_kg=None,
+                weight_trend=None,
+                body_fat_pct=None,
+                body_fat_trend=None,
+                muscle_pct=None,
+                is_catabolic=False,
+                status="unknown",
+                directive="",
+            ),
+            headline="No data yet.",
+        ),
+    )
+
+
+def test_run_without_programme_sends_setup_guidance(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _make_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "main.load_programme_runtime",
+        lambda *a, **kw: ProgrammeRuntime(status="setup_required"),
+    )
+    saved: list[dict] = []
+    delivered: list[dict] = []
+    monkeypatch.setattr(
+        "main.save_daily_log",
+        lambda *a, **kw: saved.append({"args": a, "kwargs": kw}),
+    )
+    monkeypatch.setattr(
+        "main._deliver",
+        lambda *a, **kw: delivered.append({"args": a, "kwargs": kw}) or 0,
+    )
+
+    assert run(preview=False) == 0
+    assert saved
+    assert delivered
+    assert "programme" in delivered[0]["kwargs"]["title"].lower()
+    assert delivered[0]["kwargs"]["link"] == "/programmes"
+
+
+def test_run_with_paused_programme_does_not_prescribe_a_workout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _make_config(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "main.load_programme_runtime",
+        lambda *a, **kw: ProgrammeRuntime(
+            status="paused",
+            message="This programme is paused.",
+        ),
+    )
+    delivered: list[dict] = []
+    monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "main._deliver",
+        lambda *a, **kw: delivered.append({"args": a, "kwargs": kw}) or 0,
+    )
+    monkeypatch.setattr(
+        "main.generate_next_workout",
+        lambda *a, **kw: pytest.fail("must not generate a workout"),
+    )
+    monkeypatch.setattr("main.checkin.record", lambda *a, **kw: None)
+
+    assert run(preview=False) == 0
+    assert "paused" in delivered[0]["args"][1].lower()
+
+
+def test_run_active_programme_uses_runtime_prescription(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _make_config(monkeypatch, tmp_path)
+    runtime = _active_runtime()
+    monkeypatch.setattr("main.load_programme_runtime", lambda *a, **kw: runtime)
+    _patch_optional_io(monkeypatch)
     monkeypatch.setattr(
         "main._resolve_provider",
         lambda config, **kw: MagicMock(name="test-provider"),
     )
-    monkeypatch.setattr("main.local_today", lambda name, now=None: date(2026, 8, 3))
+    calls: list[dict] = []
     monkeypatch.setattr(
-        "main.get_user_by_id",
-        lambda user_id, db_path: {"id": user_id, "timezone": "UTC"},
-    )
-    monkeypatch.setattr(
-        "main.get_active_programme",
-        lambda user_id, **kw: resolved,
-    )
-    monkeypatch.setattr("main.get_recent_hevy_logs", lambda **kw: [])
-
-    notifications: list[dict[str, Any]] = []
-
-    def _save_notification(user_id: str, **kwargs: Any) -> int:
-        notifications.append({"user_id": user_id, **kwargs})
-        return 1
-
-    monkeypatch.setattr("main.save_notification", _save_notification)
-
-    monkeypatch.setattr(
-        "main.google_health_client.sync_body_metrics",
-        lambda *args: None,
-    )
-    monkeypatch.setattr("main.read_recovery_metrics", lambda *args, **kw: None)
-    monkeypatch.setattr("main.body_metrics_from_recovery", lambda rec: rec)
-    monkeypatch.setattr("main.save_body_metrics", lambda *args, **kw: None)
-    monkeypatch.setattr(
-        "main.fetch_latest_workout",
-        lambda key: {"id": "1", "title": "Upper Strength", "exercises": []},
-    )
-    from hevy_parser import WorkoutSummary
-
-    monkeypatch.setattr(
-        "main.parse_workout",
-        lambda raw, targets: WorkoutSummary(
-            title="Upper Strength",
-            date="2026-08-02",
-            duration_seconds=3600,
-            total_volume_kg=2500,
-            exercises=[],
+        "main.generate_next_workout",
+        lambda provider, **kw: (
+            calls.append(kw)
+            or "Chest and back - Week 2\nIncline press: 3 x 8-12"
         ),
     )
-    monkeypatch.setattr("main.save_workout", lambda *args, **kw: None)
-    monkeypatch.setattr("main.save_progress", lambda *args, **kw: None)
-    monkeypatch.setattr("main.get_recent_bests", lambda *args, **kw: {})
-    monkeypatch.setattr("main.get_progress_history", lambda **kw: {})
-    monkeypatch.setattr("main.get_body_metrics", lambda **kw: [])
-    monkeypatch.setattr("main.get_daily_logs", lambda **kw: [])
-    monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
-
-    from insights import LiftInsight, RecoveryInsight, TrainingInsights
-
-    fake_insights = TrainingInsights(
-        lifts=[
-            LiftInsight(
-                name="Bench Press",
-                trend="progressing",
-                metric="kg",
-                change_pct=5.0,
-                sessions=4,
-                latest=100.0,
-                best=100.0,
-                slope_per_session=1.25,
-                sessions_since_best=0,
-                intervention=None,
-            ),
-        ],
-        recovery=RecoveryInsight(
-            sleep_hours=7.5,
-            resting_hr=58,
-            resting_hr_trend="steady",
-            weight_kg=82.0,
-            weight_trend="steady",
-            body_fat_pct=None,
-            body_fat_trend=None,
-            muscle_pct=None,
-            is_catabolic=False,
-            status="good",
-            directive="Stay the course.",
-        ),
-        headline="All lifts progressing.",
-    )
+    saved: list[dict] = []
     monkeypatch.setattr(
-        "main.insights_engine.build_insights",
-        lambda *a, **kw: fake_insights,
+        "main.save_daily_log",
+        lambda *a, **kw: saved.append({"args": a, "kwargs": kw}),
+    )
+    monkeypatch.setattr("main._deliver", lambda *a, **kw: 0)
+
+    assert run(preview=False) == 0
+    assert calls
+    assert calls[0]["runtime"] is runtime
+    assert calls[0]["day"] is runtime.next_day
+    assert saved
+    assert saved[0]["args"][2] == "Chest and back"
+
+
+def test_run_active_programme_degrades_to_deterministic_plan_without_provider(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _make_config(monkeypatch, tmp_path)
+    runtime = _active_runtime()
+    monkeypatch.setattr("main.load_programme_runtime", lambda *a, **kw: runtime)
+    _patch_optional_io(monkeypatch)
+    monkeypatch.setattr(
+        "main._resolve_provider",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("no provider")),
     )
     monkeypatch.setattr(
         "main.generate_next_workout",
-        lambda *args, **kw: "Upper Strength - Week 1\nBench Press: 4 x 5-8",
+        lambda *a, **kw: pytest.fail("must not call the explainer without a provider"),
     )
-    return config, resolved, notifications
-
-
-def test_run_preview_training_day(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path)
-    result = run(preview=True)
-    assert result == 0
-
-
-def test_run_skips_without_active_programme(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _config, _active, notifications = _make_config(
-        monkeypatch,
-        tmp_path,
-        active=None,
-    )
-    result = run(preview=True)
-    assert result == 0
-    assert notifications == []  # preview mode does not persist a skip
-
-
-def test_run_records_setup_required_notification_without_programme(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _config, _active, notifications = _make_config(
-        monkeypatch,
-        tmp_path,
-        active=None,
-    )
-    generated: list[Any] = []
-
-    def _generate(*args: Any, **kwargs: Any) -> str:
-        generated.append(True)
-        return "should not run"
-
-    monkeypatch.setattr("main.generate_next_workout", _generate)
-
-    result = run(preview=False)
-    assert result == 0
-    assert generated == []
-    assert any(item["title"] == "Programme setup required" for item in notifications)
-
-
-def test_run_checkin_due_is_delivered(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path, checkin_enabled=True)
-
-    import checkin
-
+    delivered: list[dict] = []
+    monkeypatch.setattr("main.save_daily_log", lambda *a, **kw: None)
     monkeypatch.setattr(
-        "main.checkin.due",
-        lambda cfg, **kw: checkin.CheckinDue(
-            number=1,
-            workouts_done=24,
-            weeks_elapsed=4,
-            total_count=64,
-        ),
-    )
-    monkeypatch.setattr(
-        "main.checkin.run_checkin",
-        lambda *args, **kw: "Check-in 1: all good.",
-    )
-    monkeypatch.setattr("main.checkin.record", lambda *a, **kw: None)
-
-    import io
-    import sys
-
-    captured = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", captured)
-
-    result = run(preview=True)
-    assert result == 0
-    assert "Check-in 1" in captured.getvalue()
-
-
-def test_run_checkin_due_failure_does_not_block(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path, checkin_enabled=True)
-    monkeypatch.setattr(
-        "main.checkin.due",
-        MagicMock(side_effect=RuntimeError("DB error")),
-    )
-    result = run(preview=True)
-    assert result == 0
-
-
-def test_run_lifestyle_guidance_is_included(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path, lifestyle_enabled=True)
-
-    import io
-    import sys
-
-    captured = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", captured)
-
-    result = run(preview=True)
-    assert result == 0
-    assert "Today's lifestyle:" in captured.getvalue()
-
-
-def test_run_deliver_sends_push(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path)
-    monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
-
-    push_calls: list[dict[str, Any]] = []
-
-    def _fake_send(sub: dict, payload: dict, vapid_key: str) -> bool:
-        push_calls.append(payload)
-        return True
-
-    monkeypatch.setattr(
-        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
-    )
-    monkeypatch.setattr("main.send_push_notification", _fake_send)
-
-    result = run(preview=False)
-    assert result == 0
-    assert len(push_calls) == 1
-    assert "Upper Strength" in push_calls[0]["body"]
-
-
-def test_run_deliver_returns_2_when_push_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path)
-    monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
-    monkeypatch.setattr(
-        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
-    )
-    monkeypatch.setattr("main.send_push_notification", lambda *a, **kw: False)
-
-    result = run(preview=False)
-    assert result == 2
-
-
-def test_run_self_review_on_configured_weekday(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    _make_config(monkeypatch, tmp_path, self_review_enabled=True)
-    monkeypatch.setattr(
-        "main.datetime",
-        MagicMock(
-            now=lambda tz=None: datetime(2026, 8, 9, 7, 0, tzinfo=timezone.utc),
-            spec=datetime,
-        ),
+        "main._deliver",
+        lambda *a, **kw: delivered.append({"args": a, "kwargs": kw}) or 0,
     )
 
-    import io
-    import sys
-
-    captured = io.StringIO()
-    monkeypatch.setattr(sys, "stdout", captured)
-
-    result = run(preview=True)
-    assert result == 0
-    assert "Weekly self-review" in captured.getvalue()
+    assert run(preview=False) == 0
+    assert "Incline press: 3 x 8-12" in delivered[0]["args"][1].replace("×", "x")
 
 
 def test_run_config_error_returns_1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -499,7 +415,6 @@ def test_run_config_error_returns_1(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(
         "main.Config.load",
-        MagicMock(side_effect=ConfigError("Missing vars")),
+        lambda: (_ for _ in ()).throw(ConfigError("missing config")),
     )
-    result = run(preview=True)
-    assert result == 1
+    assert run(preview=True) == 1

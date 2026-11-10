@@ -1,0 +1,102 @@
+# app.py (L400-L500 of 3061)
+ 400 | # Cookie attributes, idle/absolute lifetimes and the server-side session
+ 401 | # registry. Validated at import so unsafe limits stop startup (issue #752).
+ 402 | SESSION_SECURITY = load_session_security_config()
+ 403 | if _WEB_RUNTIME.production and not SESSION_SECURITY.cookie.secure:
+ 404 |     raise RuntimeError("Production sessions must use Secure cookies.")
+ 405 | SESSION_STORE = SessionStore(DB_PATH, SESSION_SECURITY.lifetime)
+ 406 | SESSION_LIFECYCLE = SessionLifecycle(SESSION_STORE)
+ 407 | 
+ 408 | 
+ 409 | def _identity_allowed(email: object) -> bool:
+ 410 |     """Re-apply the e-mail allow-list to sessions that already exist.
+ 411 | 
+ 412 |     Removing an address from ``ALLOWED_EMAILS`` therefore ends its sessions on
+ 413 |     their next request instead of leaving them valid until they age out.
+ 414 |     """
+ 415 |     if not ALLOWED_EMAILS:
+ 416 |         return True
+ 417 |     return isinstance(email, str) and email in ALLOWED_EMAILS
+ 418 | 
+ 419 | 
+ 420 | def _check_api_auth(request: Request) -> str:
+ 421 |     """Return the authenticated, active account id for this request.
+ 422 | 
+ 423 |     A signed session is not enough on its own: the account it names must still
+ 424 |     exist and be ``active``, so suspending or removing an account takes effect on
+ 425 |     its very next request. The only unauthenticated path is the explicit
+ 426 |     non-production local mode; production has no shared fallback user.
+ 427 |     """
+ 428 |     session = request.session if hasattr(request, "session") else {}
+ 429 |     user = session.get("user")
+ 430 |     uid = session.get("user_id")
+ 431 |     if not uid and isinstance(user, dict) and user.get("id"):
+ 432 |         uid = user["id"]
+ 433 |     if uid:
+ 434 |         try:
+ 435 |             return require_active_user(str(uid), DB_PATH)["id"]
+ 436 |         except AccountError as exc:
+ 437 |             raise HTTPException(status_code=401, detail="Unauthorized") from exc
+ 438 |     if ALLOW_ANONYMOUS_WEB and implicit_single_user_allowed():
+ 439 |         return get_legacy_user_id(DB_PATH)
+ 440 |     raise HTTPException(status_code=401, detail="Unauthorized")
+ 441 | 
+ 442 | 
+ 443 | def _account_setup(user_id: str) -> AccountSetup:
+ 444 |     """Derive this tenant's account setup state from their own records."""
+ 445 | 
+ 446 |     return build_account_setup(
+ 447 |         user_id=user_id,
+ 448 |         db_path=DB_PATH,
+ 449 |         server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+ 450 |     )
+ 451 | 
+ 452 | 
+ 453 | def _setup_payload(
+ 454 |     user_id: str,
+ 455 |     surface: str,
+ 456 |     *,
+ 457 |     programme_status: str | None = None,
+ 458 | ) -> dict[str, Any]:
+ 459 |     """Return the setup contract for one surface of this tenant."""
+ 460 | 
+ 461 |     return surface_setup_payload(
+ 462 |         _account_setup(user_id),
+ 463 |         surface,
+ 464 |         programme_status=programme_status,
+ 465 |     )
+ 466 | 
+ 467 | 
+ 468 | # Google Health linking is opt-in: set the OAuth client in the web service's
+ 469 | # environment to enable the "Connect Google Health" button on the Settings page.
+ 470 | GH_CLIENT_ID = os.environ.get("GOOGLE_HEALTH_CLIENT_ID", "").strip()
+ 471 | GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
+ 472 | # Optional explicit redirect URI (recommended behind a reverse proxy so the
+ 473 | # scheme/host match exactly what is registered with Google). When unset it is
+ 474 | # derived from the incoming request.
+ 475 | GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
+ 476 | _GH_STATE_KEY = "google_health_oauth_state"
+ 477 | 
+ 478 | oauth = OAuth()
+ 479 | if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
+ 480 |     oauth.register(
+ 481 |         name="google",
+ 482 |         client_id=WEB_GOOGLE_CLIENT_ID,
+ 483 |         client_secret=WEB_GOOGLE_CLIENT_SECRET,
+ 484 |         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+ 485 |         client_kwargs={"scope": "openid email profile"},
+ 486 |     )
+ 487 | 
+ 488 | _BASE_DIR = Path(__file__).resolve().parent
+ 489 | 
+ 490 | # Cache-busting for static assets. Cloudflare (and browsers) cache /static/*
+ 491 | # aggressively, so a plain "/static/style.css" can serve a stale copy for hours
+ 492 | # after a deploy. We append a short content hash (?v=...) so every change yields
+ 493 | # a brand-new URL the cache has never seen, while unchanged files stay cached.
+ 494 | _ASSET_VERSIONS: dict[str, str] = {}
+ 495 | 
+ 496 | 
+ 497 | @asynccontextmanager
+ 498 | async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+ 499 |     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
+ 500 |     init_db(DB_PATH)

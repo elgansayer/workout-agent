@@ -14,7 +14,7 @@ tries to select implementation work.
 
 | Role | Responsibility | Never does |
 | --- | --- | --- |
-| OpenHands Agent Canvas on the VPS | Selects eligible issues, claims them with a lease, opens branches and pull requests, reacts to review outcomes | Merges its own pull request, approves its own pull request, changes verification results |
+| OpenHands Agent Canvas on the VPS | Selects eligible issues, claims them with a lease, opens branches and pull requests, repairs the branch after review, reacts to review outcomes | Merges its own pull request, approves its own pull request, changes verification results |
 | GitHub Actions | Deterministic verification: lint, type-check, unit tests, builds, policy checks | Selects, claims, implements, branches or opens implementation pull requests |
 | Human maintainer | Reviews and merges pull requests, decides on blocked work, cancels work | — |
 
@@ -149,6 +149,19 @@ Review outcomes map to exactly one queue action:
 A blocked or cancelled issue is terminal: it is never selected again, and a later
 registration does not revive it.
 
+## Repair
+
+Repair belongs to the same VPS scheduler that claimed the issue:
+
+- A `CHANGES_REQUESTED` or `CLOSED` review requeues the item, and the scheduler
+  repairs the existing branch under a fresh lease before reopening the pull
+  request.
+- Repair never starts a second planner, resolver, reviewer or repair agent. There
+  is no GitHub-hosted fallback owner for any of claim, branch, pull request,
+  review or repair.
+- When the attempt budget is spent the item is blocked for a human decision
+  instead of being handed to another automation.
+
 ## Scheduler ownership
 
 Selection belongs to the OpenHands Agent Canvas on the VPS. The boundary is enforced
@@ -165,6 +178,10 @@ mechanically:
 - GitHub Actions stay deterministic verification. They never select an issue, never
   claim work, never create an implementation branch and never open an
   implementation pull request.
+- The retired `auto-dispatcher`, planner, resolver, reviewer, hourly, daily, weekly
+  and failure-monitor workflow filenames are rejected if restored. Every retained
+  workflow declares explicit permissions and concurrency, external actions are
+  full-SHA pinned, and actionlint validates workflow syntax and action metadata.
 
 ### Queue commands
 

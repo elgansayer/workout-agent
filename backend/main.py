@@ -1,9 +1,8 @@
 """Entry point: orchestrates the early-morning agent run.
 
-Each morning it resolves the authenticated user's active Hevy-native programme,
-applies progressive overload from the latest Hevy session, and messages the
-plan. When no programme is active it records a setup-required skip instead of
-fabricating a workout.
+The active tenant-scoped programme determines today's routine, dates, block and
+materialised prescription.  When no programme is active the run sends explicit
+setup guidance and never fabricates a workout from the retired static split.
 
 Run manually with `python main.py`, or schedule via cron for 07:00 daily.
 Use `python main.py --preview` for a dry run that prints today's plan to stdout
@@ -15,7 +14,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import sys
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -25,21 +23,18 @@ import checkin
 import google_health_client
 import insights as insights_engine
 import lifestyle
+from accounts import AccountError, require_active_user
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
-    get_active_programme,
     get_body_metrics,
     get_daily_logs,
     get_legacy_user_id,
-    get_or_create_user,
     get_progress_history,
     get_push_subscriptions,
     get_recent_bests,
-    get_recent_hevy_logs,
-    get_user_api_key,
-    get_user_by_id,
+    get_training_rules,
     init_db,
     save_body_metrics,
     save_daily_log,
@@ -47,12 +42,26 @@ from database import (
     save_progress,
     save_workout,
 )
-from gemini_engine import generate_next_workout
+from gemini_engine import (
+    baseline_plan,
+    generate_next_workout,
+)
 from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import normalise_name, parse_workout
-from programme_runtime import local_today, resolve_programme_runtime
+from hevy_sync import sync_routines
+from legacy_ownership import is_deployment_owner
+from programme_runtime import ProgrammeRuntime, load_programme_runtime, local_today
 from push_notifier import send_push_notification
+from secret_vault import (
+    CredentialStatus,
+    CredentialUnavailableError,
+    ResolvedCredential,
+    SecretVault,
+    migrate_legacy_credentials,
+)
+from tenancy import TenantRequiredError, implicit_single_user_allowed
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(
     level=logging.INFO,
@@ -61,7 +70,15 @@ logging.basicConfig(
 logger = logging.getLogger("workout_agent")
 
 
-def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
+def _deliver(
+    config: Config,
+    message: str,
+    preview: bool,
+    user_id: str,
+    *,
+    title: str = "🏋️ Today's Workout Plan Ready",
+    link: str = "/plan",
+) -> int:
     """Print the message in preview mode, otherwise send it via Web Push."""
     if user_id:
         try:
@@ -72,10 +89,10 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
             )
             save_notification(
                 user_id,
-                title="🏋️ Today's Workout Plan Ready",
+                title=title,
                 message=first_line,
                 type="coach",
-                link="/plan",
+                link=link,
                 db_path=config.database_path,
             )
         except Exception as e:  # noqa: BLE001
@@ -114,20 +131,16 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
 
 def _maybe_check_in(
     config: Config,
-    week: int,
-    cycle_weeks: int,
-    block: dict[str, Any],
-    days: list[dict[str, Any]],
-    rules: list[str],
+    runtime: ProgrammeRuntime,
     preview: bool,
     *,
     user_id: str,
 ) -> None:
-    """Run a programme check-in if one is due, delivering it as its own message."""
+    """Run a programme check-in at an active programme review point."""
     if not config.checkin_enabled:
         return
     try:
-        due_info = checkin.due(config, user_id=user_id)
+        due_info = checkin.due(config, user_id=user_id, runtime=runtime)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Check-in scheduling failed: %s", exc)
         return
@@ -139,26 +152,16 @@ def _maybe_check_in(
         due_info.workouts_done,
         due_info.weeks_elapsed,
     )
-    message = checkin.run_checkin(
-        config,
-        due_info,
-        week,
-        cycle_weeks,
-        block,
-        days,
-        rules,
-        user_id=user_id,
-    )
+    message = checkin.run_checkin(config, due_info, runtime, user_id=user_id)
     _deliver(config, message, preview, user_id)
     if not preview:
-        checkin.record(config, due_info, message, user_id=user_id)
+        checkin.record(config, due_info, message, user_id=user_id, runtime=runtime)
 
 
 def _maybe_self_review(
     config: Config,
     recovery: dict[str, Any] | None,
-    week: int,
-    block: dict[str, Any],
+    runtime: ProgrammeRuntime,
     preview: bool,
     *,
     user_id: str,
@@ -177,8 +180,8 @@ def _maybe_self_review(
         logger.info("Self-review skipped: not enough logged history yet.")
         return
     logger.info("Self-review due: %s", review.headline)
-    block_name = str(block.get("name") or "Programme")
-    _deliver(config, review.as_message(week, block_name), preview, user_id)
+    block_name = str((runtime.block or {}).get("name") or "Programme")
+    _deliver(config, review.as_message(runtime.week, block_name), preview, user_id)
 
 
 def _compose(body: str, guidance: lifestyle.DailyGuidance | None, footer: str) -> str:
@@ -204,54 +207,107 @@ def _resolve_provider(
 
 
 def _resolve_run_user(db_path: str) -> str:
-    """Return the user_id the scheduled run should operate under.
+    """Return the user_id the run should operate under.
 
-    Prefers $SCHEDULER_USER_ID (set by scheduler.py when dispatching per-user).
-    Falls back to the first legacy user for single-tenant backwards compat.
+    ``$SCHEDULER_USER_ID`` (an active account chosen by the operator or the
+    scheduler) is always honoured. Without it the only fallback is the explicit
+    non-production local tenant; production has no shared fallback user, so the
+    run is refused instead.
+
+    Raises:
+        TenantRequiredError: no user was selected and no local fallback applies.
+        AccountError: the selected account does not exist or is not active.
     """
     env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
     if env_id:
+        require_active_user(env_id, db_path)
         return env_id
-    return get_or_create_user("legacy@local", "Legacy Data", db_path)["id"]
-
-
-def _scope_config_to_user(config: Config, user_id: str) -> Config:
-    """Resolve user-owned connector secrets and fail closed on shared fallbacks."""
-    key_record = get_user_api_key(user_id, "hevy", db_path=config.database_path)
-    user_hevy_key = None
-    if key_record:
-        user_hevy_key = str(key_record.get("api_key") or "").strip() or None
-
-    is_legacy_user = user_id == get_legacy_user_id(config.database_path)
-    hevy_key = user_hevy_key or (config.hevy_api_key if is_legacy_user else None)
-    return replace(
-        config,
-        hevy_api_key=hevy_key,
-        health_connect_file=(config.health_connect_file if is_legacy_user else None),
-        google_health_client_id=(
-            config.google_health_client_id if is_legacy_user else None
-        ),
-        google_health_client_secret=(
-            config.google_health_client_secret if is_legacy_user else None
-        ),
-        google_health_refresh_token=(
-            config.google_health_refresh_token if is_legacy_user else None
-        ),
+    if implicit_single_user_allowed():
+        return get_legacy_user_id(db_path)
+    raise TenantRequiredError(
+        "No user selected: pass --user-id or set SCHEDULER_USER_ID."
     )
 
 
-def _rep_targets_from_days(days: list[dict[str, Any]]) -> dict[str, int]:
-    """Return top-of-range rep targets for the active programme's exercises."""
-    targets: dict[str, int] = {}
-    for day in days:
-        for exercise in day.get("exercises", []):
-            name = str(exercise.get("name") or "")
-            if not name:
-                continue
-            numbers = re.findall(r"\d+", str(exercise.get("rep_range") or ""))
-            if numbers:
-                targets[normalise_name(name)] = int(numbers[-1])
-    return targets
+def _vault_credential(
+    db_path: str,
+    user_id: str,
+    provider: str,
+    *,
+    purpose: str,
+) -> ResolvedCredential | None:
+    """Resolve one owner's credential, treating unavailability as absent."""
+    try:
+        return SecretVault(db_path).resolve(user_id, provider, purpose=purpose)
+    except CredentialUnavailableError:
+        return None
+
+
+def _vault_record_exists(db_path: str, user_id: str, provider: str) -> bool:
+    """Whether the owner has any credential row, including a revoked one."""
+    return (
+        SecretVault(db_path).describe(user_id, provider).status
+        is not CredentialStatus.NOT_CONFIGURED
+    )
+
+
+def _scope_config_to_user(config: Config, user_id: str) -> Config:
+    """Resolve user-owned connector secrets and fail closed on shared fallbacks.
+
+    Deployment-wide connector settings (the single-user ``HEVY_API_KEY`` and the
+    Google Health environment) are applied only for the deployment owner: the
+    verified person the pre-account data was assigned to, or the local tenant in
+    the explicit non-production mode. Every other user relies solely on their own
+    vaulted credentials.
+    """
+    hevy_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "hevy",
+        purpose="hevy_sync",
+    )
+    hevy_record_exists = _vault_record_exists(
+        config.database_path, user_id, "hevy"
+    )
+    user_hevy_key = (
+        hevy_credential.api_key.reveal()
+        if hevy_credential is not None and hevy_credential.api_key is not None
+        else None
+    )
+    google_credential = _vault_credential(
+        config.database_path,
+        user_id,
+        "google_health",
+        purpose="health_sync",
+    )
+    google_record_exists = _vault_record_exists(
+        config.database_path, user_id, "google_health"
+    )
+    user_google_token = (
+        google_credential.refresh_token.reveal()
+        if google_credential is not None and google_credential.refresh_token is not None
+        else None
+    )
+
+    owns_server_config = is_deployment_owner(user_id, config.database_path)
+    allow_legacy_hevy = owns_server_config and not hevy_record_exists
+    allow_legacy_google = owns_server_config and not google_record_exists
+    hevy_key = user_hevy_key or (config.hevy_api_key if allow_legacy_hevy else None)
+    google_token = user_google_token or (
+        config.google_health_refresh_token if allow_legacy_google else None
+    )
+    return replace(
+        config,
+        hevy_api_key=hevy_key,
+        health_connect_file=(
+            config.health_connect_file if owns_server_config else None
+        ),
+        # The OAuth *client* belongs to the deployment and is safe to share;
+        # only the per-user refresh token is tenant scoped.
+        google_health_client_id=config.google_health_client_id,
+        google_health_client_secret=config.google_health_client_secret,
+        google_health_refresh_token=google_token,
+    )
 
 
 def run(preview: bool = False, user_id: str | None = None) -> int:
@@ -262,71 +318,46 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         return 1
 
     init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
 
-    if user_id is None:
-        user_id = _resolve_run_user(config.database_path)
+    try:
+        if user_id is None:
+            user_id = _resolve_run_user(config.database_path)
+        owner = authorize_owner(config.database_path, user_id)
+        require_active_user(owner.user_id, config.database_path)
+        user_id = owner.user_id
+    except (TenantRequiredError, AccountError, OwnershipError) as exc:
+        logger.error("Cannot start the daily cycle: %s", exc)
+        return 1
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 
-    user = get_user_by_id(user_id, config.database_path)
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
-    today = local_today(timezone_name)
+    # Managed Hevy copies are an explicit opt-in; completed workouts are
+    # ingested separately through the canonical reader.
+    try:
+        for status in sync_routines(config, user_id=user_id):
+            logger.info("Hevy routine %s", status)
+    except Exception as exc:  # noqa: BLE001 - source sync must not block the run
+        logger.warning("Hevy routine synchronisation failed: %s", exc)
+
+    today = local_today(_user_timezone(user_id, config.database_path))
     when = today.isoformat()
-
-    active = get_active_programme(user_id, db_path=config.database_path)
-    runtime = resolve_programme_runtime(
-        active,
-        get_recent_hevy_logs(
-            limit=56,
-            db_path=config.database_path,
-            user_id=user_id,
-        ),
+    runtime = load_programme_runtime(
+        user_id,
+        config.database_path,
         today=today,
-        timezone_name=timezone_name,
     )
-    if runtime.status != "active" or runtime.next_day is None:
-        message = runtime.message or "Connect Hevy and select routines to begin."
-        logger.info("Skipping daily workout for user %s: %s", user_id, message)
-        if not preview:
-            save_notification(
-                user_id,
-                title="Programme setup required",
-                message=message,
-                type="programme",
-                link="/programmes",
-                db_path=config.database_path,
-            )
-        return 0
-
-    definition = (active or {}).get("definition") or {}
-    if not isinstance(definition, dict):
-        definition = {}
-    programme_name = str(definition.get("name") or "Hevy programme")
-    rules = [str(rule) for rule in definition.get("rules") or []]
-    days = runtime.days
-    week = runtime.week
-    cycle_weeks = runtime.cycle_weeks
-    block = runtime.block
-    day = runtime.next_day
-    focus = str(day.get("focus") or "Training")
     logger.info(
-        "Week %s of %s, Block %s: %s.",
-        week,
-        cycle_weeks,
-        block.get("number") or 0,
-        block.get("name") or "Programme",
+        "Programme status: %s; week %s of %s.",
+        runtime.status,
+        runtime.week,
+        runtime.cycle_weeks,
     )
 
-    _maybe_check_in(
-        config,
-        week,
-        cycle_weeks,
-        block,
-        days,
-        rules,
-        preview,
-        user_id=user_id,
-    )
+    if not runtime.has_training_today:
+        return _deliver_programme_state(config, runtime, preview, user_id, when)
+
+    _maybe_check_in(config, runtime, preview, user_id=user_id)
 
     recovery = read_recovery_metrics(config.health_connect_file)
     synced = google_health_client.sync_body_metrics(
@@ -334,6 +365,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         config.google_health_client_secret,
         config.google_health_refresh_token,
         config.database_path,
+        user_id=user_id,
     )
     if synced:
         # Live scale readings take precedence over a stale file.
@@ -349,24 +381,28 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     _maybe_self_review(
         config,
         recovery,
-        week,
-        block,
+        runtime,
         preview,
         user_id=user_id,
     )
 
+    day = runtime.next_day
+    if day is None:  # defensive: has_training_today already guarantees this
+        return _deliver_programme_state(config, runtime, preview, user_id, when)
+
     try:
         provider = _resolve_provider(config, user_id=user_id)
     except (ImportError, ValueError) as exc:
-        logger.error("AI provider configuration failed: %s", exc)
-        return 1
-
-    logger.info("Today is %s: %s.", today.strftime("%A"), focus)
+        logger.warning(
+            "AI provider configuration failed (%s); using the deterministic plan.",
+            exc,
+        )
+        provider = None
 
     recent_workout = (
         fetch_latest_workout(config.hevy_api_key) if config.hevy_api_key else None
     )
-    summary = parse_workout(recent_workout, _rep_targets_from_days(days))
+    summary = parse_workout(recent_workout, _runtime_rep_targets(runtime))
     if not preview:
         save_workout(recent_workout, config.database_path, user_id=user_id)
         save_progress(summary, config.database_path, user_id=user_id)
@@ -387,29 +423,43 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             last_plan = log["plan"]
             break
 
-    plan = generate_next_workout(
-        provider,
-        day=day,
-        week=week,
-        cycle_weeks=cycle_weeks,
-        programme_name=programme_name,
-        rules=rules,
-        workout_summary=summary,
-        recovery=recovery,
-        history=history,
-        insights=review,
-        last_plan=last_plan,
-    )
+    rules = get_training_rules(user_id, db_path=config.database_path)
+    if provider is None:
+        plan = baseline_plan(runtime, day)
+    else:
+        plan = generate_next_workout(
+            provider,
+            runtime=runtime,
+            day=day,
+            workout_summary=summary,
+            recovery=recovery,
+            history=history,
+            insights=review,
+            last_plan=last_plan,
+            rules=rules,
+        )
     guidance = (
-        lifestyle.daily_guidance(focus, False, recovery)
+        lifestyle.daily_guidance(
+            str(day.get("focus") or ""),
+            False,
+            recovery,
+        )
         if config.lifestyle_enabled
         else None
     )
     if not preview:
+        _persist_week_state(
+            config,
+            runtime,
+            user_id,
+            when,
+            plan,
+            summary,
+        )
         save_daily_log(
             when,
-            int(day.get("number") or 1),
-            focus,
+            int(day.get("number") or 0) or None,
+            str(day.get("focus") or "Training"),
             guidance.carb_tier if guidance else "",
             plan,
             guidance.as_text() if guidance else "",
@@ -417,6 +467,132 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             user_id=user_id,
         )
     return _deliver(config, _compose(plan, guidance, ""), preview, user_id)
+
+
+def _user_timezone(user_id: str, db_path: str) -> str:
+    from database import get_user_by_id
+
+    try:
+        user = get_user_by_id(user_id, db_path)
+    except Exception:  # noqa: BLE001 - invalid legacy settings fall back to UTC
+        user = None
+    values: dict[str, Any] = dict(user) if user else {}
+    return str(values.get("timezone") or "UTC")
+
+
+def _runtime_rep_targets(runtime: ProgrammeRuntime) -> dict[str, int]:
+    """Map today's materialised exercise names to the top of their rep range."""
+    import re
+
+    targets: dict[str, int] = {}
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            numbers = re.findall(r"\d+", str(exercise.get("rep_range") or ""))
+            if not numbers:
+                continue
+            name = normalise_name(str(exercise.get("name") or ""))
+            if name:
+                targets[name] = int(numbers[-1])
+    return targets
+
+
+def _deliver_programme_state(
+    config: Config,
+    runtime: ProgrammeRuntime,
+    preview: bool,
+    user_id: str,
+    when: str,
+) -> int:
+    """Send explicit setup/paused/completed guidance instead of a workout."""
+
+    if runtime.status == "setup_required":
+        guidance = (
+            "No active programme yet. Select routines from Hevy and generate a "
+            "programme to get today's workout."
+        )
+        title = "⚙️ Set up your programme"
+        link = "/programmes"
+    elif runtime.status == "paused":
+        guidance = (
+            "Your programme is paused, so there is no workout today. "
+            "Resume or replace it when you are ready."
+        )
+        title = "⏸️ Programme paused"
+        link = "/programmes"
+    elif runtime.status == "completed":
+        guidance = (
+            "Your programme is complete. Review it and start the next programme "
+            "when you are ready."
+        )
+        title = "✅ Programme complete"
+        link = "/programmes"
+    elif runtime.status == "not_started":
+        guidance = runtime.message
+        title = "📅 Programme starts soon"
+        link = "/plan"
+    else:
+        guidance = runtime.message or "No workout is prescribed today."
+        title = "🗓️ No workout prescribed"
+        link = "/plan"
+
+    message = f"{guidance}\n\n{runtime.message}".strip()
+    if not preview:
+        save_daily_log(
+            when,
+            None,
+            "Programme setup",
+            "",
+            message,
+            "",
+            config.database_path,
+            user_id=user_id,
+        )
+    return _deliver(
+        config,
+        message,
+        preview,
+        user_id,
+        title=title,
+        link=link,
+    )
+
+
+def _persist_week_state(
+    config: Config,
+    runtime: ProgrammeRuntime,
+    user_id: str,
+    when: str,
+    plan: str,
+    summary: Any,
+) -> None:
+    """Persist planned/actual week state for a domain-backed programme."""
+    if runtime.programme_id is None or runtime.revision_id is None:
+        return
+    try:
+        from programme_domain import ProgrammeService, ProgrammeWeekState
+
+        state = ProgrammeWeekState(
+            week_number=runtime.week,
+            planned={
+                "date": when,
+                "routine_id": (runtime.next_day or {}).get("routine_id"),
+                "focus": (runtime.next_day or {}).get("focus"),
+                "plan": plan,
+                "revision_number": runtime.revision_number,
+            },
+            actual={
+                "summary": summary.as_text() if summary is not None else "",
+            },
+            review_state="planned",
+        )
+        ProgrammeService(config.database_path).save_week_state(
+            user_id,
+            runtime.programme_id,
+            runtime.revision_id,
+            state,
+        )
+    except Exception as exc:  # noqa: BLE001 - state persistence is best effort
+        logger.warning("Could not persist programme week state: %s", exc)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -440,27 +616,44 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _sync_history(user_id: str | None = None) -> int:
+    """Rebuild one owner's Hevy history (``--sync-history``).
+
+    ``--user-id`` only claims an owner. It is re-authorized before any connector
+    credential is read, so a mistyped or forged id cannot select another
+    tenant's Hevy key or overwrite their history.
+    """
+    from scripts.sync_history import sync_all
+
+    try:
+        config = Config.load()
+    except ConfigError as exc:
+        logger.error("%s", exc)
+        return 1
+    init_db(config.database_path)
+    migrate_legacy_credentials(config.database_path)
+    try:
+        owner = authorize_owner(
+            config.database_path, user_id or _resolve_run_user(config.database_path)
+        )
+        require_active_user(owner.user_id, config.database_path)
+    except (OwnershipError, TenantRequiredError, AccountError) as exc:
+        logger.error("Refusing history rebuild: %s", exc)
+        return 1
+    config = _scope_config_to_user(config, owner.user_id)
+    if not config.hevy_api_key:
+        logger.error("No Hevy API key is configured for this user.")
+        return 1
+    result = sync_all(config.hevy_api_key, config.database_path, user_id=owner.user_id)
+    if "error" in result:
+        logger.error("%s", result["error"])
+        return 1
+    logger.info("%s", result)
+    return 0
+
+
 if __name__ == "__main__":
     args = _parse_args()
     if args.sync_history:
-        from scripts.sync_history import sync_all
-
-        config = Config.load()
-        init_db(config.database_path)
-        sync_user_id = args.user_id or _resolve_run_user(config.database_path)
-        config = _scope_config_to_user(config, sync_user_id)
-        api_key = config.hevy_api_key
-        if not api_key:
-            logger.error("No Hevy API key is configured for this user.")
-            sys.exit(1)
-        result = sync_all(
-            api_key,
-            config.database_path,
-            user_id=sync_user_id,
-        )
-        if "error" in result:
-            logger.error("%s", result["error"])
-            sys.exit(1)
-        logger.info("%s", result)
-        sys.exit(0)
+        sys.exit(_sync_history(user_id=args.user_id))
     sys.exit(run(preview=args.preview, user_id=args.user_id))

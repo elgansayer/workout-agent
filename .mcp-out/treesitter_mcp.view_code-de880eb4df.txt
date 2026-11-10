@@ -1,0 +1,151 @@
+# app.py (L2624-L2773 of 3061)
+2624 | @app.get("/api/history")
+2625 | def api_history(request: Request):
+2626 |     user_id = _check_api_auth(request)
+2627 |     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+2628 |     levels = _training_levels(user_id=user_id)
+2629 |     return JSONResponse(
+2630 |         jsonable_encoder(
+2631 |             {
+2632 |                 "logs": logs,
+2633 |                 "calendar": charts.calendar_heatmap(levels),
+2634 |                 "setup": _setup_payload(user_id, "history"),
+2635 |             }
+2636 |         )
+2637 |     )
+2638 | 
+2639 | 
+2640 | @app.get("/api/plan")
+2641 | def api_plan(request: Request) -> JSONResponse:
+2642 |     """Render only the tenant's active dynamic programme; never a static fallback."""
+2643 |     from programme_runtime import load_programme_runtime
+2644 | 
+2645 |     user_id = _check_api_auth(request)
+2646 |     runtime = load_programme_runtime(user_id, DB_PATH)
+2647 | 
+2648 |     # Keep the raw activated definition available for backwards-compatible
+2649 |     # clients, but every runtime decision below comes from the shared service.
+2650 |     active = get_active_programme(user_id, db_path=DB_PATH)
+2651 |     raw_definition = active.get("definition") if active else None
+2652 |     definition: dict[str, Any] = (
+2653 |         raw_definition if isinstance(raw_definition, dict) else {}
+2654 |     )
+2655 | 
+2656 |     if runtime.setup_required:
+2657 |         return JSONResponse(
+2658 |             jsonable_encoder(
+2659 |                 {
+2660 |                     "setup_required": True,
+2661 |                     "is_active_programme": False,
+2662 |                     "source": None,
+2663 |                     "active_programme": None,
+2664 |                     "split_name": "No active programme",
+2665 |                     "week": 0,
+2666 |                     "cycle_weeks": 0,
+2667 |                     "current_block": None,
+2668 |                     "blocks": [],
+2669 |                     "days": [],
+2670 |                     "rules": [],
+2671 |                     "analysis": {},
+2672 |                     "warnings": [],
+2673 |                     "programme_spec": {},
+2674 |                     "programme_status": runtime.status,
+2675 |                     "start_date": None,
+2676 |                     "end_date": None,
+2677 |                     "requested_duration_weeks": 0,
+2678 |                     "rotation_message": runtime.message,
+2679 |                     "next_routine_id": None,
+2680 |                     "setup": _setup_payload(
+2681 |                         user_id,
+2682 |                         "plan",
+2683 |                         programme_status="setup_required",
+2684 |                     ),
+2685 |                 }
+2686 |             )
+2687 |         )
+2688 | 
+2689 |     spec = definition.get("programme_spec") or {
+2690 |         "start_date": runtime.start_date.isoformat() if runtime.start_date else None,
+2691 |         "duration_weeks": runtime.cycle_weeks,
+2692 |         "goal": runtime.goal,
+2693 |     }
+2694 |     split_name = (
+2695 |         runtime.name
+2696 |         or definition.get("name")
+2697 |         or (active or {}).get("name")
+2698 |         or "Hevy programme"
+2699 |     )
+2700 | 
+2701 |     return JSONResponse(
+2702 |         jsonable_encoder(
+2703 |             {
+2704 |                 "setup_required": False,
+2705 |                 "is_active_programme": runtime.status == "active",
+2706 |                 "source": "hevy" if runtime.status != "setup_required" else None,
+2707 |                 "active_programme": active,
+2708 |                 "split_name": split_name,
+2709 |                 "week": runtime.week,
+2710 |                 "cycle_weeks": runtime.cycle_weeks,
+2711 |                 "current_block": (
+2712 |                     runtime.block.get("name") if runtime.block else None
+2713 |                 ),
+2714 |                 "blocks": runtime.blocks,
+2715 |                 "days": runtime.days,
+2716 |                 "programme_status": runtime.status,
+2717 |                 "rotation_message": runtime.message,
+2718 |                 "next_routine_id": (
+2719 |                     runtime.next_day.get("routine_id") if runtime.next_day else None
+2720 |                 ),
+2721 |                 "start_date": runtime.start_date,
+2722 |                 "end_date": runtime.end_date,
+2723 |                 "requested_duration_weeks": runtime.cycle_weeks,
+2724 |                 "review_weeks": runtime.review_weeks,
+2725 |                 "rules": definition.get("rules") or [],
+2726 |                 "analysis": definition.get("analysis") or {},
+2727 |                 "warnings": definition.get("warnings") or [],
+2728 |                 "programme_spec": spec,
+2729 |                 "setup": _setup_payload(
+2730 |                     user_id,
+2731 |                     "plan",
+2732 |                     programme_status=runtime.status,
+2733 |                 ),
+2734 |             }
+2735 |         )
+2736 |     )
+2737 | 
+2738 | 
+2739 | @app.get("/api/programmes")
+2740 | def api_programmes(request: Request) -> JSONResponse:
+2741 |     """Return the user's live Hevy routine library and active programme."""
+2742 | 
+2743 |     user_id = _check_api_auth(request)
+2744 |     active = get_active_programme(user_id, db_path=DB_PATH)
+2745 |     hevy_credential = _vault_credential(
+2746 |         user_id, "hevy", purpose="programme_import"
+2747 |     )
+2748 | 
+2749 |     empty_source: dict[str, Any] = {
+2750 |         "username": None,
+2751 |         "workout_count": 0,
+2752 |         "routine_count": 0,
+2753 |         "recent_workout_count": 0,
+2754 |         "folders": [],
+2755 |         "routines": [],
+2756 |     }
+2757 |     connection: dict[str, Any]
+2758 |     source = empty_source
+2759 | 
+2760 |     if hevy_credential is None:
+2761 |         connection = {
+2762 |             "state": "disconnected",
+2763 |             "detail": "Add your Hevy API key in Settings to import routines.",
+2764 |             "username": None,
+2765 |         }
+2766 |     else:
+2767 |         try:
+2768 |             training_data = _load_hevy_training_for_user(user_id)
+2769 |             prefs = get_user_preferences(user_id, DB_PATH)
+2770 |             source = serialise_hevy_source(
+2771 |                 training_data,
+2772 |                 profile_rules=prefs.get("constraints"),
+2773 |                 training_rules=get_training_rules(user_id, DB_PATH),
