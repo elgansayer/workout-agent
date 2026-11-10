@@ -1,0 +1,88 @@
+# csrf_security.py (L48-L134 of 333)
+  48 | def _sha256(value: str) -> str:
+  49 |     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+  50 | 
+  51 | 
+  52 | def _normalise_origin(value: str) -> str | None:
+  53 |     """Return a comparable HTTP(S) origin or ``None`` for malformed input."""
+  54 | 
+  55 |     try:
+  56 |         parsed = urlsplit(value.strip())
+  57 |         port = parsed.port
+  58 |     except ValueError:
+  59 |         return None
+  60 |     if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+  61 |         return None
+  62 |     scheme = parsed.scheme.lower()
+  63 |     default_port = (scheme == "http" and port == 80) or (
+  64 |         scheme == "https" and port == 443
+  65 |     )
+  66 |     authority = parsed.hostname.lower()
+  67 |     if port is not None and not default_port:
+  68 |         authority = f"{authority}:{port}"
+  69 |     return f"{scheme}://{authority}"
+  70 | 
+  71 | 
+  72 | def _request_origin(request: Request) -> str | None:
+  73 |     host = request.headers.get("host", "").strip()
+  74 |     if not host:
+  75 |         return None
+  76 |     return _normalise_origin(f"{request.url.scheme}://{host}")
+  77 | 
+  78 | 
+  79 | def _origin_is_trusted(request: Request, trusted_origins: frozenset[str]) -> bool:
+  80 |     """Validate browser origin metadata without requiring it from API clients."""
+  81 | 
+  82 |     origin = request.headers.get("origin")
+  83 |     if origin:
+  84 |         normalised = _normalise_origin(origin)
+  85 |         current = _request_origin(request)
+  86 |         return normalised is not None and (
+  87 |             normalised == current or normalised in trusted_origins
+  88 |         )
+  89 | 
+  90 |     # Modern browsers provide Fetch Metadata even in cases where Origin is
+  91 |     # omitted. Reject an explicit cross-site signal, while still allowing
+  92 |     # non-browser clients that provide neither header and possess a valid token.
+  93 |     return request.headers.get("sec-fetch-site", "").lower() != "cross-site"
+  94 | 
+  95 | 
+  96 | class CSRFTokenStore:
+  97 |     """SQLite-backed, single-use token registry.
+  98 | 
+  99 |     Plaintext CSRF tokens and session cookies are never persisted. A token is
+ 100 |     useful only with the exact signed session that requested it.
+ 101 |     """
+ 102 | 
+ 103 |     def __init__(
+ 104 |         self,
+ 105 |         db_path: str,
+ 106 |         *,
+ 107 |         ttl_seconds: int = CSRF_TOKEN_TTL_SECONDS,
+ 108 |     ) -> None:
+ 109 |         if ttl_seconds <= 0:
+ 110 |             raise ValueError("ttl_seconds must be positive")
+ 111 |         self.db_path = db_path
+ 112 |         self.ttl_seconds = ttl_seconds
+ 113 | 
+ 114 |     def _connect(self) -> sqlite3.Connection:
+ 115 |         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+ 116 |         conn = sqlite3.connect(self.db_path, timeout=10, isolation_level=None)
+ 117 |         conn.execute("PRAGMA busy_timeout = 10000")
+ 118 |         conn.execute(
+ 119 |             """
+ 120 |             CREATE TABLE IF NOT EXISTS csrf_tokens (
+ 121 |                 token_hash TEXT PRIMARY KEY,
+ 122 |                 session_hash TEXT NOT NULL,
+ 123 |                 user_id TEXT NOT NULL,
+ 124 |                 expires_at INTEGER NOT NULL
+ 125 |             )
+ 126 |             """
+ 127 |         )
+ 128 |         conn.execute(
+ 129 |             "CREATE INDEX IF NOT EXISTS idx_csrf_tokens_user_expiry "
+ 130 |             "ON csrf_tokens (user_id, expires_at)"
+ 131 |         )
+ 132 |         return conn
+ 133 | 
+ 134 |     def issue(

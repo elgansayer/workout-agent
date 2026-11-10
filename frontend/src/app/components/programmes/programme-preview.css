@@ -1,0 +1,167 @@
+.generated-preview {
+  margin-top: 1.25rem;
+}
+
+.warning-list {
+  background: rgb(245 158 11 / 0.12);
+  border: 1px solid rgb(245 158 11 / 0.55);
+  border-radius: 0.65rem;
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+}
+
+.warning-list p {
+  margin: 0.3rem 0;
+}
+
+.violation-panel,
+.conflict-panel {
+  background: rgb(239 68 68 / 0.12);
+  border: 1px solid rgb(239 68 68 / 0.55);
+  border-radius: 0.65rem;
+  margin: 1rem 0;
+  padding: 0.85rem 1rem;
+}
+
+.violation-panel ul,
+.conflict-panel ul,
+.conflict-panel ol {
+  margin: 0.4rem 0 0.8rem;
+}
+
+.violation-panel h2,
+.conflict-panel h2 {
+  margin-top: 0;
+}
+
+.block-timeline,
+.routine-preview-grid {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  margin: 1rem 0 1.5rem;
+}
+
+.block-preview {
+  border: 1px solid var(--border, #374151);
+  border-radius: 0.75rem;
+  padding: 0.9rem;
+}
+
+.block-preview dl {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.75rem 0 0;
+}
+
+.block-preview dl div {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+
+.block-preview dt {
+  color: var(--muted, #9ca3af);
+}
+
+.block-preview dd {
+  font-weight: 700;
+  margin: 0;
+  text-align: right;
+}
+
+.day-ex li {
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.day-ex li > span:first-child {
+  display: grid;
+}
+
+.day-ex small {
+  color: var(--muted, #9ca3af);
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.muscle-list,
+.schedule-list {
+  display: grid;
+  gap: 0.35rem;
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+
+.muscle-list li {
+  align-items: center;
+  border-bottom: 1px solid var(--border, #374151);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+}
+
+.prescription-list {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+}
+
+.prescription-list li {
+  border-top: 1px solid var(--border, #374151);
+  font-size: 0.82rem;
+  padding: 0.3rem 0;
+}
+
+.prescription-list small {
+  color: var(--muted, #9ca3af);
+  display: block;
+}
+
+.activation-row {
+  align-items: center;
+  border-top: 1px solid var(--border, #374151);
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+
+.source-exercises {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.9rem 0;
+  padding-left: 1.5rem;
+}
+
+.source-exercises li {
+  padding-left: 0.25rem;
+}
+
+.exercise-source-head {
+  align-items: baseline;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: space-between;
+}
+
+.set-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.45rem 0;
+}
+
+.set-targets code,
+.source-revision code,
+.generated-preview > .section-heading code {
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
+.source-revision {
+  color: var(--muted, #9ca3af);
+  font-size: 0.8rem;
+}

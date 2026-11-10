@@ -21,7 +21,12 @@ if (
     _proxy_environment["WEB_PUBLIC_URL"] = "http://testserver"
 _PROXY_SECURITY = load_proxy_security_config(_proxy_environment)
 
-from webapp.app import DB_PATH, app as application  # noqa: E402
+from webapp.app import (  # noqa: E402
+    DB_PATH,
+    SESSION_SECURITY,
+    SESSION_STORE,
+)
+from webapp.app import app as application  # noqa: E402
 from webapp.csrf_security import CSRFMiddleware  # noqa: E402
 from webapp.health import (  # noqa: E402
     OperationalHealthMiddleware,
@@ -64,7 +69,10 @@ install_authenticated_diagnostics(application, db_path=DB_PATH)
 # Keep the canonical FastAPI object importable for unit tests, while the
 # production entrypoint wraps every interactive route. CSRF is installed only
 # when cookie authentication is configured; production runtime validation
-# already requires that configuration and fails startup otherwise.
+# already requires that configuration and fails startup otherwise. The CSRF
+# layer reads the same hardened cookie (name and lifetime) as the session
+# middleware and defers to the server-side session registry, so a revoked or
+# expired cookie cannot mint or spend CSRF tokens.
 secured_application = application
 _session_secret = os.environ.get("WEB_AUTH_SECRET", "").strip()
 _google_client_id = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
@@ -74,6 +82,9 @@ if _session_secret and _google_client_id:
         db_path=DB_PATH,
         session_secret=_session_secret,
         trusted_origins=_trusted_browser_origins(),
+        session_cookie_name=SESSION_SECURITY.cookie.name,
+        session_max_age_seconds=SESSION_SECURITY.cookie.max_age,
+        session_validator=SESSION_STORE.is_active_payload,
     )
 
 # ProxySecurityMiddleware is the request-side boundary for the interactive app:

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ruff: noqa: EXE001 - the deployed workflow invokes this script through Python.
 """Probe the deployed app's route inventory without authenticating.
 
 The script imports the local FastAPI app only to discover the canonical route
@@ -16,36 +17,14 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from fastapi.routing import APIRoute
 
-PUBLIC_EXACT_PATHS = {
-    "/login",
-    "/login/google",
-    "/logout",
-    "/auth",
-    "/google-health/callback",
-    "/favicon.ico",
-    "/sw.js",
-}
-PUBLIC_PREFIXES = ("/static/", "/assets/")
-PUBLIC_SUFFIXES = (
-    ".js",
-    ".css",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".svg",
-    ".ico",
-    ".woff",
-    ".woff2",
-    ".ttf",
-    ".map",
-    ".json",
-    ".webmanifest",
-)
+PublicPathPolicy = Callable[[str], bool]
+
 SENSITIVE_MARKERS = (
     "api_key",
     "refresh_token",
@@ -63,14 +42,6 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _is_public(path: str) -> bool:
-    return (
-        path in PUBLIC_EXACT_PATHS
-        or path.startswith(PUBLIC_PREFIXES)
-        or path.endswith(PUBLIC_SUFFIXES)
-    )
-
-
 def _representative_path(path: str) -> str:
     def replace(match: re.Match[str]) -> str:
         spec = match.group(1)
@@ -84,7 +55,7 @@ def _representative_path(path: str) -> str:
     return re.sub(r"\{([^{}]+)\}", replace, path)
 
 
-def _load_routes() -> list[APIRoute]:
+def _load_route_inventory() -> tuple[list[APIRoute], PublicPathPolicy]:
     repo_root = Path(__file__).resolve().parents[2]
     (repo_root / "frontend" / "dist" / "frontend" / "browser").mkdir(
         parents=True,
@@ -97,18 +68,23 @@ def _load_routes() -> list[APIRoute]:
     os.environ.setdefault("WEB_GOOGLE_CLIENT_SECRET", "anonymous-smoke-route-discovery-secret")
 
     import webapp.app as app_module
+    from webapp.auth_boundary import is_public_path
 
     importlib.reload(app_module)
-    return [route for route in app_module.app.routes if isinstance(route, APIRoute)]
+    routes = [
+        route for route in app_module.app.routes if isinstance(route, APIRoute)
+    ]
+    return routes, is_public_path
 
 
 def _probe(base_url: str, timeout: float) -> list[str]:
     opener = urllib.request.build_opener(_NoRedirect())
     failures: list[str] = []
     checked = 0
+    routes, is_public_path = _load_route_inventory()
 
-    for route in _load_routes():
-        if _is_public(route.path):
+    for route in routes:
+        if is_public_path(route.path):
             continue
 
         path = _representative_path(route.path)

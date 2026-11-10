@@ -38,8 +38,11 @@ def _login(test_client: TestClient, app_module: Any, user_id: str) -> None:
     """Establish the complete signed session mutation security requires."""
 
     def login(request: Request) -> dict[str, str]:
-        request.session["user"] = "synthetic@example.test"
-        request.session["user_id"] = user_id
+        app_module.SESSION_LIFECYCLE.establish(
+            request.session,
+            user_id=user_id,
+            email="synthetic@example.test",
+        )
         return {"status": "ok"}
 
     app_module.app.router.routes.insert(

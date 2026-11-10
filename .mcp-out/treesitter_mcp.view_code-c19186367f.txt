@@ -1,0 +1,151 @@
+# app.py (L1823-L1972 of 3061)
+1823 | def _gh_redirect_uri(request: Request) -> str:
+1824 |     """The OAuth redirect URI, explicit env override or derived from the request."""
+1825 |     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
+1826 | 
+1827 | 
+1828 | def _hevy_verification_status(state: HevyCredentialState) -> int:
+1829 |     """Map a verification outcome to an HTTP status code."""
+1830 |     if state is HevyCredentialState.UNVERIFIED:
+1831 |         # Hevy could not be reached; the credential was not disproved.
+1832 |         return 502
+1833 |     return 400
+1834 | 
+1835 | 
+1836 | @app.post("/api/settings/key")
+1837 | async def save_api_key(request: Request) -> dict[str, Any]:
+1838 |     """Save or update an API key for the current user.
+1839 | 
+1840 |     A Hevy credential is verified before it is stored: an unusable key is
+1841 |     rejected and never activated. The secret is only ever persisted through the
+1842 |     tenant-scoped vault, never returned to the browser.
+1843 |     """
+1844 |     _check_rate_limit(request, limit=5)
+1845 |     user_id = _check_api_auth(request)
+1846 |     if not user_id:
+1847 |         raise HTTPException(status_code=401, detail="Not authenticated")
+1848 | 
+1849 |     body = await request.json()
+1850 |     provider_value = body.get("provider") if isinstance(body, dict) else None
+1851 |     api_key_value = body.get("api_key") if isinstance(body, dict) else None
+1852 |     provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+1853 |     api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+1854 | 
+1855 |     if not provider or not api_key:
+1856 |         raise HTTPException(status_code=400, detail="Provider and api_key are required")
+1857 |     try:
+1858 |         provider_spec(provider)
+1859 |     except UnknownProviderError as exc:
+1860 |         raise HTTPException(status_code=400, detail=str(exc)) from exc
+1861 | 
+1862 |     model_value = body.get("model")
+1863 |     if model_value is not None and not isinstance(model_value, str):
+1864 |         raise HTTPException(status_code=400, detail="Model must be a string")
+1865 |     model = model_value.strip() if isinstance(model_value, str) else ""
+1866 |     if len(model) > 200:
+1867 |         raise HTTPException(status_code=400, detail="Model is too long")
+1868 | 
+1869 |     verification: HevyCredentialTest | None = None
+1870 |     if provider == "hevy":
+1871 |         # The verification performs a bounded set of outbound requests; run it
+1872 |         # off the event loop so a slow provider cannot stall other tenants.
+1873 |         # The candidate is proven usable before it is ever persisted.
+1874 |         verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+1875 |         if not verification.connected:
+1876 |             raise HTTPException(
+1877 |                 status_code=_hevy_verification_status(verification.state),
+1878 |                 detail=verification.detail,
+1879 |             )
+1880 | 
+1881 |     vault = _vault()
+1882 |     try:
+1883 |         if vault.describe(user_id, provider).configured:
+1884 |             summary = vault.rotate(user_id, provider, api_key=api_key, model=model or None)
+1885 |         else:
+1886 |             summary = vault.store(user_id, provider, api_key=api_key, model=model or None)
+1887 |     except CredentialExistsError:
+1888 |         try:
+1889 |             summary = vault.rotate(
+1890 |                 user_id, provider, api_key=api_key, model=model or None
+1891 |             )
+1892 |         except VaultError as exc:
+1893 |             raise _vault_http_error(exc) from exc
+1894 |     except VaultError as exc:
+1895 |         raise _vault_http_error(exc) from exc
+1896 | 
+1897 |     if verification is not None:
+1898 |         save_hevy_connection(
+1899 |             user_id,
+1900 |             state=verification.state.value,
+1901 |             api_version=verification.api_version,
+1902 |             capabilities=dict(verification.capabilities),
+1903 |             tested_at=verification.tested_at.isoformat(),
+1904 |             account_username=verification.account_username,
+1905 |             account_id=verification.account_id,
+1906 |             db_path=DB_PATH,
+1907 |         )
+1908 |         return {
+1909 |             "status": "ok",
+1910 |             "provider": provider,
+1911 |             "connection": verification.as_public_metadata(),
+1912 |             "credential": _settings_key_payload(summary),
+1913 |         }
+1914 | 
+1915 |     ai_provider_defaults = {
+1916 |         item["id"]: item["default_model"] for item in available_providers()
+1917 |     }
+1918 |     if provider in ai_provider_defaults:
+1919 |         preferences = get_user_preferences(user_id, DB_PATH)
+1920 |         if preferences.get("preferred_ai") == provider:
+1921 |             save_user_preferences(
+1922 |                 user_id,
+1923 |                 ai_model=model or ai_provider_defaults[provider],
+1924 |                 db_path=DB_PATH,
+1925 |             )
+1926 |     return {
+1927 |         "status": "ok",
+1928 |         "provider": provider,
+1929 |         "credential": _settings_key_payload(summary),
+1930 |     }
+1931 | 
+1932 | 
+1933 | @app.post("/api/settings/key/rotate")
+1934 | async def rotate_api_key(request: Request) -> dict[str, Any]:
+1935 |     """Replace an existing credential, keeping its audit history."""
+1936 |     _check_rate_limit(request, limit=5)
+1937 |     user_id = _check_api_auth(request)
+1938 |     if not user_id:
+1939 |         raise HTTPException(status_code=401, detail="Not authenticated")
+1940 | 
+1941 |     body = await request.json()
+1942 |     provider_value = body.get("provider")
+1943 |     api_key_value = body.get("api_key")
+1944 |     provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+1945 |     api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+1946 |     if not provider or not api_key:
+1947 |         raise HTTPException(status_code=400, detail="Provider and api_key are required")
+1948 | 
+1949 |     model_value = body.get("model")
+1950 |     model = model_value.strip() if isinstance(model_value, str) else None
+1951 |     try:
+1952 |         summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
+1953 |     except VaultError as exc:
+1954 |         raise _vault_http_error(exc) from exc
+1955 |     return {
+1956 |         "status": "ok",
+1957 |         "provider": provider,
+1958 |         "credential": _settings_key_payload(summary),
+1959 |     }
+1960 | 
+1961 | 
+1962 | @app.post("/api/settings/key/revoke")
+1963 | async def revoke_api_key(request: Request) -> dict[str, Any]:
+1964 |     """Invalidate a credential and destroy its secret material."""
+1965 |     _check_rate_limit(request, limit=5)
+1966 |     user_id = _check_api_auth(request)
+1967 |     if not user_id:
+1968 |         raise HTTPException(status_code=401, detail="Not authenticated")
+1969 | 
+1970 |     body = await request.json()
+1971 |     provider_value = body.get("provider")
+1972 |     provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""

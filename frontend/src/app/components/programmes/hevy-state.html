@@ -1,0 +1,53 @@
+@if (data(); as data) {
+  <section class="panel source-status" aria-labelledby="hevy-state-heading">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Step 1</p>
+        <h2 id="hevy-state-heading">Hevy state</h2>
+      </div>
+      <span class="badge" [class.badge-alert]="data.connection.state !== 'connected'">
+        {{ data.connection.state }}
+      </span>
+    </div>
+
+    <dl class="state-grid">
+      <div>
+        <dt>Account</dt>
+        <dd>{{ data.connection.username || 'Unknown Hevy account' }}</dd>
+      </div>
+      <div>
+        <dt>Signed in as</dt>
+        <dd>{{ data.connection.owner || 'Unknown' }}</dd>
+      </div>
+      <div>
+        <dt>Last successful sync</dt>
+        <dd>
+          {{ data.connection.last_successful_sync || 'Never' }}
+          @if (data.connection.stale) {
+            <span class="badge badge-alert">Stale</span>
+          }
+        </dd>
+      </div>
+      <div>
+        <dt>Routines</dt>
+        <dd>{{ data.source.routine_count }}</dd>
+      </div>
+      <div>
+        <dt>Folders</dt>
+        <dd>{{ data.source.folders.length }}</dd>
+      </div>
+      <div>
+        <dt>Recent workouts</dt>
+        <dd>{{ data.source.recent_workout_count }}</dd>
+      </div>
+    </dl>
+
+    @if (data.connection.warnings?.length) {
+      <div class="warning-list" role="status">
+        @for (warning of data.connection.warnings; track warning) {
+          <p>{{ warning }}</p>
+        }
+      </div>
+    }
+  </section>
+}
