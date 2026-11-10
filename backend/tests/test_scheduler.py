@@ -280,3 +280,71 @@ def test_active_scheduler_scopes_each_insight_job_to_user(
 
     assert daily_calls == ["user-a", "user-b"]
     assert weekly_calls == ["user-a", "user-b"]
+
+
+# ---------------------------------------------------------------------------
+# Account export maintenance
+# ---------------------------------------------------------------------------
+
+
+def test_run_export_maintenance_sweeps_the_configured_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    import account_export
+
+    seen: dict[str, object] = {}
+
+    def fake_maintain(*, db_path: str, export_dir: object) -> account_export.MaintenanceReport:
+        seen.update(db_path=db_path, export_dir=export_dir)
+        return account_export.MaintenanceReport(
+            expired=1, interrupted=0, orphans_removed=0, pruned=0
+        )
+
+    monkeypatch.setenv("ACCOUNT_EXPORT_DIR", str(tmp_path / "archives"))
+    monkeypatch.setattr(account_export, "maintain_exports", fake_maintain)
+
+    scheduler.run_export_maintenance(MagicMock(database_path="synthetic.db"))
+
+    assert seen == {"db_path": "synthetic.db", "export_dir": tmp_path / "archives"}
+
+
+def test_run_export_maintenance_failure_is_isolated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import account_export
+
+    def explode(**_kwargs: object) -> None:
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(account_export, "maintain_exports", explode)
+
+    # A failed sweep must never stop the scheduler loop.
+    scheduler.run_export_maintenance(MagicMock(database_path="synthetic.db"))
+
+
+def test_active_scheduler_sweeps_exports_at_boot_and_every_cycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+
+    class StopLoop(Exception):
+        pass
+
+    def stop_after_first_cycle(_seconds: float) -> None:
+        raise StopLoop
+
+    monkeypatch.setattr(
+        scheduler, "run_export_maintenance", lambda _config: events.append("sweep")
+    )
+    monkeypatch.setattr(scheduler, "run_once", lambda _config: events.append("boot") or 0)
+    monkeypatch.setattr(scheduler, "run_coaching", lambda _config: 0)
+    monkeypatch.setattr(scheduler, "run_daily_insight", lambda _config: None)
+    monkeypatch.setattr(scheduler, "run_weekly_correlations", lambda _config: None)
+    monkeypatch.setattr(scheduler.time, "sleep", stop_after_first_cycle)
+
+    with pytest.raises(StopLoop):
+        scheduler.run_schedule(MagicMock(database_path="synthetic.db"))
+
+    # Maintenance is not delayed behind the (potentially long) boot cycle, and it
+    # runs again on each wake-up of the scheduler loop.
+    assert events == ["sweep", "boot", "sweep"]

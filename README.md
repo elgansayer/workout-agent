@@ -45,6 +45,8 @@ Core rules:
 - Example email addresses must use reserved example domains.
 - Sensitive examples must be clearly marked as synthetic so they cannot be mistaken for production data.
 
+Signed-in users can download a portable archive of their own data from Settings (Your data); see [Account data export](docs/ACCOUNT_DATA_EXPORT.md).
+
 The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI.
 
 ## Synthetic example programme

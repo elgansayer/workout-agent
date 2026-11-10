@@ -1,7 +1,29 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { Component, computed, inject, signal, OnDestroy, OnInit } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+
+import { environment } from '../../../environments/environment';
+
+export interface AccountExport {
+  id: string;
+  status: 'queued' | 'running' | 'ready' | 'failed' | 'expired';
+  requested_at: string;
+  completed_at: string | null;
+  expires_at: string | null;
+  size_bytes: number | null;
+  checksum_sha256: string | null;
+  error_code: string | null;
+  download_url: string | null;
+}
+
+interface AccountExportList {
+  exports: AccountExport[];
+  retention_hours: number;
+  enabled: boolean;
+}
+
+const EXPORT_POLL_MS = 2000;
 
 @Component({
   selector: 'app-settings',
@@ -10,7 +32,7 @@ import { FormsModule } from '@angular/forms';
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })
-export class Settings implements OnInit {
+export class Settings implements OnInit, OnDestroy {
   private http = inject(HttpClient);
 
   data = signal<any>(null);
@@ -37,8 +59,34 @@ export class Settings implements OnInit {
   selectedExperience = signal<string>('intermediate');
   constraintsInput = '';
 
+  exports = signal<AccountExport[]>([]);
+  exportsLoaded = signal(false);
+  exportsEnabled = signal(true);
+  exportRetentionHours = signal(24);
+  exportBusy = signal(false);
+  exportStatus = signal('');
+  exportInFlight = computed(() =>
+    this.exports().some((item) => item.status === 'queued' || item.status === 'running'),
+  );
+  private exportPoll: ReturnType<typeof setTimeout> | null = null;
+  private destroyed = false;
+
   ngOnInit() {
     this.loadSettings();
+  }
+
+  ngOnDestroy() {
+    this.destroyed = true;
+    this.stopExportPolling();
+  }
+
+  selectSection(key: string) {
+    this.section.set(key);
+    if (key === 'data') {
+      this.loadExports();
+    } else {
+      this.stopExportPolling();
+    }
   }
 
   loadSettings(populateForm = true) {
@@ -270,6 +318,118 @@ export class Settings implements OnInit {
       this.pushStatus.set(
         'Could not update notifications. Check browser permissions and try again.',
       );
+    }
+  }
+
+  loadExports(): void {
+    this.stopExportPolling();
+    this.http.get<AccountExportList>('/api/account/exports').subscribe({
+      next: (res) => {
+        if (this.destroyed) return;
+        this.exports.set(res.exports ?? []);
+        this.exportRetentionHours.set(res.retention_hours ?? 24);
+        this.exportsEnabled.set(res.enabled !== false);
+        this.exportsLoaded.set(true);
+        if (this.exportInFlight() && this.section() === 'data') {
+          this.exportPoll = setTimeout(() => this.loadExports(), EXPORT_POLL_MS);
+        }
+      },
+      error: (err: HttpErrorResponse) => {
+        if (this.destroyed) return;
+        this.exportsLoaded.set(true);
+        this.exportStatus.set(
+          err.status === 401 ? 'Sign in again to manage exports.' : 'Could not load your exports.',
+        );
+      },
+    });
+  }
+
+  requestExport(): void {
+    if (this.exportBusy() || this.exportInFlight() || !this.exportsEnabled()) return;
+    this.exportBusy.set(true);
+    this.exportStatus.set('Requesting your export…');
+    this.http.post('/api/account/exports', {}).subscribe({
+      next: () => {
+        this.exportBusy.set(false);
+        this.exportStatus.set('Export requested. It will be ready shortly.');
+        this.loadExports();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.exportBusy.set(false);
+        this.exportStatus.set(this.requestErrorMessage(err));
+      },
+    });
+  }
+
+  deleteExport(item: AccountExport): void {
+    const building = item.status === 'queued' || item.status === 'running';
+    if (!confirm(building ? 'Cancel and delete this export?' : 'Delete this export now?')) return;
+    this.http.delete(`/api/account/exports/${encodeURIComponent(item.id)}`).subscribe({
+      next: () => {
+        this.exportStatus.set('Export deleted.');
+        this.loadExports();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.exportStatus.set(err.error?.detail || 'Could not delete the export.');
+      },
+    });
+  }
+
+  downloadHref(item: AccountExport): string | null {
+    if (item.status !== 'ready' || !item.download_url) return null;
+    const base = environment.apiUrl ? environment.apiUrl.replace(/\/$/, '') : '';
+    return `${base}${item.download_url}`;
+  }
+
+  exportStatusLabel(status: AccountExport['status']): string {
+    return {
+      queued: 'Queued',
+      running: 'Building',
+      ready: 'Ready',
+      failed: 'Failed',
+      expired: 'Expired',
+    }[status];
+  }
+
+  exportFailureMessage(code: string | null): string {
+    switch (code) {
+      case 'export_too_large':
+        return 'The export was too large to build. Contact the server operator.';
+      case 'export_timeout':
+        return 'The export took too long to build. Try again later.';
+      case 'interrupted':
+        return 'The export was interrupted. Request a new one.';
+      case 'export_disabled':
+        return 'Exports are currently disabled by the server operator.';
+      default:
+        return 'The export could not be built. Request a new one.';
+    }
+  }
+
+  formatBytes(bytes: number | null): string {
+    if (bytes === null) return '';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  private requestErrorMessage(err: HttpErrorResponse): string {
+    switch (err.status) {
+      case 401:
+        return 'Sign in again to request an export.';
+      case 429:
+        return 'You have reached the export limit for today. Try again later.';
+      case 503:
+        return 'Data exports are temporarily unavailable.';
+      default:
+        return err.error?.detail || 'Could not request an export.';
+    }
+  }
+
+  private stopExportPolling(): void {
+    if (this.exportPoll !== null) {
+      clearTimeout(this.exportPoll);
+      this.exportPoll = null;
     }
   }
 }

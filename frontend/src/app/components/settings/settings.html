@@ -18,6 +18,7 @@
         ['ai', 'AI coach'],
         ['profile', 'Profile'],
         ['notifications', 'Notifications'],
+        ['data', 'Your data'],
       ];
       track option[0]
     ) {
@@ -25,7 +26,7 @@
         type="button"
         class="btn btn-ghost"
         [attr.aria-pressed]="section() === option[0]"
-        (click)="section.set(option[0])"
+        (click)="selectSection(option[0])"
       >
         {{ option[1] }}
       </button>
@@ -247,6 +248,105 @@
       <p class="panel muted">Push notifications are not available on this server.</p>
     }
   }
+  <!-- ──────────── Your data (account export) ──────────── -->
+  <section class="card" id="settings-data" [hidden]="section() !== 'data'">
+    <div class="card-head">
+      <h2>Your data</h2>
+    </div>
+    <p class="muted">
+      Download a copy of the data Workout Agent holds about your account: profile, programmes,
+      workouts, metrics, check-ins, connector details, notifications, coaching history and audit
+      events. API keys, tokens and other secrets are never included. Exports are built in the
+      background, can only be downloaded by you, and are deleted after
+      {{ exportRetentionHours() }} hours.
+    </p>
+    <div class="btn-row">
+      <button
+        class="btn"
+        type="button"
+        id="export-request-btn"
+        [disabled]="exportBusy() || exportInFlight() || !exportsEnabled()"
+        (click)="requestExport()"
+      >
+        Request data export
+      </button>
+    </div>
+    @if (!exportsEnabled()) {
+      <p class="muted" id="export-disabled">
+        Data exports are currently turned off by the server operator.
+      </p>
+    }
+    <div id="export-status" class="key-status" role="status">{{ exportStatus() }}</div>
+
+    @if (exportsLoaded() && exports().length === 0) {
+      <p class="muted" id="export-empty">You have not requested an export yet.</p>
+    }
+    @for (item of exports(); track item.id) {
+      <div
+        class="provider-config export-item"
+        style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border)"
+      >
+        <div class="card-head" style="margin-bottom: 0.5rem">
+          <h3>Requested {{ item.requested_at | date: 'medium' }}</h3>
+          <span
+            class="status"
+            [class.on]="item.status === 'ready'"
+            [class.off]="item.status !== 'ready'"
+          >
+            {{ exportStatusLabel(item.status) }}
+          </span>
+        </div>
+        @if (item.status === 'queued' || item.status === 'running') {
+          <p class="muted" aria-busy="true">
+            Your export is being prepared. This page updates automatically.
+          </p>
+        }
+        @if (item.status === 'ready') {
+          <p class="muted">
+            {{ formatBytes(item.size_bytes) }} · expires {{ item.expires_at | date: 'medium' }} ·
+            SHA-256
+            <code [attr.title]="item.checksum_sha256"
+              >{{ item.checksum_sha256 | slice: 0 : 12 }}…</code
+            >
+          </p>
+        }
+        @if (item.status === 'failed') {
+          <p class="key-status error" role="alert">{{ exportFailureMessage(item.error_code) }}</p>
+        }
+        @if (item.status === 'expired') {
+          <p class="muted">This export has expired and was deleted. Request a new one.</p>
+        }
+        <div class="btn-row" style="margin-top: 0.5rem">
+          @if (downloadHref(item); as href) {
+            <a
+              class="btn btn-sm"
+              [href]="href"
+              download
+              [attr.aria-label]="
+                'Download the export requested ' + (item.requested_at | date: 'medium')
+              "
+              >Download</a
+            >
+          }
+          @if (item.status !== 'expired') {
+            <button
+              class="btn btn-ghost btn-danger btn-sm"
+              type="button"
+              [attr.aria-label]="
+                (item.status === 'queued' || item.status === 'running' ? 'Cancel' : 'Delete') +
+                ' the export requested ' +
+                (item.requested_at | date: 'medium')
+              "
+              (click)="deleteExport(item)"
+            >
+              {{ item.status === 'queued' || item.status === 'running' ? 'Cancel' : 'Delete' }}
+            </button>
+          }
+        </div>
+      </div>
+    }
+  </section>
+
   <!-- ──────────── Profile & Goals ──────────── -->
   <section class="card" id="settings-profile" [hidden]="section() !== 'profile'">
     <div class="card-head">

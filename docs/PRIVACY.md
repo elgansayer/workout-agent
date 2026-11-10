@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-10  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -17,7 +17,8 @@ Depending on the features a user enables, Workout Agent can process:
 - connector metadata such as provider account identifiers, sync cursors, connection state and timestamps;
 - credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission;
 - notification delivery data such as Telegram chat identifiers or web-push subscriptions when those channels are enabled;
-- operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service.
+- operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service;
+- temporary account export archives that a user requests, which contain a copy of the account's data described above (never credentials) and are deleted when they expire.
 
 The application should not require unrelated personal information. Do not put secrets or health information into public GitHub issues, logs, fixtures, screenshots or documentation.
 
@@ -45,11 +46,13 @@ The machine-readable inventory records the intended retention rule for each syst
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 
+Account export archives are a short-lived secondary copy of a user's own data. They are stored privately, readable only by the requesting user, deleted automatically after 24 hours by default (the operator can shorten or lengthen this between 1 and 168 hours) and can be deleted by the user at any time. Export requests, completions and downloads are recorded as audit events and included in the user's next export.
+
 A deployment must not claim that account deletion, backup purging or provider-side deletion is automatic unless those paths are actually configured and verified. Where a complete automated deletion flow is not yet available, the operator must handle a verified deletion request using the documented operational process.
 
 ## Your choices and rights
 
-Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export, correction or deletion of their account data and can withdraw consent for optional processing.
+Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Signed-in users can download an export of their account data from Settings (Your data); see `docs/ACCOUNT_DATA_EXPORT.md` for exactly what it contains and excludes. Where supported by the deployed product, users can also request correction or deletion of their account data and can withdraw consent for optional processing.
 
 Applicable legal rights vary by jurisdiction. The deployment operator is responsible for authenticating a requester before disclosing, changing or deleting account data and for responding within any legally required period.
 

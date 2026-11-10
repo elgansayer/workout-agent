@@ -205,6 +205,33 @@ def run_weekly_correlations(config: Config) -> None:
             logger.exception("Weekly correlations failed for user %s.", user_id)
 
 
+def run_export_maintenance(config: Config) -> None:
+    """Purge expired account-export artifacts and recover interrupted exports.
+
+    Request-time checks already refuse to serve an expired export; this sweep is
+    what removes the file for an owner who never returns. It is idempotent, so it
+    is safe alongside the web process's own start-up sweep.
+    """
+    from account_export import export_dir_for, maintain_exports
+
+    try:
+        report = maintain_exports(
+            db_path=config.database_path,
+            export_dir=export_dir_for(config.database_path),
+        )
+    except Exception:
+        logger.exception("Account export maintenance failed.")
+        return
+    if report.expired or report.interrupted or report.orphans_removed:
+        logger.info(
+            "Account export maintenance: %d expired, %d interrupted, "
+            "%d orphaned files removed.",
+            report.expired,
+            report.interrupted,
+            report.orphans_removed,
+        )
+
+
 def run_once(config: Config) -> int:
     """Run a full scheduled cycle: coaching, daily insight, and weekly (if Sunday)."""
     logger.info("Running scheduled cycle...")
@@ -249,6 +276,7 @@ def run_schedule(config: Config) -> None:
 
     # Run once on startup
     logger.info("Running initial boot cycle...")
+    run_export_maintenance(config)
     run_once(config)
     jobs_run.add("coaching")
     jobs_run.add("insight_daily")
@@ -265,6 +293,7 @@ def run_schedule(config: Config) -> None:
 
     while True:
         _reset_if_new_day()
+        run_export_maintenance(config)
 
         now_local = _now_in_zone(_TZ)
         now_h, now_m = now_local.hour, now_local.minute

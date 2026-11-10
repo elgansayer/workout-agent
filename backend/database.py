@@ -822,6 +822,78 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # ---- Account data export jobs and tenant-scoped audit trail ----
+        # Job rows describe an export artifact (never its contents). The partial
+        # unique index makes "one export in flight per account" a database
+        # invariant that holds across web replicas.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_exports (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                status TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                requested_at TEXT NOT NULL,
+                started_at TEXT,
+                heartbeat_at TEXT NOT NULL,
+                completed_at TEXT,
+                expires_at TEXT,
+                size_bytes INTEGER,
+                checksum_sha256 TEXT,
+                record_counts TEXT,
+                error_code TEXT
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_exports_user_requested "
+            "ON account_exports (user_id, requested_at DESC)"
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_exports_user_in_flight "
+            "ON account_exports (user_id) WHERE status IN ('queued', 'running')"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_exports_status_expiry "
+            "ON account_exports (status, expires_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_account_exports_user_immutable
+            BEFORE UPDATE OF user_id ON account_exports
+            BEGIN
+                SELECT RAISE(ABORT, 'account_exports.user_id is immutable');
+            END
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                event_type TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                resource_type TEXT NOT NULL,
+                resource_id TEXT NOT NULL,
+                occurred_at TEXT NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_audit_events_user "
+            "ON account_audit_events (user_id, id DESC)"
+        )
+        # Audit events are append-only: a recorded event can be deleted by a
+        # retention or account-deletion workflow but never rewritten.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_account_audit_events_immutable
+            BEFORE UPDATE ON account_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'account_audit_events rows are immutable');
+            END
+            """
+        )
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:

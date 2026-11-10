@@ -25,6 +25,8 @@ Before logging a value whose class is not Public, pass it through `safe_log_valu
 
 Before building a user export, pass untrusted/general mappings through `sanitize_for_export()` and then apply the feature's authenticated tenant filter. The sanitizer always removes Credential, Internal, and Analytics fields. A future export that deliberately includes a derived analytics field must explicitly transform it into a reviewed export DTO rather than weakening the global policy.
 
+The account data export is that reviewed DTO path. `backend/account_export_sections.py` selects explicit columns per collection, never selects Credential columns, scrubs Credential-class keys from free-form JSON at any depth, and refuses to write a record that still carries one. Its Analytics-class sources (`insight_json`, `insight_markdown`) are exported as the reviewed `dashboard_insight` and `correlation_report` collections with provenance and schema versions. See `docs/ACCOUNT_DATA_EXPORT.md`.
+
 The classification helper does **not** replace encryption, ownership checks, consent checks, or retention jobs. It provides one shared decision point that those systems can consume.
 
 ## Schema requirements

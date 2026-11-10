@@ -171,7 +171,7 @@ Trigger for suspected IDOR/cross-user reads, cache or service-worker leakage, mi
 
 ### Containment
 
-Disable the smallest affected route/job/channel or place the service in maintenance mode if tenant boundaries cannot be trusted. Revoke affected sessions and credentials where needed. Stop exports, notifications, provider writes, and automated sync paths implicated in the incident. Do not purge evidence as part of containment.
+Disable the smallest affected route/job/channel or place the service in maintenance mode if tenant boundaries cannot be trusted. Revoke affected sessions and credentials where needed. Stop exports, notifications, provider writes, and automated sync paths implicated in the incident. For account data exports set `ACCOUNT_EXPORT_ENABLED=0` and recreate the web container: new exports are refused, downloads of existing archives stop, and builds that have not finished are abandoned (see `docs/ACCOUNT_DATA_EXPORT.md`). Do not purge evidence as part of containment.
 
 ### Communication
 

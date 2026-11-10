@@ -29,6 +29,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import account_export
 import analytics
 import insights
 import lifestyle
@@ -102,11 +103,12 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from starlette.background import BackgroundTask
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
+from webapp.auth_boundary import has_verified_identity
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -211,11 +213,25 @@ _BASE_DIR = Path(__file__).resolve().parent
 _ASSET_VERSIONS: dict[str, str] = {}
 
 
+def _sweep_account_exports() -> None:
+    """Best-effort start-up sweep of expired or interrupted account exports."""
+    try:
+        account_export.maintain_exports(
+            db_path=DB_PATH, export_dir=account_export.export_dir_for(DB_PATH)
+        )
+    except Exception:
+        logger.exception("Account export start-up sweep failed.")
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
-    yield
+    _sweep_account_exports()
+    try:
+        yield
+    finally:
+        account_export.shutdown_runner()
 
 
 # Determine frontend dist path
@@ -1831,6 +1847,154 @@ def api_chat_history(request: Request):
             {"messages": get_chat_messages(db_path=DB_PATH, user_id=user_id)}
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Account data export (docs/ACCOUNT_DATA_EXPORT.md)
+# ---------------------------------------------------------------------------
+
+_EXPORT_STREAM_CHUNK_BYTES = 1024 * 1024
+
+
+def _require_account_user_id(request: Request) -> str:
+    """Return the signed-in account's id for the data-export routes.
+
+    Unlike ``_check_api_auth`` this never falls back to the anonymous legacy
+    tenant. An export discloses the whole account, so it requires a verified,
+    signed session identity.
+    """
+    session = getattr(request, "session", None)
+    if session is None or not has_verified_identity(session):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return str(session["user_id"]).strip()
+
+
+def _account_export_http_error(exc: account_export.ExportError) -> HTTPException:
+    # Unknown, foreign and deleted export ids all produce the same 404 so an id
+    # belonging to another account cannot be told apart from one that never existed.
+    if isinstance(exc, account_export.ExportNotFound):
+        return HTTPException(status_code=404, detail="Export not found")
+    if isinstance(exc, account_export.ExportNotReady):
+        return HTTPException(status_code=409, detail="The export is not ready yet")
+    if isinstance(exc, account_export.ExportGone):
+        return HTTPException(
+            status_code=410,
+            detail="The export is no longer available. Request a new one.",
+        )
+    if isinstance(exc, account_export.ExportDisabled):
+        return HTTPException(
+            status_code=503, detail="Account exports are temporarily unavailable."
+        )
+    return HTTPException(status_code=500, detail="Account export failed")
+
+
+@app.post("/api/account/exports", status_code=202)
+def api_request_account_export(request: Request) -> JSONResponse:
+    """Queue an asynchronous export of the signed-in account's data."""
+    user_id = _require_account_user_id(request)
+    export_dir = account_export.export_dir_for(DB_PATH)
+    try:
+        job, created = account_export.request_export(
+            user_id, db_path=DB_PATH, export_dir=export_dir
+        )
+    except account_export.ExportRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many export requests. Try again later.",
+            headers={"Retry-After": str(exc.retry_after_seconds)},
+        ) from exc
+    except account_export.ExportError as exc:
+        raise _account_export_http_error(exc) from exc
+    if created:
+        account_export.get_runner().submit(
+            job.id, db_path=DB_PATH, export_dir=export_dir
+        )
+    return JSONResponse(
+        jsonable_encoder({"export": account_export.public_view(job), "created": created}),
+        status_code=202,
+    )
+
+
+@app.get("/api/account/exports")
+def api_list_account_exports(request: Request) -> JSONResponse:
+    user_id = _require_account_user_id(request)
+    jobs = account_export.list_exports(
+        user_id, db_path=DB_PATH, export_dir=account_export.export_dir_for(DB_PATH)
+    )
+    retention_hours = int(account_export.retention_period().total_seconds() // 3600)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "exports": [account_export.public_view(job) for job in jobs],
+                "retention_hours": retention_hours,
+                "enabled": account_export.exports_enabled(),
+            }
+        )
+    )
+
+
+@app.get("/api/account/exports/{export_id}")
+def api_get_account_export(export_id: str, request: Request) -> JSONResponse:
+    user_id = _require_account_user_id(request)
+    try:
+        job = account_export.get_export(
+            user_id,
+            export_id,
+            db_path=DB_PATH,
+            export_dir=account_export.export_dir_for(DB_PATH),
+        )
+    except account_export.ExportError as exc:
+        raise _account_export_http_error(exc) from exc
+    return JSONResponse(jsonable_encoder({"export": account_export.public_view(job)}))
+
+
+@app.get("/api/account/exports/{export_id}/download")
+def api_download_account_export(export_id: str, request: Request) -> StreamingResponse:
+    """Stream the owner's ready archive. Other accounts' ids are indistinguishable
+    from unknown ones, and expired archives are never served."""
+    user_id = _require_account_user_id(request)
+    try:
+        download = account_export.open_export(
+            user_id,
+            export_id,
+            db_path=DB_PATH,
+            export_dir=account_export.export_dir_for(DB_PATH),
+        )
+    except account_export.ExportError as exc:
+        raise _account_export_http_error(exc) from exc
+
+    def stream() -> Iterator[bytes]:
+        try:
+            while chunk := download.file.read(_EXPORT_STREAM_CHUNK_BYTES):
+                yield chunk
+        finally:
+            download.file.close()
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download.filename}"',
+            "Content-Length": str(download.size_bytes),
+        },
+        background=BackgroundTask(download.file.close),
+    )
+
+
+@app.delete("/api/account/exports/{export_id}")
+def api_delete_account_export(export_id: str, request: Request) -> JSONResponse:
+    """Delete the owner's export now; an export still being built is cancelled."""
+    user_id = _require_account_user_id(request)
+    try:
+        account_export.delete_export(
+            user_id,
+            export_id,
+            db_path=DB_PATH,
+            export_dir=account_export.export_dir_for(DB_PATH),
+        )
+    except account_export.ExportError as exc:
+        raise _account_export_http_error(exc) from exc
+    return JSONResponse({"status": "ok"})
 
 
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
