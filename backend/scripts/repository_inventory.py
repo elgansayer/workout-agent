@@ -17,6 +17,7 @@ PUBLIC_ROUTES = {
     "/login/google",
     "/logout",
     "/auth",
+    "/api/auth/config",
     "/google-health/callback",
     "/favicon.ico",
     "/sw.js",

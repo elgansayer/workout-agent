@@ -1,8 +1,16 @@
-import { HttpBackend, HttpClient, HttpInterceptorFn } from '@angular/common/http';
+import {
+  HttpBackend,
+  HttpClient,
+  HttpErrorResponse,
+  HttpInterceptorFn,
+} from '@angular/common/http';
 import { inject } from '@angular/core';
-import { switchMap } from 'rxjs';
+import { Router } from '@angular/router';
+import { catchError, switchMap, throwError } from 'rxjs';
 
 import { environment } from '../../environments/environment';
+import { Auth } from '../services/auth';
+import { resumeDestination } from '../services/auth/destination';
 
 interface CsrfTokenResponse {
   token: string;
@@ -11,7 +19,15 @@ interface CsrfTokenResponse {
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+// The auth probe is expected to answer 401 for a signed-out visitor, so that
+// answer must not bounce the visitor away from where they already are.
+function isAuthProbe(url: string): boolean {
+  return url.split('?')[0].endsWith('/api/me');
+}
+
 export const apiInterceptor: HttpInterceptorFn = (req, next) => {
+  const auth = inject(Auth);
+  const router = inject(Router);
   const baseUrl = environment.apiUrl ? environment.apiUrl.replace(/\/$/, '') : '';
   let url = req.url;
 
@@ -26,12 +42,33 @@ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
 
   const relativeBackendRequest = req.url.startsWith('/');
   const absoluteBackendRequest = Boolean(baseUrl) && req.url.startsWith(baseUrl);
-  const requiresCsrf =
-    UNSAFE_METHODS.has(req.method.toUpperCase()) &&
-    (relativeBackendRequest || absoluteBackendRequest);
+  const isBackendRequest = relativeBackendRequest || absoluteBackendRequest;
+  const requiresCsrf = UNSAFE_METHODS.has(req.method.toUpperCase()) && isBackendRequest;
+
+  // The server ends sessions (idle or absolute limit, sign-out on another
+  // device, access withdrawn) and answers 401 from then on. Return to sign-in
+  // instead of leaving a page full of failed requests, and bring the visitor
+  // back to the page they were on once they have signed in again.
+  const handleError = (error: unknown) => {
+    if (
+      error instanceof HttpErrorResponse &&
+      error.status === 401 &&
+      isBackendRequest &&
+      !isAuthProbe(req.url)
+    ) {
+      auth.markSessionEnded();
+      if (!router.url.startsWith('/login')) {
+        const next = resumeDestination(router.url);
+        void (next === null
+          ? router.navigate(['/login'])
+          : router.navigate(['/login'], { queryParams: { next } }));
+      }
+    }
+    return throwError(() => error);
+  };
 
   if (!requiresCsrf) {
-    return next(modifiedReq);
+    return next(modifiedReq).pipe(catchError(handleError));
   }
 
   // Each browser mutation uses a fresh, server-side single-use nonce. Use the
@@ -39,15 +76,14 @@ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
   // interceptor; the request URL and credentials are explicit here instead.
   const csrfClient = new HttpClient(inject(HttpBackend));
   const csrfUrl = baseUrl ? `${baseUrl}/api/csrf-token` : '/api/csrf-token';
-  return csrfClient
-    .get<CsrfTokenResponse>(csrfUrl, { withCredentials: true })
-    .pipe(
-      switchMap(({ token }) =>
-        next(
-          modifiedReq.clone({
-            setHeaders: { 'X-CSRF-Token': token },
-          }),
-        ),
+  return csrfClient.get<CsrfTokenResponse>(csrfUrl, { withCredentials: true }).pipe(
+    switchMap(({ token }) =>
+      next(
+        modifiedReq.clone({
+          setHeaders: { 'X-CSRF-Token': token },
+        }),
       ),
-    );
+    ),
+    catchError(handleError),
+  );
 };

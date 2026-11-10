@@ -1,0 +1,5 @@
+/* The registration sentence sits between the intro and the button, so it
+   pulls the intro's bottom margin in rather than adding a second gap. */
+.login-card .registration-note {
+  margin: -1.25rem 0 1.5rem;
+}
