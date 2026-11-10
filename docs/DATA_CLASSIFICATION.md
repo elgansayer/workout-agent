@@ -25,6 +25,8 @@ Before logging a value whose class is not Public, pass it through `safe_log_valu
 
 Before building a user export, pass untrusted/general mappings through `sanitize_for_export()` and then apply the feature's authenticated tenant filter. The sanitizer always removes Credential, Internal, and Analytics fields. A future export that deliberately includes a derived analytics field must explicitly transform it into a reviewed export DTO rather than weakening the global policy.
 
+In running processes this is enforced centrally as well: `log_redaction.install_log_redaction()` applies the same vocabulary, plus credential-format and e-mail rules, to every log record, traceback, uncaught exception, and HTTP error detail, so a value that is logged without an explicit wrapper is still redacted. Explicit `safe_log_value()`/`redact_for_log()` remains the right tool for structured data. See `docs/LOG_REDACTION.md` for what is covered, the opaque error-response contract, and the protected diagnostics file.
+
 The classification helper does **not** replace encryption, ownership checks, consent checks, or retention jobs. It provides one shared decision point that those systems can consume.
 
 ## Schema requirements
@@ -60,7 +62,7 @@ If real personal data has already been committed, removing it from the current t
 
 The public-source heuristic is deliberately conservative. It is a prevention layer, not a complete DLP or historical-secret scanner, and does not replace review of screenshots, binary attachments, generated artifacts, or Git history.
 
-`backend/tests/test_data_classification.py` verifies the complete matrix, classification fallbacks, recursive log redaction, and export filtering. `backend/tests/test_data_policy_check.py` exercises the static checker against synthetic safe and unsafe code.
+`backend/tests/test_data_classification.py` verifies the complete matrix, classification fallbacks, recursive log redaction, and export filtering. `backend/tests/test_data_policy_check.py` exercises the static checker against synthetic safe and unsafe code. `backend/tests/test_log_redaction.py`, `test_error_boundary.py`, and `test_secret_leak_regressions.py` prove that injected secrets and personal data do not appear in captured logs or error responses.
 
 The `Data classification policy` GitHub Actions workflow runs the focused tests and repository scanner when backend policy code, public documentation, fixture paths, or the workflow itself changes.
 
@@ -68,7 +70,7 @@ The `Data classification policy` GitHub Actions workflow runs the focused tests 
 
 - Classify new fields before persistence or transport.
 - Keep every tenant-owned value scoped to the authenticated owner.
-- Never log raw credentials, health payloads, workout payloads, or prompts.
+- Never log raw credentials, health payloads, workout payloads, or prompts; log metadata (counts, lengths, status, exception class) and pseudonymise user IDs.
 - Never return stored credentials after submission.
 - Treat exports as a new disclosure boundary; filter by owner first and classification second.
 - Do not downgrade a class to make a test pass. Add a purpose-specific reviewed DTO when a legitimate disclosure is required.

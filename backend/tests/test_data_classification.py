@@ -123,3 +123,49 @@ def test_credentials_are_never_exportable() -> None:
     assert POLICIES[DataClass.CREDENTIAL].exportable is False
     assert POLICIES[DataClass.INTERNAL].exportable is False
     assert POLICIES[DataClass.ANALYTICS].exportable is False
+
+
+def test_registered_internal_fields_are_redacted_from_logs_but_unknown_ones_are_not() -> None:
+    assert safe_log_value("system_prompt", "operator rubric") == "[REDACTED:INTERNAL]"
+    assert safe_log_value("future_unreviewed_field", "diagnostic") == "diagnostic"
+
+    redacted = redact_for_log({"system_prompt": "operator rubric", "mode": "schedule"})
+
+    assert redacted == {"system_prompt": "[REDACTED:INTERNAL]", "mode": "schedule"}
+
+
+def test_redact_for_log_applies_text_redactor_to_every_free_text_leaf() -> None:
+    payload = {
+        "detail": "plain",
+        "items": ["a", b"b", {"note": "c"}],
+        "unique": {"d"},
+        "count": 3,
+        "api_key": "kept-out-by-field-name",
+    }
+
+    redacted = redact_for_log(payload, text_redactor=str.upper)
+
+    assert redacted == {
+        "detail": "PLAIN",
+        "items": ["A", "B", {"note": "C"}],
+        "unique": ["D"],
+        "count": 3,
+        "api_key": "[REDACTED:CREDENTIAL]",
+    }
+
+
+def test_redact_for_log_without_a_text_redactor_is_unchanged() -> None:
+    assert redact_for_log({"detail": "plain", "items": ["a"]}) == {
+        "detail": "plain",
+        "items": ["a"],
+    }
+
+
+def test_credential_fragments_cover_common_spellings() -> None:
+    for name in ("apikey", "X-ApiKey", "db_passwd", "service_credentials"):
+        assert classify_field(name) is DataClass.CREDENTIAL
+
+
+def test_chat_messages_collection_is_prompt_class() -> None:
+    assert classify_field("messages") is DataClass.PROMPT
+    assert safe_log_value("messages", [{"content": "hi"}]) == "[REDACTED:PROMPT]"

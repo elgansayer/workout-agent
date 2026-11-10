@@ -91,6 +91,13 @@ The proxy should:
 Do not expose the application container directly to untrusted networks when its
 proxy CIDR is trusted.
 
+The proxy's own access log records request URLs. Do not log query strings: the
+OAuth callbacks carry one-time codes (`/auth?code=…`, `/google-health/callback?code=…`)
+and the coach endpoint carries the user's question (`/api/rag_search?q=…`). Use a
+log format that records the path only (nginx `$uri` rather than `$request`;
+Apache `%U` rather than `%r`). The application's own logs already drop query
+strings; see `docs/LOG_REDACTION.md`.
+
 ## Verification
 
 Run the deterministic boundary tests:

@@ -216,3 +216,27 @@ class TestConfigLoad:
         cfg = Config.load()
         with pytest.raises(AttributeError):
             cfg.gemini_api_key = "new"  # type: ignore[misc]
+
+
+def test_config_repr_never_contains_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    secrets = {
+        "HEVY_API_KEY": "synthetic-hevy-key-0123456789",
+        "GEMINI_API_KEY": "synthetic-gemini-key-0123456789",
+        "GOOGLE_HEALTH_CLIENT_SECRET": "synthetic-client-secret-0123456789",
+        "GOOGLE_HEALTH_REFRESH_TOKEN": "synthetic-refresh-token-0123456789",
+    }
+    for name, value in secrets.items():
+        monkeypatch.setenv(name, value)
+
+    config = Config.load()
+    rendered = f"{config!r} {config}"
+
+    # The values are loaded and usable ...
+    assert config.hevy_api_key == secrets["HEVY_API_KEY"]
+    assert config.google_health_refresh_token == secrets["GOOGLE_HEALTH_REFRESH_TOKEN"]
+    # ... but formatting the object, as an f-string or log argument might, never
+    # discloses them.
+    for value in secrets.values():
+        assert value not in rendered
+    assert "database_path" in rendered
+

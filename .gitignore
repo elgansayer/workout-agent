@@ -21,6 +21,7 @@ htmlcov/
 
 # Local data & logs
 data/
+diagnostics/
 *.db
 *.db-wal
 *.db-shm

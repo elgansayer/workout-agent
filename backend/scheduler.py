@@ -19,7 +19,9 @@ from zoneinfo import ZoneInfo
 
 from config import Config, ConfigError
 from database import get_all_users, init_db
+from log_redaction import install_log_redaction, pseudonymise_identifier
 
+install_log_redaction()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -147,7 +149,9 @@ def run_scheduler() -> None:
                 try:
                     _run_coaching(uid)
                 except Exception:
-                    logger.exception("Coaching failed for user %s", uid)
+                    logger.exception(
+                        "Coaching failed for user %s", pseudonymise_identifier(uid)
+                    )
         time.sleep(30)
 
 
@@ -174,7 +178,10 @@ def run_coaching(config: Config) -> int:
         try:
             result = max(result, main_run(preview=False, user_id=user_id))
         except Exception:
-            logger.exception("Daily coaching run failed for user %s.", user_id)
+            logger.exception(
+                "Daily coaching run failed for user %s.",
+                pseudonymise_identifier(user_id),
+            )
             result = max(result, 1)
     return result
 
@@ -189,7 +196,10 @@ def run_daily_insight(config: Config) -> None:
         try:
             generate_daily_header(config, user_id=user_id)
         except Exception:
-            logger.exception("Daily insight generation failed for user %s.", user_id)
+            logger.exception(
+                "Daily insight generation failed for user %s.",
+                pseudonymise_identifier(user_id),
+            )
 
 
 def run_weekly_correlations(config: Config) -> None:
@@ -202,7 +212,10 @@ def run_weekly_correlations(config: Config) -> None:
         try:
             generate_weekly_correlations(config, user_id=user_id)
         except Exception:
-            logger.exception("Weekly correlations failed for user %s.", user_id)
+            logger.exception(
+                "Weekly correlations failed for user %s.",
+                pseudonymise_identifier(user_id),
+            )
 
 
 def run_once(config: Config) -> int:

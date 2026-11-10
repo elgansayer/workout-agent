@@ -1,0 +1,125 @@
+# log_redaction.py (L1-L124 of 449)
+   1 | """Central, fail-closed redaction for logs, diagnostics, and error responses.
+   2 | 
+   3 | Every process that can handle credentials or user data installs this layer
+   4 | (``install_log_redaction``) so the same rules apply to application loggers,
+   5 | third-party loggers (uvicorn, httpx, SDKs), exception tracebacks, and uncaught
+   6 | exceptions. The field vocabulary comes from :mod:`data_classification`; this
+   7 | module adds the value-shape rules (bearer tokens, API-key formats, OAuth codes,
+   8 | cookies, e-mail addresses) that apply even when a secret appears in free text
+   9 | with no field name next to it.
+  10 | 
+  11 | Redaction is deliberately conservative: a false positive costs a little
+  12 | debugging context, a false negative leaks a credential or personal data.
+  13 | """
+  14 | 
+  15 | from __future__ import annotations
+  16 | 
+  17 | import hashlib
+  18 | import logging
+  19 | import re
+  20 | import string
+  21 | import sys
+  22 | import traceback
+  23 | from functools import lru_cache
+  24 | from types import TracebackType
+  25 | from typing import Any
+  26 | 
+  27 | from data_classification import redact_for_log, safe_log_value
+  28 | 
+  29 | REDACTED_CREDENTIAL = safe_log_value("api_key", "")
+  30 | REDACTED_IDENTIFIER = safe_log_value("email", "")
+  31 | 
+  32 | MAX_REDACTION_CHARS = 131_072
+  33 | TRUNCATION_NOTICE = "[TRUNCATED]"
+  34 | 
+  35 | _INSTALLED_MARKER = "_workout_log_redaction_installed"
+  36 | _ACCESS_LOGGERS = frozenset({"uvicorn.access"})
+  37 | _ACCESS_LOG_ARGUMENTS = 5
+  38 | 
+  39 | # Header lines and header-shaped mappings whose whole value is a credential.
+  40 | # The value runs to the end of the line or the closing quote of a dict/JSON
+  41 | # repr, so multi-word values such as ``Bearer <token>`` and cookie jars go too.
+  42 | _CREDENTIAL_HEADER = re.compile(
+  43 |     r"(?P<head>\b(?:proxy[-_])?authorization|\b(?:set[-_])?cookie)"
+  44 |     r"(?P<sep>[\"']?[ \t]*[:=][ \t]*[\"']?)"
+  45 |     r"(?P<value>[^\r\n\"']+)",
+  46 |     re.IGNORECASE,
+  47 | )
+  48 | 
+  49 | # Query-string / form parameters that carry one-time OAuth material, or a
+  50 | # precise location. Matched only after ``?`` or ``&`` so that prose such as
+  51 | # "exit code=1" is left alone.
+  52 | _SECRET_PARAM = re.compile(
+  53 |     r"(?P<head>[?&](?:code|state|code_verifier|session_state|key|signature)=)"
+  54 |     r"(?P<value>[^&\s\"'#]*)",
+  55 |     re.IGNORECASE,
+  56 | )
+  57 | _LOCATION_PARAM = re.compile(
+  58 |     r"(?P<head>[?&](?:latitude|longitude|lat|lon|lng)=)(?P<value>[^&\s\"'#]*)",
+  59 |     re.IGNORECASE,
+  60 | )
+  61 | # ``{"code": "4/0AX..."}`` in a JSON or dict dump (OAuth token-exchange body).
+  62 | _OAUTH_CODE_FIELD = re.compile(
+  63 |     r"(?P<head>[\"']code[\"']\s*:\s*[\"'])(?P<value>[^\"'\s]{10,})",
+  64 |     re.IGNORECASE,
+  65 | )
+  66 | 
+  67 | _PEM_BLOCK = re.compile(
+  68 |     r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+  69 |     re.DOTALL,
+  70 | )
+  71 | _URL_USERINFO = re.compile(
+  72 |     r"(?P<scheme>(?<![A-Za-z0-9+.\-])[A-Za-z][A-Za-z0-9+.\-]{0,31}://)"
+  73 |     r"[^/\s:@]{1,256}:[^/\s@]{1,256}@"
+  74 | )
+  75 | _BEARER = re.compile(
+  76 |     r"\b(?P<scheme>Bearer)\s{1,8}[A-Za-z0-9._~+/=\-]{8,4096}", re.IGNORECASE
+  77 | )
+  78 | 
+  79 | # Credential formats that are recognisable without a field name beside them.
+  80 | # Every repeat is bounded so a failed attempt costs a constant, never a rescan
+  81 | # of an arbitrarily long run (see ``MAX_REDACTION_CHARS``).
+  82 | _CREDENTIAL_SHAPES = tuple(
+  83 |     re.compile(pattern)
+  84 |     for pattern in (
+  85 |         # JWTs and signed session cookies (payload.timestamp.signature).
+  86 |         r"\beyJ[A-Za-z0-9_\-]{8,512}\.[A-Za-z0-9_\-]{3,4096}\.[A-Za-z0-9_\-]{0,1024}",
+  87 |         # OpenAI, Anthropic, DeepSeek keys, including provider-masked forms.
+  88 |         r"\bsk-[A-Za-z0-9_*\-]{6,256}",
+  89 |         # Google API keys, OAuth access/refresh tokens, authorisation codes.
+  90 |         r"\bAIza[0-9A-Za-z_\-]{20,128}",
+  91 |         r"\bya29\.[0-9A-Za-z_\-]{10,2048}",
+  92 |         r"(?<![\w/])1//[0-9A-Za-z_\-]{10,512}",
+  93 |         r"(?<![\w/])4/0[0-9A-Za-z_\-]{18,512}",
+  94 |         # GitHub tokens, AWS access keys.
+  95 |         r"\bgh[pousr]_[A-Za-z0-9]{20,255}",
+  96 |         r"\bgithub_pat_[A-Za-z0-9_]{20,255}",
+  97 |         r"\bAKIA[0-9A-Z]{16}\b",
+  98 |         # Telegram bot tokens (also appear inside request URLs: /bot<token>/).
+  99 |         r"(?<!\d)\d{6,12}:[A-Za-z0-9_\-]{30,64}",
+ 100 |         # Fernet ciphertext (encrypted stored credentials).
+ 101 |         r"\bgAAAA[A-Za-z0-9_\-=]{20,4096}",
+ 102 |     )
+ 103 | )
+ 104 | _EMAIL = re.compile(
+ 105 |     r"(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]{1,64}@"
+ 106 |     r"[A-Za-z0-9\-]{1,63}(?:\.[A-Za-z0-9\-]{1,63}){0,8}\.[A-Za-z]{2,24}"
+ 107 | )
+ 108 | 
+ 109 | # Leading padding is bounded: an unbounded run would make every position in a
+ 110 | # long whitespace run rescan the rest of it.
+ 111 | _SEPARATOR = re.compile(r"[\"']?[ \t]{0,32}[:=][ \t]*")
+ 112 | _KEY_CHARS = frozenset(string.ascii_letters + string.digits + "_.-")
+ 113 | _MAX_KEY_CHARS = 128
+ 114 | _BARE_VALUE = re.compile(r"[^\s,;&)\]}\"']+")
+ 115 | _OPENERS = "{[("
+ 116 | _CLOSERS = "}])"
+ 117 | _QUOTES = "\"'"
+ 118 | 
+ 119 | # Used to ask ``safe_log_value`` whether a field may be logged without
+ 120 | # duplicating its decision logic: the probe comes back unchanged if it may.
+ 121 | _PROBE = object()
+ 122 | 
+ 123 | 
+ 124 | @lru_cache(maxsize=2048)

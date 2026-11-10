@@ -45,7 +45,7 @@ Core rules:
 - Example email addresses must use reserved example domains.
 - Sensitive examples must be clearly marked as synthetic so they cannot be mistaken for production data.
 
-The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI.
+The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI. Runtime log redaction, opaque error responses, and the protected diagnostics file are described in [`docs/LOG_REDACTION.md`](docs/LOG_REDACTION.md).
 
 ## Synthetic example programme
 
@@ -145,6 +145,7 @@ The focused data-policy checks can be run with:
 ```bash
 cd backend
 python -m pytest -q tests/test_data_classification.py tests/test_data_policy_check.py
+python -m pytest -q tests/test_log_redaction.py tests/test_error_boundary.py tests/test_secret_leak_regressions.py
 python scripts/check_data_policy.py
 ```
 

@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-09  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -44,6 +44,8 @@ Each external provider operates under its own terms and privacy policy. The depl
 The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser/session data is bounded by session and browser storage behaviour. External providers may retain data under their own policies after receiving a request.
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
+
+Application logs and failure diagnostics are redacted before they are written: credentials, OAuth codes, cookies, health values, workout payloads, prompt text, e-mail addresses and other identifiers are replaced with markers (see `docs/LOG_REDACTION.md`). When the server hits an unexpected error, the person using the application is shown only an opaque reference. The redacted technical trace is kept in an owner-only diagnostics file on the server, which rotates at a fixed small size and can be deleted by the operator at any time.
 
 A deployment must not claim that account deletion, backup purging or provider-side deletion is automatic unless those paths are actually configured and verified. Where a complete automated deletion flow is not yet available, the operator must handle a verified deletion request using the documented operational process.
 

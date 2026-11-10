@@ -1,0 +1,43 @@
+# data_classification.py :: redact_for_log (L263-L304 of 336)
+ 263 | def redact_for_log(
+ 264 |     value: Any,
+ 265 |     *,
+ 266 |     field_name: str | None = None,
+ 267 |     text_redactor: Callable[[str], str] | None = None,
+ 268 | ) -> Any:
+ 269 |     """Recursively redact a structure before it is emitted to logs.
+ 270 | 
+ 271 |     Mapping keys drive classification. Sequence contents inherit the parent
+ 272 |     field's classification so a list of tokens or health samples cannot leak.
+ 273 |     ``text_redactor`` is applied to every remaining string value so credentials
+ 274 |     embedded in free text (for example a URL or exception message under an
+ 275 |     otherwise harmless key) are scrubbed too.
+ 276 |     """
+ 277 |     if field_name is not None:
+ 278 |         classification = classify_field(field_name)
+ 279 |         if (
+ 280 |             classification is not DataClass.PUBLIC
+ 281 |             and classification is not DataClass.INTERNAL
+ 282 |         ) or _is_registered_internal(field_name):
+ 283 |             return safe_log_value(field_name, value)
+ 284 | 
+ 285 |     if isinstance(value, Mapping):
+ 286 |         return {
+ 287 |             str(key): redact_for_log(
+ 288 |                 item, field_name=str(key), text_redactor=text_redactor
+ 289 |             )
+ 290 |             for key, item in value.items()
+ 291 |         }
+ 292 |     if isinstance(value, (Sequence, AbstractSet)) and not isinstance(
+ 293 |         value, (str, bytes, bytearray)
+ 294 |     ):
+ 295 |         return [
+ 296 |             redact_for_log(item, field_name=field_name, text_redactor=text_redactor)
+ 297 |             for item in value
+ 298 |         ]
+ 299 |     if text_redactor is not None:
+ 300 |         if isinstance(value, str):
+ 301 |             return text_redactor(value)
+ 302 |         if isinstance(value, (bytes, bytearray)):
+ 303 |             return text_redactor(bytes(value).decode("utf-8", errors="replace"))
+ 304 |     return value

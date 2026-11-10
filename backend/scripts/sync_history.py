@@ -24,7 +24,9 @@ from config import Config
 from database import init_db, save_progress, save_workout
 from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
+from log_redaction import install_log_redaction
 
+install_log_redaction()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 

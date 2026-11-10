@@ -26,6 +26,7 @@ Uses the Authorization Code Grant. Only stdlib + requests are needed.
 
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 import sys
@@ -35,8 +36,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import requests
-
 from google_health_client import SCOPE, TOKEN_URL
+
+logger = logging.getLogger(__name__)
 
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/auth"
 DEFAULT_REDIRECT_URI = "http://localhost:8080/"
@@ -90,16 +92,21 @@ def exchange_code(
         response.raise_for_status()
         data = response.json()
         if not isinstance(data, dict):
-            print("Google returned non-object token JSON.", file=sys.stderr)
+            logger.warning("Google returned non-object token JSON.")
             return None
         return data
     except requests.RequestException as exc:
-        print(f"Token exchange failed: {exc}", file=sys.stderr)
-        if exc.response is not None:
-            print(exc.response.text, file=sys.stderr)
+        # Logged (not printed) so the central redaction layer applies. The
+        # response body of a token endpoint can echo request material, so only
+        # the failure class and HTTP status are recorded.
+        logger.warning(
+            "Google token exchange failed: %s (HTTP status %s).",
+            type(exc).__name__,
+            getattr(exc.response, "status_code", None),
+        )
         return None
     except ValueError:
-        print("Google returned invalid token JSON.", file=sys.stderr)
+        logger.warning("Google returned invalid token JSON.")
         return None
 
 

@@ -77,7 +77,13 @@ def send_telegram_message(
             response = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
             response.raise_for_status()
         except requests.RequestException as exc:
-            logger.error("Failed to send Telegram message: %s", exc)
+            # The exception text embeds the request URL, which contains the bot
+            # token, so only the failure class and HTTP status are logged.
+            logger.error(
+                "Failed to send Telegram message: %s (HTTP status %s).",
+                type(exc).__name__,
+                getattr(exc.response, "status_code", None),
+            )
             return False
 
     return True

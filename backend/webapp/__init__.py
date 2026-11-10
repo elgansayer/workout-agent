@@ -10,7 +10,13 @@ those environments.
 
 from __future__ import annotations
 
+from log_redaction import install_log_redaction
+
 from webapp.runtime_security import WebRuntimeSecurity, validate_web_runtime
+
+# Redact every log record (uvicorn access logs, SDK loggers, tracebacks) before
+# anything else can log, including startup validation failures.
+install_log_redaction()
 
 RUNTIME_SECURITY: WebRuntimeSecurity = validate_web_runtime()
 

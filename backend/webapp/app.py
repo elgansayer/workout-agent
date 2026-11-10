@@ -29,12 +29,25 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 import analytics
 import insights
 import lifestyle
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
-from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -85,28 +98,16 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from log_redaction import pseudonymise_identifier
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
 from webapp import ai_widgets, charts
-
+from webapp.error_boundary import install_error_boundary
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -144,8 +145,8 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
-    elif request.headers.get("x-real-ip"):
-        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
+    elif (real_ip := request.headers.get("x-real-ip")) is not None:
+        ip = real_ip.strip()
     else:
         ip = request.client.host if request.client else "unknown"
 
@@ -320,6 +321,10 @@ app.add_middleware(
     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
 )
 
+# Registered last so it wraps the other middleware: captured failures render as
+# an opaque 500 while the traceback goes to protected diagnostics.
+install_error_boundary(app)
+
 
 @app.get("/login/google")
 async def login_google(request: Request) -> Any:
@@ -352,13 +357,20 @@ async def auth(request: Request) -> Any:
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
-        logger.warning("OAuth token exchange failed: %s", e)
+        # The exception class names the failure (for example a state mismatch);
+        # its text can carry provider response detail and is not logged.
+        logger.warning("OAuth token exchange failed: %s", type(e).__name__)
         return RedirectResponse("/login")
     user = token.get("userinfo")
     if user:
         email = user.get("email", "")
         if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
-            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
+            # Neither the page nor the log repeats the submitted address.
+            logger.warning("Sign-in rejected: account is not on the allow-list.")
+            return HTMLResponse(
+                "Access denied. This account is not authorised to use this service.",
+                status_code=403,
+            )
         # Create or retrieve the user record on first login.
         user_record = get_or_create_user(
             email,
@@ -925,7 +937,7 @@ def _load_hevy_training_for_user(
     except Exception as exc:
         logger.exception(
             "Could not fetch Hevy source data for user %s.",
-            user_id,
+            pseudonymise_identifier(user_id),
         )
         raise HTTPException(
             status_code=502,

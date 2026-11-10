@@ -7,7 +7,8 @@ fail closed to ``internal`` rather than being treated as public.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -151,6 +152,7 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "system_prompt": DataClass.INTERNAL,
     "content": DataClass.PROMPT,
     "reasoning": DataClass.PROMPT,
+    "messages": DataClass.PROMPT,
     "insight_json": DataClass.ANALYTICS,
     "insight_markdown": DataClass.ANALYTICS,
     # analytics / derived metrics
@@ -161,9 +163,12 @@ FIELD_CLASSES: dict[str, DataClass] = {
 
 _CREDENTIAL_FRAGMENTS = (
     "api_key",
+    "apikey",
     "secret",
     "token",
     "password",
+    "passwd",
+    "credential",
     "authorization",
     "cookie",
     "private_key",
@@ -223,6 +228,17 @@ def classify_field(field_name: str) -> DataClass:
     return DataClass.INTERNAL
 
 
+def _is_registered_internal(field_name: str) -> bool:
+    """Return whether a field was explicitly reviewed and registered as internal.
+
+    Unregistered names fall back to ``internal`` only because they are unknown;
+    a registered internal field (for example ``system_prompt``) is known to be
+    operator-only and must not be written to logs either.
+    """
+    normalised = _normalise_field_name(field_name)
+    return FIELD_CLASSES.get(normalised) is DataClass.INTERNAL
+
+
 def safe_log_value(field_name: str, value: Any) -> Any:
     """Return a logging-safe representation for one classified value."""
     classification = classify_field(field_name)
@@ -239,27 +255,52 @@ def safe_log_value(field_name: str, value: Any) -> Any:
         return f"[REDACTED:{classification.value.upper()}]"
     if classification is DataClass.ANALYTICS:
         return "[REDACTED:ANALYTICS]"
+    if _is_registered_internal(field_name):
+        return "[REDACTED:INTERNAL]"
     return value
 
 
-def redact_for_log(value: Any, *, field_name: str | None = None) -> Any:
+def redact_for_log(
+    value: Any,
+    *,
+    field_name: str | None = None,
+    text_redactor: Callable[[str], str] | None = None,
+) -> Any:
     """Recursively redact a structure before it is emitted to logs.
 
     Mapping keys drive classification. Sequence contents inherit the parent
     field's classification so a list of tokens or health samples cannot leak.
+    ``text_redactor`` is applied to every remaining string value so credentials
+    embedded in free text (for example a URL or exception message under an
+    otherwise harmless key) are scrubbed too.
     """
     if field_name is not None:
         classification = classify_field(field_name)
-        if classification is not DataClass.PUBLIC and classification is not DataClass.INTERNAL:
+        if (
+            classification is not DataClass.PUBLIC
+            and classification is not DataClass.INTERNAL
+        ) or _is_registered_internal(field_name):
             return safe_log_value(field_name, value)
 
     if isinstance(value, Mapping):
         return {
-            str(key): redact_for_log(item, field_name=str(key))
+            str(key): redact_for_log(
+                item, field_name=str(key), text_redactor=text_redactor
+            )
             for key, item in value.items()
         }
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
-        return [redact_for_log(item, field_name=field_name) for item in value]
+    if isinstance(value, (Sequence, AbstractSet)) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return [
+            redact_for_log(item, field_name=field_name, text_redactor=text_redactor)
+            for item in value
+        ]
+    if text_redactor is not None:
+        if isinstance(value, str):
+            return text_redactor(value)
+        if isinstance(value, (bytes, bytearray)):
+            return text_redactor(bytes(value).decode("utf-8", errors="replace"))
     return value
 
 

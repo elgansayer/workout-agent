@@ -18,7 +18,9 @@ from database import (
     save_deep_correlation,
     save_notification,
 )
+from log_redaction import install_log_redaction
 
+install_log_redaction()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
@@ -100,7 +102,12 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
                 )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
-            logger.error("Invalid JSON structure returned: %s", text)
+            # The model output is a prompt-class payload: log its shape only.
+            logger.error(
+                "Invalid JSON structure returned: expected keys missing "
+                "(%d characters received).",
+                len(text),
+            )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
 

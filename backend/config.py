@@ -7,7 +7,7 @@ Secrets are read from environment variables (optionally populated from a local
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 try:
     from dotenv import load_dotenv
@@ -47,8 +47,10 @@ def _parse_weekday(value: str, default: int = 6) -> int:
 
 @dataclass(frozen=True)
 class Config:
-    hevy_api_key: str | None
-    gemini_api_key: str | None
+    # Credentials are excluded from ``repr`` so that formatting a Config into a
+    # log line, exception message, or debug dump cannot disclose them.
+    hevy_api_key: str | None = field(repr=False)
+    gemini_api_key: str | None = field(repr=False)
     gemini_model: str
     health_connect_file: str | None
     database_path: str
@@ -57,8 +59,8 @@ class Config:
     checkin_enabled: bool
     lifestyle_enabled: bool
     google_health_client_id: str | None
-    google_health_client_secret: str | None
-    google_health_refresh_token: str | None
+    google_health_client_secret: str | None = field(repr=False)
+    google_health_refresh_token: str | None = field(repr=False)
     self_review_enabled: bool
     self_review_weekday: int
 

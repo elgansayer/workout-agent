@@ -48,6 +48,7 @@ from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from log_redaction import install_log_redaction, pseudonymise_identifier
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -59,6 +60,7 @@ from program import (
 )
 from push_notifier import send_push_notification
 
+install_log_redaction()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -274,7 +276,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     if user_id is None:
         user_id = _resolve_run_user(config.database_path)
     config = _scope_config_to_user(config, user_id)
-    logger.info("Running daily cycle for user %s", user_id)
+    logger.info("Running daily cycle for user %s", pseudonymise_identifier(user_id))
 
     statuses = _sync_hevy_routines(config, user_id=user_id)
     footer = _changes_footer(statuses)
