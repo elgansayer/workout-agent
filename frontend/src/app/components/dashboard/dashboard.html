@@ -7,10 +7,10 @@
     {{ loading() ? 'Refreshing…' : 'Refresh workout' }}
   </button>
 </header>
-@if (loading() && !data()) {
+@if (viewState() === 'loading') {
   <p class="loading-state muted" role="status">Loading your workout…</p>
 }
-@if (error()) {
+@if (viewState() === 'failed') {
   <div class="panel error-panel" role="alert">
     {{ error() }}.
     @if (data()) {
@@ -22,160 +22,170 @@
   </div>
 }
 @if (data(); as data) {
-  @if (data.setup_required) {
+  @if (data.programme_status && data.programme_status !== 'active') {
     <section class="panel">
-      <h2>Build your programme from Hevy</h2>
-      <p class="muted">
-        Connect Hevy, choose your routines, then set your goal and programme duration.
-      </p>
-      <a class="btn" href="/programmes">Open programme builder</a>
+      <h2>Programme {{ data.programme_status | titlecase }}</h2>
+      <p class="muted">{{ data.rotation_message }}</p>
+      <a class="btn" href="/programmes">Review programme</a>
     </section>
   } @else {
-    <details class="panel programme-overview">
-      <summary>
-        <span class="eyebrow"
-          >Week {{ data.week }} of {{ data.cycle_weeks }} · {{ data.weekday }}</span
-        >
-        <strong>Block {{ data.block?.number }}: {{ data.block?.name }}</strong>
-        <span class="muted">Programme details</span>
-      </summary>
-      <p><app-provenance-badge [provenance]="data.programme_provenance" /></p>
-      <p>{{ data.block?.focus }}</p>
-      <div class="schemes">
-        <span class="chip">{{ data.block?.rep_emphasis }}</span>
-        <span class="chip">RIR {{ data.block?.target_rir }}</span>
-        <span class="chip ghost">{{ data.block?.volume_multiplier }}× source volume</span>
-        <a href="/plan">View full plan</a>
-      </div>
-      <div class="hero-rings">
-        <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
-        <div [innerHTML]="safeHtml(data.block_ring)"></div>
-      </div>
-    </details>
+    @if (viewState() === 'empty') {
+      <app-setup-notice [setup]="setup()" />
   }
-  <div class="today-layout">
-    <section class="panel today" aria-labelledby="workout-heading">
-      <div class="page-heading">
-        <div>
-          <p class="eyebrow">Next workout</p>
-          <h2 id="workout-heading">{{ data.focus }}</h2>
+  @if (viewState() === 'stale') {
+    <app-setup-notice [setup]="setup()" />
+  }
+  @if (viewState() === 'ready' || viewState() === 'stale') {
+    @if (!data.setup_required) {
+      <details class="panel programme-overview">
+        <summary>
+          <span class="eyebrow"
+            >Week {{ data.week }} of {{ data.cycle_weeks }} · {{ data.weekday }}</span
+          >
+          <strong>Block {{ data.block?.number }}: {{ data.block?.name }}</strong>
+          <span class="muted">Programme details</span>
+        </summary>
+        <p><app-provenance-badge [provenance]="data.programme_provenance" /></p>
+        <p>{{ data.block?.focus }}</p>
+        <div class="schemes">
+          <span class="chip">{{ data.block?.rep_emphasis }}</span>
+          <span class="chip">RIR {{ data.block?.target_rir }}</span>
+          <span class="chip ghost">{{ data.block?.volume_multiplier }}× source volume</span>
+          <a href="/plan">View full plan</a>
         </div>
-        <span class="chip">{{ data.rows?.length || 0 }} exercises</span>
-      </div>
-      @if (data.rotation_message) {
-        <p class="muted" role="status">{{ data.rotation_message }}</p>
-      }
-      @if (data.last_completed_at) {
-        <p class="muted">Last synced workout: {{ data.last_completed_at | date: 'medium' }}</p>
-      }
-      @if (data.rows?.length) {
-        <p class="muted">Select an exercise for previous results and coaching notes.</p>
-        <div class="exercise-list">
-          @for (row of data.rows; track $index + row.name) {
-            <details class="exercise">
-              <summary>
-                <span class="exercise-number">{{ $index + 1 }}</span>
-                <span class="ex-name">{{ row.name }}</span>
-                <span class="ex-planned">{{ row.planned }}</span>
-              </summary>
-              <div class="exercise-detail">
-                @if (row.role) {
-                  <p class="ex-note">{{ row.role }}</p>
-                }
-                @if (row.note) {
-                  <p>{{ row.note }}</p>
-                }
-                <div class="ex-meta">
-                  <span class="last">Last: {{ row.last }}</span
-                  ><span class="nudge">{{ row.nudge }}</span>
+        <div class="hero-rings">
+          <div [innerHTML]="safeHtml(data.cycle_ring)"></div>
+          <div [innerHTML]="safeHtml(data.block_ring)"></div>
+        </div>
+      </details>
+    }
+    <div class="today-layout">
+      <section class="panel today" aria-labelledby="workout-heading">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">Next workout</p>
+            <h2 id="workout-heading">{{ data.focus }}</h2>
+          </div>
+          <span class="chip">{{ data.rows?.length || 0 }} exercises</span>
+        </div>
+        @if (data.rotation_message) {
+          <p class="muted" role="status">{{ data.rotation_message }}</p>
+        }
+        @if (data.last_completed_at) {
+          <p class="muted">Last synced workout: {{ data.last_completed_at | date: 'medium' }}</p>
+        }
+        @if (data.rows?.length) {
+          <p class="muted">Select an exercise for previous results and coaching notes.</p>
+          <div class="exercise-list">
+            @for (row of data.rows; track $index + row.name) {
+              <details class="exercise">
+                <summary>
+                  <span class="exercise-number">{{ $index + 1 }}</span>
+                  <span class="ex-name">{{ row.name }}</span>
+                  <span class="ex-planned">{{ row.planned }}</span>
+                </summary>
+                <div class="exercise-detail">
+                  @if (row.role) {
+                    <p class="ex-note">{{ row.role }}</p>
+                  }
+                  @if (row.note) {
+                    <p>{{ row.note }}</p>
+                  }
+                  <div class="ex-meta">
+                    <span class="last">Last: {{ row.last }}</span
+                    ><span class="nudge">{{ row.nudge }}</span>
+                  </div>
                 </div>
-              </div>
-            </details>
-          }
-        </div>
-      } @else {
-        <p class="muted">
-          {{
-            data.setup_required
-              ? 'Your workout will appear after you activate a programme.'
-              : 'No routine prescription is available for this rotation position.'
-          }}
-        </p>
-      }
-    </section>
-    <aside class="today-sidebar" aria-label="Training insights">
-      <section class="panel">
-        <h2>Coach status</h2>
-        @if (data.dashboard_insight; as insight) {
-          <p><app-provenance-badge [provenance]="data.dashboard_insight_provenance" /></p>
-          @if (insight.fatigue) {
-            <p><strong>Fatigue:</strong> {{ insight.fatigue }}</p>
-          }
-          <p>{{ insight.advice }}</p>
-          <details>
-            <summary>Wins and stalls</summary>
-            <p>{{ insight.wins_stalls }}</p>
-          </details>
+              </details>
+            }
+          </div>
         } @else {
           <p class="muted">
-            No coaching insight is available yet. Check your data and AI provider in
-            <a href="/settings">Settings</a>.
+            {{
+              data.setup_required
+                ? 'Your workout will appear after you activate a programme.'
+                : 'No routine prescription is available for this rotation position.'
+            }}
           </p>
         }
       </section>
-      <section class="panel">
-        <h2>Coaching review</h2>
-        <p class="muted">{{ data.review_headline }}</p>
-        @if (data.review_lifts?.length) {
-          <details class="coaching-review">
-            <summary>Browse {{ data.review_lifts.length }} exercise reviews</summary>
-            <app-list-controls [list]="reviews" id="reviews" label="reviews">
-              <select
-                list-filter
-                aria-label="Filter reviews by trend"
-                [value]="reviewTrend()"
-                (change)="filterReviews($any($event.target).value)"
-              >
-                <option value="all">All trends</option>
-                <option value="regressing">Regressing</option>
-                <option value="stalling">Stalling</option>
-                <option value="progressing">Progressing</option>
-                <option value="new">New</option>
-              </select>
-              <div class="review-list">
-                @for (lift of reviews.visible(); track lift.name + (reviews.start() + $index)) {
-                  <div class="review-row" [class]="'trend-' + lift.trend">
-                    <span class="review-name">{{ lift.name }}</span>
-                    <span class="review-trend">{{ lift.trend }}</span>
-                    <span class="review-detail">{{ lift.as_line }}</span>
-                  </div>
-                }
-              </div>
-              @if (!reviews.filtered().length && !reviews.query()) {
-                <p class="muted">No exercises with this trend.</p>
-              }
-            </app-list-controls>
-          </details>
-        } @else {
-          <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
-        }
-        @if (data.review_recovery) {
-          <p class="muted review-recovery">{{ data.review_recovery }}</p>
-        }
-      </section>
-      <details class="panel">
-        <summary>Today's lifestyle</summary>
-        <ul class="pillars">
-          @for (line of data.lifestyle; track $index) {
-            <li>{{ line }}</li>
+      <aside class="today-sidebar" aria-label="Training insights">
+        <section class="panel">
+          <h2>Coach status</h2>
+          @if (data.dashboard_insight; as insight) {
+            <p><app-provenance-badge [provenance]="data.dashboard_insight_provenance" /></p>
+            @if (insight.fatigue) {
+              <p><strong>Fatigue:</strong> {{ insight.fatigue }}</p>
+            }
+            <p>{{ insight.advice }}</p>
+            <details>
+              <summary>Wins and stalls</summary>
+              <p>{{ insight.wins_stalls }}</p>
+            </details>
+          } @else if (coachNeedsSetup()) {
+            <app-setup-notice [setup]="coachSetup()" headingOverride="Coach needs setup" />
+          } @else {
+            <p class="muted">
+              No coaching insight has been generated yet. It appears after your programme and
+              logged sessions are in place.
+            </p>
           }
-        </ul>
-      </details>
-      <section class="panel">
-        <h2>Consistency</h2>
-        <p class="streak">{{ data.streak }} day streak</p>
-        <a href="/history">View training calendar and history</a>
-      </section>
-    </aside>
-  </div>
+        </section>
+        <section class="panel">
+          <h2>Coaching review</h2>
+          <p class="muted">{{ data.review_headline }}</p>
+          @if (data.review_lifts?.length) {
+            <details class="coaching-review">
+              <summary>Browse {{ data.review_lifts.length }} exercise reviews</summary>
+              <app-list-controls [list]="reviews" id="reviews" label="reviews">
+                <select
+                  list-filter
+                  aria-label="Filter reviews by trend"
+                  [value]="reviewTrend()"
+                  (change)="filterReviews($any($event.target).value)"
+                >
+                  <option value="all">All trends</option>
+                  <option value="regressing">Regressing</option>
+                  <option value="stalling">Stalling</option>
+                  <option value="progressing">Progressing</option>
+                  <option value="new">New</option>
+                </select>
+                <div class="review-list">
+                  @for (lift of reviews.visible(); track lift.name + (reviews.start() + $index)) {
+                    <div class="review-row" [class]="'trend-' + lift.trend">
+                      <span class="review-name">{{ lift.name }}</span>
+                      <span class="review-trend">{{ lift.trend }}</span>
+                      <span class="review-detail">{{ lift.as_line }}</span>
+                    </div>
+                  }
+                </div>
+                @if (!reviews.filtered().length && !reviews.query()) {
+                  <p class="muted">No exercises with this trend.</p>
+                }
+              </app-list-controls>
+            </details>
+          } @else {
+            <p class="muted">Not enough logged history yet to spot trends. Keep logging.</p>
+          }
+          @if (data.review_recovery) {
+            <p class="muted review-recovery">{{ data.review_recovery }}</p>
+          }
+        </section>
+        <details class="panel">
+          <summary>Today's lifestyle</summary>
+          <ul class="pillars">
+            @for (line of data.lifestyle; track $index) {
+              <li>{{ line }}</li>
+            }
+          </ul>
+        </details>
+        <section class="panel">
+          <h2>Consistency</h2>
+          <p class="streak">{{ data.streak }} day streak</p>
+          <a href="/history">View training calendar and history</a>
+        </section>
+      </aside>
+    </div>
+  }
+  }
 }

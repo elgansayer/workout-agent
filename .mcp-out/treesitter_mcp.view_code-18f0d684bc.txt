@@ -1,0 +1,89 @@
+# app.py (L2279-L2366 of 3061)
+2279 | @app.get("/google-health/connect")
+2280 | def google_health_connect(request: Request) -> RedirectResponse:
+2281 |     """Start the Google Health OAuth flow and redirect to the consent screen."""
+2282 |     _check_rate_limit(request, limit=5)
+2283 |     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
+2284 |         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+2285 |     user_id = _check_api_auth(request)
+2286 |     state = secrets.token_urlsafe(16)
+2287 |     set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
+2288 |     url = build_authorize_url(
+2289 |         GH_CLIENT_ID,
+2290 |         state,
+2291 |         redirect_uri=_gh_redirect_uri(request),
+2292 |     )
+2293 |     return RedirectResponse(url, status_code=303)
+2294 | 
+2295 | 
+2296 | @app.get("/google-health/callback", name="google_health_callback")
+2297 | def google_health_callback(request: Request) -> RedirectResponse:
+2298 |     """Receive Google's redirect, swap the code for a refresh token, store it."""
+2299 |     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
+2300 |         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
+2301 |     if request.query_params.get("error"):
+2302 |         return RedirectResponse("/settings?gh=denied", status_code=303)
+2303 |     user_id = _check_api_auth(request)
+2304 |     code = request.query_params.get("code")
+2305 |     state = request.query_params.get("state")
+2306 |     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
+2307 |     set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
+2308 |     if not code or not state or not expected or state != expected:
+2309 |         return RedirectResponse("/settings?gh=error", status_code=303)
+2310 |     tokens = exchange_code(
+2311 |         GH_CLIENT_ID,
+2312 |         GH_CLIENT_SECRET,
+2313 |         code,
+2314 |         redirect_uri=_gh_redirect_uri(request),
+2315 |     )
+2316 |     if not tokens or not tokens.get("refresh_token"):
+2317 |         return RedirectResponse("/settings?gh=error", status_code=303)
+2318 |     try:
+2319 |         vault = _vault()
+2320 |         if vault.describe(user_id, "google_health").configured:
+2321 |             vault.rotate(
+2322 |                 user_id,
+2323 |                 "google_health",
+2324 |                 refresh_token=tokens["refresh_token"],
+2325 |                 actor="owner",
+2326 |                 source="oauth_callback",
+2327 |             )
+2328 |         else:
+2329 |             try:
+2330 |                 vault.store(
+2331 |                     user_id,
+2332 |                     "google_health",
+2333 |                     refresh_token=tokens["refresh_token"],
+2334 |                     actor="owner",
+2335 |                     source="oauth_callback",
+2336 |                 )
+2337 |             except CredentialExistsError:
+2338 |                 vault.rotate(
+2339 |                     user_id,
+2340 |                     "google_health",
+2341 |                     refresh_token=tokens["refresh_token"],
+2342 |                     actor="owner",
+2343 |                     source="oauth_callback",
+2344 |                 )
+2345 |     except VaultError:
+2346 |         logger.warning("Could not store a Google Health credential.")
+2347 |         return RedirectResponse("/settings?gh=error", status_code=303)
+2348 |     return RedirectResponse("/settings?gh=connected", status_code=303)
+2349 | 
+2350 | 
+2351 | @app.post("/google-health/disconnect")
+2352 | def google_health_disconnect(request: Request) -> RedirectResponse:
+2353 |     """Forget the stored refresh token so the agent stops syncing."""
+2354 |     _check_rate_limit(request, limit=5)
+2355 |     user_id = _check_api_auth(request)
+2356 |     try:
+2357 |         _vault().revoke(user_id, "google_health")
+2358 |     except CredentialNotFoundError:
+2359 |         pass
+2360 |     except VaultError:
+2361 |         logger.warning("Could not revoke a Google Health credential.")
+2362 |         return RedirectResponse("/settings?gh=error", status_code=303)
+2363 |     return RedirectResponse("/settings?gh=disconnected", status_code=303)
+2364 | 
+2365 | 
+2366 | @app.get("/sw.js", include_in_schema=False)

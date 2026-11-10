@@ -1,15 +1,17 @@
-import { Component, HostListener, inject, signal, OnInit } from '@angular/core';
+import { Component, HostListener, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, ListControls, ProvenanceBadge],
+  imports: [CommonModule, ListControls, ProvenanceBadge, SetupNotice],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })
@@ -20,6 +22,20 @@ export class Dashboard implements OnInit {
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
+
+  setup = signal<SetupState | null>(null);
+  coachSetup = signal<SetupState | null>(null);
+
+  readonly viewState = computed<ViewState>(() =>
+    resolveViewState({
+      loading: this.loading(),
+      error: this.error(),
+      hasData: (this.data()?.rows?.length ?? 0) > 0,
+      stale: this.setup()?.stale ?? false,
+    }),
+  );
+
+  readonly coachNeedsSetup = computed(() => (this.coachSetup()?.state ?? 'ready') !== 'ready');
 
   reviewTrend = signal('all');
   readonly reviews = new PagedList<any>(
@@ -57,6 +73,8 @@ export class Dashboard implements OnInit {
     this.http.get('/api/dashboard').subscribe({
       next: (data: any) => {
         this.data.set(data);
+        this.setup.set(data?.setup ?? null);
+        this.coachSetup.set(data?.coach_setup ?? null);
         this.loading.set(false);
       },
       error: () => {

@@ -1,0 +1,116 @@
+# mutation_security.py (L70-L184 of 310)
+  70 | def _session_identity(scope: Scope) -> str | None:
+  71 |     session = scope.get("session")
+  72 |     if not isinstance(session, Mapping):
+  73 |         return None
+  74 |     user = session.get("user")
+  75 |     user_id = session.get("user_id")
+  76 |     if not user or not isinstance(user_id, str) or not user_id.strip():
+  77 |         return None
+  78 |     return user_id.strip()
+  79 | 
+  80 | 
+  81 | def _claim_values(value: Any) -> list[str]:
+  82 |     if isinstance(value, (list, tuple, set, frozenset)):
+  83 |         values: list[str] = []
+  84 |         for item in value:
+  85 |             values.extend(_claim_values(item))
+  86 |         return values
+  87 |     if value is None:
+  88 |         return [""]
+  89 |     return [str(value).strip()]
+  90 | 
+  91 | 
+  92 | def _collect_json_owner_claims(value: Any) -> list[str]:
+  93 |     claims: list[str] = []
+  94 |     if isinstance(value, Mapping):
+  95 |         for key, item in value.items():
+  96 |             normalised_key = str(key).strip().lower()
+  97 |             if normalised_key in _OWNER_FIELDS:
+  98 |                 claims.extend(_claim_values(item))
+  99 |             claims.extend(_collect_json_owner_claims(item))
+ 100 |     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+ 101 |         for item in value:
+ 102 |             claims.extend(_collect_json_owner_claims(item))
+ 103 |     return claims
+ 104 | 
+ 105 | 
+ 106 | def _query_owner_claims(headers: Headers, scope: Scope) -> list[str]:
+ 107 |     claims: list[str] = []
+ 108 |     raw_query = scope.get("query_string", b"")
+ 109 |     if isinstance(raw_query, bytes) and raw_query:
+ 110 |         try:
+ 111 |             query = parse_qs(raw_query.decode("utf-8"), keep_blank_values=True)
+ 112 |         except UnicodeDecodeError:
+ 113 |             query = {}
+ 114 |         for key, values in query.items():
+ 115 |             if key.strip().lower() in _OWNER_FIELDS:
+ 116 |                 claims.extend(_claim_values(values))
+ 117 | 
+ 118 |     for header, _field in _OWNER_HEADERS.items():
+ 119 |         if header in headers:
+ 120 |             claims.extend(_claim_values(headers.get(header)))
+ 121 |     return claims
+ 122 | 
+ 123 | 
+ 124 | def _multipart_owner_claims(body: bytes, content_type: str) -> list[str]:
+ 125 |     match = _MULTIPART_BOUNDARY_RE.search(content_type)
+ 126 |     boundary_text = (match.group(1) or match.group(2)).strip() if match else ""
+ 127 |     if not boundary_text:
+ 128 |         return []
+ 129 |     try:
+ 130 |         boundary = ("--" + boundary_text).encode("ascii")
+ 131 |     except UnicodeEncodeError:
+ 132 |         return []
+ 133 | 
+ 134 |     claims: list[str] = []
+ 135 |     for part in body.split(boundary):
+ 136 |         if b"\r\n\r\n" not in part:
+ 137 |             continue
+ 138 |         raw_headers, raw_value = part.split(b"\r\n\r\n", 1)
+ 139 |         try:
+ 140 |             header_text = raw_headers.decode("latin-1")
+ 141 |         except UnicodeDecodeError:  # pragma: no cover - latin-1 decodes all bytes
+ 142 |             continue
+ 143 |         disposition = next(
+ 144 |             (
+ 145 |                 line.split(":", 1)[1].strip()
+ 146 |                 for line in header_text.split("\r\n")
+ 147 |                 if line.lower().startswith("content-disposition:") and ":" in line
+ 148 |             ),
+ 149 |             "",
+ 150 |         )
+ 151 |         name_match = _MULTIPART_NAME_RE.search(disposition)
+ 152 |         if not name_match or name_match.group(1).strip().lower() not in _OWNER_FIELDS:
+ 153 |             continue
+ 154 |         value = raw_value.rstrip(b"\r\n-")
+ 155 |         claims.append(value.decode("utf-8", errors="replace").strip())
+ 156 |     return claims
+ 157 | 
+ 158 | 
+ 159 | def _body_owner_claims(body: bytes, content_type: str) -> list[str]:
+ 160 |     media_type = content_type.split(";", 1)[0].strip().lower()
+ 161 |     if media_type == "application/json" or media_type.endswith("+json"):
+ 162 |         try:
+ 163 |             payload = json.loads(body)
+ 164 |         except (json.JSONDecodeError, UnicodeDecodeError):
+ 165 |             return []
+ 166 |         return _collect_json_owner_claims(payload)
+ 167 | 
+ 168 |     if media_type == "application/x-www-form-urlencoded":
+ 169 |         try:
+ 170 |             values = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+ 171 |         except UnicodeDecodeError:
+ 172 |             return []
+ 173 |         claims: list[str] = []
+ 174 |         for key, value in values.items():
+ 175 |             if key.strip().lower() in _OWNER_FIELDS:
+ 176 |                 claims.extend(_claim_values(value))
+ 177 |         return claims
+ 178 | 
+ 179 |     if media_type == "multipart/form-data":
+ 180 |         return _multipart_owner_claims(body, content_type)
+ 181 |     return []
+ 182 | 
+ 183 | 
+ 184 | def _content_length(headers: Headers) -> int | None:

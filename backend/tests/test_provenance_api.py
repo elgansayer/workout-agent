@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import importlib
 import json
 from datetime import datetime, timezone
@@ -25,8 +24,8 @@ from database import (
     save_workout,
 )
 from hevy_parser import parse_workout
-from itsdangerous import TimestampSigner
 from provenance import Provenance
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "provenance-test-secret-that-is-long-enough"
@@ -36,11 +35,17 @@ NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
 DAY = "2026-01-01"
 
 
-def _session_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "alice@example.com", "user_id": user_id}).encode()
+def _session_cookie(webapp_app: Any, user_id: str) -> tuple[str, str]:
+    session_id = webapp_app.SESSION_STORE.create(user_id)
+    return (
+        webapp_app.SESSION_SECURITY.cookie.name,
+        signed_session_cookie(
+            _SECRET,
+            user="alice@example.com",
+            user_id=user_id,
+            session_id=session_id,
+        ),
     )
-    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 def _google(**kw: Any) -> Provenance:
@@ -83,7 +88,8 @@ def harness(tmp_path: Any, monkeypatch: Any) -> _Harness:
     state = {"user": alice}
     monkeypatch.setattr(webapp_app, "_check_api_auth", lambda request: state["user"])
     client = TestClient(webapp_app.app)
-    client.cookies.set("session", _session_cookie(alice))
+    cookie_name, cookie_value = _session_cookie(webapp_app, alice)
+    client.cookies.set(cookie_name, cookie_value)
     return _Harness(client, db, alice, bob, state)
 
 
@@ -338,11 +344,29 @@ class _NamedProvider:
 
 def _use_provider(monkeypatch: Any, provider: _NamedProvider) -> None:
     import webapp.app as webapp_app
+    from coaching_capabilities import CapabilityItem, CoachingCapabilityState
     from config import Config
 
+    capabilities = CoachingCapabilityState(
+        provider_ready=True,
+        provider_name=provider.name(),
+        capabilities={
+            "workout_analysis": CapabilityItem(True, "ready", ""),
+            "recovery_analysis": CapabilityItem(True, "ready", ""),
+            "body_composition": CapabilityItem(True, "ready", ""),
+            "programme_guidance": CapabilityItem(True, "ready", ""),
+        },
+        suggested_prompts=[],
+        overall_status="fully_grounded",
+        disclaimer="",
+        welcome_message="",
+    )
     monkeypatch.setenv("GEMINI_API_KEY", "synthetic-key")
     monkeypatch.setattr(webapp_app, "resolve_provider", lambda **kw: provider)
     monkeypatch.setattr(webapp_app, "get_config", lambda: Config.load())
+    monkeypatch.setattr(
+        webapp_app, "get_coaching_capabilities", lambda *a, **kw: capabilities
+    )
 
 
 def test_explanations_are_saved_and_returned_as_ai_derived(harness: _Harness, monkeypatch: Any) -> None:
@@ -391,12 +415,16 @@ def test_coach_retrieval_labels_source_data_corrections_and_recommendations(
     provider = _NamedProvider()
     _use_provider(monkeypatch, provider)
 
-    response = harness.client.get("/api/rag_search?q=How+am+I+doing")
+    response = harness.client.get("/api/rag_search?q=How+is+my+deadlift+progressing%3F")
 
     assert response.status_code == 200
     [prompt] = provider.prompts
     assert "Provenance rules:" in prompt
-    context = json.loads(prompt.split("Training data context")[1].split("\n", 1)[1].rsplit("\n\nUser's new message", 1)[0])
+    context = json.loads(
+        prompt.split("Verified training data context")[1]
+        .split("\n", 1)[1]
+        .rsplit("\n\nUser's question:", 1)[0]
+    )
     biometrics = {row["date"]: row["provenance"] for row in context["biometrics"]}
     assert biometrics[DAY]["origin"] == "user_entered"
     assert biometrics[DAY]["corrected_by_user"] is True
@@ -426,7 +454,7 @@ def test_coach_retrieval_does_not_present_unrecorded_records_as_verified(
     provider = _NamedProvider()
     _use_provider(monkeypatch, provider)
 
-    harness.client.get("/api/rag_search?q=hi")
+    harness.client.get("/api/rag_search?q=How+is+my+deadlift+progressing%3F")
 
     [prompt] = provider.prompts
     assert '"origin": "unrecorded"' in prompt
@@ -454,7 +482,8 @@ def test_corrections_are_csrf_protected_in_the_production_stack(
     alice = get_or_create_user("alice@example.com", "Alice", db_path=db)["id"]
     save_body_metrics({"weight_kg": 91.0}, DAY, db, user_id=alice, provenance=_google())
     client = TestClient(secure_app.app, base_url="http://testserver")
-    client.cookies.set("session", _session_cookie(alice))
+    cookie_name, cookie_value = _session_cookie(webapp_app, alice)
+    client.cookies.set(cookie_name, cookie_value)
     payload = {"date": DAY, "weight_kg": 81.0}
 
     assert client.post("/api/body-metrics/corrections", json=payload).status_code == 403

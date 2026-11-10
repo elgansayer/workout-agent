@@ -2,11 +2,13 @@ import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { BodyReading, Provenance } from '../../shared/provenance';
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 export const CORRECTABLE_FIELDS = [
   { key: 'weight_kg', label: 'Weight (kg)', unit: 'kg' },
@@ -30,7 +32,7 @@ const emptyDraft = (): CorrectionDraft => ({
 @Component({
   selector: 'app-progress',
   standalone: true,
-  imports: [ListControls, ProvenanceBadge, CommonModule, FormsModule],
+  imports: [ListControls, ProvenanceBadge, CommonModule, FormsModule, SetupNotice],
   templateUrl: './progress.html',
   styleUrl: './progress.css',
 })
@@ -43,6 +45,25 @@ export class Progress implements OnInit {
   error = signal<string | null>(null);
   xaiReasoning = signal<{ [key: string]: string }>({});
   xaiProvenance = signal<{ [key: string]: Provenance | null }>({});
+  setup = signal<SetupState | null>(null);
+
+  readonly viewState = computed<ViewState>(() =>
+    resolveViewState({
+      loading: this.loading(),
+      error: this.error(),
+      hasData: this.hasData(),
+      stale: this.setup()?.stale ?? false,
+    }),
+  );
+
+  readonly hasData = computed(() => {
+    const data = this.data();
+    if (!data) return false;
+    if ((data.charts?.length ?? 0) > 0) return true;
+    if ((data.body_readings?.length ?? 0) > 0) return true;
+    const body = data.body ?? {};
+    return !!(body.weight || body.body_fat || body.muscle || body.resting_hr);
+  });
 
   readonly fields = CORRECTABLE_FIELDS;
   editingDate = signal<string | null>(null);
@@ -68,6 +89,7 @@ export class Progress implements OnInit {
     this.http.get('/api/progress').subscribe({
       next: (data: any) => {
         this.data.set(data);
+        this.setup.set(data?.setup ?? null);
         this.loading.set(false);
       },
       error: () => {

@@ -13,6 +13,7 @@ from database import (
     correct_body_metrics,
     get_body_metrics,
     get_daily_logs,
+    get_legacy_user_id,
     get_or_create_user,
     get_provenance_summary,
     get_record_lineage,
@@ -283,7 +284,7 @@ def test_workout_import_records_hevy_identity_and_ignores_reimports(tmp_path: An
     assert view["source_timestamp"] == "2026-01-01T09:00:00+00:00"
     assert view["transformation_version"] == "hevy-parser/1"
     assert view["revision"] == 1
-    assert _rows(db, "SELECT COUNT(*) FROM workout_history") == [(2,)]
+    assert _rows(db, "SELECT COUNT(*) FROM workout_history") == [(1,)]
     assert len(get_record_lineage(user, RecordType.WORKOUT, "hevy-w-1", db)) == 1
 
 
@@ -593,7 +594,9 @@ def test_unscoped_legacy_save_does_not_delete_another_users_reading(tmp_path: An
     save_body_metrics({"weight_kg": 70.0}, "2026-01-01", db)
     save_body_metrics({"weight_kg": 71.0}, "2026-01-01", db)
     assert get_body_metrics(db_path=db, user_id=alice)[0]["weight_kg"] == 90.0
-    assert len(get_body_metrics(db_path=db)) == 2  # alice's row + one legacy row
+    legacy = get_legacy_user_id(db)
+    assert get_body_metrics(db_path=db, user_id=legacy)[0]["weight_kg"] == 71.0
+    assert _rows(db, "SELECT COUNT(*) FROM body_metrics") == [(2,)]
 
 
 # ---------------------------------------------------------------------------
@@ -617,10 +620,11 @@ def test_body_metrics_reads_can_include_per_reading_provenance(tmp_path: Any) ->
     assert "content" not in second["provenance"]  # values live in the lineage endpoint
 
 
-def test_provenance_retrieval_fails_closed_without_an_owner(tmp_path: Any) -> None:
+def test_provenance_retrieval_without_an_owner_is_scoped_to_the_legacy_tenant(
+    tmp_path: Any,
+) -> None:
     db = _db(tmp_path)
-    with pytest.raises(ValueError, match="user_id"):
-        get_body_metrics(db_path=db, include_provenance=True)
+    assert get_body_metrics(db_path=db, include_provenance=True) == []
 
 
 # ---------------------------------------------------------------------------

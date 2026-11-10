@@ -53,10 +53,15 @@ on:
         description: Concise pre-release verification summary/reference
         required: true
         type: string
+
       rollback_command:
         description: Reviewed rollback command (no secrets)
         required: true
         type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read

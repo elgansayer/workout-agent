@@ -1,0 +1,151 @@
+# repository.py (L700-L849 of 907)
+ 700 |             rows = conn.execute(
+ 701 |                 """
+ 702 |                 SELECT * FROM adaptation_decisions
+ 703 |                 WHERE user_id = ? AND programme_id = ?
+ 704 |                 ORDER BY id ASC
+ 705 |                 """,
+ 706 |                 (user_id, programme_id),
+ 707 |             ).fetchall()
+ 708 |             return [
+ 709 |                 AdaptationDecision(
+ 710 |                     id=int(row["id"]),
+ 711 |                     programme_id=int(row["programme_id"]),
+ 712 |                     from_revision_id=row["from_revision_id"],
+ 713 |                     to_revision_id=int(row["to_revision_id"]),
+ 714 |                     scope=_loads(row["scope_json"]),
+ 715 |                     inputs=_loads(row["inputs_json"]),
+ 716 |                     output=_loads(row["output_json"]),
+ 717 |                     confidence=float(row["confidence"]),
+ 718 |                     rule_version=str(row["rule_version"]),
+ 719 |                     explanation=str(row["explanation"]),
+ 720 |                     confirmed=bool(row["confirmed"]),
+ 721 |                     created_at=str(row["created_at"]),
+ 722 |                 )
+ 723 |                 for row in rows
+ 724 |             ]
+ 725 | 
+ 726 |     # ------------------------------------------------------------------
+ 727 |     # Internal helpers
+ 728 |     # ------------------------------------------------------------------
+ 729 | 
+ 730 |     @staticmethod
+ 731 |     def _assert_snapshot_ownership(user_id: str, draft: ProgrammeDraft) -> None:
+ 732 |         for routine in draft.routines:
+ 733 |             if (
+ 734 |                 routine.owner_user_id is not None
+ 735 |                 and routine.owner_user_id != user_id
+ 736 |             ):
+ 737 |                 raise ProgrammeValidationError(
+ 738 |                     "A programme revision cannot reference a routine snapshot "
+ 739 |                     "owned by another user."
+ 740 |                 )
+ 741 | 
+ 742 |     def _programme_row(
+ 743 |         self, conn: sqlite3.Connection, user_id: str, programme_id: int
+ 744 |     ) -> sqlite3.Row | None:
+ 745 |         return conn.execute(
+ 746 |             "SELECT * FROM programmes WHERE id = ? AND user_id = ?",
+ 747 |             (programme_id, user_id),
+ 748 |         ).fetchone()
+ 749 | 
+ 750 |     def _revision_belongs_to(
+ 751 |         self,
+ 752 |         conn: sqlite3.Connection,
+ 753 |         user_id: str,
+ 754 |         programme_id: int,
+ 755 |         revision_id: int,
+ 756 |     ) -> bool:
+ 757 |         return (
+ 758 |             conn.execute(
+ 759 |                 """
+ 760 |                 SELECT 1 FROM programme_revisions
+ 761 |                 WHERE id = ? AND user_id = ? AND programme_id = ?
+ 762 |                 """,
+ 763 |                 (revision_id, user_id, programme_id),
+ 764 |             ).fetchone()
+ 765 |             is not None
+ 766 |         )
+ 767 | 
+ 768 |     def _load_programme(
+ 769 |         self, conn: sqlite3.Connection, user_id: str, programme_id: int
+ 770 |     ) -> Programme:
+ 771 |         row = self._programme_row(conn, user_id, programme_id)
+ 772 |         if row is None:
+ 773 |             raise ProgrammeNotFoundError("Programme not found for this user.")
+ 774 |         revision = None
+ 775 |         if row["current_revision_id"] is not None:
+ 776 |             revision = self._load_revision(
+ 777 |                 conn, int(row["current_revision_id"]), user_id
+ 778 |             )
+ 779 |         return Programme(
+ 780 |             id=int(row["id"]),
+ 781 |             user_id=str(row["user_id"]),
+ 782 |             name=str(row["name"] or ""),
+ 783 |             status=str(row["status"]),
+ 784 |             goal=row["goal"],
+ 785 |             duration_weeks=row["duration_weeks"],
+ 786 |             start_date=date.fromisoformat(row["start_date"])
+ 787 |             if row["start_date"]
+ 788 |             else None,
+ 789 |             end_date=date.fromisoformat(row["end_date"]) if row["end_date"] else None,
+ 790 |             current_revision_id=row["current_revision_id"],
+ 791 |             current_revision=revision,
+ 792 |             created_at=str(row["created_at"]),
+ 793 |             updated_at=str(row["updated_at"]),
+ 794 |             activated_at=row["activated_at"],
+ 795 |             archived_at=row["archived_at"],
+ 796 |             predecessor_programme_id=row["predecessor_programme_id"],
+ 797 |         )
+ 798 | 
+ 799 |     def _load_revision(
+ 800 |         self, conn: sqlite3.Connection, revision_id: int, user_id: str
+ 801 |     ) -> ProgrammeRevision:
+ 802 |         row = conn.execute(
+ 803 |             "SELECT * FROM programme_revisions WHERE id = ? AND user_id = ?",
+ 804 |             (revision_id, user_id),
+ 805 |         ).fetchone()
+ 806 |         if row is None:
+ 807 |             raise ProgrammeNotFoundError("Revision not found for this user.")
+ 808 |         programme_id = int(row["programme_id"])
+ 809 |         routines = [
+ 810 |             ProgrammeRoutine(
+ 811 |                 source_routine_id=str(routine["source_routine_id"]),
+ 812 |                 title=str(routine["title"]),
+ 813 |                 snapshot_hash=str(routine["snapshot_hash"]),
+ 814 |                 rotation_position=int(routine["position"]),
+ 815 |                 provider=str(routine["provider"]),
+ 816 |                 folder_id=routine["folder_id"],
+ 817 |                 provider_updated_at=routine["provider_updated_at"],
+ 818 |                 snapshot=_loads(routine["snapshot_json"]),
+ 819 |                 enabled=bool(routine["enabled"]),
+ 820 |                 participation=str(routine["participation"]),
+ 821 |                 cadence=str(routine["cadence"]),
+ 822 |                 source_conflict_state=str(routine["source_conflict_state"]),
+ 823 |             )
+ 824 |             for routine in conn.execute(
+ 825 |                 """
+ 826 |                 SELECT * FROM programme_routines
+ 827 |                 WHERE user_id = ? AND programme_id = ? AND revision_id = ?
+ 828 |                 ORDER BY position ASC
+ 829 |                 """,
+ 830 |                 (user_id, programme_id, revision_id),
+ 831 |             ).fetchall()
+ 832 |         ]
+ 833 |         blocks = [
+ 834 |             ProgrammeBlock(
+ 835 |                 position=int(block["position"]),
+ 836 |                 key=str(block["key"]),
+ 837 |                 name=str(block["name"]),
+ 838 |                 start_week=int(block["start_week"]),
+ 839 |                 end_week=int(block["end_week"]),
+ 840 |                 objective=str(block["objective"]),
+ 841 |                 targets=_loads(block["targets_json"]),
+ 842 |                 adaptation_policy=_loads(block["adaptation_policy_json"]),
+ 843 |                 exit_criteria=_loads(block["exit_criteria_json"]),
+ 844 |             )
+ 845 |             for block in conn.execute(
+ 846 |                 """
+ 847 |                 SELECT * FROM programme_blocks
+ 848 |                 WHERE user_id = ? AND programme_id = ? AND revision_id = ?
+ 849 |                 ORDER BY position ASC

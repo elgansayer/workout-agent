@@ -33,6 +33,8 @@ Sensitive database fields must have an explicit or pattern-derived non-Internal 
 
 The provenance ledger (`record_provenance`, see `docs/PROVENANCE.md`) classifies `external_id` as an identifier, `retained_content` (prior body-metric values kept for lineage) as health data, `lineage_note` (the user's correction reason) as prompt-class text and `confidence` as analytics. Ledger rows are owner-scoped and must be covered by account export and deletion.
 
+`user_sessions.session_token_hash` is classified as a Credential: it holds only a one-way SHA-256 digest of a 256-bit random session identifier (never the identifier), so a database leak cannot be replayed as a session. Revoked and expired rows are purged after seven days.
+
 Any migration that adds a credential, identifier, health, workout, prompt, or analytics column should update `FIELD_CLASSES` in the same pull request. The focused tests assert the current high-value database boundary so accidental reclassification fails review.
 
 ## Public source and synthetic-data rule

@@ -48,6 +48,18 @@ def test_complete_production_authentication_is_accepted() -> None:
     assert result.anonymous_enabled is False
 
 
+@pytest.mark.parametrize(
+    ("environment", "expected"),
+    [("production", True), ("prod", True), ("development", False), ("test", False)],
+)
+def test_production_property_reflects_the_validated_environment(
+    environment: str, expected: bool
+) -> None:
+    runtime = validate_web_runtime(_authenticated(environment))
+
+    assert runtime.production is expected
+
+
 def test_partial_authentication_configuration_is_rejected() -> None:
     with pytest.raises(
         WebRuntimeConfigurationError,

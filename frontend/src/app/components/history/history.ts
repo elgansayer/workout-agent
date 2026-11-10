@@ -4,11 +4,13 @@ import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmBadgeImports } from '@spartan-ng/ui/badge';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
-import { Component, inject, signal, OnInit } from '@angular/core';
+import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { SetupNotice } from '../../shared/setup-notice';
+import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 @Component({
   selector: 'app-history',
@@ -21,6 +23,7 @@ import { FormsModule } from '@angular/forms';
     HlmCardImports,
     HlmBadgeImports,
     HlmAlertImports,
+    SetupNotice,
   ],
   templateUrl: './history.html',
   styleUrl: './history.css',
@@ -32,6 +35,18 @@ export class History implements OnInit {
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
+  setup = signal<SetupState | null>(null);
+
+  readonly hasData = computed(() => (this.data()?.logs?.length ?? 0) > 0);
+
+  readonly viewState = computed<ViewState>(() =>
+    resolveViewState({
+      loading: this.loading(),
+      error: this.error(),
+      hasData: this.hasData(),
+      stale: this.setup()?.stale ?? false,
+    }),
+  );
 
   readonly logs = new PagedList<any>(
     () => this.data()?.logs ?? [],
@@ -49,6 +64,7 @@ export class History implements OnInit {
     this.http.get('/api/history').subscribe({
       next: (data: any) => {
         this.data.set(data);
+        this.setup.set(data?.setup ?? null);
         this.loading.set(false);
       },
       error: (err) => {

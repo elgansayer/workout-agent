@@ -1,0 +1,107 @@
+# app.py (L700-L805 of 3061)
+ 700 |     except Exception as e:  # noqa: BLE001
+ 701 |         logger.warning("OAuth token exchange failed: %s", e)
+ 702 |         return RedirectResponse("/login")
+ 703 |     userinfo = token.get("userinfo")
+ 704 |     claims: dict[str, Any] = userinfo if isinstance(userinfo, dict) else {}
+ 705 |     # A sign-in is bound to the provider's stable subject. Refuse a missing
+ 706 |     # subject before the access policy can create an account, so a failed
+ 707 |     # callback never leaves an identity-less account behind.
+ 708 |     subject = str(claims.get("sub") or "").strip()
+ 709 |     if not subject:
+ 710 |         logger.warning("Sign-in rejected: the provider supplied no stable subject.")
+ 711 |         request.session.clear()
+ 712 |         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+ 713 | 
+ 714 |     # Authenticating with Google proves who the person is, not that this
+ 715 |     # deployment admits them. Allowlist, invitation, suspension and deletion
+ 716 |     # state are all decided here, server-side, before any session exists.
+ 717 |     try:
+ 718 |         decision = await run_in_threadpool(ACCESS_POLICY.admit_login, claims)
+ 719 |     except sqlite3.Error:
+ 720 |         # An unreadable policy store is an outage, not a verdict on the person:
+ 721 |         # refuse the sign-in (fail closed) but say so, and keep no session.
+ 722 |         logger.exception("Account policy lookup failed during login completion.")
+ 723 |         request.session.clear()
+ 724 |         return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+ 725 | 
+ 726 |     if not decision.allowed:
+ 727 |         # Always start from an empty session on denial too: drop leftover
+ 728 |         # pre-login state (OAuth correlation keys, a previous identity).
+ 729 |         request.session.clear()
+ 730 |         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+ 731 | 
+ 732 |     # Bind the canonical (provider, subject) identity to the admitted account.
+ 733 |     # Email alone never selects an account; the identity cannot be re-pointed,
+ 734 |     # and a subject already bound elsewhere refuses this sign-in.
+ 735 |     try:
+ 736 |         user_record = await run_in_threadpool(
+ 737 |             lambda: resolve_oauth_user(
+ 738 |                 provider="google",
+ 739 |                 subject=subject,
+ 740 |                 email=str(claims.get("email") or ""),
+ 741 |                 email_verified=_claim_is_true(claims.get("email_verified")),
+ 742 |                 display_name=claims.get("name"),
+ 743 |                 db_path=DB_PATH,
+ 744 |             )
+ 745 |         )
+ 746 |     except sqlite3.Error:
+ 747 |         logger.exception("Identity lookup failed during login completion.")
+ 748 |         request.session.clear()
+ 749 |         return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+ 750 |     except AccountError as exc:
+ 751 |         # Unverified or missing claims, an identity conflict, or an identity
+ 752 |         # whose account no longer exists: all refuse the sign-in rather than
+ 753 |         # surfacing a 500. The messages never contain the email or subject.
+ 754 |         logger.warning("Sign-in rejected: %s", exc)
+ 755 |         request.session.clear()
+ 756 |         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+ 757 | 
+ 758 |     if user_record["id"] != decision.user_id:
+ 759 |         # The stable subject names a different account than the policy admitted:
+ 760 |         # never mint a session from that mismatch (fail closed).
+ 761 |         logger.warning("Sign-in rejected: identity/policy account mismatch.")
+ 762 |         request.session.clear()
+ 763 |         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+ 764 | 
+ 765 |     # Rotate on login: a fresh session identifier is registered, whatever
+ 766 |     # identifier the browser held is revoked, and all pre-login session data
+ 767 |     # (including leftover OAuth state) is discarded.
+ 768 |     approved_user_id = decision.user_id
+ 769 |     approved_email = decision.email
+ 770 |     if approved_user_id is None or approved_email is None:  # pragma: no cover
+ 771 |         # Defensive: an allowed decision always carries both, but never mint a
+ 772 |         # session from a partially populated result (fail closed).
+ 773 |         request.session.clear()
+ 774 |         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+ 775 |     await run_in_threadpool(
+ 776 |         SESSION_LIFECYCLE.establish,
+ 777 |         request.session,
+ 778 |         user_id=approved_user_id,
+ 779 |         email=approved_email,
+ 780 |     )
+ 781 |     # ``establish`` clears the session, so record the policy epoch (issue #753)
+ 782 |     # after it; the per-request guard compares this against the stored account.
+ 783 |     request.session[SESSION_EPOCH_KEY] = decision.session_epoch
+ 784 |     return RedirectResponse("/")
+ 785 | 
+ 786 | 
+ 787 | # Automated hype lines. One is shown per day, chosen deterministically from the
+ 788 | # date, so the dashboard always greets you without an API call or a button.
+ 789 | _QUOTES = [
+ 790 |     "Show up today and the work gets easier tomorrow. One more rep than last time.",
+ 791 |     "Strength is a skill you practise. Brace, control, repeat.",
+ 792 |     "Small jumps, stacked weekly, become real progress. Keep stacking.",
+ 793 |     "Your next personal best is built on the boring set you log today.",
+ 794 |     "Consistency now, results later. Hit your plan and your target.",
+ 795 |     "The last clean rep is where the adaptation lives. Earn it.",
+ 796 |     "Win the morning by winning last night's sleep.",
+ 797 |     "Train with intent, recover with purpose. Stay the course.",
+ 798 |     "You do not need motivation, you need the next set. Go.",
+ 799 |     "Consistency is the cheat code. You already have it.",
+ 800 |     "Add a rep or add a little load. Either way, move forward.",
+ 801 |     "Recovery is training too. Eat, sleep, repeat.",
+ 802 | ]
+ 803 | 
+ 804 | 
+ 805 | def _daily_quote(today: date | None = None) -> str:

@@ -1,0 +1,72 @@
+# scheduler.py (L80-L150 of 361)
+  80 | 
+  81 | 
+  82 | def _now_in_zone(tz_name: str) -> datetime:
+  83 |     """Return the current local time in the given timezone name."""
+  84 |     return _now_in_tz(tz_name)
+  85 | 
+  86 | 
+  87 | def _is_due(tz: str, run_times: list[str]) -> bool:
+  88 |     """Check if the current time in the timezone is in run_times."""
+  89 |     now = _now_in_tz(tz)
+  90 |     curr = f"{now.hour:02d}:{now.minute:02d}"
+  91 |     return curr in run_times
+  92 | 
+  93 | 
+  94 | def _run_coaching(user_id: str) -> bool:
+  95 |     """Run daily coaching for a user."""
+  96 |     try:
+  97 |         res = subprocess.run(
+  98 |             [sys.executable, "main.py", "--user-id", user_id], check=True
+  99 |         )
+ 100 |         return res.returncode == 0
+ 101 |     except Exception:  # noqa: BLE001
+ 102 |         return False
+ 103 | 
+ 104 | 
+ 105 | def _run_insight_job(flag: str) -> bool:
+ 106 |     """Run insight cron job with the given flag."""
+ 107 |     try:
+ 108 |         res = subprocess.run([sys.executable, "insight_cron.py", flag], check=True)
+ 109 |         return res.returncode == 0
+ 110 |     except Exception:  # noqa: BLE001
+ 111 |         return False
+ 112 | 
+ 113 | 
+ 114 | def _run_dead_code_sweep() -> bool:
+ 115 |     """Run dead code sweep."""
+ 116 |     try:
+ 117 |         res = subprocess.run([sys.executable, "dead_code_sweep.py"], check=True)
+ 118 |         return res.returncode == 0
+ 119 |     except Exception:  # noqa: BLE001
+ 120 |         return False
+ 121 | 
+ 122 | 
+ 123 | def _run_commit_hygiene() -> bool:
+ 124 |     """Run commit hygiene check."""
+ 125 |     try:
+ 126 |         res = subprocess.run([sys.executable, "commit_hygiene.py"], check=True)
+ 127 |         return res.returncode == 0
+ 128 |     except Exception:  # noqa: BLE001
+ 129 |         return False
+ 130 | 
+ 131 | 
+ 132 | def _run_connector_health() -> bool:
+ 133 |     """Run connector health check."""
+ 134 |     try:
+ 135 |         res = subprocess.run([sys.executable, "connector_health.py"], check=True)
+ 136 |         return res.returncode == 0
+ 137 |     except Exception:  # noqa: BLE001
+ 138 |         return False
+ 139 | 
+ 140 | 
+ 141 | def run_scheduler() -> None:
+ 142 |     """Main scheduler loop."""
+ 143 |     run_times = _parse_run_at()
+ 144 |     _run_insight_job("--daily")
+ 145 |     _run_insight_job("--weekly")
+ 146 |     _run_dead_code_sweep()
+ 147 |     _run_commit_hygiene()
+ 148 |     _run_connector_health()
+ 149 | 
+ 150 |     while True:

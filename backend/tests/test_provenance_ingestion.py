@@ -29,8 +29,57 @@ from gemini_engine import (
     generate_rest_day_message,
 )
 from hevy_parser import parse_workout, workout_identity
-from program import BLOCKS
+from programme_runtime import ProgrammeRuntime
 from provenance import GeneratedText, RecordType
+
+
+def _runtime() -> ProgrammeRuntime:
+    day = {
+        "number": 1,
+        "routine_id": "routine-chest-back",
+        "focus": "Chest and back",
+        "exercises": [
+            {
+                "name": "Incline press",
+                "template_id": "press",
+                "sets": 3,
+                "rep_range": "8-12",
+                "scheme": "3 × 8-12",
+                "note": "",
+                "role": "primary_strength",
+            },
+            {
+                "name": "Chest-supported row",
+                "template_id": "row",
+                "sets": 3,
+                "rep_range": "10-12",
+                "scheme": "3 × 10-12",
+                "note": "controlled",
+                "role": "secondary_compound",
+            },
+        ],
+    }
+    block = {
+        "number": 1,
+        "name": "Foundation volume",
+        "start_week": 1,
+        "end_week": 4,
+    }
+    return ProgrammeRuntime(
+        status="active",
+        message="Your workout for today.",
+        name="Synthetic programme",
+        goal="hypertrophy",
+        source="hevy",
+        start_date=date(2026, 9, 1),
+        end_date=date(2026, 10, 26),
+        week=3,
+        cycle_weeks=8,
+        blocks=[block],
+        block=block,
+        days=[day],
+        next_day=day,
+    )
 
 # ---------------------------------------------------------------------------
 # Hevy identity
@@ -142,20 +191,43 @@ def _provider(text: str = "AI plan", *, fail: bool = False) -> MagicMock:
 
 @pytest.mark.parametrize("empty", [False, True])
 def test_ai_generated_text_names_the_model_and_fallback_text_does_not(empty: bool) -> None:
-    ai = generate_next_workout(_provider(), day=1, week=1, block=BLOCKS[1])
-    assert ai == "AI plan" and ai.generator == "Gemini (gemini-test)" and not ai.from_fallback
-    rest = generate_rest_day_message(_provider("Rest well"))
+    runtime = _runtime()
+    day = runtime.next_day or {}
+    valid_plan = (
+        "Chest and back - Week 3\n"
+        "Incline press: 3 × 8-12\n"
+        "Chest-supported row: 3 × 10-12"
+    )
+    ai = generate_next_workout(
+        _provider(valid_plan), runtime=runtime, day=day
+    )
+    assert ai == valid_plan and ai.generator == "Gemini (gemini-test)" and not ai.from_fallback
+    rest = generate_rest_day_message(_provider("Rest well"), runtime=runtime)
     assert rest.generator == "Gemini (gemini-test)"
     note = generate_checkin_message(
-        _provider("Check-in text"), 1, 2, BLOCKS[1], 10, 4, "analysis", "fallback"
+        _provider("Check-in text"),
+        runtime=runtime,
+        number=1,
+        workouts_done=2,
+        weeks=4,
+        analysis_text="analysis",
+        fallback="fallback",
     )
     assert note.generator == "Gemini (gemini-test)"
 
     failing = _provider("" if empty else "x", fail=not empty)
     fallbacks = [
-        generate_next_workout(failing, day=1, week=1, block=BLOCKS[1]),
-        generate_rest_day_message(failing),
-        generate_checkin_message(failing, 1, 2, BLOCKS[1], 10, 4, "analysis", "fallback text"),
+        generate_next_workout(failing, runtime=runtime, day=day),
+        generate_rest_day_message(failing, runtime=runtime),
+        generate_checkin_message(
+            failing,
+            runtime=runtime,
+            number=1,
+            workouts_done=2,
+            weeks=4,
+            analysis_text="analysis",
+            fallback="fallback text",
+        ),
     ]
     for text in fallbacks:
         assert isinstance(text, GeneratedText) and text.from_fallback and text.generator is None
@@ -244,16 +316,16 @@ def _run_daily_cycle(
     monkeypatch.setattr("main._resolve_provider", lambda cfg, **kw: _provider())
     monkeypatch.setattr("main._deliver", lambda *a, **kw: 0)
     monkeypatch.setattr("main.sync_routines", lambda cfg, **kw: [])
-    monkeypatch.setattr(
-        "main.datetime",
-        MagicMock(now=lambda tz=None: datetime(2026, 8, 3, 7, 0, tzinfo=timezone.utc)),
-    )
-    monkeypatch.setattr("main.get_programme_start_date", lambda *a, **kw: date(2026, 8, 3))
+    monkeypatch.setattr("main.local_today", lambda *a, **kw: date(2026, 8, 3))
+    monkeypatch.setattr("main.load_programme_runtime", lambda *a, **kw: _runtime())
+    monkeypatch.setattr("main.migrate_legacy_credentials", lambda *a, **kw: None)
     monkeypatch.setattr(
         "main.read_recovery_metrics",
         lambda *a, **kw: {"date": "2026-08-03", "weight_kg": 82.0, "muscle_pct": 41.0},
     )
-    monkeypatch.setattr("main.google_health_client.sync_body_metrics", lambda *a: synced)
+    monkeypatch.setattr(
+        "main.google_health_client.sync_body_metrics", lambda *a, **kw: synced
+    )
     monkeypatch.setattr("main.fetch_latest_workout", lambda key: _hevy_payload("hevy-run-1"))
     monkeypatch.setattr("main.generate_next_workout", lambda *a, **kw: plan)
     assert main.run(preview=False) == 0

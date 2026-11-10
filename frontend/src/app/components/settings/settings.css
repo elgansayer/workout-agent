@@ -1,0 +1,28 @@
+.deletion-zone {
+  border-top: 1px solid var(--border);
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+}
+.deletion-zone h3,
+#deletion-request h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+.deletion-progress {
+  display: block;
+  width: 100%;
+  height: 0.6rem;
+  margin-top: 0.75rem;
+  accent-color: var(--accent);
+}
+.deletion-steps {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+}
+.deletion-steps li.done {
+  color: var(--accent);
+}

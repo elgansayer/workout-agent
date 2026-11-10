@@ -1,0 +1,151 @@
+# app.py (L2823-L2972 of 3061)
+2823 | @app.get("/api/settings")
+2824 | def api_settings(request: Request):
+2825 |     user_id = _check_api_auth(request)
+2826 | 
+2827 |     prefs = get_user_preferences(user_id, DB_PATH)
+2828 |     ai_providers = available_providers()
+2829 |     vault = _vault()
+2830 |     summaries = vault.list_credentials(user_id)
+2831 | 
+2832 |     user_keys: dict[str, dict[str, Any]] = {}
+2833 |     known_providers = ["hevy", *[item["id"] for item in ai_providers]]
+2834 |     for provider_id in known_providers:
+2835 |         summary = summaries[provider_id]
+2836 |         public = summary.to_public_dict()
+2837 |         user_keys[provider_id] = {
+2838 |             "has_key": public["has_key"],
+2839 |             "masked": public["masked"],
+2840 |             "model": public["model"],
+2841 |             "status": public["status"],
+2842 |             "version": public["version"],
+2843 |             "last_tested_at": public["last_tested_at"],
+2844 |             "last_test_status": public["last_test_status"],
+2845 |             "revoked_at": public["revoked_at"],
+2846 |         }
+2847 | 
+2848 |     gh_connected = summaries["google_health"].configured
+2849 |     credential_availability = vault.availability().to_public_dict()
+2850 |     try:
+2851 |         credential_events = [
+2852 |             event.to_public_dict() for event in vault.recent_events(user_id, limit=20)
+2853 |         ]
+2854 |     except VaultError:
+2855 |         credential_events = []
+2856 |     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
+2857 |     gh_status = request.query_params.get("gh")
+2858 | 
+2859 |     hevy_connection = get_hevy_connection(user_id, DB_PATH)
+2860 |     hevy_connection_payload: dict[str, Any] = {
+2861 |         "state": "not_connected",
+2862 |         "account_username": None,
+2863 |         "account_id": None,
+2864 |         "api_version": None,
+2865 |         "capabilities": {},
+2866 |         "tested_at": None,
+2867 |     }
+2868 |     if hevy_connection:
+2869 |         hevy_connection_payload = {
+2870 |             "state": hevy_connection.get("state") or "unverified",
+2871 |             "account_username": hevy_connection.get("account_username"),
+2872 |             "account_id": hevy_connection.get("account_id"),
+2873 |             "api_version": hevy_connection.get("api_version"),
+2874 |             "capabilities": hevy_connection.get("capabilities") or {},
+2875 |             "tested_at": hevy_connection.get("tested_at"),
+2876 |         }
+2877 | 
+2878 |     registry = build_builtin_registry()
+2879 |     ctx = ConnectorContext(user_id=user_id)
+2880 |     connectors_info = []
+2881 |     for connector in registry.all():
+2882 |         try:
+2883 |             status = connector.status(ctx)
+2884 |             if status.state == "pending":
+2885 |                 continue
+2886 |             connectors_info.append(
+2887 |                 {
+2888 |                     "provider": connector.provider,
+2889 |                     "name": connector.provider.title().replace("_", " "),
+2890 |                     "state": status.state,
+2891 |                     "message": status.message,
+2892 |                     "authorize_supported": connector.capabilities.authorize,
+2893 |                 }
+2894 |             )
+2895 |         except Exception:
+2896 |             logger.exception(
+2897 |                 "Could not read status for connector %s.", connector.provider
+2898 |             )
+2899 | 
+2900 |     return JSONResponse(
+2901 |         jsonable_encoder(
+2902 |             {
+2903 |                 "user_prefs": prefs,
+2904 |                 "training_rules": get_training_rules(user_id, DB_PATH),
+2905 |                 "user_keys": user_keys,
+2906 |                 "hevy_connection": hevy_connection_payload,
+2907 |                 "ai_providers": ai_providers,
+2908 |                 "gh_connected": gh_connected,
+2909 |                 "gh_configured": gh_configured,
+2910 |                 "credential_vault": credential_availability,
+2911 |                 "credential_events": credential_events,
+2912 |                 "gh_status": gh_status,
+2913 |                 "connectors_info": connectors_info,
+2914 |                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
+2915 |                 "key_status": request.query_params.get("key_status"),
+2916 |                 "pref_status": request.query_params.get("pref_status"),
+2917 |             }
+2918 |         )
+2919 |     )
+2920 | 
+2921 | 
+2922 | @app.post("/api/settings/sync-history")
+2923 | async def sync_history_endpoint(request: Request) -> dict[str, Any]:
+2924 |     """Rebuild user's workout history from Hevy."""
+2925 |     _check_rate_limit(request, limit=2)
+2926 |     user_id = _check_api_auth(request)
+2927 | 
+2928 |     credential = _vault_credential(user_id, "hevy", purpose="hevy_sync")
+2929 |     hevy_key = (
+2930 |         credential.api_key.reveal()
+2931 |         if credential is not None and credential.api_key is not None
+2932 |         else ""
+2933 |     )
+2934 |     if not hevy_key:
+2935 |         raise HTTPException(
+2936 |             status_code=400,
+2937 |             detail="No Hevy API key configured. Save your Hevy API key in Settings first.",
+2938 |         )
+2939 | 
+2940 |     from scripts.sync_history import sync_all
+2941 | 
+2942 |     result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+2943 |     if "error" in result:
+2944 |         err_msg = str(result["error"])
+2945 |         save_notification(
+2946 |             user_id,
+2947 |             title="⚠️ Hevy Sync Failed",
+2948 |             message=f"Could not sync history: {err_msg}",
+2949 |             type="sync",
+2950 |             link="/settings",
+2951 |             db_path=DB_PATH,
+2952 |         )
+2953 |         raise HTTPException(status_code=400, detail=err_msg)
+2954 | 
+2955 |     workouts_found = int(result.get("workouts_found", 0))
+2956 |     processed = int(result.get("processed", 0))
+2957 |     save_notification(
+2958 |         user_id,
+2959 |         title="✓ Hevy History Synced",
+2960 |         message=f"Successfully synced and rebuilt {processed} of {workouts_found} workouts from Hevy.",
+2961 |         type="sync",
+2962 |         link="/history",
+2963 |         db_path=DB_PATH,
+2964 |     )
+2965 |     return {"status": "ok", **result}
+2966 | 
+2967 | 
+2968 | @app.get("/api/notifications")
+2969 | def api_get_notifications(
+2970 |     request: Request,
+2971 |     limit: int = Query(50, ge=1, le=100),
+2972 |     unread_only: bool = Query(False),

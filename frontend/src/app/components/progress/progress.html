@@ -1,8 +1,8 @@
-@if (loading()) {
-  <div class="loading-state muted" role="status">Loading...</div>
+@if (viewState() === 'loading') {
+  <div class="loading-state muted" role="status">Loading your progress…</div>
 }
 
-@if (error()) {
+@if (viewState() === 'failed') {
   <div class="panel error-panel" role="alert">
     <strong>Error:</strong> {{ error() }}
     <button class="btn btn-ghost" type="button" (click)="load()" [disabled]="loading()">
@@ -14,189 +14,199 @@
 @if (data(); as data) {
   <h1>Progress</h1>
 
-  @if (
-    data.body &&
-    (data.body.weight || data.body.body_fat || data.body.muscle || data.body.resting_hr)
-  ) {
-    <section class="panel">
-      <h2>Body composition</h2>
-      <div class="chart-grid">
-        @if (data.body.weight) {
-          <div class="chart-card">
-            <h3>Weight (kg)</h3>
-            <div [innerHTML]="safeHtml(data.body.weight)"></div>
-          </div>
-        }
-        @if (data.body.body_fat) {
-          <div class="chart-card">
-            <h3>Body fat (%)</h3>
-            <div [innerHTML]="safeHtml(data.body.body_fat)"></div>
-          </div>
-        }
-        @if (data.body.muscle) {
-          <div class="chart-card">
-            <h3>Muscle (%)</h3>
-            <div [innerHTML]="safeHtml(data.body.muscle)"></div>
-          </div>
-        }
-        @if (data.body.resting_hr) {
-          <div class="chart-card">
-            <h3>Resting HR (bpm)</h3>
-            <div [innerHTML]="safeHtml(data.body.resting_hr)"></div>
-          </div>
-        }
-      </div>
-    </section>
+  @if (viewState() === 'empty') {
+    <app-setup-notice [setup]="setup()" />
   }
 
-  @if (data.body_readings?.length) {
-    <section class="panel" aria-labelledby="readings-heading">
-      <h2 id="readings-heading">Body readings</h2>
-      <p class="muted">
-        Each reading shows where it came from. If a reading is wrong, correct it: your value takes
-        over and the original stays in the reading's history.
-      </p>
-      @if (correctionNotice()) {
-        <p class="key-status success" role="status">{{ correctionNotice() }}</p>
-      }
-      <ul class="reading-list">
-        @for (reading of data.body_readings; track reading.date) {
-          <li>
-            <div class="reading-row">
-              <span class="reading-date">{{ reading.date }}</span>
-              <span class="reading-values">{{ readingSummary(reading) }}</span>
-              <app-provenance-badge [provenance]="reading.provenance" />
-              <button
-                type="button"
-                class="btn btn-ghost btn-sm"
-                [attr.aria-expanded]="editingDate() === reading.date"
-                [attr.aria-label]="'Correct the reading for ' + reading.date"
-                (click)="startCorrection(reading)"
-              >
-                Correct
-              </button>
-              <button
-                type="button"
-                class="btn btn-ghost btn-sm"
-                [attr.aria-expanded]="!!lineage()[reading.date]"
-                [attr.aria-label]="'Show the history of the reading for ' + reading.date"
-                (click)="toggleLineage(reading.date)"
-              >
-                History
-              </button>
-            </div>
-            @if (editingDate() === reading.date) {
-              <form
-                class="correction-form"
-                (ngSubmit)="submitCorrection(reading)"
-                [attr.aria-label]="'Correct the reading for ' + reading.date"
-              >
-                @for (field of fields; track field.key) {
-                  <label>
-                    {{ field.label }}
+  @if (viewState() === 'stale') {
+    <app-setup-notice [setup]="setup()" />
+  }
+
+  @if (viewState() === 'ready' || viewState() === 'stale') {
+    @if (data.body_readings?.length) {
+      <section class="panel" aria-labelledby="readings-heading">
+        <h2 id="readings-heading">Body readings</h2>
+        <p class="muted">
+          Each reading shows where it came from. If a reading is wrong, correct it: your value takes
+          over and the original stays in the reading's history.
+        </p>
+        @if (correctionNotice()) {
+          <p class="key-status success" role="status">{{ correctionNotice() }}</p>
+        }
+        <ul class="reading-list">
+          @for (reading of data.body_readings; track reading.date) {
+            <li>
+              <div class="reading-row">
+                <span class="reading-date">{{ reading.date }}</span>
+                <span class="reading-values">{{ readingSummary(reading) }}</span>
+                <app-provenance-badge [provenance]="reading.provenance" />
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  [attr.aria-expanded]="editingDate() === reading.date"
+                  [attr.aria-label]="'Correct the reading for ' + reading.date"
+                  (click)="startCorrection(reading)"
+                >
+                  Correct
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm"
+                  [attr.aria-expanded]="!!lineage()[reading.date]"
+                  [attr.aria-label]="'Show the history of the reading for ' + reading.date"
+                  (click)="toggleLineage(reading.date)"
+                >
+                  History
+                </button>
+              </div>
+              @if (editingDate() === reading.date) {
+                <form
+                  class="correction-form"
+                  (ngSubmit)="submitCorrection(reading)"
+                  [attr.aria-label]="'Correct the reading for ' + reading.date"
+                >
+                  @for (field of fields; track field.key) {
+                    <label>
+                      {{ field.label }}
+                      <input
+                        class="key-input"
+                        type="number"
+                        step="any"
+                        inputmode="decimal"
+                        [name]="field.key"
+                        [(ngModel)]="draft.values[field.key]"
+                      />
+                    </label>
+                  }
+                  <label class="wide">
+                    Why are you correcting it? (optional)
                     <input
                       class="key-input"
-                      type="number"
-                      step="any"
-                      inputmode="decimal"
-                      [name]="field.key"
-                      [(ngModel)]="draft.values[field.key]"
+                      type="text"
+                      name="reason"
+                      maxlength="280"
+                      [(ngModel)]="draft.reason"
                     />
                   </label>
-                }
-                <label class="wide">
-                  Why are you correcting it? (optional)
-                  <input
-                    class="key-input"
-                    type="text"
-                    name="reason"
-                    maxlength="280"
-                    [(ngModel)]="draft.reason"
-                  />
-                </label>
-                @if (correctionError()) {
-                  <p class="key-status error wide" role="alert">{{ correctionError() }}</p>
-                }
-                <div class="btn-row">
-                  <button type="submit" class="btn btn-sm" [disabled]="saving()">
-                    {{ saving() ? 'Saving…' : 'Save correction' }}
-                  </button>
-                  <button type="button" class="btn btn-ghost btn-sm" (click)="cancelCorrection()">
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            }
-            @if (lineage()[reading.date]; as revisions) {
-              @if (revisions.length === 0) {
-                <p class="muted">No history is recorded for this reading yet.</p>
-              } @else {
-                <ol
-                  class="lineage-list"
-                  [attr.aria-label]="'History of the reading for ' + reading.date"
-                >
-                  @for (revision of revisions; track revision.revision) {
-                    <li [class.not-applied]="!revision.applied">
-                      <app-provenance-badge [provenance]="revision" />
-                      revision {{ revision.revision }} · stored
-                      {{ revision.ingested_at | date: 'medium' }}
-                      @if (revisionSummary(revision)) {
-                        · {{ revisionSummary(revision) }}
-                      }
-                      @if (!revision.applied) {
-                        · not applied
-                      }
-                      @if (revision.note) {
-                        <br /><span class="muted">{{ revision.note }}</span>
-                      }
-                    </li>
+                  @if (correctionError()) {
+                    <p class="key-status error wide" role="alert">{{ correctionError() }}</p>
                   }
-                </ol>
+                  <div class="btn-row">
+                    <button type="submit" class="btn btn-sm" [disabled]="saving()">
+                      {{ saving() ? 'Saving…' : 'Save correction' }}
+                    </button>
+                    <button type="button" class="btn btn-ghost btn-sm" (click)="cancelCorrection()">
+                      Cancel
+                    </button>
+                  </div>
+                </form>
               }
-            }
-          </li>
-        }
-      </ul>
-    </section>
-  }
+              @if (lineage()[reading.date]; as revisions) {
+                @if (revisions.length === 0) {
+                  <p class="muted">No history is recorded for this reading yet.</p>
+                } @else {
+                  <ol
+                    class="lineage-list"
+                    [attr.aria-label]="'History of the reading for ' + reading.date"
+                  >
+                    @for (revision of revisions; track revision.revision) {
+                      <li [class.not-applied]="!revision.applied">
+                        <app-provenance-badge [provenance]="revision" />
+                        revision {{ revision.revision }} · stored
+                        {{ revision.ingested_at | date: 'medium' }}
+                        @if (revisionSummary(revision)) {
+                          · {{ revisionSummary(revision) }}
+                        }
+                        @if (!revision.applied) {
+                          · not applied
+                        }
+                        @if (revision.note) {
+                          <br /><span class="muted">{{ revision.note }}</span>
+                        }
+                      </li>
+                    }
+                  </ol>
+                }
+              }
+            </li>
+          }
+        </ul>
+      </section>
+    }
 
-  <h2 class="section-head">Lifts</h2>
-  @if (!data.charts || data.charts.length === 0) {
-    <p class="muted">
-      No logged sets yet. Once the agent records your Hevy sessions, your progressive overload will
-      show up here.
-    </p>
-  }
-  <app-list-controls [list]="lifts" id="progress" label="lifts">
-    <div class="chart-grid">
-      @for (chart of lifts.visible(); track chart.name) {
-        <section class="chart-card">
-          <div class="chart-card-head">
-            <h3>{{ chart.name }}</h3>
-            @if (chart.best_e1rm) {
-              <span class="badge">e1RM {{ chart.best_e1rm }} kg</span>
-            }
-            <button
-              type="button"
-              [attr.aria-expanded]="!!xaiReasoning()[chart.name]"
-              class="ai-btn"
-              (click)="toggleXAI(chart.name)"
-            >
-              Why did this happen?
-            </button>
-          </div>
-          @if (xaiReasoning()[chart.name]) {
-            <div class="xai-result" style="display: block">
-              {{ xaiReasoning()[chart.name] }}
-              @if (xaiProvenance()[chart.name]; as explanation) {
-                <app-provenance-badge [provenance]="explanation" />
-              }
+    @if (
+      data.body &&
+      (data.body.weight || data.body.body_fat || data.body.muscle || data.body.resting_hr)
+    ) {
+      <section class="panel">
+        <h2>Body composition</h2>
+        <div class="chart-grid">
+          @if (data.body.weight) {
+            <div class="chart-card">
+              <h3>Weight (kg)</h3>
+              <div [innerHTML]="safeHtml(data.body.weight)"></div>
             </div>
           }
-          <div [innerHTML]="safeHtml(chart.svg)"></div>
-          <p class="chart-foot muted">{{ chart.sessions }} logged session(s)</p>
-        </section>
-      }
-    </div>
-  </app-list-controls>
+          @if (data.body.body_fat) {
+            <div class="chart-card">
+              <h3>Body fat (%)</h3>
+              <div [innerHTML]="safeHtml(data.body.body_fat)"></div>
+            </div>
+          }
+          @if (data.body.muscle) {
+            <div class="chart-card">
+              <h3>Muscle (%)</h3>
+              <div [innerHTML]="safeHtml(data.body.muscle)"></div>
+            </div>
+          }
+          @if (data.body.resting_hr) {
+            <div class="chart-card">
+              <h3>Resting HR (bpm)</h3>
+              <div [innerHTML]="safeHtml(data.body.resting_hr)"></div>
+            </div>
+          }
+        </div>
+      </section>
+    }
+
+    <h2 class="section-head">Lifts</h2>
+    @if (!data.charts || data.charts.length === 0) {
+      <p class="muted">
+        No logged sets yet. Once the agent records your Hevy sessions, your progressive overload
+        will show up here.
+      </p>
+    }
+    <app-list-controls [list]="lifts" id="progress" label="lifts">
+      <div class="chart-grid">
+        @for (chart of lifts.visible(); track chart.name) {
+          <section class="chart-card">
+            <div class="chart-card-head">
+              <h3>{{ chart.name }}</h3>
+              @if (chart.best_e1rm) {
+                <span class="badge">e1RM {{ chart.best_e1rm }} kg</span>
+              }
+              <button
+                type="button"
+                [attr.aria-expanded]="!!xaiReasoning()[chart.name]"
+                class="ai-btn"
+                (click)="toggleXAI(chart.name)"
+              >
+                Why did this happen?
+              </button>
+            </div>
+            @if (xaiReasoning()[chart.name]) {
+              <div class="xai-result" style="display: block">
+                {{ xaiReasoning()[chart.name] }}
+                @if (xaiProvenance()[chart.name]; as explanation) {
+                  <app-provenance-badge [provenance]="explanation" />
+                }
+              </div>
+            }
+            <div [innerHTML]="safeHtml(chart.svg)"></div>
+            <p class="chart-foot muted">{{ chart.sessions }} logged session(s)</p>
+          </section>
+        }
+      </div>
+    </app-list-controls>
+  }
 }
