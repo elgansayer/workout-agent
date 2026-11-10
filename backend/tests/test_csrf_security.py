@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -158,3 +159,31 @@ def test_production_and_spa_wiring_keep_csrf_boundary_enabled() -> None:
     assert "/api/csrf-token" in interceptor
     assert "X-CSRF-Token" in interceptor
     assert "withCredentials: true" in interceptor
+
+
+def test_closed_accounts_can_neither_obtain_nor_use_tokens(tmp_path: Path) -> None:
+    from database import init_db
+
+    client = _client(tmp_path)
+    db = str(tmp_path / "csrf.db")
+    init_db(db)  # adds the deletion ledger next to the token table
+    live_token = _token(client)
+
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO account_tombstones "
+            "(user_id, request_id, deleted_at, retain_until, policy_version) "
+            "VALUES ('user-1', 'receipt', '2026-11-10T00:00:00+00:00', "
+            "'2027-11-10T00:00:00+00:00', '1.0.0')"
+        )
+
+    # A token minted before closure is useless, and no new one is issued.
+    assert client.get("/api/csrf-token").status_code == 401
+    assert (
+        client.post("/mutate", headers={CSRF_HEADER_NAME: live_token}).status_code
+        == 401
+    )
+    # Other accounts are unaffected.
+    other = TestClient(client.app, base_url="https://workout.example")
+    other.cookies.set("session", _session_cookie("user-2"))
+    assert _token(other)

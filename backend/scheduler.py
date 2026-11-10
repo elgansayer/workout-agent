@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from account_deletion import process_due_deletions
 from config import Config, ConfigError
 from database import get_all_users, init_db
 
@@ -151,6 +152,15 @@ def run_scheduler() -> None:
         time.sleep(30)
 
 
+def run_account_deletions(config: Config) -> int:
+    """Execute due account/health-data deletions; never lets a failure stop the loop."""
+    try:
+        return process_due_deletions(config.database_path)
+    except Exception:
+        logger.exception("Account deletion processing failed.")
+        return 0
+
+
 def run_coaching(config: Config) -> int:
     """Run one isolated daily coaching cycle per persisted user."""
     from main import run as main_run
@@ -208,6 +218,7 @@ def run_weekly_correlations(config: Config) -> None:
 def run_once(config: Config) -> int:
     """Run a full scheduled cycle: coaching, daily insight, and weekly (if Sunday)."""
     logger.info("Running scheduled cycle...")
+    run_account_deletions(config)
     rc = run_coaching(config)
     run_daily_insight(config)
 
@@ -265,6 +276,7 @@ def run_schedule(config: Config) -> None:
 
     while True:
         _reset_if_new_day()
+        run_account_deletions(config)
 
         now_local = _now_in_zone(_TZ)
         now_h, now_m = now_local.hour, now_local.minute

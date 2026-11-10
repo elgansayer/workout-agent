@@ -822,6 +822,67 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # ---- Account / health-data deletion ledger (see account_deletion.py) ----
+        # These tables deliberately carry no foreign key to users(id): the ledger
+        # must outlive the account it describes. They hold opaque identifiers,
+        # timestamps and row counts only - never personal or health data.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_deletion_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                scope TEXT NOT NULL CHECK (scope IN ('account', 'health_data')),
+                state TEXT NOT NULL CHECK (
+                    state IN ('pending', 'in_progress', 'failed', 'completed', 'cancelled')
+                ),
+                requested_at TEXT NOT NULL,
+                execute_after TEXT NOT NULL,
+                next_attempt_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT,
+                cancelled_at TEXT,
+                error_code TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_deletion_open_request "
+            "ON account_deletion_requests (user_id) "
+            "WHERE state IN ('pending', 'in_progress', 'failed')"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_deletion_requests_user "
+            "ON account_deletion_requests (user_id, requested_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_deletion_requests_due "
+            "ON account_deletion_requests (state, next_attempt_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_deletion_steps (
+                request_id TEXT NOT NULL REFERENCES account_deletion_requests(id),
+                step TEXT NOT NULL,
+                state TEXT NOT NULL CHECK (state IN ('pending', 'done')),
+                rows_affected INTEGER NOT NULL DEFAULT 0,
+                remaining_after INTEGER,
+                completed_at TEXT,
+                PRIMARY KEY (request_id, step)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_tombstones (
+                user_id TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                retain_until TEXT NOT NULL,
+                policy_version TEXT NOT NULL
+            )
+            """
+        )
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:
@@ -1925,12 +1986,24 @@ def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | No
     )
 
 
-def get_all_users(db_path: str = DEFAULT_DB_PATH) -> list[UserRow]:
-    """Return all user rows, keyed by user_id."""
+def get_all_users(
+    db_path: str = DEFAULT_DB_PATH, *, include_closing: bool = False
+) -> list[UserRow]:
+    """Return user rows eligible for scheduled processing.
+
+    Accounts with an open deletion request (pending, in progress or failed) are
+    excluded by default so no coaching run, insight job or sync is dispatched
+    for a user who has asked for their data to be erased. Pass
+    ``include_closing=True`` for administrative listings.
+    """
+    query = "SELECT id, email, display_name, created_at, timezone, units FROM users"
+    if not include_closing:
+        query += (
+            " WHERE id NOT IN (SELECT user_id FROM account_deletion_requests "
+            "WHERE state IN ('pending', 'in_progress', 'failed'))"
+        )
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, email, display_name, created_at, timezone, units FROM users"
-        ).fetchall()
+        rows = conn.execute(query).fetchall()
     return [
         UserRow(
             id=row[0],

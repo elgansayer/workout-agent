@@ -19,6 +19,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+import account_deletion
 import checkin
 import google_health_client
 import insights as insights_engine
@@ -273,6 +274,11 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     if user_id is None:
         user_id = _resolve_run_user(config.database_path)
+    if account_deletion.is_account_closing(config.database_path, user_id):
+        # A run dispatched before the deletion request must not sync, call an AI
+        # provider or write new rows for an account that asked to be erased.
+        logger.info("Skipping the daily cycle: the account has a deletion request.")
+        return 0
     config = _scope_config_to_user(config, user_id)
     logger.info("Running daily cycle for user %s", user_id)
 

@@ -1,7 +1,51 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { Component, inject, signal, OnInit, OnDestroy } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+
+type DeletionScope = 'account' | 'health_data';
+
+interface DeletionStep {
+  step: string;
+  label: string;
+  state: 'pending' | 'done';
+  rows_affected: number;
+  remaining_after: number | null;
+}
+
+interface DeletionRequest {
+  request_id: string;
+  scope: DeletionScope;
+  state: 'pending' | 'in_progress' | 'failed' | 'completed' | 'cancelled';
+  requested_at: string;
+  execute_after: string;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  can_cancel: boolean;
+  attempts: number;
+  error_code: string | null;
+  steps: DeletionStep[];
+  progress_percent: number;
+}
+
+interface DeletionInfo {
+  eligible: boolean;
+  reason: string | null;
+  scopes?: { scope: DeletionScope; required_confirmation: string; grace_days: number }[];
+  request: DeletionRequest | null;
+}
+
+const DELETION_ERRORS: Record<string, string> = {
+  confirmation_mismatch: 'The confirmation text did not match exactly.',
+  already_requested: 'A deletion request is already open for this account.',
+  not_eligible: 'This account cannot be deleted from here.',
+  not_cancellable: 'The cancellation window has closed.',
+  not_found: 'There is no open deletion request to cancel.',
+};
+
+// How often an open request is re-read: running erasure shows live progress,
+// a pending closure only needs to notice when its window ends.
+const POLL_MS: Record<string, number> = { in_progress: 2000, failed: 15000, pending: 60000 };
 
 @Component({
   selector: 'app-settings',
@@ -10,7 +54,7 @@ import { FormsModule } from '@angular/forms';
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })
-export class Settings implements OnInit {
+export class Settings implements OnInit, OnDestroy {
   private http = inject(HttpClient);
 
   data = signal<any>(null);
@@ -37,8 +81,30 @@ export class Settings implements OnInit {
   selectedExperience = signal<string>('intermediate');
   constraintsInput = '';
 
+  deletion = signal<DeletionInfo | null>(null);
+  deletionStatus = signal('');
+  deletionError = signal('');
+  deletionBusy = signal(false);
+  healthConfirmation = '';
+  accountConfirmation = '';
+  private deletionPoll?: ReturnType<typeof setTimeout>;
+
   ngOnInit() {
     this.loadSettings();
+    // Deep link from the Account page: /settings?section=account
+    if (new URLSearchParams(window.location.search).get('section') === 'account') {
+      this.selectSection('account');
+    }
+  }
+
+  ngOnDestroy() {
+    this.stopDeletionPoll();
+  }
+
+  selectSection(name: string) {
+    this.section.set(name);
+    // Deletion status is only read when the section is opened.
+    if (name === 'account') this.loadDeletion();
   }
 
   loadSettings(populateForm = true) {
@@ -271,5 +337,141 @@ export class Settings implements OnInit {
         'Could not update notifications. Check browser permissions and try again.',
       );
     }
+  }
+
+  // ───────────── Account & data deletion ─────────────
+
+  loadDeletion() {
+    this.http.get<DeletionInfo>('/api/account/deletion').subscribe({
+      next: (info) => {
+        this.deletion.set(info);
+        this.scheduleDeletionPoll(info.request);
+      },
+      error: (err: HttpErrorResponse) => this.handleDeletionFailure(err),
+    });
+  }
+
+  requiredConfirmation(scope: DeletionScope): string {
+    return (
+      this.deletion()?.scopes?.find((item) => item.scope === scope)?.required_confirmation ?? ''
+    );
+  }
+
+  graceDays(): number {
+    return this.deletion()?.scopes?.find((item) => item.scope === 'account')?.grace_days ?? 0;
+  }
+
+  confirmationMatches(scope: DeletionScope): boolean {
+    const typed = scope === 'account' ? this.accountConfirmation : this.healthConfirmation;
+    const required = this.requiredConfirmation(scope);
+    const normalise = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
+    return required !== '' && normalise(typed) === normalise(required);
+  }
+
+  isOpen(request: DeletionRequest | null | undefined): boolean {
+    return !!request && ['pending', 'in_progress', 'failed'].includes(request.state);
+  }
+
+  requestDeletion(scope: DeletionScope) {
+    if (this.deletionBusy() || !this.confirmationMatches(scope)) return;
+    this.deletionBusy.set(true);
+    this.deletionError.set('');
+    const confirmation = scope === 'account' ? this.accountConfirmation : this.healthConfirmation;
+    this.http.post<DeletionRequest>('/api/account/deletion', { scope, confirmation }).subscribe({
+      next: (request) => {
+        this.deletionBusy.set(false);
+        this.healthConfirmation = '';
+        this.accountConfirmation = '';
+        this.deletion.update((info) => (info ? { ...info, request } : info));
+        if (request.state === 'completed' && request.scope === 'account') {
+          void this.finishAccountClosure();
+          return;
+        }
+        this.deletionStatus.set(this.describeRequest(request));
+        this.scheduleDeletionPoll(request);
+      },
+      error: (err: HttpErrorResponse) => {
+        this.deletionBusy.set(false);
+        this.handleDeletionFailure(err);
+      },
+    });
+  }
+
+  cancelDeletion() {
+    if (this.deletionBusy()) return;
+    this.deletionBusy.set(true);
+    this.deletionError.set('');
+    this.http.post<DeletionRequest>('/api/account/deletion/cancel', {}).subscribe({
+      next: (request) => {
+        this.deletionBusy.set(false);
+        this.deletion.update((info) => (info ? { ...info, request } : info));
+        this.deletionStatus.set('Account closure cancelled. Nothing was deleted.');
+        this.stopDeletionPoll();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.deletionBusy.set(false);
+        this.handleDeletionFailure(err);
+        this.loadDeletion();
+      },
+    });
+  }
+
+  describeRequest(request: DeletionRequest): string {
+    switch (request.state) {
+      case 'pending':
+        return 'Account closure is scheduled. You can cancel until the date shown.';
+      case 'in_progress':
+        return 'Erasing your data…';
+      case 'failed':
+        return 'Erasure hit a problem and is being retried automatically.';
+      case 'completed':
+        return request.scope === 'account'
+          ? 'Your account has been closed.'
+          : 'Your health data has been erased.';
+      default:
+        return '';
+    }
+  }
+
+  private handleDeletionFailure(err: HttpErrorResponse) {
+    if (err?.status === 401) {
+      // A closed account's session is refused: the erasure has finished.
+      void this.finishAccountClosure();
+      return;
+    }
+    const code = err?.error?.detail;
+    this.deletionError.set(
+      err?.status === 423
+        ? 'Your data is being erased right now.'
+        : (DELETION_ERRORS[code] ?? 'The request could not be completed. Please try again.'),
+    );
+  }
+
+  private scheduleDeletionPoll(request: DeletionRequest | null | undefined) {
+    this.stopDeletionPoll();
+    const delay = request ? POLL_MS[request.state] : undefined;
+    if (delay) this.deletionPoll = setTimeout(() => this.loadDeletion(), delay);
+  }
+
+  private stopDeletionPoll() {
+    if (this.deletionPoll !== undefined) clearTimeout(this.deletionPoll);
+    this.deletionPoll = undefined;
+  }
+
+  private async finishAccountClosure(): Promise<void> {
+    this.stopDeletionPoll();
+    this.deletionStatus.set('Your account has been closed and your data erased.');
+    try {
+      // The server already deleted its copy; also drop this browser's push subscription.
+      const reg = await navigator.serviceWorker?.getRegistration();
+      await (await reg?.pushManager?.getSubscription())?.unsubscribe();
+    } catch {
+      // Best effort only.
+    }
+    this.navigate('/logout');
+  }
+
+  protected navigate(url: string) {
+    window.location.assign(url);
   }
 }

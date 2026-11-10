@@ -6,6 +6,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
+import account_deletion
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
@@ -45,6 +46,9 @@ def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
 def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating daily insight header...")
     uid = user_id or _resolve_insight_user(config.database_path)
+    if uid and account_deletion.is_account_closing(config.database_path, uid):
+        logger.info("Skipping the daily insight: the account has a deletion request.")
+        return
     provider = _resolve_provider(config, user_id=uid)
 
     # Fetch last 7 days of data
@@ -108,6 +112,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 def generate_weekly_correlations(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating weekly deep correlations...")
     uid = user_id or _resolve_insight_user(config.database_path)
+    if uid and account_deletion.is_account_closing(config.database_path, uid):
+        logger.info("Skipping weekly correlations: the account has a deletion request.")
+        return
     provider = _resolve_provider(config, user_id=uid)
 
     # Fetch 60-day trailing window

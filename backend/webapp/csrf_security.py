@@ -124,6 +124,27 @@ class CSRFTokenStore:
         )
         return conn
 
+    def is_closed(self, user_id: str) -> bool:
+        """Whether *user_id* has a deletion tombstone (its sessions must fail closed).
+
+        A database without the ledger table cannot hold a tombstone; any other
+        database error propagates rather than being treated as "open".
+        """
+        conn = self._connect()
+        try:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM account_tombstones WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                is not None
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                return False
+            raise
+        finally:
+            conn.close()
+
     def issue(
         self,
         user_id: str,
@@ -260,6 +281,8 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
 
         user_id, session_cookie = validated
+        if self.store.is_closed(user_id):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         token = self.store.issue(user_id, session_cookie)
         response = JSONResponse(
             {"token": token, "expires_in": self.store.ttl_seconds},
@@ -300,6 +323,8 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         if not _origin_is_trusted(request, self.trusted_origins):
             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
+        if self.store.is_closed(user_id):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
         token = request.headers.get(CSRF_HEADER_NAME, "")
         if not self.store.consume(user_id, session_cookie, token):

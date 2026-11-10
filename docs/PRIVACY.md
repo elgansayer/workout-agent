@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-10  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -45,11 +45,13 @@ The machine-readable inventory records the intended retention rule for each syst
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 
-A deployment must not claim that account deletion, backup purging or provider-side deletion is automatic unless those paths are actually configured and verified. Where a complete automated deletion flow is not yet available, the operator must handle a verified deletion request using the documented operational process.
+Users can erase their health data, or close their account and erase everything, from **Settings → Account and data**. Account closure waits out a cancellation window (default 7 days) and then removes primary records, derived insights, caches, notifications, connector tokens, API keys and retained exports, and verifies the result. What is deliberately retained is limited to an anonymous deletion tombstone, encrypted backups until they expire, and copies already held by other systems; see [`ACCOUNT_DELETION.md`](ACCOUNT_DELETION.md) for the exact scope and the operator procedures.
+
+A deployment must not claim that backup purging or provider-side deletion is automatic: backups are not rewritten and connected providers are not asked to delete or revoke anything. A deferred account closure is carried out by the scheduler process, so an operator must keep it running and must verify deletion requests that show as `failed` or overdue.
 
 ## Your choices and rights
 
-Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export, correction or deletion of their account data and can withdraw consent for optional processing.
+Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export or correction of their account data and can withdraw consent for optional processing. Deletion is self-service in Settings → Account and data.
 
 Applicable legal rights vary by jurisdiction. The deployment operator is responsible for authenticating a requester before disclosing, changing or deleting account data and for responding within any legally required period.
 
