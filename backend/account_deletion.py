@@ -200,8 +200,23 @@ USER_DATA_STORES: tuple[DataStore, ...] = (
     DataStore("daily_log", Step.PRIMARY_RECORDS),
     DataStore("programme_state", Step.PRIMARY_RECORDS),
     DataStore("programmes", Step.PRIMARY_RECORDS),
+    DataStore("programme_revisions", Step.PRIMARY_RECORDS),
+    DataStore("programme_routines", Step.PRIMARY_RECORDS),
+    DataStore("programme_blocks", Step.PRIMARY_RECORDS),
+    DataStore("exercise_prescriptions", Step.PRIMARY_RECORDS),
+    DataStore("programme_week_states", Step.PRIMARY_RECORDS),
+    DataStore("adaptation_decisions", Step.PRIMARY_RECORDS),
+    DataStore("programme_decisions", Step.PRIMARY_RECORDS),
     DataStore("user_preferences", Step.PRIMARY_RECORDS),
+    DataStore("training_rules", Step.PRIMARY_RECORDS),
     DataStore("hevy_routines", Step.PRIMARY_RECORDS),
+    DataStore("hevy_routine_snapshots", Step.PRIMARY_RECORDS),
+    DataStore("routine_workout_matches", Step.PRIMARY_RECORDS),
+    DataStore("routine_match_overrides", Step.PRIMARY_RECORDS),
+    DataStore("exercise_history_baselines", Step.PRIMARY_RECORDS),
+    DataStore("hevy_connections", Step.CONNECTOR_TOKENS),
+    DataStore("user_identities", Step.PRIMARY_RECORDS),
+    DataStore("user_sessions", Step.CACHES),
     DataStore("body_metrics", Step.PRIMARY_RECORDS, health=True),
     DataStore("csrf_tokens", Step.CACHES, optional=True),
     # Canonical health platform tables (health_schema.py). Optional because the
@@ -209,12 +224,17 @@ USER_DATA_STORES: tuple[DataStore, ...] = (
     *(_health_table_store(table) for table in HEALTH_USER_TABLES),
 )
 
-# Ledger tables that intentionally survive erasure (documented retention
-# exception). They hold opaque identifiers, timestamps and row counts only.
+# Tables that intentionally survive erasure (documented retention exceptions).
+# The deletion ledger holds opaque identifiers, timestamps and row counts only.
+# The two audit trails are append-only evidence with pseudonymous references;
+# the application never deletes them, including during account closure, and they
+# never hold secret material.
 RETAINED_LEDGER_TABLES: tuple[str, ...] = (
     "account_deletion_requests",
     "account_deletion_steps",
     "account_tombstones",
+    "credential_audit_events",
+    "security_audit_events",
 )
 
 # Search indexes that hold user content. There are none today: the check in

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import importlib
-import json
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -21,17 +20,13 @@ from database import (
     save_notification,
     save_user_api_key,
 )
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 _SECRET = "account-deletion-test-secret-that-is-long-enough"
+_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
 EMAIL_A = "athlete.a@example.com"
 EMAIL_B = "athlete.b@example.com"
-
-
-def _cookie(email: str, user_id: str) -> str:
-    payload = base64.b64encode(json.dumps({"user": email, "user_id": user_id}).encode())
-    return TimestampSigner(_SECRET).sign(payload).decode()
 
 
 class Env(NamedTuple):
@@ -77,6 +72,7 @@ def _count(db: str, table: str, user_id: str) -> int:
 
 @pytest.fixture
 def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
+    monkeypatch.setenv("ENCRYPTION_KEY", _ENCRYPTION_KEY)
     db = str(tmp_path / "api.db")
     init_db(db)
     a = get_or_create_user(EMAIL_A, "Athlete A", db_path=db)["id"]
@@ -87,7 +83,15 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
 
     def client_for(email: str, user_id: str) -> TestClient:
         client = TestClient(webapp_app.app)
-        client.cookies.set("session", _cookie(email, user_id))
+        client.cookies.set(
+            webapp_app.SESSION_SECURITY.cookie.name,
+            signed_session_cookie(
+                _SECRET,
+                user=email,
+                user_id=user_id,
+                session_id=webapp_app.SESSION_STORE.create(user_id),
+            ),
+        )
         return client
 
     return Env(db, a, b, client_for)

@@ -19,6 +19,6 @@ other doc in the repo.
    something is planned but not built, it belongs in a `task_add()` entry or
    `AGENTS.md`'s Known Issues list, not presented as current functionality.
 4. If `AGENTS.md` §7 (Known Issues) lists something that's now fixed, update
-   it to reflect that (strike-through or remove, matching how other swarm
-   constitutions mark resolved findings) rather than leaving stale findings
+   it to reflect that (strike-through or remove, matching how other
+   repositories mark resolved findings) rather than leaving stale findings
    accumulating indefinitely.

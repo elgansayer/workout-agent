@@ -129,10 +129,101 @@ def _seed(db: str, user_id: str) -> None:
             "INSERT INTO user_preferences (user_id, goals, updated_at) VALUES (?, '[]', ?)",
             (user_id, stamp),
         )
-        run(
+        programme_id = run(
             "INSERT INTO programmes (user_id, source, template_key, definition, active, created_at, updated_at) "
             "VALUES (?, 'template', 'synthetic', '{}', 1, ?, ?)",
             (user_id, stamp, stamp),
+        ).lastrowid
+        revision_id = run(
+            "INSERT INTO programme_revisions "
+            "(user_id, programme_id, revision_number, reason, engine_version, created_at) "
+            "VALUES (?, ?, 1, 'synthetic', 'test', ?)",
+            (user_id, programme_id, stamp),
+        ).lastrowid
+        run(
+            "INSERT INTO programme_routines "
+            "(user_id, programme_id, revision_id, position, source_routine_id, title, snapshot_hash, created_at) "
+            "VALUES (?, ?, ?, 1, 'synthetic-routine', 'Synthetic', 'hash', ?)",
+            (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO programme_blocks "
+            "(user_id, programme_id, revision_id, position, key, name, start_week, end_week, created_at) "
+            "VALUES (?, ?, ?, 1, 'block', 'Synthetic', 1, 1, ?)",
+            (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO exercise_prescriptions "
+            "(user_id, programme_id, revision_id, exercise_template_id, exercise_title, "
+            "role, progression_method, rule_version, created_at) "
+            "VALUES (?, ?, ?, 'template', 'Synthetic Squat', 'primary', 'linear', 'test', ?)",
+            (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO programme_week_states "
+            "(user_id, programme_id, revision_id, week_number, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            (user_id, programme_id, revision_id, stamp, stamp),
+        )
+        run(
+            "INSERT INTO adaptation_decisions "
+            "(user_id, programme_id, to_revision_id, rule_version, created_at) "
+            "VALUES (?, ?, ?, 'test', ?)",
+            (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO programme_decisions "
+            "(user_id, programme_id, source, decision, reason, created_at) "
+            "VALUES (?, ?, 'synthetic', 'keep', 'synthetic', ?)",
+            (user_id, programme_id, stamp),
+        )
+        run(
+            "INSERT INTO training_rules (user_id, version, rules_json, updated_at) "
+            "VALUES (?, 1, '{}', ?)",
+            (user_id, stamp),
+        )
+        run(
+            "INSERT INTO hevy_routine_snapshots "
+            "(user_id, snapshot_id, routine_id, title, content_hash, schema_version, snapshot_json) "
+            "VALUES (?, 'snapshot', 'routine', 'Synthetic', 'hash', 1, '{}')",
+            (user_id,),
+        )
+        run(
+            "INSERT INTO routine_workout_matches "
+            "(user_id, programme_id, routine_position, source_routine_id, workout_id, "
+            "features_json, method, matcher_version, matched_at, created_at) "
+            "VALUES (?, ?, 1, 'routine', 'workout', '{}', 'synthetic', 'test', ?, ?)",
+            (user_id, programme_id, stamp, stamp),
+        )
+        run(
+            "INSERT INTO routine_match_overrides "
+            "(user_id, pattern_type, pattern_value, routine_id, routine_snapshot_id, created_at) "
+            "VALUES (?, 'routine', 'pattern', 'routine', 'snapshot', ?)",
+            (user_id, stamp),
+        )
+        run(
+            "INSERT INTO exercise_history_baselines "
+            "(user_id, template_id, rule_version, confidence, baseline_json, created_at) "
+            "VALUES (?, 'template', 'test', 'high', '{}', ?)",
+            (user_id, stamp),
+        )
+        run(
+            "INSERT INTO hevy_connections "
+            "(user_id, provider, state, capabilities_json, tested_at, created_at, updated_at) "
+            "VALUES (?, 'hevy', 'connected', '{}', ?, ?, ?)",
+            (user_id, stamp, stamp, stamp),
+        )
+        run(
+            "INSERT INTO user_identities "
+            "(user_id, provider, subject, email, email_verified, created_at) "
+            "VALUES (?, 'google', ?, ?, 1, ?)",
+            (user_id, f"subject-{user_id}", f"identity-{user_id}@example.test", stamp),
+        )
+        run(
+            "INSERT INTO user_sessions "
+            "(session_token_hash, user_id, created_at, last_seen_at) "
+            "VALUES (?, ?, 1, 1)",
+            (f"session-{user_id}", user_id),
         )
         run(
             "INSERT INTO csrf_tokens (token_hash, session_hash, user_id, expires_at) "
@@ -307,7 +398,11 @@ def test_tombstone_retention_is_bounded_and_prunable(
     assert _scalar(db, "SELECT COUNT(*) FROM account_tombstones") == 1
 
     assert ad.prune_expired_tombstones(db, now=retain_until) == 1
-    for table in ad.RETAINED_LEDGER_TABLES:
+    for table in (
+        "account_deletion_requests",
+        "account_deletion_steps",
+        "account_tombstones",
+    ):
         assert _scalar(db, f'SELECT COUNT(*) FROM "{table}"') == 0
 
 
@@ -1201,8 +1296,8 @@ def test_insight_jobs_skip_accounts_with_a_deletion_request(
     monkeypatch.setattr(
         insight_cron,
         "_resolve_provider",
-        lambda _config, user_id=None: (
-            seen.append(user_id) or (_ for _ in ()).throw(RuntimeError("stop"))
+        lambda _config, owner: (
+            seen.append(owner.user_id) or (_ for _ in ()).throw(RuntimeError("stop"))
         ),
     )
     with pytest.raises(RuntimeError, match="stop"):
@@ -1238,7 +1333,7 @@ def test_daily_run_does_nothing_for_an_account_with_a_deletion_request(
     def must_not_sync(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("work started for a closing account")
 
-    monkeypatch.setattr(main, "_sync_hevy_routines", must_not_sync)
+    monkeypatch.setattr(main, "sync_routines", must_not_sync)
     monkeypatch.setattr(main, "_scope_config_to_user", must_not_sync)
     ad.request_deletion(db, a, "account", EMAIL_A, now=NOW)
 

@@ -1,0 +1,114 @@
+# auth_boundary.py (L60-L172 of 264)
+  60 | # generic suffix such as `.json` as public, because future user exports may use
+  61 | # those suffixes.
+  62 | _ROOT_FINGERPRINTED_ASSET = re.compile(
+  63 |     r"^/[A-Za-z0-9_.-]+[-.][A-Za-z0-9]{8,64}"
+  64 |     r"\.(?:css|js|mjs|map|png|jpg|jpeg|gif|webp|svg|ico|woff|woff2|ttf)$",
+  65 |     re.IGNORECASE,
+  66 | )
+  67 | 
+  68 | 
+  69 | def is_public_path(path: str) -> bool:
+  70 |     """Return whether *path* is part of the deliberate anonymous surface."""
+  71 | 
+  72 |     if path in PUBLIC_EXACT_PATHS:
+  73 |         return True
+  74 |     if path in {"/static", "/assets"} or path.startswith(PUBLIC_STATIC_PREFIXES):
+  75 |         return True
+  76 |     return bool(_ROOT_FINGERPRINTED_ASSET.fullmatch(path))
+  77 | 
+  78 | 
+  79 | def has_verified_identity(session: Mapping[str, Any] | None) -> bool:
+  80 |     """Require the signed session to contain both user identity components."""
+  81 | 
+  82 |     if not session:
+  83 |         return False
+  84 | 
+  85 |     user_id = session.get("user_id")
+  86 |     if not isinstance(user_id, str) or not user_id.strip():
+  87 |         return False
+  88 | 
+  89 |     user = session.get("user")
+  90 |     if isinstance(user, str):
+  91 |         return bool(user.strip())
+  92 |     if isinstance(user, Mapping):
+  93 |         return bool(user.get("email") or user.get("id"))
+  94 |     return False
+  95 | 
+  96 | 
+  97 | class AuthenticationBoundaryMiddleware:
+  98 |     """Fail closed for every non-public HTTP request without a verified user."""
+  99 | 
+ 100 |     def __init__(
+ 101 |         self,
+ 102 |         app: ASGIApp,
+ 103 |         *,
+ 104 |         anonymous_enabled: bool = False,
+ 105 |         session_guard: SessionGuard | None = None,
+ 106 |     ) -> None:
+ 107 |         if not anonymous_enabled and session_guard is None:
+ 108 |             # Never degrade to a shape-only check: a revoked, suspended or
+ 109 |             # de-listed account must not keep working on a still-signed cookie.
+ 110 |             raise RuntimeError(
+ 111 |                 "Authenticated mode requires a session guard for the account "
+ 112 |                 "access policy."
+ 113 |             )
+ 114 |         self.app = app
+ 115 |         self.anonymous_enabled = anonymous_enabled
+ 116 |         self.session_guard = session_guard
+ 117 | 
+ 118 |     @staticmethod
+ 119 |     def _unauthenticated_response(path: str) -> Response:
+ 120 |         if path.startswith("/api/"):
+ 121 |             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+ 122 |         return RedirectResponse("/login", status_code=303)
+ 123 | 
+ 124 |     async def __call__(
+ 125 |         self,
+ 126 |         scope: Scope,
+ 127 |         receive: Receive,
+ 128 |         send: Send,
+ 129 |     ) -> None:
+ 130 |         if scope.get("type") != "http" or self.anonymous_enabled:
+ 131 |             await self.app(scope, receive, send)
+ 132 |             return
+ 133 | 
+ 134 |         path = str(scope.get("path") or "/")
+ 135 |         if is_public_path(path):
+ 136 |             await self.app(scope, receive, send)
+ 137 |             return
+ 138 | 
+ 139 |         session = scope.get("session")
+ 140 |         if not isinstance(session, Mapping) or not has_verified_identity(session):
+ 141 |             response = self._unauthenticated_response(path)
+ 142 |             await response(scope, receive, send)
+ 143 |             return
+ 144 | 
+ 145 |         guard = self.session_guard
+ 146 |         if guard is not None:
+ 147 |             try:
+ 148 |                 decision = await run_in_threadpool(guard, session)
+ 149 |             except (sqlite3.Error, OSError):
+ 150 |                 # The policy store is unreadable: refuse (fail closed) but do
+ 151 |                 # not clear the session. An outage must not sign everyone out.
+ 152 |                 logger.exception("Account policy check unavailable; refusing request.")
+ 153 |                 unavailable = JSONResponse(
+ 154 |                     {"detail": "Service temporarily unavailable"},
+ 155 |                     status_code=503,
+ 156 |                     headers={"Cache-Control": "no-store"},
+ 157 |                 )
+ 158 |                 await unavailable(scope, receive, send)
+ 159 |                 return
+ 160 |             if not decision.allowed:
+ 161 |                 # Dropping the session makes the outer SessionMiddleware expire
+ 162 |                 # the cookie, so a well-behaved browser stops presenting it.
+ 163 |                 if isinstance(session, MutableMapping):
+ 164 |                     session.clear()
+ 165 |                 response = self._unauthenticated_response(path)
+ 166 |                 await response(scope, receive, send)
+ 167 |                 return
+ 168 | 
+ 169 |         await self.app(scope, receive, send)
+ 170 | 
+ 171 | 
+ 172 | def _is_session_middleware(item: Middleware) -> bool:

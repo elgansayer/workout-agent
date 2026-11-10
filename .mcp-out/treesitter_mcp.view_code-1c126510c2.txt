@@ -1,0 +1,94 @@
+# auth_boundary.py (L172-L264 of 264)
+ 172 | def _is_session_middleware(item: Middleware) -> bool:
+ 173 |     """Whether *item* mounts SessionMiddleware or a subclass of it.
+ 174 | 
+ 175 |     ``issubclass`` rather than identity: the production stack mounts
+ 176 |     ``HardenedSessionMiddleware``, which is a ``SessionMiddleware`` subclass.
+ 177 |     """
+ 178 | 
+ 179 |     mounted = getattr(item, "cls", None)
+ 180 |     return isinstance(mounted, type) and issubclass(mounted, SessionMiddleware)
+ 181 | 
+ 182 | 
+ 183 | def _contains_boundary(app: FastAPI) -> bool:
+ 184 |     return any(
+ 185 |         getattr(item, "cls", None) is AuthenticationBoundaryMiddleware
+ 186 |         for item in app.user_middleware
+ 187 |     )
+ 188 | 
+ 189 | 
+ 190 | def _install_on_workout_app(app: FastAPI) -> None:
+ 191 |     """Place the boundary immediately inside SessionMiddleware.
+ 192 | 
+ 193 |     Starlette applies ``user_middleware`` from the end of the list inward.  The
+ 194 |     session middleware therefore needs to remain outside this boundary so the
+ 195 |     signed cookie has already been decoded into ``scope['session']``.
+ 196 |     """
+ 197 | 
+ 198 |     if app.title != "Workout Agent" or _contains_boundary(app):
+ 199 |         return
+ 200 | 
+ 201 |     session_index = next(
+ 202 |         (
+ 203 |             index
+ 204 |             for index, item in enumerate(app.user_middleware)
+ 205 |             if _is_session_middleware(item)
+ 206 |         ),
+ 207 |         None,
+ 208 |     )
+ 209 |     if session_index is None:
+ 210 |         raise RuntimeError(
+ 211 |             "Workout Agent authentication boundary requires SessionMiddleware"
+ 212 |         )
+ 213 | 
+ 214 |     runtime = validate_web_runtime()
+ 215 |     session_guard: SessionGuard | None = None
+ 216 |     if not runtime.anonymous_enabled:
+ 217 |         policy = getattr(app.state, "access_policy", None)
+ 218 |         if policy is None:
+ 219 |             raise RuntimeError(
+ 220 |                 "Workout Agent authentication boundary requires "
+ 221 |                 "app.state.access_policy in authenticated mode"
+ 222 |             )
+ 223 |         session_guard = policy.check_session
+ 224 |     app.user_middleware.insert(
+ 225 |         session_index + 1,
+ 226 |         Middleware(
+ 227 |             AuthenticationBoundaryMiddleware,
+ 228 |             anonymous_enabled=runtime.anonymous_enabled,
+ 229 |             session_guard=session_guard,
+ 230 |         ),
+ 231 |     )
+ 232 | 
+ 233 | 
+ 234 | def install_authentication_boundary() -> None:
+ 235 |     """Install the process-wide FastAPI stack hook once.
+ 236 | 
+ 237 |     ``webapp.app`` constructs its FastAPI object after the package bootstrap has
+ 238 |     run.  Hooking stack construction lets us add a global boundary without
+ 239 |     depending on every route author remembering an authentication decorator.
+ 240 |     """
+ 241 | 
+ 242 |     if getattr(FastAPI, "_workout_auth_boundary_installed", False):
+ 243 |         return
+ 244 | 
+ 245 |     original = FastAPI.build_middleware_stack
+ 246 | 
+ 247 |     def guarded_build_middleware_stack(self: FastAPI) -> ASGIApp:
+ 248 |         _install_on_workout_app(self)
+ 249 |         return original(self)
+ 250 | 
+ 251 |     FastAPI._workout_auth_boundary_original_build = original  # type: ignore[attr-defined]
+ 252 |     FastAPI.build_middleware_stack = guarded_build_middleware_stack  # type: ignore[method-assign]
+ 253 |     FastAPI._workout_auth_boundary_installed = True  # type: ignore[attr-defined]
+ 254 | 
+ 255 | 
+ 256 | __all__ = [
+ 257 |     "PUBLIC_EXACT_PATHS",
+ 258 |     "PUBLIC_STATIC_PREFIXES",
+ 259 |     "AuthenticationBoundaryMiddleware",
+ 260 |     "SessionGuard",
+ 261 |     "has_verified_identity",
+ 262 |     "install_authentication_boundary",
+ 263 |     "is_public_path",
+ 264 | ]

@@ -45,7 +45,7 @@ graph TD
 ## 3. Unconstrained Action Plan
 
 ### Phase 1: Full Multi-Tenancy & Modern ORM
-- [ ] Complete multi-tenancy migrations for all database tables (`hevy_routines`, `hevy_meta`, `programme_state`, `user_preferences`).
+- [ ] Complete multi-tenancy migrations for all database tables (`hevy_routines`, `hevy_meta`, `user_preferences`).
 - [ ] Implement SQLAlchemy 2.0 / SQLModel layer with dual SQLite and PostgreSQL support.
 - [ ] Ensure all API endpoints return clean, typed Pydantic models.
 

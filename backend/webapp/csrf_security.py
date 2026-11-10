@@ -5,6 +5,10 @@ browser first obtains an opaque, single-use nonce from ``/api/csrf-token`` and
 sends it back in ``X-CSRF-Token`` on POST, PUT, PATCH, and DELETE requests.
 Tokens are stored only as hashes, bound to both the authenticated user and the
 exact signed session cookie, and consumed atomically so replay fails closed.
+When a ``session_validator`` is supplied (the production entrypoint always does)
+a correctly signed cookie is still rejected unless the server-side session
+registry honours it, so revoked, expired and logged-out cookies can neither mint
+nor spend CSRF tokens.
 
 OAuth callbacks remain GET requests and keep their purpose-specific OAuth
 state/nonce checks. A webhook without the application's session cookie is not a
@@ -20,8 +24,9 @@ import json
 import secrets
 import sqlite3
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import Request
@@ -36,6 +41,8 @@ CSRF_TOKEN_TTL_SECONDS = 10 * 60
 SESSION_MAX_AGE_SECONDS = 14 * 24 * 60 * 60
 _UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _TOKEN_BYTES = 32
+
+SessionValidator = Callable[[Mapping[str, Any]], bool]
 
 
 def _sha256(value: str) -> str:
@@ -211,13 +218,17 @@ class SignedSessionIdentity:
         secret_key: str,
         *,
         max_age_seconds: int = SESSION_MAX_AGE_SECONDS,
+        session_validator: SessionValidator | None = None,
     ) -> None:
         if not secret_key:
             raise ValueError("A session signing secret is required for CSRF protection")
         self.signer = TimestampSigner(secret_key)
         self.max_age_seconds = max_age_seconds
+        self.session_validator = session_validator
 
-    def user_id(self, session_cookie: str) -> str | None:
+    def payload(self, session_cookie: str) -> dict[str, Any] | None:
+        """Return the decoded payload of a correctly signed, unexpired cookie."""
+
         try:
             signed_payload = self.signer.unsign(
                 session_cookie.encode("utf-8"),
@@ -232,11 +243,17 @@ class SignedSessionIdentity:
             json.JSONDecodeError,
         ):
             return None
-        if not isinstance(payload, dict):
+        return payload if isinstance(payload, dict) else None
+
+    def user_id(self, session_cookie: str) -> str | None:
+        payload = self.payload(session_cookie)
+        if payload is None:
             return None
         user_id = payload.get("user_id")
         user = payload.get("user")
         if not isinstance(user_id, str) or not user_id or not user:
+            return None
+        if self.session_validator is not None and not self.session_validator(payload):
             return None
         return user_id
 
@@ -253,10 +270,16 @@ class CSRFMiddleware(BaseHTTPMiddleware):
         trusted_origins: Iterable[str] = (),
         session_cookie_name: str = "session",
         ttl_seconds: int = CSRF_TOKEN_TTL_SECONDS,
+        session_max_age_seconds: int = SESSION_MAX_AGE_SECONDS,
+        session_validator: SessionValidator | None = None,
     ) -> None:
         super().__init__(app)
         self.store = CSRFTokenStore(db_path, ttl_seconds=ttl_seconds)
-        self.session_identity = SignedSessionIdentity(session_secret)
+        self.session_identity = SignedSessionIdentity(
+            session_secret,
+            max_age_seconds=session_max_age_seconds,
+            session_validator=session_validator,
+        )
         self.session_cookie_name = session_cookie_name
         self.trusted_origins = frozenset(
             origin

@@ -1,0 +1,106 @@
+# app.py (L1558-L1662 of 3061)
+1558 | @app.get("/api/coach/capabilities")
+1559 | @app.get("/api/chat/capabilities")
+1560 | def coach_capabilities(request: Request) -> JSONResponse:
+1561 |     user_id = _check_api_auth(request)
+1562 |     state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=get_config())
+1563 |     return JSONResponse(state.to_dict())
+1564 | 
+1565 | 
+1566 | def _parse_observed_at(value: Any) -> datetime | None:
+1567 |     if value is None:
+1568 |         return None
+1569 |     try:
+1570 |         parsed = datetime.fromisoformat(str(value))
+1571 |     except ValueError:
+1572 |         return None
+1573 |     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+1574 | 
+1575 | 
+1576 | def _latest_observed_at(values: list[Any]) -> datetime | None:
+1577 |     parsed = [
+1578 |         observed
+1579 |         for value in values
+1580 |         if (observed := _parse_observed_at(value)) is not None
+1581 |     ]
+1582 |     return max(parsed) if parsed else None
+1583 | 
+1584 | 
+1585 | def _coach_capability_for_user(
+1586 |     user_id: str,
+1587 |     *,
+1588 |     logs: list[dict[str, Any]] | None = None,
+1589 |     history: dict[str, list[dict[str, Any]]] | None = None,
+1590 |     body_metrics: list[dict[str, Any]] | None = None,
+1591 |     personal_records: list[dict[str, Any]] | None = None,
+1592 |     programme_available: bool | None = None,
+1593 | ) -> CoachCapabilityState:
+1594 |     """Derive Coach capability from this tenant's records and provider state."""
+1595 | 
+1596 |     keys = get_user_api_keys(user_id, DB_PATH)
+1597 |     prefs = get_user_preferences(user_id, DB_PATH)
+1598 |     provider_name = str(prefs.get("preferred_ai") or "gemini").strip().lower()
+1599 |     provider_supported = provider_name in PROVIDERS
+1600 | 
+1601 |     provider_configured = False
+1602 |     if provider_supported:
+1603 |         provider_key = str(
+1604 |             keys.get(provider_name, {}).get("api_key") or ""
+1605 |         ).strip()
+1606 |         if not provider_key and provider_name == "gemini":
+1607 |             provider_key = str(get_config().gemini_api_key or "").strip()
+1608 |         provider_configured = bool(provider_key)
+1609 | 
+1610 |     if logs is None:
+1611 |         logs = get_daily_logs(limit=1, db_path=DB_PATH, user_id=user_id)
+1612 |     if history is None:
+1613 |         history = get_progress_history(
+1614 |             limit_per_exercise=1, db_path=DB_PATH, user_id=user_id
+1615 |         )
+1616 |     if body_metrics is None:
+1617 |         body_metrics = get_body_metrics(limit=1, db_path=DB_PATH, user_id=user_id)
+1618 |     if personal_records is None:
+1619 |         personal_records = get_personal_records(db_path=DB_PATH, user_id=user_id)
+1620 |     if programme_available is None:
+1621 |         programme_available = get_active_programme(user_id, DB_PATH) is not None
+1622 | 
+1623 |     history_dates = [
+1624 |         entry.get("date")
+1625 |         for entries in history.values()
+1626 |         for entry in entries
+1627 |     ]
+1628 |     observed_at = {
+1629 |         "training_logs": _latest_observed_at(
+1630 |             [log.get("date") for log in logs]
+1631 |         ),
+1632 |         "progress_history": _latest_observed_at(history_dates),
+1633 |         "personal_records": _latest_observed_at(
+1634 |             [record.get("date") for record in personal_records]
+1635 |         ),
+1636 |         "body_metrics": _latest_observed_at(
+1637 |             [metric.get("date") for metric in body_metrics]
+1638 |         ),
+1639 |     }
+1640 | 
+1641 |     return derive_coach_capability(
+1642 |         provider_name=provider_name,
+1643 |         provider_configured=provider_configured,
+1644 |         provider_supported=provider_supported,
+1645 |         sync_configured=bool(keys.get("hevy", {}).get("api_key")),
+1646 |         observed_at=observed_at,
+1647 |         programme_available=programme_available,
+1648 |         now=datetime.now(tz=timezone.utc),
+1649 |     )
+1650 | 
+1651 | 
+1652 | @app.get("/api/coach/capability")
+1653 | def coach_capability(request: Request) -> JSONResponse:
+1654 |     """Return the authenticated user's truthful Coach capability state."""
+1655 | 
+1656 |     user_id = _check_api_auth(request)
+1657 |     state = _coach_capability_for_user(user_id)
+1658 |     return JSONResponse(state.as_dict())
+1659 | 
+1660 | 
+1661 | @app.get("/api/chat/history")
+1662 | def chat_history(request: Request):
