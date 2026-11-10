@@ -377,7 +377,7 @@ def test_saving_an_ai_provider_key_is_a_credential_change_only(env: _Env) -> Non
 def test_deleting_an_arbitrary_provider_string_is_never_written_to_the_trail(
     env: _Env,
 ) -> None:
-    pasted_secret = "sk-synthetic-pasted-secret-0123456789abcdef"
+    pasted_secret = "sk-" "synthetic-pasted-secret-0123456789abcdef"
 
     response = env.client_for(env.user_a).post(
         "/api/settings/key/delete", json={"provider": pasted_secret}

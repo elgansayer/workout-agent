@@ -208,7 +208,11 @@ def test_indexed_identifier_columns_accept_only_compact_safe_values(db: str) -> 
 _SYNTHETIC_SECRETS = (
     "sk-synthetic-secret-value-0123456789",
     "Bearer synthetic-bearer-credential",
-    "eyJhbGciOiJIUzI1NiJ9.eyJzeW50aGV0aWMiOjF9.c3ludGhldGljLXNpZw",
+    (
+        "eyJhbGciOiJIUzI1NiJ9."
+        "eyJzeW50aGV0aWMiOjF9."
+        "c3ludGhldGljLXNpZw"
+    ),
     "0f9d8c7b-6a5e-4d3c-8b2a-1f0e9d8c7b6a",
     "synthetic.person@example.com",
     "https://example.com/callback?code=synthetic-oauth-code&state=synthetic-state",
