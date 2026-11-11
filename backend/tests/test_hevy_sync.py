@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import hevy_sync
 import pytest
 from config import Config
-from program import BLOCKS, Exercise, day_exercises
 
 
-def test_every_programme_exercise_has_a_template_id() -> None:
-    for day in (1, 2, 3):
-        for exercise in day_exercises(day, BLOCKS[1]):
-            assert exercise.template_id is not None, exercise.name
+@dataclass(frozen=True)
+class Exercise:
+    name: str
+    sets: int
+    rep_range: str
+    note: str = ""
+    template_id: str | None = None
 
 
 def test_parse_rep_range_single_and_range() -> None:
@@ -60,7 +62,9 @@ def test_build_exercises_filters_unmapped() -> None:
 
 
 def test_content_hash_is_stable_and_sensitive() -> None:
-    a = hevy_sync._build_exercises(day_exercises(3, BLOCKS[1]))
+    a = hevy_sync._build_exercises(
+        [Exercise("Leg Press", 3, "10-12", "", "C7973E0E")]
+    )
     h1 = hevy_sync._content_hash("Legs & Abs", a, "notes")
     h2 = hevy_sync._content_hash("Legs & Abs", a, "notes")
     assert h1 == h2
@@ -241,40 +245,196 @@ def _config_for_sync(tmp_path: Path) -> Config:
     )
 
 
-def test_sync_routines_threads_user_id_through_persistence(
+def test_sync_routines_requires_opt_in(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    config = _config_for_sync(tmp_path)
-    captured: list[tuple[str, str | None]] = []
-
+    config = replace(_config_for_sync(tmp_path), hevy_sync_routines=False)
     monkeypatch.setattr(
         hevy_sync,
-        "_migrate_titles",
-        lambda _config, *, user_id=None: captured.append(("migrate", user_id)),
-    )
-    monkeypatch.setattr(
-        hevy_sync,
-        "get_programme_start_date",
-        lambda _db, *, user_id=None: (
-            captured.append(("programme", user_id)) or date(2026, 9, 18)
-        ),
-    )
-    monkeypatch.setattr(
-        hevy_sync,
-        "_ensure_folder",
-        lambda _config, *, user_id=None: captured.append(("folder", user_id)) or None,
+        "load_programme_runtime",
+        lambda *a, **kw: pytest.fail("must not read the programme when disabled"),
     )
     monkeypatch.setattr(
         hevy_sync,
         "_sync_session",
-        lambda _config, title, built, folder_id, notes, *, user_id=None: (
-            captured.append((title, user_id)) or f"{title}: up to date"
-        ),
+        lambda *a, **kw: pytest.fail("must not mutate Hevy routines when disabled"),
+    )
+
+    assert hevy_sync.sync_routines(config, user_id="user-a") == []
+
+
+def test_sync_routines_publishes_active_runtime_routines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config_for_sync(tmp_path)
+    from programme_runtime import ProgrammeRuntime
+
+    runtime = ProgrammeRuntime(
+        status="active",
+        name="Synthetic programme",
+        week=1,
+        cycle_weeks=8,
+        block={"number": 1, "name": "Base"},
+        days=[
+            {
+                "focus": "Push",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "template_id": "C7973E0E",
+                        "sets": 3,
+                        "rep_range": "8-10",
+                        "rest_seconds": 60,
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "load_programme_runtime",
+        lambda user_id, db_path: runtime,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_ensure_folder",
+        lambda config, *, user_id=None: 55,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_managed_routine_ids",
+        lambda api_key, folder_id: set(),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_migrate_titles",
+        lambda config, *, user_id=None: None,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "get_routine_record",
+        lambda *a, **kw: None,
+    )
+    monkeypatch.setattr(hevy_sync, "get_routines", lambda api_key: [])
+    saved: dict[str, object] = {}
+
+    def fake_create(api_key: str, payload: dict[str, object]) -> dict[str, object]:
+        saved.update(payload)
+        return {"routine": {"id": "managed-new"}}
+
+    monkeypatch.setattr(hevy_sync, "create_routine", fake_create)
+    monkeypatch.setattr(
+        hevy_sync,
+        "update_routine",
+        lambda *a, **kw: pytest.fail("a new managed copy must be created"),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "save_routine_record",
+        lambda *a, **kw: None,
     )
 
     statuses = hevy_sync.sync_routines(config, user_id="user-a")
 
-    assert len(statuses) == 3
-    assert captured
-    assert all(user_id == "user-a" for _operation, user_id in captured)
+    assert statuses == ["Push: created"]
+    routine = saved["routine"]
+    assert isinstance(routine, dict)
+    assert routine["title"] == "Push"
+    assert routine["folder_id"] == 55
+    assert "week 1 of 8" in str(routine["notes"])
+    assert routine["exercises"][0]["exercise_template_id"] == "C7973E0E"
+    assert len(routine["exercises"][0]["sets"]) == 3
+
+
+def test_sync_routines_never_updates_source_routines(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config_for_sync(tmp_path)
+    from programme_runtime import ProgrammeRuntime
+
+    runtime = ProgrammeRuntime(
+        status="active",
+        name="Synthetic programme",
+        week=1,
+        cycle_weeks=8,
+        days=[
+            {
+                "focus": "Push",
+                "exercises": [
+                    {
+                        "name": "Bench Press",
+                        "template_id": "C7973E0E",
+                        "sets": 3,
+                        "rep_range": "8-10",
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "load_programme_runtime",
+        lambda user_id, db_path: runtime,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_ensure_folder",
+        lambda config, *, user_id=None: 55,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_managed_routine_ids",
+        lambda api_key, folder_id: {"managed-1"},
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "_migrate_titles",
+        lambda config, *, user_id=None: None,
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "get_routine_record",
+        lambda title, db_path, *, user_id=None: ("source-1", "tracked-hash"),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "get_routines",
+        lambda api_key: [
+            {"id": "source-1", "title": "Push", "folder_id": 9},
+        ],
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "update_routine",
+        lambda *a, **kw: pytest.fail("source routine must not be updated"),
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "create_routine",
+        lambda api_key, payload: {"routine": {"id": "managed-2"}},
+    )
+    monkeypatch.setattr(
+        hevy_sync,
+        "save_routine_record",
+        lambda *a, **kw: None,
+    )
+
+    assert hevy_sync.sync_routines(config, user_id="user-a") == ["Push: created"]
+
+
+def test_sync_routines_requires_an_active_programme(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    config = _config_for_sync(tmp_path)
+    from programme_runtime import ProgrammeRuntime
+
+    monkeypatch.setattr(
+        hevy_sync,
+        "load_programme_runtime",
+        lambda user_id, db_path: ProgrammeRuntime(status="setup_required"),
+    )
+    assert hevy_sync.sync_routines(config, user_id="user-a") == []

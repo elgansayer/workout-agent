@@ -6,9 +6,9 @@ commit.
 
 ## Instructions
 1. Review the last 10 commits (`git log -10 --stat`). Confirm commit
-   messages are descriptive (not just "fix" or "wip") — if the swarm
-   produced a low-quality message recently, that's informational only, don't
-   rewrite published history.
+   messages are descriptive (not just "fix" or "wip") — if recent automation
+   produced a low-quality message, that's informational only, don't rewrite
+   published history.
 2. Check `git log -p -10 -- .env .env.* data/ '*.db'` returns nothing — no
    environment file or database file should ever have been committed. If one
    was, do not force-push history rewrites unattended; instead add the

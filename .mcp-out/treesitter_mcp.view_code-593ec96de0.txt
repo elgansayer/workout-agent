@@ -1,0 +1,150 @@
+# encryption.py (L90-L238 of 238)
+  90 |     def __init__(self, reason: str) -> None:
+  91 |         super().__init__(f"stored credential could not be decrypted: {reason}")
+  92 |         self.reason = reason
+  93 | 
+  94 | 
+  95 | @dataclass(frozen=True, slots=True, repr=False)
+  96 | class MasterKey:
+  97 |     """Validated master key. The raw material is never exposed via ``repr``."""
+  98 | 
+  99 |     key_id: str
+ 100 |     _material: bytes = field(repr=False)
+ 101 |     _fernet_key: bytes = field(repr=False)
+ 102 | 
+ 103 |     def __repr__(self) -> str:
+ 104 |         return f"MasterKey(key_id={self.key_id!r})"
+ 105 | 
+ 106 | 
+ 107 | def load_master_key(environ: Mapping[str, str] | None = None) -> MasterKey:
+ 108 |     """Load and validate ``ENCRYPTION_KEY``; raise if it cannot be used.
+ 109 | 
+ 110 |     The key must be a canonical URL-safe base64 encoding of exactly 32 bytes
+ 111 |     (the format produced by ``Fernet.generate_key()``), so existing deployments
+ 112 |     keep their key.
+ 113 |     """
+ 114 |     if not _HAS_CRYPTOGRAPHY:
+ 115 |         raise EncryptionUnavailableError("cryptography_missing")
+ 116 | 
+ 117 |     source = os.environ if environ is None else environ
+ 118 |     raw = source.get(ENCRYPTION_KEY_ENV, "").strip()
+ 119 |     if not raw:
+ 120 |         raise EncryptionUnavailableError("not_configured")
+ 121 | 
+ 122 |     try:
+ 123 |         encoded = raw.encode("ascii")
+ 124 |         material = base64.b64decode(
+ 125 |             encoded.replace(b"-", b"+").replace(b"_", b"/"),
+ 126 |             validate=True,
+ 127 |         )
+ 128 |     except (binascii.Error, UnicodeEncodeError, ValueError):
+ 129 |         raise EncryptionUnavailableError("invalid_key") from None
+ 130 |     if (
+ 131 |         len(material) != _MASTER_KEY_BYTES
+ 132 |         or base64.urlsafe_b64encode(material) != encoded
+ 133 |     ):
+ 134 |         raise EncryptionUnavailableError("invalid_key")
+ 135 | 
+ 136 |     key_id = hmac.new(material, _KEY_ID_LABEL, hashlib.sha256).hexdigest()[:8]
+ 137 |     return MasterKey(key_id=key_id, _material=material, _fernet_key=encoded)
+ 138 | 
+ 139 | 
+ 140 | def is_sealed(value: str | None) -> bool:
+ 141 |     """Return whether *value* was produced by :func:`seal` (any key)."""
+ 142 |     return isinstance(value, str) and value.startswith(f"{SEALED_PREFIX}.")
+ 143 | 
+ 144 | 
+ 145 | def _binding(user_id: str, provider: str, field_name: str) -> bytes:
+ 146 |     parts = (user_id, provider, field_name)
+ 147 |     if any((not part) or "\x00" in part for part in parts):
+ 148 |         raise ValueError("credential binding components must be non-empty text")
+ 149 |     return b"\x00".join((_SCHEME_LABEL, *(part.encode("utf-8") for part in parts)))
+ 150 | 
+ 151 | 
+ 152 | def _user_key(master: MasterKey, user_id: str) -> bytes:
+ 153 |     return HKDF(
+ 154 |         algorithm=hashes.SHA256(),
+ 155 |         length=_DERIVED_KEY_BYTES,
+ 156 |         salt=_SCHEME_LABEL,
+ 157 |         info=b"user:" + user_id.encode("utf-8"),
+ 158 |     ).derive(master._material)
+ 159 | 
+ 160 | 
+ 161 | def seal(
+ 162 |     master: MasterKey,
+ 163 |     *,
+ 164 |     user_id: str,
+ 165 |     provider: str,
+ 166 |     field_name: str,
+ 167 |     plaintext: str,
+ 168 | ) -> str:
+ 169 |     """Encrypt *plaintext* for one user's credential field.
+ 170 | 
+ 171 |     The result is ``wv2.<key id>.<base64url(nonce || ciphertext || tag)>``.
+ 172 |     """
+ 173 |     aad = _binding(user_id, provider, field_name)
+ 174 |     nonce = os.urandom(_NONCE_BYTES)
+ 175 |     sealed = AESGCM(_user_key(master, user_id)).encrypt(
+ 176 |         nonce,
+ 177 |         plaintext.encode("utf-8"),
+ 178 |         aad,
+ 179 |     )
+ 180 |     body = base64.urlsafe_b64encode(nonce + sealed).rstrip(b"=").decode("ascii")
+ 181 |     return f"{SEALED_PREFIX}.{master.key_id}.{body}"
+ 182 | 
+ 183 | 
+ 184 | def open_sealed(
+ 185 |     master: MasterKey,
+ 186 |     *,
+ 187 |     user_id: str,
+ 188 |     provider: str,
+ 189 |     field_name: str,
+ 190 |     token: str,
+ 191 | ) -> str:
+ 192 |     """Decrypt a value produced by :func:`seal` for the same binding.
+ 193 | 
+ 194 |     Raises :class:`DecryptionError` when the token is malformed, was sealed under
+ 195 |     a different master key, belongs to a different user/provider/field, or was
+ 196 |     tampered with.
+ 197 |     """
+ 198 |     aad = _binding(user_id, provider, field_name)
+ 199 |     parts = token.split(".")
+ 200 |     if len(parts) != 3 or parts[0] != SEALED_PREFIX:
+ 201 |         raise DecryptionError("malformed")
+ 202 |     if parts[1] != master.key_id:
+ 203 |         raise DecryptionError("key_mismatch")
+ 204 |     try:
+ 205 |         padded = parts[2] + "=" * (-len(parts[2]) % 4)
+ 206 |         blob = base64.urlsafe_b64decode(padded.encode("ascii"))
+ 207 |     except (binascii.Error, UnicodeEncodeError, ValueError):
+ 208 |         raise DecryptionError("malformed") from None
+ 209 |     if len(blob) < _NONCE_BYTES + _TAG_BYTES:
+ 210 |         raise DecryptionError("malformed")
+ 211 | 
+ 212 |     try:
+ 213 |         plaintext = AESGCM(_user_key(master, user_id)).decrypt(
+ 214 |             blob[:_NONCE_BYTES],
+ 215 |             blob[_NONCE_BYTES:],
+ 216 |             aad,
+ 217 |         )
+ 218 |         return plaintext.decode("utf-8")
+ 219 |     except InvalidTag:
+ 220 |         raise DecryptionError("authentication_failed") from None
+ 221 |     except UnicodeDecodeError:
+ 222 |         raise DecryptionError("malformed") from None
+ 223 | 
+ 224 | 
+ 225 | def read_legacy_value(master: MasterKey, value: str) -> str:
+ 226 |     """Read a credential stored before the vault existed (migration only).
+ 227 | 
+ 228 |     Legacy rows are either Fernet tokens produced under the master key or, when
+ 229 |     encryption was not configured at the time, the plaintext itself. A value
+ 230 |     that looks like a Fernet token but cannot be decrypted is *not* treated as
+ 231 |     plaintext: it was encrypted under a different key and must fail closed.
+ 232 |     """
+ 233 |     if not value.startswith(_LEGACY_FERNET_PREFIX):
+ 234 |         return value
+ 235 |     try:
+ 236 |         return Fernet(master._fernet_key).decrypt(value.encode("ascii")).decode("utf-8")
+ 237 |     except (InvalidToken, UnicodeError, ValueError):
+ 238 |         raise DecryptionError("legacy_undecryptable") from None

@@ -1,0 +1,54 @@
+# app.py (L2773-L2825 of 3061)
+2773 |                 training_rules=get_training_rules(user_id, DB_PATH),
+2774 |             )
+2775 |             connection = {
+2776 |                 "state": "connected",
+2777 |                 "detail": None,
+2778 |                 "username": training_data.username,
+2779 |             }
+2780 |         except HTTPException as exc:
+2781 |             connection = {
+2782 |                 "state": "error",
+2783 |                 "detail": str(exc.detail),
+2784 |                 "username": None,
+2785 |             }
+2786 | 
+2787 |     if active and active.get("source") == "hevy":
+2788 |         if connection["state"] == "connected":
+2789 |             source_drift = detect_source_drift(active.get("definition"), source)
+2790 |         else:
+2791 |             source_drift = {
+2792 |                 "status": "source_unavailable",
+2793 |                 "has_changes": False,
+2794 |                 "routines": [],
+2795 |                 "summary": {"renamed": 0, "content_changed": 0, "removed": 0},
+2796 |                 "detail": (
+2797 |                     "Reconnect Hevy to check whether your selected routines have changed."
+2798 |                 ),
+2799 |             }
+2800 |     else:
+2801 |         source_drift = detect_source_drift(None, source)
+2802 | 
+2803 |     return JSONResponse(
+2804 |         jsonable_encoder(
+2805 |             {
+2806 |                 "active_programme": active,
+2807 |                 "current_state": active,
+2808 |                 "source_drift": source_drift,
+2809 |                 "templates": [],
+2810 |                 "connection": connection,
+2811 |                 "source": source,
+2812 |                 "duration": {
+2813 |                     "minimum_weeks": MIN_DURATION_WEEKS,
+2814 |                     "maximum_weeks": MAX_DURATION_WEEKS,
+2815 |                     "default_weeks": 12,
+2816 |                 },
+2817 |                 "goals": goal_options(),
+2818 |             }
+2819 |         )
+2820 |     )
+2821 | 
+2822 | 
+2823 | @app.get("/api/settings")
+2824 | def api_settings(request: Request):
+2825 |     user_id = _check_api_auth(request)

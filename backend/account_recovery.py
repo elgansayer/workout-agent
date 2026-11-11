@@ -583,14 +583,16 @@ def resolve_oauth_account(
             user_id = str(uuid.uuid4())
             conn.execute(
                 "INSERT INTO users (id, email, display_name, created_at, status, "
-                "email_verified, email_verified_at, last_login_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                "status_changed_at, email_verified, email_verified_at, "
+                "last_login_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
                 (
                     user_id,
                     canonical,
                     display_name,
                     stamp,
                     ACCOUNT_STATUS_ACTIVE,
+                    stamp,
                     stamp,
                     stamp,
                     stamp,

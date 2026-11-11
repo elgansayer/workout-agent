@@ -1,0 +1,151 @@
+# gemini_engine.py (L84-L233 of 378)
+  84 | def _build_prompt(
+  85 |     runtime: ProgrammeRuntime,
+  86 |     day: dict[str, Any],
+  87 |     workout_summary: WorkoutSummary | None,
+  88 |     recovery: dict[str, Any] | None,
+  89 |     history: dict[str, dict[str, Any]] | None,
+  90 |     insights: TrainingInsights | None = None,
+  91 |     last_plan: str | None = None,
+  92 |     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+  93 | ) -> str:
+  94 |     focus = str(day.get("focus") or "Training")
+  95 |     baseline = _baseline_plan(runtime, day)
+  96 |     structured_rules_str = format_rules_for_prompt(rules)
+  97 |     workout_text = workout_summary.as_text() if workout_summary else "None available."
+  98 |     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
+  99 |     history_text = _format_history(history)
+ 100 |     insights_text = insights.as_text() if insights else "Not enough history yet."
+ 101 |     last_plan_text = last_plan if last_plan else "None available."
+ 102 | 
+ 103 |     return f"""You are the user's training coach. Explain and format the validated prescription below.
+ 104 | 
+ 105 | {_programme_header(runtime)}
+ 106 | 
+ 107 | Today's routine: {focus}.
+ 108 | 
+ 109 | The deterministic prescription is the source of truth. Do NOT add, remove, swap,
+ 110 | re-order, or change any exercise, set, rep target, load, tempo, or rest period.
+ 111 | Do not infer a load that is not in the prescription. If you mention an
+ 112 | adjustment, it must already be present in the prescription or the structured
+ 113 | rules.
+ 114 | 
+ 115 | {structured_rules_str}
+ 116 | 
+ 117 | Validated prescription:
+ 118 | {baseline}
+ 119 | 
+ 120 | The plan shown last session:
+ 121 | {last_plan_text}
+ 122 | 
+ 123 | Most recent logged session (actual execution, for context only):
+ 124 | {workout_text}
+ 125 | 
+ 126 | Per-exercise bests on record:
+ 127 | {history_text}
+ 128 | 
+ 129 | Recovery metrics (optional; may be absent or stale):
+ 130 | {recovery_json}
+ 131 | 
+ 132 | Recent trend context:
+ 133 | {insights_text}
+ 134 | 
+ 135 | Your task:
+ 136 | - Output the validated prescription in the same order, with the same exercises,
+ 137 |   sets, and rep targets.
+ 138 | - You may add a short parenthetical note only when it explains an existing
+ 139 |   prescribed adjustment or a structured-rule substitution.
+ 140 | - Act on the recovery and trend context only to the extent allowed by the
+ 141 |   structured rules; never invent extra volume or load.
+ 142 | 
+ 143 | Strict output format:
+ 144 | - Plain text only. No markdown, no asterisks, no bold, no headings.
+ 145 | - First line exactly: "{focus} - Week {runtime.week}".
+ 146 | - Then one exercise per line as "Name: sets x reps".
+ 147 | - No intro, no assessment, no motivation, no tips, no closing line.
+ 148 | 
+ 149 | Use British English. Never use the em dash."""
+ 150 | 
+ 151 | 
+ 152 | def generate_next_workout(
+ 153 |     provider: AIProvider,
+ 154 |     *,
+ 155 |     runtime: ProgrammeRuntime,
+ 156 |     day: dict[str, Any],
+ 157 |     workout_summary: WorkoutSummary | None = None,
+ 158 |     recovery: dict[str, Any] | None = None,
+ 159 |     history: dict[str, dict[str, Any]] | None = None,
+ 160 |     insights: TrainingInsights | None = None,
+ 161 |     last_plan: str | None = None,
+ 162 |     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+ 163 |     **_kwargs: Any,
+ 164 | ) -> str:
+ 165 |     """Format the deterministic prescription, falling back to the baseline."""
+ 166 |     effective_rules = rules or _kwargs.get("rules")
+ 167 |     rules_obj = (
+ 168 |         StructuredTrainingRules.from_raw(effective_rules)
+ 169 |         if effective_rules
+ 170 |         else None
+ 171 |     )
+ 172 | 
+ 173 |     try:
+ 174 |         prompt = _build_prompt(
+ 175 |             runtime,
+ 176 |             day,
+ 177 |             workout_summary,
+ 178 |             recovery,
+ 179 |             history,
+ 180 |             insights,
+ 181 |             last_plan,
+ 182 |             rules=rules_obj,
+ 183 |         )
+ 184 |         text = str(provider.generate(prompt)).strip()
+ 185 |         if text:
+ 186 |             baseline = _baseline_plan(runtime, day)
+ 187 |             if _prescription_preserved(baseline, text) and rules_obj:
+ 188 |                 enforced, _ = enforce_rules_on_plan_text(
+ 189 |                     text, rules_obj, recovery=recovery
+ 190 |                 )
+ 191 |                 return enforced
+ 192 |             if _prescription_preserved(baseline, text):
+ 193 |                 return text
+ 194 |             logger.warning(
+ 195 |                 "AI output changed the validated prescription; using baseline."
+ 196 |             )
+ 197 |         else:
+ 198 |             logger.warning("AI provider returned an empty response; using baseline plan.")
+ 199 |     except Exception as exc:  # noqa: BLE001
+ 200 |         logger.warning("AI generation failed (%s); using baseline plan.", exc)
+ 201 | 
+ 202 |     fallback = _baseline_plan(runtime, day)
+ 203 |     if rules_obj:
+ 204 |         fallback, _ = enforce_rules_on_plan_text(
+ 205 |             fallback, rules_obj, recovery=recovery
+ 206 |         )
+ 207 |     return fallback
+ 208 | 
+ 209 | 
+ 210 | def _prescription_preserved(baseline: str, candidate: str) -> bool:
+ 211 |     """Reject generated prose that drops or rewrites a prescribed exercise/scheme."""
+ 212 | 
+ 213 |     def parse(text: str) -> list[tuple[str, str]]:
+ 214 |         parsed: list[tuple[str, str]] = []
+ 215 |         for line in text.splitlines()[1:]:
+ 216 |             if ":" not in line:
+ 217 |                 continue
+ 218 |             name, scheme = line.split(":", 1)
+ 219 |             scheme = scheme.split("(", 1)[0].strip()
+ 220 |             scheme = " ".join(scheme.replace("×", "x").lower().split())
+ 221 |             parsed.append((name.strip().lower(), scheme))
+ 222 |         return parsed
+ 223 | 
+ 224 |     expected = parse(baseline)
+ 225 |     actual = parse(candidate)
+ 226 |     return bool(expected) and actual == expected
+ 227 | 
+ 228 | 
+ 229 | def _fallback_plan(runtime: ProgrammeRuntime, day: dict[str, Any]) -> str:
+ 230 |     return _baseline_plan(runtime, day)
+ 231 | 
+ 232 | 
+ 233 | baseline_plan = _baseline_plan

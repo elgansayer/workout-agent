@@ -1,7 +1,7 @@
 # Workout Agent privacy notice
 
-**Notice version:** 1.0.0  
-**Effective date:** 2026-08-20  
+**Notice version:** 1.1.0  
+**Effective date:** 2026-11-10  
 **Machine-readable inventory:** `docs/data-flow-inventory.json`
 
 Workout Agent is a self-hosted training and coaching application. This notice explains what information the application can process, why it is processed, which external services may receive it, and the controls available to a user or deployment operator. A deployment operator may need to supplement this notice with its own legal identity, contact details, hosting location, and jurisdiction-specific terms.
@@ -11,11 +11,13 @@ Workout Agent is a self-hosted training and coaching application. This notice ex
 Depending on the features a user enables, Workout Agent can process:
 
 - account and identity data such as email address, display name, account identifiers, session metadata, locale and preferences;
+- account access-control data such as an operator's invitation for an address, the account's status (active, suspended or deleted) and the session-revocation counter used to end sessions;
 - workout and programme data such as exercises, sets, repetitions, loads, routines, programme blocks, check-ins and training history;
 - health and wellness data such as body metrics, sleep, recovery, readiness, activity and other records imported from an enabled health connector;
 - coaching data such as goals, constraints, chat messages, prompts, generated recommendations, reasoning records and feedback;
 - connector metadata such as provider account identifiers, sync cursors, connection state and timestamps;
-- credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission;
+- record provenance and correction history, meaning where each stored value came from (an import, something the user entered, or a generated recommendation), when it was stored, and the earlier values and optional reasons kept when a user corrects a reading;
+- credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission; a supplied connector credential is checked against the provider before it is activated, and the resulting connected account identifier, verification time, API version and capability metadata are stored with the tenant's connection record;
 - notification delivery data such as Telegram chat identifiers or web-push subscriptions when those channels are enabled;
 - operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service.
 
@@ -24,6 +26,8 @@ The application should not require unrelated personal information. Do not put se
 ## Why we use the data
 
 Workout Agent uses these data to authenticate users, import and normalise training or health records, build and adapt programmes, calculate progress and recovery signals, provide AI-assisted coaching, deliver user-requested notifications, support exports/deletion workflows, diagnose connector failures, and secure the service.
+
+Who may sign in to a deployment is decided on the server: an address allowlist, an invitation requirement for new accounts, and the account's own status are all enforced by the application, and a change to any of them ends the affected sessions. Refusals are logged without the address, token or any other secret. See `docs/ACCOUNT_ACCESS_POLICY.md`.
 
 AI processing is optional and provider-dependent. When a user selects an AI provider, the prompt and the minimum context needed for the requested coaching feature can be sent to that provider. Users should avoid putting unnecessary identifying information in free-text coaching fields.
 
@@ -42,15 +46,19 @@ Each external provider operates under its own terms and privacy policy. The depl
 
 ## Retention and deletion
 
-The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser/session data is bounded by session and browser storage behaviour. External providers may retain data under their own policies after receiving a request.
+The machine-readable inventory records the intended retention rule for each system and flow. In the current self-hosted design, primary account, workout, coaching and health records are stored in the configured database until they are deleted by the application or deployment operator. Connector credentials remain only while the relevant connection is enabled or until revoked/deleted. Browser sessions are bounded by server-enforced idle and absolute limits (by default 3 and 14 days), can be revoked per device or for all devices, and are recorded only as one-way digests of the session identifier that are purged shortly after the session ends. External providers may retain data under their own policies after receiving a request.
+
+Security audit records (sign-ins, failed sign-ins, session revocation, credential and connector changes, deletions, permission changes and the alerts derived from them) are written to an append-only, tamper-evident table so account and integration changes stay attributable. They hold pseudonymous references to network addresses and attempted sign-in identities, never credentials, health data or prompts, and are not purged by the application; the deployment operator sets and applies their retention. See `docs/SECURITY_AUDIT_LOGGING.md`.
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 
-A deployment must not claim that account deletion, backup purging or provider-side deletion is automatic unless those paths are actually configured and verified. Where a complete automated deletion flow is not yet available, the operator must handle a verified deletion request using the documented operational process.
+Users can erase their health data, or close their account and erase everything, from **Settings → Account and data**. Account closure waits out a cancellation window (default 7 days) and then removes primary records, derived insights, caches, notifications, connector tokens, API keys and retained exports, and verifies the result. What is deliberately retained is limited to an anonymous deletion tombstone, the append-only security and credential audit records described above, encrypted backups until they expire, and copies already held by other systems; see [`ACCOUNT_DELETION.md`](ACCOUNT_DELETION.md) for the exact scope and the operator procedures.
+
+A deployment must not claim that backup purging or provider-side deletion is automatic: backups are not rewritten and connected providers are not asked to delete or revoke anything. A deferred account closure is carried out by the scheduler process, so an operator must keep it running and must verify deletion requests that show as `failed` or overdue.
 
 ## Your choices and rights
 
-Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export, correction or deletion of their account data and can withdraw consent for optional processing.
+Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export or correction of their account data and can withdraw consent for optional processing. Deletion is self-service in Settings → Account and data.
 
 Applicable legal rights vary by jurisdiction. The deployment operator is responsible for authenticating a requester before disclosing, changing or deleting account data and for responding within any legally required period.
 

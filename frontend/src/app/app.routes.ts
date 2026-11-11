@@ -8,7 +8,6 @@ import { Checkins } from './components/checkins/checkins';
 import { History } from './components/history/history';
 import { Login } from './components/login/login';
 import { Plan } from './components/plan/plan';
-import { Programmes } from './components/programmes/programmes';
 import { Progress } from './components/progress/progress';
 import { Recover } from './components/recover/recover';
 import { Settings } from './components/settings/settings';
@@ -51,7 +50,8 @@ export const routes: Routes = [
   { path: 'plan', component: Plan, title: 'Plan · Workout Agent', canActivate: [authGuard] },
   {
     path: 'programmes',
-    component: Programmes,
+    loadComponent: () =>
+      import('./components/programmes/programmes').then((m) => m.Programmes),
     title: 'Programme builder · Workout Agent',
     canActivate: [authGuard],
   },

@@ -327,7 +327,12 @@ def web(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Web:
     monkeypatch.setattr(app_module, "_send_account_email", sent.append)
     from fastapi.testclient import TestClient
 
-    return Web(TestClient(app_module.app), app_module, db, sent)
+    return Web(
+        TestClient(app_module.app, base_url="https://workout.example.com"),
+        app_module,
+        db,
+        sent,
+    )
 
 
 def test_recovery_route_is_enumeration_safe_and_completes(web: Web) -> None:
@@ -398,12 +403,15 @@ def test_email_change_route_refuses_stale_authentication(web: Web) -> None:
     assert web.client.post(
         "/api/account/recovery/complete", json={"token": token}
     ).status_code == 200
+    cookie_name = web.module.SESSION_SECURITY.cookie.name
     with web.client as client:
-        cookie = client.cookies.get("session")
+        cookie = client.cookies.get(cookie_name)
     assert cookie
     # Replace the session with the same identity but no recent-auth claim.
     web.client.cookies.clear()
-    web.client.cookies.set("session", _signed_session(web.module, _EMAIL, user_id))
+    web.client.cookies.set(
+        cookie_name, _signed_session(web.module, _EMAIL, user_id)
+    )
 
     response = web.client.post(
         "/api/account/email/request", json={"email": _NEW_EMAIL}
@@ -484,7 +492,7 @@ def _signed_session(module: ModuleType, email: str, user_id: str) -> str:
 
     from itsdangerous import TimestampSigner
 
-    payload = base64.b64encode(
-        json.dumps({"user": email, "user_id": user_id}).encode()
-    )
+    session: dict[str, Any] = {}
+    module.SESSION_LIFECYCLE.establish(session, user_id=user_id, email=email)
+    payload = base64.b64encode(json.dumps(session).encode())
     return TimestampSigner(module.WEB_AUTH_SECRET).sign(payload).decode()

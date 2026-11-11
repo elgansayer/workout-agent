@@ -1,0 +1,95 @@
+# csrf_security.py (L240-L333 of 333)
+ 240 | class CSRFMiddleware(BaseHTTPMiddleware):
+ 241 |     """Require one-time CSRF tokens for session-authenticated unsafe methods."""
+ 242 | 
+ 243 |     def __init__(
+ 244 |         self,
+ 245 |         app: ASGIApp,
+ 246 |         *,
+ 247 |         db_path: str,
+ 248 |         session_secret: str,
+ 249 |         trusted_origins: Iterable[str] = (),
+ 250 |         session_cookie_name: str = "session",
+ 251 |         ttl_seconds: int = CSRF_TOKEN_TTL_SECONDS,
+ 252 |         session_max_age_seconds: int = SESSION_MAX_AGE_SECONDS,
+ 253 |         session_validator: SessionValidator | None = None,
+ 254 |     ) -> None:
+ 255 |         super().__init__(app)
+ 256 |         self.store = CSRFTokenStore(db_path, ttl_seconds=ttl_seconds)
+ 257 |         self.session_identity = SignedSessionIdentity(
+ 258 |             session_secret,
+ 259 |             max_age_seconds=session_max_age_seconds,
+ 260 |             session_validator=session_validator,
+ 261 |         )
+ 262 |         self.session_cookie_name = session_cookie_name
+ 263 |         self.trusted_origins = frozenset(
+ 264 |             origin
+ 265 |             for value in trusted_origins
+ 266 |             if (origin := _normalise_origin(value)) is not None
+ 267 |         )
+ 268 | 
+ 269 |     def _validated_session(self, request: Request) -> tuple[str, str] | None:
+ 270 |         session_cookie = request.cookies.get(self.session_cookie_name)
+ 271 |         if not session_cookie:
+ 272 |             return None
+ 273 |         user_id = self.session_identity.user_id(session_cookie)
+ 274 |         if not user_id:
+ 275 |             return None
+ 276 |         return user_id, session_cookie
+ 277 | 
+ 278 |     def _token_response(self, request: Request) -> Response:
+ 279 |         validated = self._validated_session(request)
+ 280 |         if validated is None:
+ 281 |             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+ 282 |         if not _origin_is_trusted(request, self.trusted_origins):
+ 283 |             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
+ 284 | 
+ 285 |         user_id, session_cookie = validated
+ 286 |         token = self.store.issue(user_id, session_cookie)
+ 287 |         response = JSONResponse(
+ 288 |             {"token": token, "expires_in": self.store.ttl_seconds},
+ 289 |             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+ 290 |         )
+ 291 | 
+ 292 |         # The Angular client may be served from a separately configured origin.
+ 293 |         # Mirror only an origin that already passed the explicit trust check.
+ 294 |         origin = request.headers.get("origin")
+ 295 |         normalised = _normalise_origin(origin) if origin else None
+ 296 |         current = _request_origin(request)
+ 297 |         if normalised and normalised != current and normalised in self.trusted_origins:
+ 298 |             response.headers["Access-Control-Allow-Origin"] = origin
+ 299 |             response.headers["Access-Control-Allow-Credentials"] = "true"
+ 300 |             response.headers["Vary"] = "Origin"
+ 301 |         return response
+ 302 | 
+ 303 |     async def dispatch(
+ 304 |         self,
+ 305 |         request: Request,
+ 306 |         call_next: RequestResponseEndpoint,
+ 307 |     ) -> Response:
+ 308 |         if request.method == "GET" and request.url.path == CSRF_TOKEN_PATH:
+ 309 |             return self._token_response(request)
+ 310 | 
+ 311 |         if request.method.upper() not in _UNSAFE_METHODS:
+ 312 |             return await call_next(request)
+ 313 | 
+ 314 |         session_cookie = request.cookies.get(self.session_cookie_name)
+ 315 |         if not session_cookie:
+ 316 |             # Non-cookie requests (including connector webhooks) must rely on
+ 317 |             # their route-specific authentication/signature checks. There is no
+ 318 |             # path allowlist that could accidentally exempt a browser session.
+ 319 |             return await call_next(request)
+ 320 | 
+ 321 |         user_id = self.session_identity.user_id(session_cookie)
+ 322 |         if not user_id:
+ 323 |             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+ 324 |         if not _origin_is_trusted(request, self.trusted_origins):
+ 325 |             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
+ 326 | 
+ 327 |         token = request.headers.get(CSRF_HEADER_NAME, "")
+ 328 |         if not self.store.consume(user_id, session_cookie, token):
+ 329 |             return JSONResponse(
+ 330 |                 {"detail": "Invalid or expired CSRF token"},
+ 331 |                 status_code=403,
+ 332 |             )
+ 333 |         return await call_next(request)

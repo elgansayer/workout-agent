@@ -1,0 +1,151 @@
+# session_security.py (L300-L449 of 570)
+ 300 | 
+ 301 |         Anything malformed is simply ``UNKNOWN``.  When the session is active
+ 302 |         and ``touch`` is set, its last-seen time is refreshed (at most once per
+ 303 |         ``SessionLifetimePolicy.touch_interval``) on a best-effort basis.
+ 304 |         """
+ 305 | 
+ 306 |         if not _is_session_id(session_id) or not _is_user_id(user_id):
+ 307 |             return SessionState.UNKNOWN
+ 308 |         now = self._now()
+ 309 |         digest = _digest(session_id)
+ 310 |         with self._connection() as conn:
+ 311 |             row = conn.execute(
+ 312 |                 "SELECT user_id, created_at, last_seen_at, revoked_at "
+ 313 |                 "FROM user_sessions WHERE session_token_hash = ?",
+ 314 |                 (digest,),
+ 315 |             ).fetchone()
+ 316 |             if row is None:
+ 317 |                 return SessionState.UNKNOWN
+ 318 |             owner, created_at, last_seen_at, revoked_at = row
+ 319 |             if owner != user_id:
+ 320 |                 return SessionState.OWNER_MISMATCH
+ 321 |             if revoked_at is not None:
+ 322 |                 return SessionState.REVOKED
+ 323 |             if now - created_at >= self.lifetime.absolute_timeout:
+ 324 |                 return SessionState.ABSOLUTE_EXPIRED
+ 325 |             if now - last_seen_at >= self.lifetime.idle_timeout:
+ 326 |                 return SessionState.IDLE_EXPIRED
+ 327 |             if touch and now - last_seen_at >= self.lifetime.touch_interval:
+ 328 |                 try:
+ 329 |                     conn.execute(
+ 330 |                         "UPDATE user_sessions SET last_seen_at = ? "
+ 331 |                         "WHERE session_token_hash = ? AND user_id = ? "
+ 332 |                         "AND revoked_at IS NULL AND last_seen_at < ?",
+ 333 |                         (now, digest, owner, now),
+ 334 |                     )
+ 335 |                 except sqlite3.OperationalError:
+ 336 |                     # A busy writer must not turn a valid request into an error;
+ 337 |                     # the next request will refresh the timestamp.
+ 338 |                     logger.debug("Skipped session last-seen refresh: database busy")
+ 339 |         return SessionState.ACTIVE
+ 340 | 
+ 341 |     def is_active_payload(self, payload: Mapping[str, Any]) -> bool:
+ 342 |         """Registry check for a decoded session payload, without refreshing it."""
+ 343 | 
+ 344 |         state = self.check(
+ 345 |             payload.get(SESSION_ID_KEY), payload.get("user_id"), touch=False
+ 346 |         )
+ 347 |         return state is SessionState.ACTIVE
+ 348 | 
+ 349 |     def revoke(self, session_id: object, user_id: object, *, reason: str) -> bool:
+ 350 |         """Revoke one session owned by ``user_id``; ``True`` if it was live."""
+ 351 | 
+ 352 |         if not _is_session_id(session_id) or not _is_user_id(user_id):
+ 353 |             return False
+ 354 |         with self._connection() as conn:
+ 355 |             cursor = conn.execute(
+ 356 |                 "UPDATE user_sessions SET revoked_at = ?, revoked_reason = ? "
+ 357 |                 "WHERE session_token_hash = ? AND user_id = ? AND revoked_at IS NULL",
+ 358 |                 (self._now(), reason, _digest(session_id), user_id),
+ 359 |             )
+ 360 |             return cursor.rowcount == 1
+ 361 | 
+ 362 |     def revoke_all(self, user_id: object, *, reason: str) -> int:
+ 363 |         """Revoke every session of ``user_id``; return how many were still active.
+ 364 | 
+ 365 |         Rows that already aged out are revoked too, so loosening a timeout later
+ 366 |         can never bring a signed-out device back to life.
+ 367 |         """
+ 368 | 
+ 369 |         if not _is_user_id(user_id):
+ 370 |             return 0
+ 371 |         now = self._now()
+ 372 |         with self._connection() as conn, self._write_transaction(conn):
+ 373 |             active = conn.execute(
+ 374 |                 "SELECT COUNT(*) FROM user_sessions "
+ 375 |                 "WHERE user_id = ? AND revoked_at IS NULL "
+ 376 |                 "AND created_at > ? AND last_seen_at > ?",
+ 377 |                 (
+ 378 |                     user_id,
+ 379 |                     now - self.lifetime.absolute_timeout,
+ 380 |                     now - self.lifetime.idle_timeout,
+ 381 |                 ),
+ 382 |             ).fetchone()[0]
+ 383 |             conn.execute(
+ 384 |                 "UPDATE user_sessions SET revoked_at = ?, revoked_reason = ? "
+ 385 |                 "WHERE user_id = ? AND revoked_at IS NULL",
+ 386 |                 (now, reason, user_id),
+ 387 |             )
+ 388 |         return int(active)
+ 389 | 
+ 390 |     def _purge(self, conn: sqlite3.Connection, now: int) -> None:
+ 391 |         retention = self.lifetime.dead_session_retention
+ 392 |         conn.execute(
+ 393 |             "DELETE FROM user_sessions "
+ 394 |             "WHERE (revoked_at IS NOT NULL AND revoked_at <= ?) "
+ 395 |             "OR created_at <= ? OR last_seen_at <= ?",
+ 396 |             (
+ 397 |                 now - retention,
+ 398 |                 now - self.lifetime.absolute_timeout - retention,
+ 399 |                 now - self.lifetime.idle_timeout - retention,
+ 400 |             ),
+ 401 |         )
+ 402 | 
+ 403 | 
+ 404 | def _claims_identity(session: Mapping[str, Any]) -> bool:
+ 405 |     return any(key in session for key in _IDENTITY_KEYS)
+ 406 | 
+ 407 | 
+ 408 | class SessionRegistryGuard:
+ 409 |     """Empty any session the registry does not honour before the app sees it.
+ 410 | 
+ 411 |     This sits immediately inside the session middleware, which has already
+ 412 |     decoded the signed cookie into ``scope['session']``.  Because it runs before
+ 413 |     the authentication boundary, the mutation guard and every route, those all
+ 414 |     observe a revoked, expired, forged-owner or legacy session as logged out,
+ 415 |     and the session middleware answers with a cookie-deleting ``Set-Cookie``.
+ 416 |     """
+ 417 | 
+ 418 |     def __init__(
+ 419 |         self,
+ 420 |         app: ASGIApp,
+ 421 |         *,
+ 422 |         store: SessionStore,
+ 423 |         identity_allowed: Callable[[object], bool] | None = None,
+ 424 |     ) -> None:
+ 425 |         self.app = app
+ 426 |         self.store = store
+ 427 |         self.identity_allowed = identity_allowed
+ 428 | 
+ 429 |     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+ 430 |         if scope["type"] not in ("http", "websocket"):
+ 431 |             await self.app(scope, receive, send)
+ 432 |             return
+ 433 | 
+ 434 |         session = scope.get("session")
+ 435 |         if isinstance(session, MutableMapping) and _claims_identity(session):
+ 436 |             try:
+ 437 |                 accepted = await run_in_threadpool(self._accepts, dict(session))
+ 438 |             except (sqlite3.Error, OSError):
+ 439 |                 logger.exception("Session registry unavailable; refusing the request")
+ 440 |                 await self._unavailable(scope, receive, send)
+ 441 |                 return
+ 442 |             if not accepted:
+ 443 |                 session.clear()
+ 444 |         await self.app(scope, receive, send)
+ 445 | 
+ 446 |     def _accepts(self, claimed: Mapping[str, Any]) -> bool:
+ 447 |         session_id = claimed.get(SESSION_ID_KEY)
+ 448 |         user_id = claimed.get("user_id")
+ 449 |         state = self.store.check(session_id, user_id)

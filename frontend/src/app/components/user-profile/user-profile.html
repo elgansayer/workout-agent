@@ -41,6 +41,7 @@
 
     <div class="actions">
       <a href="/settings" class="btn btn-ghost">Edit coaching preferences</a>
+      <a href="/settings?section=account" class="btn btn-ghost">Delete account or data</a>
       <button
         (click)="logout()"
         class="inline-block bg-gradient-to-br from-green-400 to-[#36c06a] text-[#07210f] font-bold text-[0.9rem] no-underline border border-transparent rounded-lg px-4 py-2 cursor-pointer transition-all duration-300 shadow-[0_2px_8px_rgba(0,0,0,0.15)] hover:brightness-110 hover:-translate-y-[1px] hover:shadow-[0_6px_20px_rgba(74,222,128,0.2)] btn-danger"
@@ -49,4 +50,24 @@
       </button>
     </div>
   </div>
+
+  <section class="card" aria-labelledby="sessions-heading">
+    <h2 id="sessions-heading">Sessions</h2>
+    <p id="logout-all-help" class="muted">
+      Signed in somewhere you no longer use, or lost a device? This ends every session for your
+      account on every browser and device, including this one. You will need to sign in again.
+    </p>
+    <button
+      type="button"
+      class="btn btn-ghost btn-danger"
+      aria-describedby="logout-all-help"
+      [disabled]="signingOutEverywhere()"
+      (click)="logoutAllDevices()"
+    >
+      Sign out of all devices
+    </button>
+    @if (error()) {
+      <p class="panel error-panel" role="alert">{{ error() }}</p>
+    }
+  </section>
 </div>
