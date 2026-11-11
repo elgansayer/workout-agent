@@ -1568,6 +1568,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "user_api_keys",
         "push_subscriptions",
         "notifications",
+        "user_sessions",
         "user_preferences",
         "programmes",
         "hevy_routine_snapshots",

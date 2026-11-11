@@ -268,11 +268,18 @@ class SessionStore:
             raise
         conn.execute("COMMIT")
 
-    def create(self, user_id: str) -> str:
+    def create(
+        self,
+        user_id: str,
+        *,
+        device: str | None = None,
+        location: str | None = None,
+    ) -> str:
         """Register a new session for ``user_id`` and return its raw identifier.
 
         The raw identifier is returned exactly once, to be placed in the signed
-        cookie; only its digest is persisted.
+        cookie; only its digest is persisted. ``device`` and ``location`` are
+        coarse display metadata for the account session list.
         """
 
         if not _is_user_id(user_id):
@@ -283,9 +290,10 @@ class SessionStore:
             self._purge(conn, now)
             conn.execute(
                 "INSERT INTO user_sessions "
-                "(session_token_hash, user_id, created_at, last_seen_at) "
-                "VALUES (?, ?, ?, ?)",
-                (_digest(session_id), user_id, now, now),
+                "(session_token_hash, user_id, created_at, last_seen_at, "
+                "device, location) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (_digest(session_id), user_id, now, now, device, location),
             )
         return session_id
 
@@ -515,6 +523,8 @@ class SessionLifecycle:
         *,
         user_id: str,
         email: str,
+        device: str | None = None,
+        location: str | None = None,
     ) -> None:
         """Sign ``user_id`` in on a brand-new session identifier.
 
@@ -525,7 +535,7 @@ class SessionLifecycle:
         session data, including leftover OAuth state, is discarded.
         """
 
-        new_session_id = self.store.create(user_id)
+        new_session_id = self.store.create(user_id, device=device, location=location)
         self._revoke_current(session, REVOKE_REAUTHENTICATED)
         session.clear()
         session.update(

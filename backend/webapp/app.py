@@ -185,6 +185,17 @@ from security_audit import (
     AuditSubjectType,
     resolve_audit_key,
 )
+from session_registry import (
+    SESSION_COOKIE_KEY,
+    approximate_location,
+    current_session_row_id,
+    describe_device,
+    list_user_sessions,
+    request_metadata,
+    revoke_other_sessions,
+    revoke_session,
+    rotate_session,
+)
 from setup_state import (
     AccountSetup,
     build_account_setup,
@@ -548,6 +559,17 @@ def _check_api_auth(request: Request, *, allow_closing: bool = False) -> str:
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def _request_session_metadata(request: Request) -> tuple[str, str, str]:
+    validated_ip = getattr(request.state, "validated_client_ip", "")
+    client_ip = str(validated_ip or (request.client.host if request.client else ""))
+    return request_metadata(request.headers, client_ip)
+
+
+def _current_session_id(request: Request) -> str | None:
+    session_id = request.session.get(SESSION_COOKIE_KEY)
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
 def _account_setup(user_id: str) -> AccountSetup:
     """Derive this tenant's account setup state from their own records."""
 
@@ -812,6 +834,74 @@ async def get_current_user_api(request: Request) -> Any:
     return JSONResponse({"user": user})
 
 
+@app.get("/api/sessions")
+def api_list_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    sessions = list_user_sessions(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    return {"sessions": sessions}
+
+
+@app.delete("/api/sessions/{session_id}")
+def api_revoke_session(request: Request, session_id: int) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    current_id = current_session_row_id(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    if not revoke_session(user_id, session_id, DB_PATH):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if current_id == session_id:
+        request.session.clear()
+        return {"status": "ok", "logged_out": True}
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        _current_session_id(request),
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "logged_out": False,
+        "current_session_id": rotated["id"] if rotated else current_id,
+    }
+
+
+@app.post("/api/sessions/revoke-others")
+def api_revoke_other_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    session_id = _current_session_id(request)
+    revoked = revoke_other_sessions(user_id, session_id, DB_PATH)
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        session_id,
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "revoked": revoked,
+        "current_session_id": rotated["id"] if rotated else None,
+    }
+
+
 def _claim_is_true(value: Any) -> bool:
     """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
     return value is True or (isinstance(value, str) and value.lower() == "true")
@@ -948,11 +1038,14 @@ async def auth(request: Request) -> Any:
         # session from a partially populated result (fail closed).
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+    user_agent, client_ip, country_code = _request_session_metadata(request)
     await run_in_threadpool(
         SESSION_LIFECYCLE.establish,
         request.session,
         user_id=approved_user_id,
         email=approved_email,
+        device=describe_device(user_agent),
+        location=approximate_location(client_ip, country_code),
     )
     # ``establish`` clears the session, so record the policy epoch (issue #753)
     # after it; the per-request guard compares this against the stored account.

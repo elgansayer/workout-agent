@@ -1925,12 +1925,29 @@ def ensure_user_sessions_schema(conn: sqlite3.Connection) -> None:
             created_at INTEGER NOT NULL,
             last_seen_at INTEGER NOT NULL,
             revoked_at INTEGER,
-            revoked_reason TEXT
+            revoked_reason TEXT,
+            device TEXT,
+            location TEXT
         )
         """
     )
+    # Additive migration for registries created before device visibility existed.
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(user_sessions)").fetchall()
+    }
+    # A concurrent first request may win the ALTER; the column is then already
+    # present, which is the same successful outcome.
+    with contextlib.suppress(sqlite3.OperationalError):
+        if "device" not in columns:
+            conn.execute("ALTER TABLE user_sessions ADD COLUMN device TEXT")
+        if "location" not in columns:
+            conn.execute("ALTER TABLE user_sessions ADD COLUMN location TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_sessions_user "
+        "ON user_sessions (user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_active "
         "ON user_sessions (user_id, revoked_at)"
     )
 
