@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -29,8 +30,9 @@ from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import account_deletion
 import analytics
 import insights
 import lifestyle
@@ -62,6 +64,7 @@ from connectors.builtin import build_builtin_registry
 from database import (
     clear_all_notifications,
     clear_chat_messages,
+    correct_body_metrics,
     delete_hevy_connection,
     delete_notification,
     get_active_programme,
@@ -78,9 +81,12 @@ from database import (
     get_notifications,
     get_personal_records,
     get_progress_history,
+    get_provenance_summary,
     get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
+    get_record_lineage,
+    get_record_provenance,
     get_routine_match_overrides,
     get_session_volumes,
     get_training_rules,
@@ -124,6 +130,15 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from health_connection_store import get_connection, list_connections
+from health_disconnect import disconnect_connector
+from health_purge import purge_imported_data_at
+from health_retention import (
+    DisconnectMode,
+    DisconnectRequest,
+    parse_mode,
+    retention_options_payload,
+)
 from hevy_client import HevyAuthError, HevyError, HevyRateLimitError
 from hevy_connection import (
     HevyCredentialState,
@@ -142,8 +157,16 @@ from programme_service import (
     activate_programme as activate_generated_programme,
 )
 from programme_validator import validate_programme
-from pydantic import BaseModel
+from provenance import (
+    RETRIEVAL_GUIDANCE,
+    RecordType,
+    ai_provenance,
+    annotate_for_retrieval,
+    programme_view,
+)
+from pydantic import BaseModel, ConfigDict, Field
 from secret_vault import (
+    LEGACY_GOOGLE_HEALTH_META_KEY,
     CredentialExistsError,
     CredentialNotFoundError,
     CredentialSummary,
@@ -495,7 +518,25 @@ def _audit_posture(detected_by: str, request: Request | None = None) -> None:
     )
 
 
-def _check_api_auth(request: Request) -> str:
+def _enforce_account_gate(request: Request, uid: Any, *, allow_closing: bool) -> None:
+    """Fail closed for accounts that deletion has locked or closed.
+
+    A closed (tombstoned) account's signed cookie is stateless, so it is rejected
+    here on every request and the session is cleared. While erasure runs the
+    account is locked; only the deletion status endpoint may pass
+    ``allow_closing`` so progress stays visible.
+    """
+    if not isinstance(uid, str):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    gate = account_deletion.account_gate(DB_PATH, uid)
+    if gate is account_deletion.AccountGate.CLOSED:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if gate is account_deletion.AccountGate.LOCKED and not allow_closing:
+        raise HTTPException(status_code=423, detail="Account deletion is in progress.")
+
+
+def _check_api_auth(request: Request, *, allow_closing: bool = False) -> str:
     """Return the authenticated, active account id for this request.
 
     A signed session is not enough on its own: the account it names must still
@@ -509,6 +550,7 @@ def _check_api_auth(request: Request) -> str:
     if not uid and isinstance(user, dict) and user.get("id"):
         uid = user["id"]
     if uid:
+        _enforce_account_gate(request, uid, allow_closing=allow_closing)
         try:
             return require_active_user(str(uid), DB_PATH)["id"]
         except AccountError as exc:
@@ -806,10 +848,16 @@ async def get_current_user_api(request: Request) -> Any:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     try:
         # A session whose account was suspended or removed is no longer a login.
-        _check_api_auth(request)
+        # A closing account stays visible so the SPA can show deletion progress.
+        _check_api_auth(request, allow_closing=True)
     except HTTPException:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+def _claim_is_true(value: Any) -> bool:
+    """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
 @app.get("/auth")
@@ -1192,6 +1240,18 @@ def _dashboard_context(
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
         "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "programme_provenance": (
+            programme_view(get_active_programme(user_id, db_path=DB_PATH))
+            if user_id
+            else None
+        ),
+        "dashboard_insight_provenance": (
+            get_record_provenance(
+                user_id, RecordType.DASHBOARD_INSIGHT, "current", DB_PATH
+            )
+            if user_id
+            else None
+        ),
     }
 
 
@@ -1679,7 +1739,12 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
-        return {"reasoning": existing}
+        return {
+            "reasoning": existing,
+            "provenance": get_record_provenance(
+                user_id, RecordType.REASONING, context_id, DB_PATH
+            ),
+        }
 
     parts = context_id.split("_", 1)
     if len(parts) != 2:
@@ -1701,8 +1766,20 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         logger.exception("AI reasoning generation failed.")
         reasoning = "Could not determine reasoning."
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
-    return {"reasoning": reasoning}
+    save_reasoning_log(
+        context_id,
+        ex_name,
+        reasoning,
+        db_path=DB_PATH,
+        user_id=user_id,
+        provenance=ai_provenance(provider, "xai-reasoning/1"),
+    )
+    return {
+        "reasoning": reasoning,
+        "provenance": get_record_provenance(
+            user_id, RecordType.REASONING, context_id, DB_PATH
+        ),
+    }
 
 
 @app.get("/api/project_peak")
@@ -1915,6 +1992,27 @@ def chat_clear(request: Request):
     return {"status": "ok"}
 
 
+def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
+    """Section-level provenance for AI context where records are not annotated."""
+    summary = get_provenance_summary(user_id, RecordType.EXERCISE_PROGRESS, DB_PATH)
+    history: dict[str, Any] = {
+        "origin": "imported",
+        "source": "Hevy",
+        "authoritative": True,
+    }
+    if summary["total"]:
+        history["sessions_with_provenance"] = summary["total"]
+        history["last_ingested"] = str(summary["latest_ingested_at"])[:10]
+    return {
+        "history": history,
+        "prs": {
+            "origin": "derived",
+            "source": "calculated from the imported Hevy history (Epley estimate)",
+            "authoritative": False,
+        },
+    }
+
+
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
     _check_rate_limit(request, limit=15)
@@ -1925,10 +2023,15 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
     mode, required_cap = classify_coaching_query(q)
 
-    # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    # Gather training context. Every record carries its provenance so the model
+    # can tell source data, user corrections and derived recommendations apart.
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
+    biometrics = get_body_metrics(
+        db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
     capability = _coach_capability_for_user(
@@ -1996,11 +2099,12 @@ User's question: {q}"""
         rules_text = format_rules_for_prompt(rules)
         context = json.dumps(
             {
-                "logs": logs,
+                "logs": annotate_for_retrieval(logs),
                 "history": history,
-                "biometrics": biometrics[-10:],
+                "biometrics": annotate_for_retrieval(biometrics[-10:]),
                 "prs": prs[:10],
                 "active_programme": prog_name if active_prog else None,
+                "data_sources": _retrieval_data_sources(user_id),
             },
             default=str,
         )
@@ -2022,6 +2126,8 @@ Important constraints:
 
 Conversation so far:
 {conversation_text}
+
+{RETRIEVAL_GUIDANCE}
 
 Verified training data context (recent logs, progress history, biometrics, PRs, active programme):
 {context[:25000]}
@@ -2739,11 +2845,48 @@ def google_health_callback(request: Request) -> RedirectResponse:
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
+async def _disconnect_options(request: Request) -> tuple[DisconnectMode, bool]:
+    """Read and validate the retention choice from a disconnect request."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    raw_mode: Any = request.query_params.get("mode")
+    confirmed = request.query_params.get("confirmed", "").lower() in {"1", "true", "yes"}
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            raw_mode = body.get("mode") or body.get("retention") or raw_mode
+            confirmed = confirmed or bool(body.get("confirmed"))
+    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        raw_mode = form.get("mode") or form.get("retention") or raw_mode
+        confirmed = confirmed or str(form.get("confirmed", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+    try:
+        mode = parse_mode(raw_mode if raw_mode is not None else DisconnectMode.REVOKE_ONLY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data and not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Purging imported health data requires explicit confirmation.",
+        )
+    return mode, confirmed
+
+
 @app.post("/google-health/disconnect")
-def google_health_disconnect(request: Request) -> RedirectResponse:
-    """Forget the stored refresh token so the agent stops syncing."""
+async def google_health_disconnect(request: Request) -> RedirectResponse:
+    """Revoke the stored Google Health token and apply the retention choice."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    mode, _confirmed = await _disconnect_options(request)
     try:
         _vault().revoke(user_id, "google_health")
     except CredentialNotFoundError:
@@ -2760,6 +2903,10 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
             metadata={"provider": "google_health", "method": "oauth"},
         )
         return RedirectResponse("/settings?gh=error", status_code=303)
+    # Clear a token left by the pre-vault helper so it cannot be reused.
+    set_meta(LEGACY_GOOGLE_HEALTH_META_KEY, "", DB_PATH, user_id=user_id)
+    if mode.purges_imported_data:
+        purge_imported_data_at(DB_PATH, user_id=user_id, provider="google_health")
     _audit(
         request,
         AuditEventType.CONNECTOR_DISCONNECTED,
@@ -2769,7 +2916,11 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
         user_id=user_id,
         metadata={"provider": "google_health", "method": "oauth"},
     )
-    return RedirectResponse("/settings?gh=disconnected", status_code=303)
+    return RedirectResponse(
+        f"/settings?gh=disconnected&retention="
+        f"{(DisconnectMode.PURGE if mode.purges_imported_data else mode).value}",
+        status_code=303,
+    )
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -2788,6 +2939,119 @@ def service_worker() -> FileResponse:
 
 # --- AUTO-GENERATED API ROUTES FOR ANGULAR ---
 from fastapi.encoders import jsonable_encoder
+
+
+@app.get("/api/health/connections")
+def api_health_connections(request: Request) -> JSONResponse:
+    """List the authenticated tenant's connections and retention choices."""
+
+    user_id = _check_api_auth(request)
+    options = retention_options_payload()
+    registry = build_builtin_registry()
+    connections: list[dict[str, Any]] = []
+    for row in list_connections(user_id, DB_PATH):
+        entry: dict[str, Any] = {
+            "id": row["id"],
+            "provider": row["provider"],
+            "state": row["state"],
+            "last_sync_at": row["last_sync_at"],
+            "retention_options": options,
+        }
+        try:
+            connector = registry.get(row["provider"])
+        except KeyError:
+            connector = None
+        if connector is not None:
+            try:
+                status = connector.status(
+                    ConnectorContext(user_id=str(user_id), connection_id=row["id"])
+                )
+                entry["state"] = status.state.value
+                entry["message"] = status.message
+            except Exception:  # pragma: no cover - defensive status guard
+                logger.exception(
+                    "Could not read status for connector %s.", row["provider"]
+                )
+        connections.append(entry)
+    return JSONResponse(
+        jsonable_encoder(
+            {"connections": connections, "retention_options": options}
+        )
+    )
+
+
+@app.delete("/api/health/connections/{connection_id}")
+def api_health_disconnect(request: Request, connection_id: str) -> JSONResponse:
+    """Disconnect one tenant-owned connection using an explicit retention mode."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        mode = parse_mode(
+            request.query_params.get("mode") or DisconnectMode.REVOKE_ONLY.value
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    confirmed = request.query_params.get("confirmed", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    connection = get_connection(user_id, connection_id, DB_PATH)
+    if connection is None:
+        # Non-enumerating: another tenant's connection is indistinguishable
+        # from a missing one.
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    provider = str(connection["provider"])
+    disconnect_request = DisconnectRequest(
+        user_id=user_id,
+        connection_id=connection_id,
+        mode=mode,
+        confirmed=confirmed,
+    )
+    try:
+        disconnect_request.validate(authenticated_user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    registry = build_builtin_registry()
+    try:
+        connector = registry.get(provider)
+    except KeyError:
+        connector = None
+
+    purged = None
+    if connector is not None:
+        try:
+            disconnect_connector(
+                connector,
+                ConnectorContext(user_id=str(user_id), connection_id=connection_id),
+                disconnect_request,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data:
+        purged = purge_imported_data_at(
+            DB_PATH,
+            user_id=user_id,
+            provider=provider,
+            connection_id=connection_id,
+        )
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "connection_id": connection_id,
+                "provider": provider,
+                "mode": (DisconnectMode.PURGE if mode.purges_imported_data else mode).value,
+                "upstream_revoked": connector is not None,
+                "purged": purged.as_dict() if purged else None,
+            }
+        )
+    )
 
 
 @app.get("/api/progress")
@@ -2816,12 +3080,87 @@ def api_progress(request: Request):
                 "sessions": len(entries),
             }
         )
+    body_readings = get_body_metrics(
+        limit=14, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     return JSONResponse(
         jsonable_encoder(
             {
                 "charts": charts_data,
                 "body": _body_charts(user_id=user_id),
+                # Newest first, each with its source / correction provenance.
+                "body_readings": list(reversed(body_readings)),
                 "setup": _setup_payload(user_id, "progress"),
+            }
+        )
+    )
+
+
+class BodyMetricCorrection(BaseModel):
+    """A user correction (or manual entry) for one day's body-metric reading.
+
+    The owner is always the authenticated session; owner claims are rejected.
+    Value bounds are enforced by ``database.validate_body_metric_changes``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    weight_kg: float | None = None
+    body_fat_pct: float | None = None
+    muscle_pct: float | None = None
+    resting_hr: float | None = None
+    hrv: float | None = None
+    reason: str | None = Field(default=None, max_length=280)
+
+
+@app.post("/api/body-metrics/corrections")
+def correct_body_metric(
+    payload: BodyMetricCorrection, request: Request
+) -> JSONResponse:
+    """Correct a body-metric reading while preserving the original in its lineage."""
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    changes = payload.model_dump(exclude={"date", "reason"}, exclude_none=True)
+    try:
+        result = correct_body_metrics(
+            user_id, payload.date, changes, reason=payload.reason, db_path=DB_PATH
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result["lineage"] = get_record_lineage(
+        user_id, RecordType.BODY_METRIC, result["date"], DB_PATH
+    )
+    return JSONResponse(jsonable_encoder(result))
+
+
+_RECORD_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:@+-]{1,200}$")
+
+
+@app.get("/api/provenance/{record_type}/{record_key}")
+def api_record_lineage(
+    record_type: str, record_key: str, request: Request
+) -> JSONResponse:
+    """Return the authenticated user's revision history for one record."""
+    _check_rate_limit(request, limit=60)
+    user_id = _check_api_auth(request)
+    try:
+        family = RecordType(record_type)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Record not found") from None
+    if not _RECORD_KEY_PATTERN.fullmatch(record_key):
+        raise HTTPException(status_code=404, detail="Record not found")
+    revisions = get_record_lineage(user_id, family, record_key, DB_PATH)
+    if not revisions:
+        raise HTTPException(status_code=404, detail="Record not found")
+    current = next((item for item in revisions if item["applied"]), None)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "record_type": family.value,
+                "record_key": record_key,
+                "current": current,
+                "revisions": revisions,
             }
         )
     )
@@ -3033,7 +3372,9 @@ def api_stats(request: Request):
 @app.get("/api/history")
 def api_history(request: Request):
     user_id = _check_api_auth(request)
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     levels = _training_levels(user_id=user_id)
     return JSONResponse(
         jsonable_encoder(
@@ -3132,6 +3473,7 @@ def api_plan(request: Request) -> JSONResponse:
                 "end_date": runtime.end_date,
                 "requested_duration_weeks": runtime.cycle_weeks,
                 "review_weeks": runtime.review_weeks,
+                "provenance": programme_view(active),
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
@@ -3435,7 +3777,9 @@ async def api_programme_history_override(request: Request) -> JSONResponse:
 
 @app.get("/api/settings")
 def api_settings(request: Request):
-    user_id = _check_api_auth(request)
+    # Read-only and allowed while an account is locked for deletion: the Settings
+    # page hosts the deletion progress view and must stay reachable to show it.
+    user_id = _check_api_auth(request, allow_closing=True)
 
     prefs = get_user_preferences(user_id, DB_PATH)
     ai_providers = available_providers()
@@ -3490,12 +3834,17 @@ def api_settings(request: Request):
 
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
+    health_connections = {
+        str(row["provider"]): row for row in list_connections(user_id, DB_PATH)
+    }
+    retention_choices = retention_options_payload()
     connectors_info = []
     for connector in registry.all():
         try:
             status = connector.status(ctx)
             if status.state == "pending":
                 continue
+            active_connection = health_connections.get(connector.provider)
             connectors_info.append(
                 {
                     "provider": connector.provider,
@@ -3503,6 +3852,11 @@ def api_settings(request: Request):
                     "state": status.state,
                     "message": status.message,
                     "authorize_supported": connector.capabilities.authorize,
+                    "purge_supported": connector.capabilities.purge,
+                    "connection_id": (
+                        active_connection["id"] if active_connection else None
+                    ),
+                    "retention_options": retention_choices,
                 }
             )
         except Exception:
@@ -3524,6 +3878,7 @@ def api_settings(request: Request):
                 "credential_events": credential_events,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
+                "retention_options": retention_choices,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
@@ -3595,6 +3950,79 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
         db_path=DB_PATH,
     )
     return {"status": "ok", **result}
+
+
+class AccountDeletionBody(BaseModel):
+    """A confirmed deletion request. The owner is always the signed-in session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["account", "health_data"]
+    confirmation: str = Field(min_length=1, max_length=320)
+
+
+_DELETION_HTTP_STATUS = {
+    "invalid_scope": 422,
+    "confirmation_mismatch": 400,
+    "not_eligible": 403,
+    "already_requested": 409,
+    "not_cancellable": 409,
+    "not_found": 404,
+}
+
+
+def _deletion_http_error(exc: account_deletion.DeletionError) -> HTTPException:
+    return HTTPException(
+        status_code=_DELETION_HTTP_STATUS.get(exc.code, 400), detail=exc.code
+    )
+
+
+@app.get("/api/account/deletion")
+def api_account_deletion_status(request: Request) -> JSONResponse:
+    """Eligibility, the exact confirmation text, and the latest deletion request."""
+    user_id = _check_api_auth(request, allow_closing=True)
+    return JSONResponse(jsonable_encoder(account_deletion.describe(DB_PATH, user_id)))
+
+
+@app.post("/api/account/deletion")
+def api_account_deletion_request(
+    body: AccountDeletionBody, request: Request
+) -> JSONResponse:
+    """Confirm and start deleting health data or closing the signed-in account."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        status = account_deletion.request_deletion(
+            DB_PATH, user_id, body.scope, body.confirmation
+        )
+        # Runs now only when the request is already due (health data, or a
+        # zero-day window); otherwise the scheduler executes it after the window.
+        status = (
+            account_deletion.execute_deletion(DB_PATH, status["request_id"]) or status
+        )
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+
+    finished = status["state"] == account_deletion.DeletionState.COMPLETED
+    response = JSONResponse(
+        jsonable_encoder(status), status_code=200 if finished else 202
+    )
+    if finished and status["scope"] == account_deletion.DeletionScope.ACCOUNT:
+        request.session.clear()
+        response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
+    return response
+
+
+@app.post("/api/account/deletion/cancel")
+def api_account_deletion_cancel(request: Request) -> JSONResponse:
+    """Cancel the signed-in user's pending closure while its window is open."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request, allow_closing=True)
+    try:
+        status = account_deletion.cancel_deletion(DB_PATH, user_id)
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+    return JSONResponse(jsonable_encoder(status))
 
 
 @app.get("/api/notifications")

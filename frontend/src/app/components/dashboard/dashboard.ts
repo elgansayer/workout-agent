@@ -3,6 +3,7 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { SetupNotice } from '../../shared/setup-notice';
 import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
@@ -10,7 +11,7 @@ import { SetupState, ViewState, resolveViewState } from '../../shared/setup-stat
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, ListControls, SetupNotice],
+  imports: [CommonModule, ListControls, ProvenanceBadge, SetupNotice],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })

@@ -108,13 +108,25 @@ export interface UserPreferences {
   readonly training_rules?: TrainingRulesData | null;
 }
 
+/** One explicit choice for what happens to imported data on disconnect. */
+export interface RetentionOption {
+  readonly mode: 'revoke_only' | 'retain' | 'purge';
+  readonly label: string;
+  readonly explanation: string;
+  readonly deletes_imported_data: boolean;
+  readonly deletes_derived_data: boolean;
+}
+
 /** Status of one platform connector. */
 export interface ConnectorInfo {
   readonly provider: string;
   readonly name: string;
   readonly state: string;
-  readonly message: string;
+  readonly message: string | null;
   readonly authorize_supported: boolean;
+  readonly purge_supported?: boolean;
+  readonly connection_id?: string | null;
+  readonly retention_options?: readonly RetentionOption[];
 }
 
 /** An exercise that must never be prescribed or performed. */
@@ -221,6 +233,7 @@ export interface SettingsResponse {
   readonly gh_configured: boolean;
   readonly gh_status?: string | null;
   readonly connectors_info: readonly ConnectorInfo[];
+  readonly retention_options: readonly RetentionOption[];
   readonly vapid_public_key: string | null;
   readonly key_status?: string | null;
   readonly pref_status?: string | null;

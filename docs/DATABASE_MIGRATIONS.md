@@ -40,6 +40,13 @@ part-way through schema initialization.
 - Seed rows use `INSERT OR IGNORE` or a conflict-safe upsert. Re-running
   `init_db()` must preserve current programme state and existing metadata.
 
+- `record_provenance` (the provenance and lineage ledger) is created by `init_db()`
+  with `CREATE ... IF NOT EXISTS` for the table, its index and an append-only
+  trigger. It needs no backfill: records stored before it existed have no
+  revision, read as "source not recorded", and capture a legacy baseline the
+  first time they are replaced or corrected. Its unique index leads with
+  `user_id`. See `docs/PROVENANCE.md`.
+
 `user_sessions` (the browser-session registry, see [Session security](SESSION_SECURITY.md)) follows the same rules: it is created by `ensure_user_sessions_schema`, which `init_db()` calls and `SessionStore` calls again on connect so a request that arrives before initialisation still finds the table. It has a `user_id` foreign key, the user-first index `idx_user_sessions_user`, and stores only a SHA-256 digest of each session identifier. It is additive, so rolling the code back simply leaves an unused table.
 
 Never use a client-supplied owner identifier to choose the backfill tenant.

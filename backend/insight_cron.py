@@ -6,6 +6,7 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
+import account_deletion
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
@@ -20,6 +21,7 @@ from database import (
     save_deep_correlation,
     save_notification,
 )
+from provenance import RETRIEVAL_GUIDANCE, ai_provenance, annotate_for_retrieval
 from tenancy import implicit_single_user_allowed
 from tenant_isolation import (
     OwnedContext,
@@ -27,6 +29,9 @@ from tenant_isolation import (
     OwnershipError,
     authorize_owner,
 )
+
+DASHBOARD_INSIGHT_VERSION = "dashboard-insight/1"
+DEEP_CORRELATION_VERSION = "deep-correlation/1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
@@ -69,6 +74,9 @@ def _resolve_provider(config: Config, owner: OwnerIdentity) -> AIProvider:
 def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating daily insight header...")
     owner = _authorize(config, user_id)
+    if account_deletion.is_account_closing(config.database_path, owner.user_id):
+        logger.info("Skipping the daily insight: the account has a deletion request.")
+        return
     provider = _resolve_provider(config, owner)
 
     # Fetch last 7 days of data
@@ -77,23 +85,38 @@ def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     metrics = [
         m
         for m in get_body_metrics(
-            limit=14, db_path=config.database_path, user_id=owner.user_id
+            limit=14,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
         )
         if m["date"] >= cutoff
     ]
     logs = [
         log
         for log in get_daily_logs(
-            limit=14, db_path=config.database_path, user_id=owner.user_id
+            limit=14,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
         )
         if log["date"] >= cutoff
     ]
 
-    context = OwnedContext(owner, "daily-insight", {"metrics": metrics, "logs": logs})
+    context = OwnedContext(
+        owner,
+        "daily-insight",
+        {
+            "metrics": annotate_for_retrieval(metrics),
+            "logs": annotate_for_retrieval(logs),
+        },
+    )
 
     prompt = f"""You are a high-performance strength coach. Analyze the following JSON representing the user's training and recovery data for the last 7 days.
 
 {json.dumps(context.data, indent=2)}
+
+{RETRIEVAL_GUIDANCE}
 
 Provide a 3-bullet point executive summary for a dashboard header:
 1. Current fatigue state (Green/Yellow/Red) based on training volume vs. sleep/recovery.
@@ -116,6 +139,7 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
                 json.dumps(parsed),
                 db_path=config.database_path,
                 user_id=context.owner.user_id,
+                provenance=ai_provenance(provider, DASHBOARD_INSIGHT_VERSION),
             )
             fatigue = parsed.get("fatigue", "Normal")
             advice = parsed.get("advice", "")
@@ -137,6 +161,9 @@ Keep it brutally concise. Output ONLY valid JSON in this exact format, with no m
 def generate_weekly_correlations(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating weekly deep correlations...")
     owner = _authorize(config, user_id)
+    if account_deletion.is_account_closing(config.database_path, owner.user_id):
+        logger.info("Skipping weekly correlations: the account has a deletion request.")
+        return
     provider = _resolve_provider(config, owner)
 
     # Fetch 60-day trailing window
@@ -145,14 +172,20 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     metrics = [
         m
         for m in get_body_metrics(
-            limit=120, db_path=config.database_path, user_id=owner.user_id
+            limit=120,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
         )
         if m["date"] >= cutoff
     ]
     logs = [
         log
         for log in get_daily_logs(
-            limit=120, db_path=config.database_path, user_id=owner.user_id
+            limit=120,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
         )
         if log["date"] >= cutoff
     ]
@@ -173,9 +206,12 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
         owner,
         "weekly-correlations",
         {
-            "body_metrics": metrics,
-            "daily_logs": logs,
+            "body_metrics": annotate_for_retrieval(metrics),
+            "daily_logs": annotate_for_retrieval(logs),
             "exercise_history": filtered_history,
+            "exercise_history_provenance": (
+                "imported: Hevy workout logs (source data, not recommendations)"
+            ),
         },
     )
 
@@ -187,6 +223,8 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 Here is the data:
 {json.dumps(context.data, indent=2)}
 
+{RETRIEVAL_GUIDANCE}
+
 Analyze this data and produce a "Deep Correlation Engine" report. 
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.
 Use Markdown format. Output the Markdown report directly.
@@ -196,7 +234,10 @@ Use Markdown format. Output the Markdown report directly.
         text = str(provider.generate(prompt)).strip()
         if text:
             save_deep_correlation(
-                text, db_path=config.database_path, user_id=context.owner.user_id
+                text,
+                db_path=config.database_path,
+                user_id=context.owner.user_id,
+                provenance=ai_provenance(provider, DEEP_CORRELATION_VERSION),
             )
             save_notification(
                 context.owner.user_id,

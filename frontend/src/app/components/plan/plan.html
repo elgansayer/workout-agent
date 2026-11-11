@@ -30,7 +30,10 @@
 
     @if (viewState() === 'ready' || viewState() === 'stale') {
     <header>
-      <p class="muted">Active Hevy programme</p>
+      <p class="muted">
+        Active Hevy programme
+        <app-provenance-badge [provenance]="data.provenance" />
+      </p>
       <h1>{{ data.split_name }}</h1>
       <p class="muted">
         Week {{ data.week }} of {{ data.cycle_weeks }}

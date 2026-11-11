@@ -112,6 +112,9 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("programme_decisions"),
     OwnedTable("hevy_connections", ("provider",)),
     OwnedTable("training_rules", ()),
+    OwnedTable("health_connections", ("provider", "id")),
+    OwnedTable("health_metrics", ("fingerprint",)),
+    OwnedTable("health_sync_runs"),
 )
 
 
@@ -129,6 +132,16 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
     "credential_audit_events": "append-only security audit trail, not tenant data",
     "security_audit_events": (
         "append-only, hash-chained security audit trail; attribution is immutable"
+    ),
+    "account_deletion_requests": (
+        "deletion evidence for a specific account id; never adopted"
+    ),
+    "account_tombstones": (
+        "anonymous deletion evidence for a specific account id; never adopted"
+    ),
+    "record_provenance": (
+        "append-only provenance captured per account; re-parenting it would "
+        "rewrite immutable lineage"
     ),
 }
 

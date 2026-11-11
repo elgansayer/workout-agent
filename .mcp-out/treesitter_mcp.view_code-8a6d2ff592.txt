@@ -1,0 +1,151 @@
+# secret_vault.py (L1257-L1406 of 1644)
+1257 |     def verify_stored(
+1258 |         self,
+1259 |         user_id: str,
+1260 |         provider: str,
+1261 |         *,
+1262 |         verifier: Verifier,
+1263 |         actor: str = "owner",
+1264 |         source: str = "web",
+1265 |     ) -> VerificationResult:
+1266 |         """Test the owner's stored credential without ever returning it."""
+1267 |         uid = _clean_identity(user_id)
+1268 |         spec = provider_spec(provider)
+1269 |         actor, source = _clean_origin(actor, source)
+1270 |         if not spec.testable:
+1271 |             raise VerificationUnsupportedError("This credential cannot be tested.")
+1272 |         try:
+1273 |             credential = self.resolve(uid, spec.provider, purpose="credential_test")
+1274 |         except CredentialUnavailableError as exc:
+1275 |             self._audit_failure(uid, spec.provider, CredentialAction.TEST, exc, actor, source)
+1276 |             raise
+1277 |         result = _run_verifier(verifier, credential)
+1278 |         now = self._now()
+1279 |         with self._db() as conn:
+1280 |             current = self._fetch(conn, uid, spec.provider)
+1281 |             if current is not None and current.key_version == credential.version:
+1282 |                 conn.execute(
+1283 |                     "UPDATE user_api_keys SET last_tested_at = ?, last_test_status = ? "
+1284 |                     "WHERE id = ? AND user_id = ?",
+1285 |                     (now, result.code if not result.ok else "ok", current.id, uid),
+1286 |                 )
+1287 |             self._insert_audit(
+1288 |                 conn,
+1289 |                 user_id=uid,
+1290 |                 provider=spec.provider,
+1291 |                 action=CredentialAction.TEST,
+1292 |                 outcome="success" if result.ok else "failure",
+1293 |                 detail=result.code,
+1294 |                 actor=actor,
+1295 |                 source=source,
+1296 |                 version=credential.version,
+1297 |                 now=now,
+1298 |             )
+1299 |         return result
+1300 | 
+1301 |     def verify_candidate(
+1302 |         self,
+1303 |         user_id: str,
+1304 |         provider: str,
+1305 |         *,
+1306 |         verifier: Verifier,
+1307 |         api_key: str | None = None,
+1308 |         client_secret: str | None = None,
+1309 |         refresh_token: str | None = None,
+1310 |         model: str | None = None,
+1311 |         actor: str = "owner",
+1312 |         source: str = "web",
+1313 |     ) -> VerificationResult:
+1314 |         """Test a not-yet-stored credential. Nothing is persisted except the audit row."""
+1315 |         uid = _clean_identity(user_id)
+1316 |         spec = provider_spec(provider)
+1317 |         actor, source = _clean_origin(actor, source)
+1318 |         if not spec.testable:
+1319 |             raise VerificationUnsupportedError("This credential cannot be tested.")
+1320 |         supplied = self._validated_secrets(
+1321 |             spec,
+1322 |             {
+1323 |                 "api_key": api_key,
+1324 |                 "client_secret": client_secret,
+1325 |                 "refresh_token": refresh_token,
+1326 |             },
+1327 |         )
+1328 |         clean_model = _clean_model(model)
+1329 |         result = _run_verifier(
+1330 |             verifier,
+1331 |             self._candidate(spec, supplied, None, clean_model, None),
+1332 |         )
+1333 |         try:
+1334 |             with self._db() as conn:
+1335 |                 self._require_user(conn, uid)
+1336 |                 self._insert_audit(
+1337 |                     conn,
+1338 |                     user_id=uid,
+1339 |                     provider=spec.provider,
+1340 |                     action=CredentialAction.TEST,
+1341 |                     outcome="success" if result.ok else "failure",
+1342 |                     detail=f"candidate:{result.code}",
+1343 |                     actor=actor,
+1344 |                     source=source,
+1345 |                     version=None,
+1346 |                     now=self._now(),
+1347 |                 )
+1348 |         except VaultError as exc:
+1349 |             self._audit_failure(uid, spec.provider, CredentialAction.TEST, exc, actor, source)
+1350 |             raise
+1351 |         return result
+1352 | 
+1353 |     # -- use ---------------------------------------------------------------
+1354 | 
+1355 |     def resolve(
+1356 |         self,
+1357 |         user_id: str,
+1358 |         provider: str,
+1359 |         *,
+1360 |         purpose: str,
+1361 |     ) -> ResolvedCredential:
+1362 |         """Decrypt the owner's credential for in-process use.
+1363 | 
+1364 |         This is the only place plaintext leaves the vault. It always selects by
+1365 |         the caller-supplied ``user_id`` (a background job passes the job's own
+1366 |         owner), never caches, and raises :class:`CredentialUnavailableError`
+1367 |         with a precise reason instead of falling back to any other credential.
+1368 |         """
+1369 |         _clean_purpose(purpose)
+1370 |         uid = _clean_identity(user_id)
+1371 |         spec = provider_spec(provider)
+1372 |         try:
+1373 |             with self._db() as conn:
+1374 |                 row = self._fetch(conn, uid, spec.provider)
+1375 |         except VaultUnavailableError:
+1376 |             raise CredentialUnavailableError(
+1377 |                 spec.provider, UnavailableReason.VAULT_UNAVAILABLE
+1378 |             ) from None
+1379 |         if row is None or (
+1380 |             row.status == CredentialStatus.ACTIVE.value and not row.has_secret
+1381 |         ):
+1382 |             raise CredentialUnavailableError(spec.provider, UnavailableReason.NOT_CONFIGURED)
+1383 |         if row.status == CredentialStatus.REVOKED.value:
+1384 |             raise CredentialUnavailableError(spec.provider, UnavailableReason.REVOKED)
+1385 | 
+1386 |         try:
+1387 |             master = self._master()
+1388 |         except VaultUnavailableError:
+1389 |             raise CredentialUnavailableError(
+1390 |                 spec.provider, UnavailableReason.VAULT_UNAVAILABLE
+1391 |             ) from None
+1392 | 
+1393 |         plaintext: dict[str, str] = {}
+1394 |         legacy_fields: set[str] = set()
+1395 |         for name, stored in row.secret_columns().items():
+1396 |             try:
+1397 |                 if encryption.is_sealed(stored):
+1398 |                     plaintext[name] = encryption.open_sealed(
+1399 |                         master,
+1400 |                         user_id=uid,
+1401 |                         provider=spec.provider,
+1402 |                         field_name=name,
+1403 |                         token=stored,
+1404 |                     )
+1405 |                 else:
+1406 |                     plaintext[name] = encryption.read_legacy_value(master, stored)

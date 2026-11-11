@@ -1,0 +1,90 @@
+# mutation_security.py (L184-L272 of 310)
+ 184 | def _content_length(headers: Headers) -> int | None:
+ 185 |     raw = headers.get("content-length")
+ 186 |     if not raw:
+ 187 |         return None
+ 188 |     try:
+ 189 |         length = int(raw)
+ 190 |     except ValueError:
+ 191 |         return None
+ 192 |     return length if 0 <= length <= _MAX_INSPECTABLE_BODY_BYTES else None
+ 193 | 
+ 194 | 
+ 195 | async def _buffer_body(receive: Receive, expected_length: int) -> tuple[bytes, Receive]:
+ 196 |     if expected_length == 0:
+ 197 |         return b"", receive
+ 198 | 
+ 199 |     chunks: list[bytes] = []
+ 200 |     while True:
+ 201 |         message = await receive()
+ 202 |         if message["type"] != "http.request":
+ 203 |             # A disconnect before a complete request body is best left to the
+ 204 |             # downstream application rather than turning it into an auth error.
+ 205 |             async def replay_disconnect(message: Message = message) -> Message:
+ 206 |                 return message
+ 207 | 
+ 208 |             return b"", replay_disconnect
+ 209 |         chunks.append(message.get("body", b""))
+ 210 |         if not message.get("more_body", False):
+ 211 |             break
+ 212 | 
+ 213 |     body = b"".join(chunks)
+ 214 |     delivered = False
+ 215 | 
+ 216 |     async def replay() -> Message:
+ 217 |         nonlocal delivered
+ 218 |         if not delivered:
+ 219 |             delivered = True
+ 220 |             return {"type": "http.request", "body": body, "more_body": False}
+ 221 |         return {"type": "http.request", "body": b"", "more_body": False}
+ 222 | 
+ 223 |     return body, replay
+ 224 | 
+ 225 | 
+ 226 | def _claims_match_authenticated_user(claims: list[str], user_id: str) -> bool:
+ 227 |     return all(claim == user_id for claim in claims)
+ 228 | 
+ 229 | 
+ 230 | class MutationSecurityMiddleware:
+ 231 |     """Require a signed identity and reject contradictory owner claims."""
+ 232 | 
+ 233 |     def __init__(self, app: ASGIApp) -> None:
+ 234 |         self.app = app
+ 235 | 
+ 236 |     async def __call__(
+ 237 |         self,
+ 238 |         scope: Scope,
+ 239 |         receive: Receive,
+ 240 |         send: Send,
+ 241 |     ) -> None:
+ 242 |         if scope.get("type") != "http" or str(scope.get("method", "")).upper() not in _MUTATION_METHODS:
+ 243 |             await self.app(scope, receive, send)
+ 244 |             return
+ 245 | 
+ 246 |         user_id = _session_identity(scope)
+ 247 |         if user_id is None:
+ 248 |             await _send_rejection(send, status=401, detail="Not authenticated")
+ 249 |             return
+ 250 | 
+ 251 |         state = scope.setdefault("state", {})
+ 252 |         if isinstance(state, dict):
+ 253 |             state["mutation_user_id"] = user_id
+ 254 | 
+ 255 |         headers = Headers(scope=scope)
+ 256 |         claims = _query_owner_claims(headers, scope)
+ 257 |         downstream_receive = receive
+ 258 | 
+ 259 |         length = _content_length(headers)
+ 260 |         content_type = headers.get("content-type", "")
+ 261 |         if length is not None and length > 0 and content_type:
+ 262 |             body, downstream_receive = await _buffer_body(receive, length)
+ 263 |             claims.extend(_body_owner_claims(body, content_type))
+ 264 | 
+ 265 |         if not _claims_match_authenticated_user(claims, user_id):
+ 266 |             await _send_rejection(send, status=404, detail="Not found")
+ 267 |             return
+ 268 | 
+ 269 |         await self.app(scope, downstream_receive, send)
+ 270 | 
+ 271 | 
+ 272 | def _guarded_add_middleware(

@@ -23,7 +23,12 @@ from tools.legacy_data_migration import EPHEMERAL_TABLES, USER_OWNED_TABLES, mig
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 # Every non-test module that issues ``CREATE TABLE``. ``health_schema.py`` is not
 # applied to the production database yet.
-REVIEWED_DDL_SOURCES = {"database.py", "health_schema.py", "webapp/csrf_security.py"}
+REVIEWED_DDL_SOURCES = {
+    "database.py",
+    "health_schema.py",
+    "provenance_ledger.py",
+    "webapp/csrf_security.py",
+}
 _CREATE_TABLE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s*\(", re.IGNORECASE
 )

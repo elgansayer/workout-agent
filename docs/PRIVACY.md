@@ -16,6 +16,7 @@ Depending on the features a user enables, Workout Agent can process:
 - health and wellness data such as body metrics, sleep, recovery, readiness, activity and other records imported from an enabled health connector;
 - coaching data such as goals, constraints, chat messages, prompts, generated recommendations, reasoning records and feedback;
 - connector metadata such as provider account identifiers, sync cursors, connection state and timestamps;
+- record provenance and correction history, meaning where each stored value came from (an import, something the user entered, or a generated recommendation), when it was stored, and the earlier values and optional reasons kept when a user corrects a reading;
 - credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission; a supplied connector credential is checked against the provider before it is activated, and the resulting connected account identifier, verification time, API version and capability metadata are stored with the tenant's connection record;
 - notification delivery data such as Telegram chat identifiers or web-push subscriptions when those channels are enabled;
 - operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service.
@@ -50,11 +51,13 @@ Security audit records (sign-ins, failed sign-ins, session revocation, credentia
 
 Backups, logs and operational evidence are controlled by the deployment environment and should use the shortest period consistent with recovery, security and legal obligations. They must not become an indefinite secondary copy of user data.
 
-A deployment must not claim that account deletion, backup purging or provider-side deletion is automatic unless those paths are actually configured and verified. Where a complete automated deletion flow is not yet available, the operator must handle a verified deletion request using the documented operational process.
+Users can erase their health data, or close their account and erase everything, from **Settings → Account and data**. Account closure waits out a cancellation window (default 7 days) and then removes primary records, derived insights, caches, notifications, connector tokens, API keys and retained exports, and verifies the result. What is deliberately retained is limited to an anonymous deletion tombstone, the append-only security and credential audit records described above, encrypted backups until they expire, and copies already held by other systems; see [`ACCOUNT_DELETION.md`](ACCOUNT_DELETION.md) for the exact scope and the operator procedures.
+
+A deployment must not claim that backup purging or provider-side deletion is automatic: backups are not rewritten and connected providers are not asked to delete or revoke anything. A deferred account closure is carried out by the scheduler process, so an operator must keep it running and must verify deletion requests that show as `failed` or overdue.
 
 ## Your choices and rights
 
-Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export, correction or deletion of their account data and can withdraw consent for optional processing.
+Users can choose which optional connectors, AI providers and notification channels to enable. They can disconnect providers and revoke their provider credentials. Where supported by the deployed product, users can request an export or correction of their account data and can withdraw consent for optional processing. Deletion is self-service in Settings → Account and data.
 
 Applicable legal rights vary by jurisdiction. The deployment operator is responsible for authenticating a requester before disclosing, changing or deleting account data and for responding within any legally required period.
 

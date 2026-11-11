@@ -20,6 +20,7 @@ from training_rules import (
     enforce_rules_on_plan_text,
     format_rules_for_prompt,
 )
+from provenance import GeneratedText
 
 logger = logging.getLogger(__name__)
 
@@ -188,9 +189,9 @@ def generate_next_workout(
                 enforced, _ = enforce_rules_on_plan_text(
                     text, rules_obj, recovery=recovery
                 )
-                return enforced
+                return GeneratedText.from_provider(enforced, provider)
             if _prescription_preserved(baseline, text):
-                return text
+                return GeneratedText.from_provider(text, provider)
             logger.warning(
                 "AI output changed the validated prescription; using baseline."
             )
@@ -204,7 +205,7 @@ def generate_next_workout(
         fallback, _ = enforce_rules_on_plan_text(
             fallback, rules_obj, recovery=recovery
         )
-    return fallback
+    return GeneratedText.fallback(fallback)
 
 
 def _prescription_preserved(baseline: str, candidate: str) -> bool:
@@ -274,18 +275,18 @@ def generate_rest_day_message(
     try:
         runtime = runtime or _kwargs.get("runtime")
         if runtime is None:
-            return _fallback_rest_message()
+            return GeneratedText.fallback(_fallback_rest_message())
         prompt = _build_rest_prompt(runtime, recovery, rules=effective_rules)
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
+            return GeneratedText.from_provider(text, provider)
         logger.warning(
             "AI provider returned an empty rest-day response; using fallback."
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI rest-day generation failed (%s); using fallback.", exc)
 
-    return _fallback_rest_message()
+    return GeneratedText.fallback(_fallback_rest_message())
 
 
 def _fallback_rest_message() -> str:
@@ -356,12 +357,12 @@ def generate_checkin_message(
         )
         text = str(provider.generate(prompt)).strip()
         if text:
-            return text
+            return GeneratedText.from_provider(text, provider)
         logger.warning("AI provider returned an empty check-in; using fallback.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("AI check-in generation failed (%s); using fallback.", exc)
 
-    return fallback
+    return GeneratedText.fallback(fallback)
 
 
 __all__ = [
