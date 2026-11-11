@@ -5,9 +5,10 @@ All network calls are mocked; no test may hit a real external API.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import hevy_client
+import pytest
 
 # ---------------------------------------------------------------------------
 # _headers
@@ -452,3 +453,63 @@ def test_get_exercise_templates_non_list_collection() -> None:
         }
         result = hevy_client.get_exercise_templates("fake-key")
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# probe_connection — classified credential check
+# ---------------------------------------------------------------------------
+
+
+def _response(status_code: int, payload: object = None) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    if isinstance(payload, Exception):
+        response.json.side_effect = payload
+    else:
+        response.json.return_value = payload
+    return response
+
+
+def test_probe_connection_success_reports_the_workout_count() -> None:
+    with patch("hevy_client.requests.get", return_value=_response(200, {"workout_count": 7})) as get:
+        probe = hevy_client.probe_connection("synthetic-key")
+    assert probe == hevy_client.HevyProbe(True, workout_count=7)
+    assert get.call_args.kwargs["headers"]["api-key"] == "synthetic-key"
+    assert get.call_args.args[0].endswith("/workouts/count")
+
+
+@pytest.mark.parametrize(
+    ("status_code", "code", "retryable"),
+    [
+        (401, "unauthorized", False),
+        (403, "forbidden", False),
+        (429, "rate_limited", True),
+        (500, "provider_unavailable", True),
+        (503, "provider_unavailable", True),
+        (404, "provider_error", False),
+    ],
+)
+def test_probe_connection_classifies_http_failures(
+    status_code: int, code: str, retryable: bool
+) -> None:
+    with patch("hevy_client.requests.get", return_value=_response(status_code)):
+        probe = hevy_client.probe_connection("synthetic-key")
+    assert (probe.ok, probe.error_code, probe.retryable) == (False, code, retryable)
+    assert probe.workout_count is None
+
+
+def test_probe_connection_network_failure_is_retryable_and_never_leaks_the_key(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    error = hevy_client.requests.ConnectionError("failed for api-key=synthetic-key")
+    with patch("hevy_client.requests.get", side_effect=error):
+        probe = hevy_client.probe_connection("synthetic-key")
+    assert (probe.ok, probe.error_code, probe.retryable) == (False, "provider_unavailable", True)
+    assert "synthetic-key" not in caplog.text
+
+
+@pytest.mark.parametrize("payload", [ValueError("bad json"), {"other": 1}, {"workout_count": "x"}, None])
+def test_probe_connection_rejects_malformed_success_payloads(payload: object) -> None:
+    with patch("hevy_client.requests.get", return_value=_response(200, payload)):
+        probe = hevy_client.probe_connection("synthetic-key")
+    assert (probe.ok, probe.error_code, probe.retryable) == (False, "provider_error", False)

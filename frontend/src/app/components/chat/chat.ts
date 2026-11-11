@@ -4,11 +4,13 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+import { AccountStatus } from '../../shared/integration-status';
+import { StatusNotice } from '../../shared/status-widgets';
 
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, StatusNotice],
   templateUrl: './chat.html',
   styleUrl: './chat.css',
 })
@@ -23,10 +25,21 @@ export class Chat implements OnInit, OnDestroy {
   isStreaming = signal<boolean>(false);
   currentStreamText = signal<string>('');
   error = signal<string | null>(null);
+  /** Readiness of the AI provider and workout data, from the shared state model. */
+  account = signal<AccountStatus | null>(null);
   private abortController: AbortController | null = null;
 
   ngOnInit() {
     this.loadChatHistory();
+    this.loadStatus();
+  }
+
+  loadStatus() {
+    this.http.get<AccountStatus>('/api/integrations/status').subscribe({
+      next: (status) => this.account.set(status),
+      // Readiness is advisory here: the server still decides whether Coach can answer.
+      error: () => this.account.set(null),
+    });
   }
 
   ngOnDestroy(): void {
@@ -138,6 +151,7 @@ export class Chat implements OnInit, OnDestroy {
       this.currentStreamText.set('');
       this.abortController = null;
       this.scrollToBottom();
+      this.loadStatus();
     }
   }
 

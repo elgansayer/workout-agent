@@ -6,9 +6,11 @@ Docs: https://api.hevyapp.com/docs/
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import Any
 
 import requests
+from connectors.errors import map_http_error
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +242,44 @@ def get_workout_count(api_key: str) -> int | None:
     except (ValueError, TypeError) as exc:
         logger.warning("Hevy returned an invalid workout count: %s", exc)
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class HevyProbe:
+    """Classified outcome of a credential check; never carries the key."""
+
+    ok: bool
+    workout_count: int | None = None
+    error_code: str | None = None
+    retryable: bool = False
+
+
+def probe_connection(api_key: str) -> HevyProbe:
+    """Check *api_key* against ``/workouts/count`` and classify any failure.
+
+    Unlike :func:`get_workout_count`, an expired or revoked key (401/403) is
+    distinguished from rate limiting and outages so the integration state
+    machine can tell "reconnect" from "try again later". Never raises.
+    """
+    try:
+        response = requests.get(
+            f"{BASE_URL}/workouts/count",
+            headers=_headers(api_key),
+            timeout=REQUEST_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Could not reach Hevy: %s", type(exc).__name__)
+        return HevyProbe(False, error_code="provider_unavailable", retryable=True)
+    if response.status_code != 200:
+        error = map_http_error(response.status_code, provider="hevy")
+        return HevyProbe(False, error_code=error.code, retryable=error.retryable)
+    try:
+        data = response.json()
+        count = int(data["workout_count"])
+    except (ValueError, TypeError, KeyError):
+        logger.warning("Hevy returned an invalid workout count payload.")
+        return HevyProbe(False, error_code="provider_error", retryable=False)
+    return HevyProbe(True, workout_count=count)
 
 
 def get_exercise_templates(api_key: str) -> list[dict[str, Any]] | None:

@@ -76,3 +76,99 @@ describe('Compact dashboard', () => {
     http.verify();
   });
 });
+
+describe('Dashboard shared readiness', () => {
+  const component = (connector: string, label: string, state: string, message: string) => ({
+    connector,
+    label,
+    state,
+    reason: 'synthetic',
+    message,
+    next_action: 'sync',
+    action_label: state === 'ready' ? null : 'Sync now',
+    action_href: state === 'ready' ? null : '/settings?section=connections',
+  });
+
+  async function render(payload: object) {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/api/dashboard').flush(payload);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  const base = { week: 2, cycle_weeks: 12, block: {}, focus: 'Upper', rows: [] };
+
+  it('explains stale Hevy data with the shared message and action', async () => {
+    const el = await render({
+      ...base,
+      readiness: {
+        components: {
+          hevy: component('hevy', 'Hevy', 'stale', 'Hevy was last synced 5 days ago.'),
+          programme: component('programme', 'Programme', 'ready', 'Your programme is active.'),
+        },
+      },
+    });
+    const notice = el.querySelector('.status-notice[data-connector="hevy"]');
+    expect(notice?.textContent).toContain('Hevy was last synced 5 days ago.');
+    expect(notice?.querySelector('a')?.getAttribute('href')).toBe('/settings?section=connections');
+    expect(el.querySelector('.status-notice[data-connector="programme"]')).toBeNull();
+  });
+
+  it('adds no notice noise when everything is ready', async () => {
+    const el = await render({
+      ...base,
+      readiness: {
+        components: {
+          hevy: component('hevy', 'Hevy', 'ready', 'Hevy is up to date.'),
+          programme: component('programme', 'Programme', 'ready', 'Your programme is active.'),
+        },
+      },
+    });
+    expect(el.querySelector('.status-notice')).toBeNull();
+  });
+
+  it('uses the programme call to action once, driven by the server-derived flag', async () => {
+    const el = await render({
+      ...base,
+      setup_required: true,
+      readiness: {
+        components: {
+          hevy: component('hevy', 'Hevy', 'setup_required', 'Hevy is not set up yet.'),
+          programme: component(
+            'programme',
+            'Programme',
+            'setup_required',
+            'Build your programme from Hevy to see your plan.',
+          ),
+        },
+      },
+    });
+    expect(el.textContent).toContain('Build your programme from Hevy');
+    expect(el.querySelector('.status-notice[data-connector="hevy"]')).not.toBeNull();
+    expect(el.querySelector('.status-notice[data-connector="programme"]')).toBeNull();
+  });
+
+  it('flags a programme that needs review', async () => {
+    const el = await render({
+      ...base,
+      readiness: {
+        components: {
+          programme: component(
+            'programme',
+            'Programme',
+            'degraded',
+            'Your programme needs review before it can be used.',
+          ),
+        },
+      },
+    });
+    const notice = el.querySelector('.status-notice[data-connector="programme"]');
+    expect(notice?.getAttribute('role')).toBe('alert');
+  });
+});

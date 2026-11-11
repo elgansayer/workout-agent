@@ -82,7 +82,10 @@ must not depend directly on Garmin/Fitbit/Oura/etc. response shapes.
    providers.
 7. **Expose lifecycle UI.** Settings should show connect, permissions, status,
    freshness, test, resync/backfill when safe, reconnect, and disconnect without
-   displaying secrets.
+   displaying secrets. Status comes from the shared state model
+   (`docs/INTEGRATION_STATE_MACHINE.md`): record every real attempt in the
+   tenant-scoped `connector_runs` ledger with a classified error code and render
+   the derived payload; never add a parallel connected/disconnected flag.
 8. **Schedule responsibly.** Use the unified scheduler for polling providers;
    prefer push/webhooks where officially supported and operationally reliable.
 9. **Integrate privacy lifecycle.** Consent, deletion/export, retention, cache

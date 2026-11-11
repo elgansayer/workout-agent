@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { StatusNotice } from '../../shared/status-widgets';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
@@ -15,6 +16,7 @@ import { HlmCardImports } from '@spartan-ng/ui/card';
   imports: [
     CommonModule,
     ListControls,
+    StatusNotice,
     FormsModule,
     HlmCardImports,
     HlmButtonImports,

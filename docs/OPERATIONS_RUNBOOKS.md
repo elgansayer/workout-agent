@@ -132,7 +132,7 @@ Open the connector circuit or pause its scheduled jobs; keep unrelated providers
 
 ### Communication
 
-Mark the integration degraded in operator/user status surfaces and state the last successful sync time. Do not present stale provider data as current. For prolonged outages, communicate which features remain available and which recommendations are withheld because freshness/confidence is insufficient.
+Mark the integration degraded in operator/user status surfaces and state the last successful sync time; the shared state model in `docs/INTEGRATION_STATE_MACHINE.md` already derives `degraded`, `stale` and `setup_required` from the connector run ledger, so check `connector_runs` and the `integration_state_transition` log lines before editing anything. Do not present stale provider data as current. For prolonged outages, communicate which features remain available and which recommendations are withheld because freshness/confidence is insufficient.
 
 ### Safe commands
 

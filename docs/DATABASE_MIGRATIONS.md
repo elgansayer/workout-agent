@@ -20,6 +20,12 @@ part-way through schema initialization.
   queried history tables also use explicit `idx_<table>_user_...` indexes.
 - Seed rows use `INSERT OR IGNORE` or a conflict-safe upsert. Re-running
   `init_db()` must preserve current programme state and existing metadata.
+- `connector_runs` (the connector attempt ledger behind
+  `docs/INTEGRATION_STATE_MACHINE.md`) is created with `CREATE TABLE IF NOT EXISTS`,
+  references `users(id)`, is indexed by `(user_id, connector, id DESC)`, and a
+  trigger rejects any change to `user_id`. It is additive: existing databases gain
+  an empty table, no existing row is rewritten, and the run history of a connector
+  is deleted when the user disconnects it.
 
 Never use a client-supplied owner identifier to choose the backfill tenant.
 Runtime requests must continue to derive tenant identity from the authenticated

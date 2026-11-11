@@ -56,8 +56,11 @@ def sync_all(
         user_id: Scopes the rebuilt rows to a specific user when provided.
 
     Returns:
-        A summary dict with keys ``workouts_found`` (int) and
-        ``processed`` (int), or ``error`` (str) on failure.
+        ``{"error": str}`` when Hevy could not be read; nothing was changed.
+        Otherwise ``workouts_found`` and ``processed`` counts. ``failed`` is
+        added only when some workouts could not be saved, which callers must
+        treat as a partial import: workouts that Hevy returned but that carry
+        no usable exercises are skipped, not failures.
     """
     if not api_key:
         return {"error": "No Hevy API key configured."}
@@ -70,8 +73,13 @@ def sync_all(
     logger.info("Fetching all workouts from Hevy (DB %s)...", db_path)
 
     workouts = get_all_workouts(api_key)
+    if workouts is None:
+        # A failed fetch is not an empty account; reporting it as one would
+        # record a broken sync as a successful import.
+        logger.warning("Could not fetch workouts from Hevy; history left unchanged.")
+        return {"error": "Hevy could not be reached. Check the connection and try again."}
     if not workouts:
-        logger.info("No workouts found or failed to fetch.")
+        logger.info("No workouts found.")
         return {"workouts_found": 0, "processed": 0}
 
     logger.info("Found %d workouts. Rebuilding history...", len(workouts))
@@ -82,24 +90,37 @@ def sync_all(
     workouts.reverse()
 
     saved_count = 0
+    failed_count = 0
     for w in workouts:
-        # Wrap it so _first_workout parses it correctly.
-        payload = {"workouts": [w]}
+        try:
+            # Wrap it so _first_workout parses it correctly.
+            payload = {"workouts": [w]}
 
-        when = w.get("start_time") or w.get("end_time")
-        if when:
-            when = when[:10]
+            when = w.get("start_time") or w.get("end_time")
+            if when:
+                when = when[:10]
 
-        save_workout(payload, db_path, when=when, user_id=user_id)
+            save_workout(payload, db_path, when=when, user_id=user_id)
 
-        # We don't have rep_targets for historical blocks, so pass empty targets.
-        summary = parse_workout(payload, {})
-        if summary:
-            save_progress(summary, db_path, user_id=user_id)
-            saved_count += 1
+            # We don't have rep_targets for historical blocks, so pass empty targets.
+            summary = parse_workout(payload, {})
+            if summary:
+                save_progress(summary, db_path, user_id=user_id)
+                saved_count += 1
+        except (sqlite3.Error, KeyError, TypeError, ValueError, AttributeError):
+            # The rebuild has already cleared this tenant's tables, so one bad
+            # record must not abort the rest; it is reported as a partial import.
+            failed_count += 1
+            logger.warning("Could not save one Hevy workout during the rebuild.")
 
     logger.info("Finished rebuilding history. Processed %d workouts.", saved_count)
-    return {"workouts_found": len(workouts), "processed": saved_count}
+    result: dict[str, int | str] = {
+        "workouts_found": len(workouts),
+        "processed": saved_count,
+    }
+    if failed_count:
+        result["failed"] = failed_count
+    return result
 
 
 if __name__ == "__main__":

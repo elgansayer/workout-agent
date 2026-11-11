@@ -34,6 +34,9 @@
       </p>
     </header>
 
+    <app-status-notice [status]="data.readiness?.components?.hevy" />
+    <app-status-notice [status]="data.readiness?.components?.programme" />
+
     @if (data.warnings?.length) {
       <section class="panel" style="border-color: #f59e0b">
         <h2>Review notes</h2>

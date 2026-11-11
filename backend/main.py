@@ -22,6 +22,7 @@ from typing import Any
 import checkin
 import google_health_client
 import insights as insights_engine
+import integration_status
 import lifestyle
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
@@ -45,9 +46,11 @@ from database import (
 )
 from gemini_engine import generate_next_workout, generate_rest_day_message
 from health_connect import body_metrics_from_recovery, read_recovery_metrics
+from health_sync import SyncState
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from integration_state import RunKind
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -115,6 +118,33 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
 
     logger.info("Plan delivered via Push Notifications.")
     return 0
+
+
+def _record_hevy_sync(
+    config: Config, user_id: str, workout: dict[str, Any] | None
+) -> None:
+    """Record the scheduled Hevy read so readiness reflects what actually ran.
+
+    ``fetch_latest_workout`` returns ``None`` for any failure without saying why,
+    so the cause is recorded as a generic retryable provider error. Recording
+    must never break the daily run.
+    """
+    succeeded = workout is not None
+    fetched = len(workout.get("workouts") or []) if isinstance(workout, dict) else 0
+    try:
+        integration_status.record_run(
+            user_id,
+            integration_status.HEVY,
+            RunKind.SYNC,
+            SyncState.SUCCEEDED if succeeded else SyncState.FAILED,
+            integration_status.StatusContext(db_path=config.database_path),
+            error_code=None if succeeded else "provider_error",
+            retryable=not succeeded,
+            fetched=fetched,
+            written=fetched,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not record the Hevy sync outcome: %s", type(exc).__name__)
 
 
 def _sync_hevy_routines(
@@ -349,6 +379,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     recent_workout = (
         fetch_latest_workout(config.hevy_api_key) if config.hevy_api_key else None
     )
+    if config.hevy_api_key and not preview:
+        _record_hevy_sync(config, user_id, recent_workout)
     summary = parse_workout(recent_workout, rep_targets(block))
     if not preview:
         save_workout(recent_workout, config.database_path, user_id=user_id)

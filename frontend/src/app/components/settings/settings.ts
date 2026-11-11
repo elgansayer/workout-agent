@@ -1,21 +1,61 @@
-import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { Component, computed, inject, signal, OnInit } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { ActivatedRoute } from '@angular/router';
+import { IntegrationStatus } from '../../shared/integration-status';
+import { StateBadge, StatusNotice } from '../../shared/status-widgets';
+
+interface SettingsPayload {
+  user_prefs?: {
+    preferred_ai?: string;
+    ai_model?: string;
+    goals?: string[];
+    experience_level?: string;
+    constraints?: string[];
+  };
+  ai_providers?: { id: string }[];
+  user_keys?: Record<string, { model?: string } | undefined>;
+}
+
+const SECTIONS = ['connections', 'ai', 'profile', 'notifications'];
+
+interface HevyVerifyResponse {
+  status: string;
+  detail?: string;
+  workout_count?: number;
+}
+
+interface HevySyncResponse {
+  status: string;
+  processed: number;
+  workouts_found: number;
+}
 
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, StateBadge, StatusNotice],
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })
 export class Settings implements OnInit {
   private http = inject(HttpClient);
+  private route = inject(ActivatedRoute, { optional: true });
 
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
+
+  /** Connector readiness from the shared state model (`integrations` in /api/settings). */
+  private component(name: string) {
+    return computed<IntegrationStatus | null>(
+      () => this.data()?.integrations?.components?.[name] ?? null,
+    );
+  }
+  readonly hevy = this.component('hevy');
+  readonly aiCoach = this.component('ai_provider');
+  readonly googleHealth = this.component('google_health');
 
   section = signal('connections');
   pushStatus = signal('');
@@ -38,13 +78,16 @@ export class Settings implements OnInit {
   constraintsInput = '';
 
   ngOnInit() {
+    // Banners elsewhere deep-link here, e.g. /settings?section=ai.
+    const requested = this.route?.snapshot.queryParamMap.get('section') ?? '';
+    if (SECTIONS.includes(requested)) this.section.set(requested);
     this.loadSettings();
   }
 
   loadSettings(populateForm = true) {
     this.error.set(null);
     this.http.get('/api/settings').subscribe({
-      next: (res: any) => {
+      next: (res: SettingsPayload) => {
         this.data.set(res);
         if (populateForm) {
           const prefs = res.user_prefs || {};
@@ -110,7 +153,7 @@ export class Settings implements OnInit {
           }
           this.loadSettings(false);
         },
-        error: (err: any) => {
+        error: (err: { error?: { detail?: string } }) => {
           const msg = err.error?.detail || 'Error saving key.';
           if (provider === 'hevy') this.hevyStatus.set(msg);
           else this.aiStatus.set(msg);
@@ -124,7 +167,7 @@ export class Settings implements OnInit {
       next: () => {
         this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         alert(err.error?.detail || 'Could not delete key.');
       },
     });
@@ -132,33 +175,40 @@ export class Settings implements OnInit {
 
   verifyHevy() {
     this.hevyStatus.set('Verifying...');
-    this.http
-      .post('/api/settings/verify-hevy', { api_key: this.hevyKeyInput.trim() || '__stored__' })
-      .subscribe({
-        next: (res: any) => {
-          if (res.status === 'ok') {
-            this.hevyStatus.set(`✓ Connected! ${res.workout_count} workouts found.`);
-          } else {
-            this.hevyStatus.set(res.detail || 'Verification failed.');
-          }
-        },
-        error: (err: any) => {
-          this.hevyStatus.set(err.error?.detail || 'Verification failed.');
-        },
-      });
+    // Without a replacement key the server verifies the stored credential and
+    // records the result, which is what moves Hevy out of "connecting".
+    const typed = this.hevyKeyInput.trim();
+    this.http.post<HevyVerifyResponse>('/api/settings/verify-hevy', typed ? { api_key: typed } : {}).subscribe({
+      next: (res: HevyVerifyResponse) => {
+        if (res.status === 'ok') {
+          this.hevyStatus.set(`✓ Connected! ${res.workout_count} workouts found.`);
+        } else {
+          this.hevyStatus.set(res.detail || 'Verification failed.');
+        }
+        this.loadSettings(false);
+      },
+      error: (err: HttpErrorResponse) => {
+        this.hevyStatus.set(err.error?.detail || 'Verification failed.');
+        this.loadSettings(false);
+      },
+    });
   }
 
   syncHistory() {
     if (!confirm('This will rebuild your workout history from Hevy. Continue?')) return;
     this.hevyStatus.set('Syncing history from Hevy...');
-    this.http.post('/api/settings/sync-history', {}).subscribe({
-      next: (res: any) => {
+    this.http.post<HevySyncResponse>('/api/settings/sync-history', {}).subscribe({
+      next: (res: HevySyncResponse) => {
         this.hevyStatus.set(
-          `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
+          res.status === 'partial'
+            ? `Partly synced: ${res.processed} of ${res.workouts_found} workouts saved. Run the sync again.`
+            : `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
+        this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         this.hevyStatus.set(err.error?.detail || 'Sync failed.');
+        this.loadSettings(false);
       },
     });
   }
@@ -183,8 +233,10 @@ export class Settings implements OnInit {
       next: () => {
         this.prefStatus.set('Profile saved!');
         setTimeout(() => this.prefStatus.set(''), 4000);
+        // The selected provider decides which AI credential the badge describes.
+        this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         this.prefStatus.set(err.error?.detail || 'Could not save preferences.');
       },
     });

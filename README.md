@@ -14,6 +14,7 @@ Workout Agent is a multi-user fitness intelligence platform for importing workou
   The latest evidence is recorded in the [AI provider parity audit](docs/AI_PROVIDER_PARITY.md).
 - Use the web dashboard, Coach, programme builder, history, progress, settings, and check-in views.
 - Deliver notifications through supported user-configured channels.
+- See whether Hevy, your AI coach and your programme are set up, connecting, syncing, ready, stale or degraded, with the same wording on every screen ([integration state machine](docs/INTEGRATION_STATE_MACHINE.md)).
 
 ## Architecture
 

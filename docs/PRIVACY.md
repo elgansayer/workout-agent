@@ -14,7 +14,7 @@ Depending on the features a user enables, Workout Agent can process:
 - workout and programme data such as exercises, sets, repetitions, loads, routines, programme blocks, check-ins and training history;
 - health and wellness data such as body metrics, sleep, recovery, readiness, activity and other records imported from an enabled health connector;
 - coaching data such as goals, constraints, chat messages, prompts, generated recommendations, reasoning records and feedback;
-- connector metadata such as provider account identifiers, sync cursors, connection state and timestamps;
+- connector metadata such as provider account identifiers, sync cursors, connection state, timestamps and a bounded history of connection attempts (kind, outcome, error code and record counts, never payloads or credentials) that is deleted when the connector is disconnected;
 - credentials supplied by a user, including API keys and OAuth tokens, which are used to connect enabled providers and must not be returned to the browser after submission;
 - notification delivery data such as Telegram chat identifiers or web-push subscriptions when those channels are enabled;
 - operational security data such as timestamps, request identifiers, error details and audit records required to operate and protect the service.

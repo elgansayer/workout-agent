@@ -11,7 +11,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Iterator
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -820,6 +820,42 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_api_keys_user "
             "ON user_api_keys (user_id)"
+        )
+
+        # Ledger of connector attempts. Integration readiness (setup required,
+        # connecting, syncing, ready, stale, degraded) is derived from these
+        # rows plus credential presence; see docs/INTEGRATION_STATE_MACHINE.md.
+        # Rows hold codes, timestamps and counters only - never payloads or secrets.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS connector_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                connector TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                error_code TEXT,
+                retryable INTEGER NOT NULL DEFAULT 0,
+                fetched INTEGER NOT NULL DEFAULT 0,
+                written INTEGER NOT NULL DEFAULT 0,
+                skipped INTEGER NOT NULL DEFAULT 0
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_connector_runs_user_connector "
+            "ON connector_runs (user_id, connector, id DESC)"
+        )
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_connector_runs_user_immutable
+            BEFORE UPDATE OF user_id ON connector_runs
+            BEGIN
+                SELECT RAISE(ABORT, 'connector_runs.user_id is immutable');
+            END
+            """,
         )
 
 
@@ -2443,3 +2479,260 @@ def get_unread_notification_count(
         )
         row = cursor.fetchone()
         return int(row[0]) if row else 0
+
+
+# ---- Connector run ledger ----
+
+CONNECTOR_RUN_KINDS = frozenset({"authorize", "test", "request", "sync"})
+CONNECTOR_RUN_FINAL_STATUSES = frozenset({"succeeded", "failed", "partial"})
+CONNECTOR_RUN_KEEP_RECENT = 50
+CONNECTOR_RUN_KEEP_SUCCESSES = 20
+CONNECTOR_RUN_DEFAULT_LEASE_SECONDS = 900
+
+
+def _utc_iso(moment: datetime | None) -> str:
+    moment = moment or datetime.now(tz=timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat()
+
+
+def _prune_connector_runs(
+    conn: sqlite3.Connection, user_id: str, connector: str
+) -> None:
+    """Bound the ledger: newest runs plus the latest successes, never running rows."""
+    conn.execute(
+        """
+        DELETE FROM connector_runs
+        WHERE user_id = ? AND connector = ? AND status != 'running'
+          AND id NOT IN (
+              SELECT id FROM connector_runs
+              WHERE user_id = ? AND connector = ?
+              ORDER BY id DESC LIMIT ?)
+          AND id NOT IN (
+              SELECT id FROM connector_runs
+              WHERE user_id = ? AND connector = ? AND status = 'succeeded'
+              ORDER BY id DESC LIMIT ?)
+        """,
+        (
+            user_id,
+            connector,
+            user_id,
+            connector,
+            CONNECTOR_RUN_KEEP_RECENT,
+            user_id,
+            connector,
+            CONNECTOR_RUN_KEEP_SUCCESSES,
+        ),
+    )
+
+
+def start_connector_run(
+    user_id: str,
+    connector: str,
+    kind: str,
+    *,
+    exclusive: bool = True,
+    lease_seconds: int = CONNECTOR_RUN_DEFAULT_LEASE_SECONDS,
+    now: datetime | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int | None:
+    """Open a running ledger row for this tenant and connector.
+
+    Runs whose worker vanished (older than *lease_seconds*) are closed as
+    ``interrupted`` first. With ``exclusive`` a second concurrent run of the same
+    kind is refused (returns ``None``), which makes double submits and retries
+    idempotent; otherwise the older in-flight row is superseded.
+    """
+    if kind not in CONNECTOR_RUN_KINDS:
+        raise ValueError(f"unknown connector run kind: {kind}")
+    moment = now or datetime.now(tz=timezone.utc)
+    started = _utc_iso(moment)
+    cutoff = _utc_iso(moment - timedelta(seconds=lease_seconds))
+    with _connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE connector_runs
+            SET status = 'failed', finished_at = ?, error_code = 'interrupted',
+                retryable = 1
+            WHERE user_id = ? AND connector = ? AND kind = ?
+              AND status = 'running' AND started_at <= ?
+            """,
+            (started, user_id, connector, kind, cutoff),
+        )
+        if exclusive:
+            busy = conn.execute(
+                "SELECT 1 FROM connector_runs WHERE user_id = ? AND connector = ? "
+                "AND kind = ? AND status = 'running' LIMIT 1",
+                (user_id, connector, kind),
+            ).fetchone()
+            if busy:
+                return None
+        else:
+            conn.execute(
+                "DELETE FROM connector_runs WHERE user_id = ? AND connector = ? "
+                "AND kind = ? AND status = 'running'",
+                (user_id, connector, kind),
+            )
+        cursor = conn.execute(
+            "INSERT INTO connector_runs (user_id, connector, kind, status, started_at) "
+            "VALUES (?, ?, ?, 'running', ?)",
+            (user_id, connector, kind, started),
+        )
+        _prune_connector_runs(conn, user_id, connector)
+        return cursor.lastrowid
+
+
+def finish_connector_run(
+    user_id: str,
+    run_id: int,
+    status: str,
+    *,
+    error_code: str | None = None,
+    retryable: bool = False,
+    fetched: int = 0,
+    written: int = 0,
+    skipped: int = 0,
+    now: datetime | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> bool:
+    """Close a running row. Returns False when it was already closed or not owned.
+
+    Only the first completion wins, so a retried or duplicated completion can
+    neither flip an outcome nor double count.
+    """
+    if status not in CONNECTOR_RUN_FINAL_STATUSES:
+        raise ValueError(f"invalid final connector run status: {status}")
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE connector_runs
+            SET status = ?, finished_at = ?, error_code = ?, retryable = ?,
+                fetched = ?, written = ?, skipped = ?
+            WHERE id = ? AND user_id = ? AND status = 'running'
+            """,
+            (
+                status,
+                _utc_iso(now),
+                error_code,
+                1 if retryable else 0,
+                max(0, fetched),
+                max(0, written),
+                max(0, skipped),
+                run_id,
+                user_id,
+            ),
+        )
+        return cursor.rowcount == 1
+
+
+def record_connector_run(
+    user_id: str,
+    connector: str,
+    kind: str,
+    status: str,
+    *,
+    error_code: str | None = None,
+    retryable: bool = False,
+    fetched: int = 0,
+    written: int = 0,
+    skipped: int = 0,
+    now: datetime | None = None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Store an already finished run (on-demand requests and connection tests)."""
+    if kind not in CONNECTOR_RUN_KINDS:
+        raise ValueError(f"unknown connector run kind: {kind}")
+    if status not in CONNECTOR_RUN_FINAL_STATUSES:
+        raise ValueError(f"invalid final connector run status: {status}")
+    moment = _utc_iso(now)
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO connector_runs
+                (user_id, connector, kind, status, started_at, finished_at,
+                 error_code, retryable, fetched, written, skipped)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                connector,
+                kind,
+                status,
+                moment,
+                moment,
+                error_code,
+                1 if retryable else 0,
+                max(0, fetched),
+                max(0, written),
+                max(0, skipped),
+            ),
+        )
+        _prune_connector_runs(conn, user_id, connector)
+        run_id = cursor.lastrowid
+    if run_id is None:
+        raise RuntimeError("Failed to record connector run")
+    return run_id
+
+
+def get_connector_runs(
+    user_id: str,
+    connector: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> list[dict[str, Any]]:
+    """Return this tenant's retained runs for a connector, oldest first."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, kind, status, started_at, finished_at, error_code,
+                   retryable, fetched, written, skipped
+            FROM connector_runs
+            WHERE user_id = ? AND connector = ?
+            ORDER BY id ASC
+            """,
+            (user_id, connector),
+        ).fetchall()
+    return [
+        {
+            "id": row[0],
+            "kind": row[1],
+            "status": row[2],
+            "started_at": row[3],
+            "finished_at": row[4],
+            "error_code": row[5],
+            "retryable": bool(row[6]),
+            "fetched": row[7],
+            "written": row[8],
+            "skipped": row[9],
+        }
+        for row in rows
+    ]
+
+
+def delete_connector_runs(
+    user_id: str,
+    connector: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> int:
+    """Forget a connector's run history for this tenant (disconnect/purge)."""
+    with _connect(db_path) as conn:
+        cursor = conn.execute(
+            "DELETE FROM connector_runs WHERE user_id = ? AND connector = ?",
+            (user_id, connector),
+        )
+        return cursor.rowcount
+
+
+def get_credential_presence(
+    user_id: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> dict[str, str]:
+    """Map provider -> last update time for stored keys, without decrypting them."""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT provider, updated_at FROM user_api_keys "
+            "WHERE user_id = ? AND api_key != ''",
+            (user_id,),
+        ).fetchall()
+    return {provider: updated for provider, updated in rows}

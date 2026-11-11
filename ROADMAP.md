@@ -23,7 +23,8 @@ This file records the current implementation boundary and the next engineering p
 | Credential handling | Per-user API-key records and a Fernet helper exist, and Settings masks stored keys. | Encryption deliberately falls back to plaintext, while Google Health refresh tokens still use generic metadata and can be printed by the authorization helper. |
 | Health platform | Provider-neutral contracts, canonical models, provenance, normalization helpers, readiness logic and many focused tests exist. The legacy Google Health client can fetch a small body-metric set. | The canonical schema is not part of application initialization, uses integer user IDs instead of the application's UUID strings, leaves sleep/activity repository writes as no-ops, and is not connected to a production connector lifecycle. |
 | Scheduling and delivery | Docker runs one Python scheduler; coaching can save in-app notifications and send tenant-owned Web Push subscriptions. | The container enters the legacy global schedule loop. The unused per-user loop invokes unsupported CLI arguments, so timezone-aware multi-user dispatch is not operational. |
-| Angular client | Dashboard, Coach, Check-ins, History, Plan, Programmes, Progress, Settings and Stats are routed and backed by APIs. | Stored-key Hevy verification sends a sentinel value as if it were a real credential; critical authenticated flows have little component/browser coverage. |
+| Angular client | Dashboard, Coach, Check-ins, History, Plan, Programmes, Progress, Settings and Stats are routed and backed by APIs. | Critical authenticated flows have little component/browser coverage. |
+| Integration readiness | One derived state model (`setup_required`, `connecting`, `syncing`, `ready`, `stale`, `degraded`) built from credential facts and a tenant-scoped connector run ledger drives Settings, Dashboard, Plan, the programme builder, Coach, notifications and `/api/integrations/status`; see `docs/INTEGRATION_STATE_MACHINE.md`. Stored-key Hevy verification uses the stored credential. | Google Health has no web sync pipeline, so it reports `connecting` until the connector work lands; the Hevy history rebuild is still delete-then-insert. |
 
 ## Next priorities
 
@@ -43,7 +44,6 @@ This file records the current implementation boundary and the next engineering p
 
 ### P2 — finish setup reliability and verification
 
-1. Make the Hevy connection test use the authenticated user's stored credential when no replacement key is entered.
-2. Add deterministic Angular component/browser coverage for sign-in boundaries, credential setup, programme preview/activation and CSRF-protected mutations after the P0 API changes settle.
+1. Add deterministic Angular component/browser coverage for sign-in boundaries, credential setup, programme preview/activation and CSRF-protected mutations after the P0 API changes settle.
 
 Broad ORM, CSS-framework, chart-library and authentication-provider swaps from `CONTINUE.md` remain deferred. They should not displace the tenant, programme-runtime, secret-storage and health-ingestion boundaries above without a separate decision.

@@ -57,11 +57,55 @@ def test_no_api_key_returns_error() -> None:
     assert result == {"error": "No Hevy API key configured."}
 
 
-def test_get_all_workouts_returns_none(tmp_path: pathlib.Path) -> None:
+def test_failed_fetch_is_an_error_and_leaves_history_untouched(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A fetch failure must not look like an empty account or clear local history."""
+    from database import save_workout
+
     db_path = _new_temp_db(tmp_path)
+    save_workout({"workouts": [{"id": "keep-me"}]}, db_path, when="2026-03-01")
     with patch("scripts.sync_history.get_all_workouts", return_value=None):
         result = sync_history.sync_all("fake-key", db_path)
-    assert result == {"workouts_found": 0, "processed": 0}
+    assert list(result) == ["error"]
+    assert "could not be reached" in str(result["error"])
+    conn = sqlite3.connect(db_path, timeout=10)
+    assert conn.execute("SELECT COUNT(*) FROM workout_history").fetchone()[0] == 1
+    conn.close()
+
+
+def test_unsavable_workouts_are_reported_as_a_partial_import(
+    tmp_path: pathlib.Path,
+) -> None:
+    db_path = _new_temp_db(tmp_path)
+    calls = {"count": 0}
+    real_save_progress = sync_history.save_progress
+
+    def flaky_save_progress(*args: object, **kwargs: object) -> None:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        real_save_progress(*args, **kwargs)  # type: ignore[arg-type]
+
+    with (
+        patch("scripts.sync_history.get_all_workouts", return_value=list(_SAMPLE_WORKOUTS)),
+        patch("scripts.sync_history.save_progress", side_effect=flaky_save_progress),
+    ):
+        result = sync_history.sync_all("fake-key", db_path)
+    assert result == {"workouts_found": 2, "processed": 1, "failed": 1}
+    conn = sqlite3.connect(db_path, timeout=10)
+    # The failure did not abort the remaining workouts.
+    assert conn.execute("SELECT COUNT(*) FROM workout_history").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM exercise_progress").fetchone()[0] == 1
+    conn.close()
+
+
+def test_malformed_workout_is_isolated_and_reported(tmp_path: pathlib.Path) -> None:
+    db_path = _new_temp_db(tmp_path)
+    workouts: list[object] = [_SAMPLE_WORKOUTS[0], "not-a-workout"]
+    with patch("scripts.sync_history.get_all_workouts", return_value=workouts):
+        result = sync_history.sync_all("fake-key", db_path)
+    assert result == {"workouts_found": 2, "processed": 1, "failed": 1}
 
 
 def test_get_all_workouts_returns_empty_list(tmp_path: pathlib.Path) -> None:

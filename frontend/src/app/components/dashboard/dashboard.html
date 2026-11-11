@@ -22,6 +22,7 @@
   </div>
 }
 @if (data(); as data) {
+  <app-status-notice [status]="data.readiness?.components?.hevy" />
   @if (data.setup_required) {
     <section class="panel">
       <h2>Build your programme from Hevy</h2>
@@ -31,6 +32,7 @@
       <a class="btn" href="/programmes">Open programme builder</a>
     </section>
   } @else {
+    <app-status-notice [status]="data.readiness?.components?.programme" />
     <details class="panel programme-overview">
       <summary>
         <span class="eyebrow"

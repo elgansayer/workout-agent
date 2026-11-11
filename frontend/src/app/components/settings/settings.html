@@ -36,12 +36,9 @@
   <section class="card" id="settings-hevy" [hidden]="section() !== 'connections'">
     <div class="card-head">
       <h2>Hevy Integration</h2>
-      @if (data.user_keys?.hevy?.has_key) {
-        <span class="status on">Connected</span>
-      } @else {
-        <span class="status off">Not connected</span>
-      }
+      <app-state-badge [state]="hevy()?.state" />
     </div>
+    <app-status-notice [status]="hevy()" [inline]="true" [showReady]="true" [showAction]="false" />
     <p class="muted">
       Connect your Hevy account so workouts are synced automatically. You need a
       <strong>Hevy Pro</strong> subscription. Generate an API key at
@@ -84,13 +81,15 @@
   <section class="card" id="settings-ai" [hidden]="section() !== 'ai'">
     <div class="card-head">
       <h2>AI Provider</h2>
-      @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
-        <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
-      } @else {
-        <span class="status off">No key</span>
-      }
+      <app-state-badge [state]="aiCoach()?.state" />
     </div>
     <p class="muted">Choose which AI powers your coaching. You bring your own API key.</p>
+    <app-status-notice
+      [status]="aiCoach()"
+      [inline]="true"
+      [showReady]="true"
+      [showAction]="false"
+    />
 
     <div class="ai-provider-select">
       <div class="provider-tabs" id="provider-tabs">
@@ -161,12 +160,14 @@
     <div class="provider-config" style="margin-bottom: 1.5rem">
       <div class="card-head" style="margin-bottom: 0.5rem">
         <h3>Google Health</h3>
-        @if (data.gh_connected) {
-          <span class="status on">Connected</span>
-        } @else {
-          <span class="status off">Not connected</span>
-        }
+        <app-state-badge [state]="googleHealth()?.state" />
       </div>
+      <app-status-notice
+        [status]="googleHealth()"
+        [inline]="true"
+        [showReady]="true"
+        [showAction]="false"
+      />
       @if (data.gh_configured) {
         @if (data.gh_connected) {
           <button
@@ -180,10 +181,6 @@
         } @else {
           <a href="/google-health/connect" class="btn btn-sm">Connect</a>
         }
-      } @else {
-        <p class="muted" style="font-size: 0.85rem">
-          Google Health OAuth credentials are not set on the server.
-        </p>
       }
     </div>
 
@@ -197,11 +194,7 @@
       >
         <div class="card-head" style="margin-bottom: 0.5rem">
           <h3>{{ connector.name }}</h3>
-          @if (connector.state === 'connected') {
-            <span class="status on">Connected</span>
-          } @else {
-            <span class="status off">Not connected</span>
-          }
+          <app-state-badge [state]="connector.state" />
         </div>
 
         <p class="muted" style="font-size: 0.85rem; margin-bottom: 1rem">

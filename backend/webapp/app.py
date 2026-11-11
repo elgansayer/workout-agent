@@ -30,7 +30,9 @@ from pathlib import Path
 from typing import Any
 
 import analytics
+import hevy_client
 import insights
+import integration_status
 import lifestyle
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
@@ -96,8 +98,18 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from health_sync import SyncState
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from integration_state import (
+    AUTH_ERROR_CODES,
+    IntegrationState,
+    Reason,
+    RunKind,
+    coach_data_notice,
+    derive_programme_state,
+    failure_message,
+)
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
@@ -191,6 +203,20 @@ GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
 _GH_TOKEN_KEY = "google_health_refresh_token"
 _GH_STATE_KEY = "google_health_oauth_state"
+
+
+def _status_context() -> integration_status.StatusContext:
+    """Process-level inputs for the shared integration state model."""
+    return integration_status.StatusContext(
+        db_path=DB_PATH,
+        google_health_configured=bool(GH_CLIENT_ID and GH_CLIENT_SECRET),
+        server_gemini_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+    )
+
+
+def _account_status(user_id: str) -> integration_status.AccountStatus:
+    """Account and connector readiness derived for the authenticated user."""
+    return integration_status.build_account_status(user_id, _status_context())
 
 oauth = OAuth()
 if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
@@ -502,7 +528,20 @@ def _dashboard_context(
         today=today,
         timezone_name=timezone_name,
     )
-    setup_required = runtime.status == "setup_required"
+    # Programme readiness comes from the shared state model, not a local flag.
+    programme = derive_programme_state(
+        has_active_programme=bool(active),
+        runtime_status=runtime.status,
+        runtime_message=runtime.message,
+    )
+    account = (
+        integration_status.build_account_status(
+            user_id, _status_context(), programme=programme
+        )
+        if user_id
+        else None
+    )
+    setup_required = programme.state is IntegrationState.SETUP_REQUIRED
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
     current_day_number: int | None = None
@@ -600,6 +639,7 @@ def _dashboard_context(
         "last_completed_at": runtime.last_completed_at,
         "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
         "setup_required": setup_required,
+        "readiness": account.to_payload() if account else None,
         "active_programme_name": (definition.get("name") if definition else None),
         "quote": _daily_quote(today),
         "week": week,
@@ -917,8 +957,28 @@ def _load_hevy_training_for_user(
 
     from hevy_reader import fetch_user_training
 
+    ctx = _status_context()
+    # fetch_user_training is best-effort and swallows provider errors, which
+    # would turn an expired key into an empty (but "successful") read. Probe
+    # first so the failure is classified, recorded and surfaced.
+    probe = hevy_client.probe_connection(hevy_key)
+    if not probe.ok:
+        integration_status.record_run(
+            user_id,
+            integration_status.HEVY,
+            RunKind.TEST,
+            SyncState.FAILED,
+            ctx,
+            error_code=probe.error_code,
+            retryable=probe.retryable,
+        )
+        raise HTTPException(
+            status_code=400 if probe.error_code in AUTH_ERROR_CODES else 502,
+            detail=failure_message("Hevy", probe.error_code),
+        )
+
     try:
-        return fetch_user_training(
+        training_data = fetch_user_training(
             hevy_key,
             workout_limit=workout_limit,
         )
@@ -927,10 +987,27 @@ def _load_hevy_training_for_user(
             "Could not fetch Hevy source data for user %s.",
             user_id,
         )
+        integration_status.record_run(
+            user_id,
+            integration_status.HEVY,
+            RunKind.TEST,
+            SyncState.FAILED,
+            ctx,
+            error_code="provider_unavailable",
+            retryable=True,
+        )
         raise HTTPException(
             status_code=502,
             detail=("Hevy could not be reached. Check the connection and try again."),
         ) from exc
+    integration_status.record_run(
+        user_id,
+        integration_status.HEVY,
+        RunKind.TEST,
+        SyncState.SUCCEEDED,
+        ctx,
+    )
+    return training_data
 
 
 @app.get("/api/xai_reasoning/{context_id}")
@@ -1037,9 +1114,22 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
+    # Ground Coach in how current its data is, from the shared state model.
+    data_notice = coach_data_notice(
+        integration_status.component_status(
+            user_id, integration_status.HEVY, _status_context()
+        ),
+        has_local_data=bool(history),
+    )
+    readiness_block = (
+        f"\nData readiness (system-generated, authoritative):\n{data_notice}\n"
+        if data_notice
+        else ""
+    )
+
     prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
 You have access to this user's training logs, body composition data, personal records, and programme history.
-
+{readiness_block}
 Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
 - Reference specific numbers, dates, and exercises from the context when relevant.
@@ -1058,6 +1148,8 @@ Respond naturally as Coach. If the question is about their training data, refere
 
     def generate() -> Iterator[str]:
         collected: list[str] = []
+        # None while unfinished: a client disconnect records no outcome at all.
+        outcome: tuple[SyncState, str | None, bool] | None = None
         try:
             response = provider.generate(prompt, stream=True)
             chunks = (response,) if isinstance(response, str) else response
@@ -1065,8 +1157,15 @@ Respond naturally as Coach. If the question is about their training data, refere
                 if chunk:
                     collected.append(chunk)
                     yield chunk
-        except Exception:
+            outcome = (
+                (SyncState.SUCCEEDED, None, False)
+                if collected
+                else (SyncState.FAILED, "provider_error", True)
+            )
+        except Exception as exc:
             logger.exception("AI chat streaming failed.")
+            code, retryable = integration_status.classify_provider_error(exc)
+            outcome = (SyncState.FAILED, code, retryable)
             error_msg = (
                 "Sorry, Coach is currently unavailable or encountered an error. "
                 "Please try again."
@@ -1080,8 +1179,28 @@ Respond naturally as Coach. If the question is about their training data, refere
                 save_chat_message(
                     "assistant", full_response, db_path=DB_PATH, user_id=user_id
                 )
+            if outcome is not None:
+                _record_coach_request(user_id, *outcome)
 
     return StreamingResponse(generate(), media_type="text/plain")
+
+
+def _record_coach_request(
+    user_id: str, status: SyncState, error_code: str | None, retryable: bool
+) -> None:
+    """Persist the outcome of one Coach call; a ledger fault never breaks chat."""
+    try:
+        integration_status.record_run(
+            user_id,
+            integration_status.AI_PROVIDER,
+            RunKind.REQUEST,
+            status,
+            _status_context(),
+            error_code=error_code,
+            retryable=retryable,
+        )
+    except Exception:
+        logger.exception("Could not record the Coach request outcome.")
 
 
 def _gh_redirect_uri(request: Request) -> str:
@@ -1159,30 +1278,69 @@ async def remove_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Provider is required")
 
     delete_user_api_key(user_id, provider, db_path=DB_PATH)
+    # A removed credential leaves nothing to be ready; forget its run history.
+    connector = (
+        integration_status.HEVY
+        if provider == "hevy"
+        else integration_status.ai_connector_id(provider)
+    )
+    integration_status.forget_connector_history(user_id, connector, _status_context())
     return {"status": "ok", "provider": provider}
 
 
 @app.post("/api/settings/verify-hevy")
 async def verify_hevy_key(request: Request) -> dict[str, Any]:
-    """Test a Hevy API key by calling /v1/workouts/count."""
+    """Verify the stored Hevy key, or probe a candidate key without recording it.
+
+    With no key in the body (or the legacy ``__stored__`` sentinel) the
+    credential on file is probed and the outcome is recorded; that evidence is
+    what moves the connection out of ``connecting``. A candidate that differs
+    from the stored key is only probed, so it can never vouch for the credential
+    that is actually in use.
+    """
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    api_key = body.get("api_key", "").strip()
+    supplied_value = body.get("api_key") if isinstance(body, dict) else None
+    supplied = supplied_value.strip() if isinstance(supplied_value, str) else ""
+    stored = get_user_api_keys(user_id, DB_PATH).get("hevy", {}).get("api_key", "")
+    stored = stored.strip()
+    candidate = supplied if supplied not in ("", "__stored__", stored) else ""
+    api_key = candidate or stored
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(
+            status_code=400,
+            detail="No Hevy API key configured. Save your Hevy API key in Settings first.",
+        )
 
-    from hevy_client import get_workout_count
-
-    count = get_workout_count(api_key)
-    if count is not None:
-        return {"status": "ok", "workout_count": count}
+    probe = hevy_client.probe_connection(api_key)
+    integration: dict[str, Any] | None = None
+    if not candidate:
+        transition = integration_status.record_run(
+            user_id,
+            integration_status.HEVY,
+            RunKind.TEST,
+            SyncState.SUCCEEDED if probe.ok else SyncState.FAILED,
+            _status_context(),
+            error_code=probe.error_code,
+            retryable=probe.retryable,
+        )
+        integration = transition.after.to_payload()
+    if probe.ok:
+        return {
+            "status": "ok",
+            "workout_count": probe.workout_count,
+            "recorded": integration is not None,
+            "integration": integration,
+        }
     return {
         "status": "error",
-        "detail": "Could not connect to Hevy. Check the API key.",
+        "detail": failure_message("Hevy", probe.error_code),
+        "recorded": integration is not None,
+        "integration": integration,
     }
 
 
@@ -1268,6 +1426,10 @@ def google_health_connect(request: Request) -> RedirectResponse:
     user_id = _check_api_auth(request)
     state = secrets.token_urlsafe(16)
     set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
+    # Re-clicking Connect supersedes an abandoned attempt rather than blocking.
+    integration_status.begin_run(
+        user_id, integration_status.GOOGLE_HEALTH, RunKind.AUTHORIZE, _status_context()
+    )
     url = build_authorize_url(
         GH_CLIENT_ID,
         state,
@@ -1276,12 +1438,31 @@ def google_health_connect(request: Request) -> RedirectResponse:
     return RedirectResponse(url, status_code=303)
 
 
+def _finish_google_health_authorization(
+    request: Request, status: SyncState, error_code: str | None = None
+) -> None:
+    """Close this tenant's in-flight Google Health authorisation, if any."""
+    try:
+        user_id = _check_api_auth(request)
+    except HTTPException:
+        return
+    ctx = _status_context()
+    pending = integration_status.open_run(
+        user_id, integration_status.GOOGLE_HEALTH, RunKind.AUTHORIZE, ctx
+    )
+    if pending is not None:
+        integration_status.complete_run(pending, status, ctx, error_code=error_code)
+
+
 @app.get("/google-health/callback", name="google_health_callback")
 def google_health_callback(request: Request) -> RedirectResponse:
     """Receive Google's redirect, swap the code for a refresh token, store it."""
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     if request.query_params.get("error"):
+        _finish_google_health_authorization(
+            request, SyncState.FAILED, "authorization_denied"
+        )
         return RedirectResponse("/settings?gh=denied", status_code=303)
     user_id = _check_api_auth(request)
     code = request.query_params.get("code")
@@ -1289,6 +1470,7 @@ def google_health_callback(request: Request) -> RedirectResponse:
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
     set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
+        _finish_google_health_authorization(request, SyncState.FAILED, "invalid_state")
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
         GH_CLIENT_ID,
@@ -1297,8 +1479,12 @@ def google_health_callback(request: Request) -> RedirectResponse:
         redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
+        _finish_google_health_authorization(
+            request, SyncState.FAILED, "token_exchange_failed"
+        )
         return RedirectResponse("/settings?gh=error", status_code=303)
     set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
+    _finish_google_health_authorization(request, SyncState.SUCCEEDED)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
@@ -1308,6 +1494,9 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
+    integration_status.forget_connector_history(
+        user_id, integration_status.GOOGLE_HEALTH, _status_context()
+    )
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
@@ -1513,13 +1702,15 @@ def api_plan(request: Request) -> JSONResponse:
     definition: dict[str, Any] = (
         raw_definition if isinstance(raw_definition, dict) else {}
     )
-    source = active.get("source") if active else None
+    account = _account_status(user_id)
+    programme = account.components[integration_status.PROGRAMME]
 
-    if source != "hevy" or not definition:
+    if programme.state is IntegrationState.SETUP_REQUIRED or not definition:
         return JSONResponse(
             jsonable_encoder(
                 {
                     "setup_required": True,
+                    "readiness": account.to_payload(),
                     "is_active_programme": False,
                     "source": None,
                     "active_programme": None,
@@ -1555,6 +1746,7 @@ def api_plan(request: Request) -> JSONResponse:
         jsonable_encoder(
             {
                 "setup_required": False,
+                "readiness": account.to_payload(),
                 "is_active_programme": True,
                 "source": "hevy",
                 "active_programme": active,
@@ -1586,8 +1778,8 @@ def api_programmes(request: Request) -> JSONResponse:
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    ctx = _status_context()
+    hevy = integration_status.component_status(user_id, integration_status.HEVY, ctx)
 
     empty_source: dict[str, Any] = {
         "username": None,
@@ -1597,30 +1789,27 @@ def api_programmes(request: Request) -> JSONResponse:
         "folders": [],
         "routines": [],
     }
-    connection: dict[str, Any]
     source = empty_source
+    username: str | None = None
+    load_error: str | None = None
 
-    if not hevy_key:
-        connection = {
-            "state": "disconnected",
-            "detail": "Add your Hevy API key in Settings to import routines.",
-            "username": None,
-        }
-    else:
+    if hevy.reason is not Reason.CREDENTIAL_MISSING:
         try:
             training_data = _load_hevy_training_for_user(user_id)
             source = serialise_hevy_source(training_data)
-            connection = {
-                "state": "connected",
-                "detail": None,
-                "username": training_data.username,
-            }
+            username = training_data.username
         except HTTPException as exc:
-            connection = {
-                "state": "error",
-                "detail": str(exc.detail),
-                "username": None,
-            }
+            load_error = str(exc.detail)
+        # The read just attempted is itself a persisted fact; derive again.
+        hevy = integration_status.component_status(
+            user_id, integration_status.HEVY, ctx
+        )
+    connection: dict[str, Any] = {
+        **hevy.to_payload(),
+        "detail": load_error or hevy.message,
+        "username": username,
+        "load_failed": load_error is not None,
+    }
 
     return JSONResponse(
         jsonable_encoder(
@@ -1678,12 +1867,15 @@ def api_settings(request: Request):
             status = connector.status(ctx)
             if status.state == "pending":
                 continue
+            name = connector.provider.title().replace("_", " ")
+            projected = integration_status.status_from_connector(status, label=name)
             connectors_info.append(
                 {
                     "provider": connector.provider,
-                    "name": connector.provider.title().replace("_", " "),
-                    "state": status.state,
-                    "message": status.message,
+                    "name": name,
+                    "state": projected.state.value,
+                    "reason": projected.reason.value,
+                    "message": projected.message,
                     "authorize_supported": connector.capabilities.authorize,
                 }
             )
@@ -1698,10 +1890,13 @@ def api_settings(request: Request):
                 "user_prefs": prefs,
                 "user_keys": user_keys,
                 "ai_providers": ai_providers,
+                # gh_connected/gh_configured stay for older clients; every
+                # surface should render ``integrations`` (the shared state model).
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
+                "integrations": _account_status(user_id).to_payload(),
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
@@ -1710,9 +1905,21 @@ def api_settings(request: Request):
     )
 
 
+@app.get("/api/integrations/status")
+def api_integrations_status(request: Request) -> JSONResponse:
+    """Account and connector readiness, derived from persisted facts."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder(_account_status(user_id).to_payload()))
+
+
 @app.post("/api/settings/sync-history")
-async def sync_history_endpoint(request: Request) -> dict[str, Any]:
-    """Rebuild user's workout history from Hevy."""
+def sync_history_endpoint(request: Request) -> dict[str, Any]:
+    """Rebuild user's workout history from Hevy.
+
+    A plain ``def`` handler runs in the thread pool, so the ``syncing`` state is
+    observable from other requests while the import is in flight. The attempt is
+    recorded in the connector ledger; readiness is derived from that record.
+    """
     _check_rate_limit(request, limit=2)
     user_id = _check_api_auth(request)
 
@@ -1724,23 +1931,68 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
             detail="No Hevy API key configured. Save your Hevy API key in Settings first.",
         )
 
+    ctx = _status_context()
+    handle = integration_status.begin_run(
+        user_id, integration_status.HEVY, RunKind.SYNC, ctx
+    )
+    if handle is None:
+        raise HTTPException(
+            status_code=409,
+            detail="A Hevy sync is already running. Wait for it to finish.",
+        )
+
     from scripts.sync_history import sync_all
 
-    result = sync_all(hevy_key, DB_PATH, user_id=user_id)
-    if "error" in result:
-        err_msg = str(result["error"])
-        save_notification(
-            user_id,
-            title="⚠️ Hevy Sync Failed",
-            message=f"Could not sync history: {err_msg}",
-            type="sync",
-            link="/settings",
-            db_path=DB_PATH,
+    try:
+        # Probe first so an expired key is reported as such, not as an outage.
+        probe = hevy_client.probe_connection(hevy_key)
+        result = sync_all(hevy_key, DB_PATH, user_id=user_id) if probe.ok else {}
+    except Exception:
+        integration_status.complete_run(
+            handle, SyncState.FAILED, ctx, error_code="internal_error", retryable=True
         )
-        raise HTTPException(status_code=400, detail=err_msg)
+        raise
+
+    if not probe.ok or "error" in result:
+        code = probe.error_code if not probe.ok else "provider_unavailable"
+        retryable = probe.retryable if not probe.ok else True
+        integration_status.complete_run(
+            handle, SyncState.FAILED, ctx, error_code=code, retryable=retryable
+        )
+        raise HTTPException(
+            status_code=400 if code in AUTH_ERROR_CODES else 502,
+            detail=failure_message("Hevy", code),
+        )
 
     workouts_found = int(result.get("workouts_found", 0))
     processed = int(result.get("processed", 0))
+    failed = int(result.get("failed", 0))
+    skipped = max(0, workouts_found - processed - failed)
+    if failed:
+        transition = integration_status.complete_run(
+            handle,
+            SyncState.PARTIAL,
+            ctx,
+            error_code="partial_import",
+            retryable=True,
+            fetched=workouts_found,
+            written=processed,
+            skipped=skipped,
+        )
+        return {
+            "status": "partial",
+            **result,
+            "integration": transition.after.to_payload(),
+        }
+
+    transition = integration_status.complete_run(
+        handle,
+        SyncState.SUCCEEDED,
+        ctx,
+        fetched=workouts_found,
+        written=processed,
+        skipped=skipped,
+    )
     save_notification(
         user_id,
         title="✓ Hevy History Synced",
@@ -1749,7 +2001,7 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
         link="/history",
         db_path=DB_PATH,
     )
-    return {"status": "ok", **result}
+    return {"status": "ok", **result, "integration": transition.after.to_payload()}
 
 
 @app.get("/api/notifications")
@@ -1811,12 +2063,21 @@ def api_clear_notifications(request: Request):
 @app.post("/api/notifications/test-coach")
 def api_test_coach_notification(request: Request):
     user_id = _check_api_auth(request)
+    coach = integration_status.component_status(
+        user_id, integration_status.AI_PROVIDER, _status_context()
+    )
+    # Never claim Coach is active when the shared state model says it is not.
+    ready = coach.state is IntegrationState.READY
     nid = save_notification(
         user_id,
-        title="✨ Coach Status Update",
-        message="Coach analysis active: Keep recovery high and log your sets accurately today!",
+        title="✨ Coach Status Update" if ready else "⚠️ Coach is not ready",
+        message=(
+            "Coach analysis active: Keep recovery high and log your sets accurately today!"
+            if ready
+            else coach.message
+        ),
         type="coach",
-        link="/dashboard",
+        link="/dashboard" if ready else (coach.action_href or "/settings?section=ai"),
         db_path=DB_PATH,
     )
     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)

@@ -50,3 +50,64 @@ describe('Plan', () => {
     expect(text).not.toContain("¡'");
   });
 });
+
+describe('Plan shared readiness', () => {
+  function render(readiness: object | undefined, setupRequired = false) {
+    TestBed.configureTestingModule({
+      imports: [Plan],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const fixture = TestBed.createComponent(Plan);
+    fixture.detectChanges();
+    TestBed.inject(HttpTestingController).expectOne('/api/plan').flush({
+      setup_required: setupRequired,
+      split_name: 'Imported rotation',
+      week: 1,
+      cycle_weeks: 4,
+      warnings: [],
+      blocks: [],
+      days: [],
+      rules: [],
+      readiness,
+    });
+    fixture.detectChanges();
+    return fixture.nativeElement as HTMLElement;
+  }
+
+  const status = (connector: string, state: string, message: string) => ({
+    connector,
+    label: connector,
+    state,
+    reason: 'synthetic',
+    message,
+    action_label: null,
+    action_href: null,
+  });
+
+  it('surfaces a degraded Hevy connection above the plan', () => {
+    const el = render({
+      components: {
+        hevy: status(
+          'hevy',
+          'degraded',
+          'Hevy rejected your credentials. Update them to continue.',
+        ),
+        programme: status('programme', 'ready', 'Your programme is active.'),
+      },
+    });
+    const notice = el.querySelector('.status-notice[data-connector="hevy"]');
+    expect(notice?.getAttribute('role')).toBe('alert');
+    expect(notice?.textContent).toContain('rejected your credentials');
+  });
+
+  it('renders the plan without notices when the API sends no readiness', () => {
+    const el = render(undefined);
+    expect(el.querySelector('.status-notice')).toBeNull();
+    expect(el.textContent).toContain('Imported rotation');
+  });
+
+  it('keeps the setup call to action when no programme is active', () => {
+    const el = render({ components: {} }, true);
+    expect(el.textContent).toContain('Build your plan from Hevy');
+  });
+});

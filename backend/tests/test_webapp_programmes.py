@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import database
+import hevy_client
 from hevy_reader import (
     CompletedWorkout,
     ExerciseTemplate,
@@ -111,18 +112,20 @@ def _client(tmp_path: Any, monkeypatch: Any) -> tuple[TestClient, Any, str]:
 
     importlib.reload(app_module)
     monkeypatch.setattr(app_module, "ALLOW_ANONYMOUS_WEB", True)
+    user_id = database.get_legacy_user_id(db_file)
+    # A real stored credential: connection state is derived from persisted facts.
+    database.save_user_api_key(user_id, "hevy", "fixture-hevy-key", db_path=db_file)
     monkeypatch.setattr(
-        app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {"hevy": {"api_key": "fixture-hevy-key"}},
+        hevy_client,
+        "probe_connection",
+        lambda api_key: hevy_client.HevyProbe(True, workout_count=42),
     )
     monkeypatch.setattr(
-        app_module,
-        "_load_hevy_training_for_user",
+        "hevy_reader.fetch_user_training",
         lambda *args, **kwargs: _training_data(),
     )
     client = TestClient(app_module.app)
-    client.cookies.set("session", _session_cookie(database.get_legacy_user_id(db_file)))
+    client.cookies.set("session", _session_cookie(user_id))
     return client, app_module, db_file
 
 
@@ -150,7 +153,15 @@ def test_programme_builder_returns_hevy_source_without_templates(
     data = response.json()
 
     assert data["templates"] == []
-    assert data["connection"]["state"] == "connected"
+    # Routines are readable, but no history import has completed yet: the shared
+    # state model reports "connecting", not a binary "connected".
+    connection = data["connection"]
+    assert (connection["state"], connection["reason"]) == (
+        "connecting",
+        "awaiting_first_sync",
+    )
+    assert connection["username"] == "fixture-user"
+    assert connection["load_failed"] is False
     assert [routine["id"] for routine in data["source"]["routines"]] == [
         "routine-a",
         "routine-b",
@@ -237,17 +248,16 @@ def test_disconnected_builder_does_not_return_static_fallback(
     tmp_path: Any,
     monkeypatch: Any,
 ) -> None:
-    client, app_module, _db_file = _client(tmp_path, monkeypatch)
-    monkeypatch.setattr(
-        app_module,
-        "get_user_api_keys",
-        lambda *args, **kwargs: {},
+    client, _app_module, db_file = _client(tmp_path, monkeypatch)
+    database.delete_user_api_key(
+        database.get_legacy_user_id(db_file), "hevy", db_path=db_file
     )
 
     response = client.get("/api/programmes")
     assert response.status_code == 200
     data = response.json()
-    assert data["connection"]["state"] == "disconnected"
+    assert data["connection"]["state"] == "setup_required"
+    assert data["connection"]["reason"] == "credential_missing"
     assert data["templates"] == []
     assert data["source"]["routines"] == []
 

@@ -203,7 +203,7 @@ Minimum requirements include:
 7. Implement Garmin Health + Activity ingestion, then Garmin Training export.
 8. Add Oura, then Polar and Withings cloud connectors.
 9. Build readiness feature extraction, baseline calculations and explainable adaptive-training rules.
-10. Add provider status, freshness, reconnect and permission controls to Settings plus production observability, contract tests and deletion/export verification.
+10. Add provider status, freshness, reconnect and permission controls to Settings plus production observability, contract tests and deletion/export verification. Provider status, freshness and reconnect states come from the shared model in `docs/INTEGRATION_STATE_MACHINE.md`; a new provider records its runs in `connector_runs` rather than adding its own flags.
 
 ## Official references
 

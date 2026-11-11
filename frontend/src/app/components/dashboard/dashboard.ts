@@ -4,11 +4,12 @@ import { CommonModule } from '@angular/common';
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { StatusNotice } from '../../shared/status-widgets';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, ListControls],
+  imports: [CommonModule, ListControls, StatusNotice],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })

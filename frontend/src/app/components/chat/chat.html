@@ -53,6 +53,9 @@
     </div>
   </div>
 
+  <app-status-notice [status]="account()?.components?.['ai_provider']" />
+  <app-status-notice [status]="account()?.components?.['hevy']" />
+
   <div class="chat-messages" #scrollContainer>
     @if (messages().length === 0) {
       <div class="chat-welcome">

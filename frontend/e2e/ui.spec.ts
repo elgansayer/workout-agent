@@ -16,7 +16,61 @@ const names = [
   'Chin up',
   'Hammer curl',
 ];
+// Synthetic shared integration state (docs/INTEGRATION_STATE_MACHINE.md).
+const component = (connector: string, label: string, state: string, message: string) => ({
+  connector,
+  label,
+  state,
+  reason: state === 'ready' ? 'up_to_date' : 'data_stale',
+  message,
+  next_action: state === 'ready' ? 'none' : 'sync',
+  action_label: state === 'ready' ? null : 'Sync now',
+  action_href: state === 'ready' ? null : '/settings?section=connections',
+  retryable: false,
+  freshness: null,
+  last_attempt_at: null,
+  last_success_at: null,
+  last_error_code: null,
+  consecutive_failures: 0,
+  last_run: null,
+});
+const account = (hevyState: string) => ({
+  generated_at: '2026-11-11T12:00:00+00:00',
+  state: hevyState,
+  reason: hevyState === 'ready' ? 'up_to_date' : 'data_stale',
+  message: 'Synthetic account status.',
+  next_action: 'none',
+  action_label: null,
+  action_href: null,
+  required: ['hevy', 'programme', 'ai_provider'],
+  blocking: [],
+  components: {
+    hevy: component(
+      'hevy',
+      'Hevy',
+      hevyState,
+      hevyState === 'ready'
+        ? 'Hevy is up to date (last synced 1 hour ago).'
+        : 'Hevy was last synced 5 days ago. Sync again to refresh it.',
+    ),
+    programme: component('programme', 'Programme', 'ready', 'Your programme is active.'),
+    ai_provider: component(
+      'ai:gemini',
+      'AI coach (Gemini)',
+      'ready',
+      'AI coach (Gemini) is configured.',
+    ),
+    google_health: component(
+      'google_health',
+      'Google Health',
+      'setup_required',
+      'Google Health is not set up yet.',
+    ),
+  },
+});
 const dashboard = {
+  // A stale Hevy sync renders the shared notice; layout must survive enlarged text.
+  readiness: account('stale'),
   week: 2,
   cycle_weeks: 12,
   weekday: 'Monday',
@@ -110,6 +164,7 @@ const settings = {
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
+  integrations: account('ready'),
   vapid_public_key: null,
 };
 const payloads: Record<string, unknown> = {
@@ -164,7 +219,12 @@ const payloads: Record<string, unknown> = {
     rules: ['Follow your routine rotation'],
   },
   '/api/programmes': {
-    connection: { state: 'connected' },
+    connection: {
+      ...component('hevy', 'Hevy', 'ready', 'Hevy is up to date.'),
+      username: 'demo',
+      detail: null,
+      load_failed: false,
+    },
     source: {
       routines,
       folders: [{ id: 'folder', title: 'Training' }],
@@ -176,6 +236,7 @@ const payloads: Record<string, unknown> = {
   },
   '/api/settings': settings,
   '/api/chat/history': { messages: [] },
+  '/api/integrations/status': account('ready'),
   '/api/csrf-token': { token: 'synthetic-csrf', expires_in: 60 },
 };
 
