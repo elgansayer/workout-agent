@@ -161,6 +161,26 @@ const payloads: Record<string, unknown> = {
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
   },
+  '/api/sessions': {
+    sessions: [
+      {
+        id: 1,
+        device: 'Chrome on Linux',
+        location: 'Approx. network 198.51.100.0/24',
+        created_at: '2026-11-10T09:00:00+00:00',
+        last_used_at: '2026-11-10T10:00:00+00:00',
+        current: true,
+      },
+      {
+        id: 2,
+        device: 'Safari on iOS',
+        location: 'Local network',
+        created_at: '2026-11-09T09:00:00+00:00',
+        last_used_at: '2026-11-09T10:00:00+00:00',
+        current: false,
+      },
+    ],
+  },
   '/api/dashboard': dashboard,
   '/api/history': {
     calendar,
@@ -257,6 +277,48 @@ const payloads: Record<string, unknown> = {
     cadence: { modes: [], weekdays: [], roles: [] },
   },
   '/api/settings': settings,
+  '/api/settings/display': {
+    settings: {
+      timezone: 'Europe/London',
+      locale: 'en-GB',
+      unit_system: 'metric',
+      motion: 'system',
+      contrast: 'system',
+      text_size: 'default',
+    },
+    options: {
+      defaults: {
+        timezone: 'UTC',
+        locale: 'en-GB',
+        unit_system: 'metric',
+        motion: 'system',
+        contrast: 'system',
+        text_size: 'default',
+      },
+      timezones: ['UTC', 'Europe/London', 'America/New_York'],
+      locales: [
+        { value: 'en-GB', label: 'English (United Kingdom)' },
+        { value: 'en-US', label: 'English (United States)' },
+      ],
+      unit_systems: [
+        { value: 'metric', label: 'Metric (kg)' },
+        { value: 'imperial', label: 'Imperial (lb)' },
+      ],
+      motion: [
+        { value: 'system', label: 'Follow my device setting' },
+        { value: 'reduce', label: 'Always reduce motion' },
+      ],
+      contrast: [
+        { value: 'system', label: 'Follow my device setting' },
+        { value: 'more', label: 'Always increase contrast' },
+      ],
+      text_size: [
+        { value: 'default', label: 'Default' },
+        { value: 'large', label: 'Large' },
+        { value: 'x-large', label: 'Extra large' },
+      ],
+    },
+  },
   '/api/chat/history': { messages: [] },
   '/api/coach/capability': {
     provider_name: 'gemini',
@@ -549,6 +611,10 @@ test('navigation, list paging and settings sections work with keyboard focus', a
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
   await expect(page.getByLabel('Constraints Notes (optional free-text)')).toHaveValue('Synthetic preference');
+  await page.getByRole('button', { name: 'Region & accessibility', exact: true }).click();
+  await expect(page.locator('#settings-display')).toBeVisible();
+  await expect(page.getByLabel('Time zone', { exact: true })).toHaveValue('Europe/London');
+  await expect(page.getByLabel('Text size', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Notifications', exact: true }).click();
   await expect(
     page.getByText('Push notifications are not available on this server.'),

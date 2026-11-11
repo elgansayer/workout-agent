@@ -100,6 +100,9 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "hevy_meta",
     "hevy_connections",
     "training_rules",
+    "health_connections",
+    "health_metrics",
+    "health_sync_runs",
 )
 
 # Tables that carry ``user_id`` but are not single-user records to be re-owned.

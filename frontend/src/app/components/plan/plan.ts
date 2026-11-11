@@ -6,6 +6,7 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { SetupNotice } from '../../shared/setup-notice';
 import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
@@ -19,6 +20,7 @@ import { SetupState, ViewState, resolveViewState } from '../../shared/setup-stat
     HlmCardImports,
     HlmBadgeImports,
     HlmAlertImports,
+    LocalDatePipe,
     ProvenanceBadge,
     SetupNotice,
   ],

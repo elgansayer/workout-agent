@@ -14,6 +14,7 @@ Workout Agent is a multi-user fitness intelligence platform for importing workou
   The latest evidence is recorded in the [AI provider parity audit](docs/AI_PROVIDER_PARITY.md).
 - Use the web dashboard, Coach, programme builder, history, progress, settings, and check-in views.
 - Deliver notifications through supported user-configured channels.
+- Store each user's time zone, locale, unit system and accessibility preferences, and apply them to pages, scheduled jobs, notifications, exports and AI prompts. See [Per-user regional and accessibility settings](docs/USER_SETTINGS.md).
 
 ## Architecture
 

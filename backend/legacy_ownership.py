@@ -112,6 +112,9 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("programme_decisions"),
     OwnedTable("hevy_connections", ("provider",)),
     OwnedTable("training_rules", ()),
+    OwnedTable("health_connections", ("provider", "id")),
+    OwnedTable("health_metrics", ("fingerprint",)),
+    OwnedTable("health_sync_runs"),
 )
 
 

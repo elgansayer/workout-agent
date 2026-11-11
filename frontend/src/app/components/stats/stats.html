@@ -33,8 +33,8 @@
         <span class="stat-cap">Exercises tracked</span>
       </div>
       <div class="stat-card big-num">
-        <span class="num">{{ data.total_volume | number: '1.0-0' }}</span>
-        <span class="num-label">kg moved</span>
+        <span class="num">{{ data.total_volume | localNumber }}</span>
+        <span class="num-label">{{ data.weight_unit || 'kg' }} moved</span>
         <span class="stat-cap">Est. total load</span>
       </div>
       <div class="stat-card big-num">
@@ -149,9 +149,9 @@
                 @for (pr of records.visible(); track pr.exercise) {
                   <tr>
                     <td>{{ pr.exercise }}</td>
-                    <td class="num-cell">{{ pr.e1rm }} kg</td>
+                    <td class="num-cell">{{ pr.e1rm }} {{ data.weight_unit || 'kg' }}</td>
                     <td class="muted">{{ pr.detail }}</td>
-                    <td class="muted">{{ pr.date | date: 'shortDate' }}</td>
+                    <td class="muted">{{ pr.date | localDate: 'shortDate' }}</td>
                   </tr>
                 }
               </tbody>

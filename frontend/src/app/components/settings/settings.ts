@@ -2,6 +2,7 @@ import { Component, inject, signal, OnInit, OnDestroy } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+import { DisplaySettings, DisplaySettingsService } from '../../services/display-settings';
 import {
   CredentialTestResult,
   EquipmentRule,
@@ -93,6 +94,12 @@ const DELETION_ERRORS: Record<string, string> = {
 // a pending closure only needs to notice when its window ends.
 const POLL_MS: Record<string, number> = { in_progress: 2000, failed: 15000, pending: 60000 };
 
+interface ConnectorSummary {
+  connection_id?: string | null;
+  provider: string;
+  name?: string;
+}
+
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -102,6 +109,7 @@ const POLL_MS: Record<string, number> = { in_progress: 2000, failed: 15000, pend
 })
 export class Settings implements OnInit, OnDestroy {
   private http = inject(HttpClient);
+  protected readonly display = inject(DisplaySettingsService);
 
   data = signal<SettingsResponse | null>(null);
   loading = signal<boolean>(true);
@@ -111,6 +119,8 @@ export class Settings implements OnInit, OnDestroy {
   pushStatus = signal('');
   healthStatus = signal('');
   disconnectingHealth = signal(false);
+  retentionMode = signal('revoke_only');
+  connectorRetention: { [provider: string]: string } = {};
   pushBusy = signal(false);
   hevyKeyInput = '';
   hevyStatus = signal<string>('');
@@ -166,8 +176,14 @@ export class Settings implements OnInit, OnDestroy {
   });
   contextualNotes = signal<{ category: string; note: string; severity: string }[]>([]);
 
+  displayDraft = signal<DisplaySettings>({ ...this.display.settings() });
+  displayStatus = signal<string>('');
+  displayStatusIsError = signal<boolean>(false);
+  displaySaving = signal<boolean>(false);
+
   ngOnInit() {
     this.loadSettings();
+    void this.loadDisplay();
     // Deep link from the Account page: /settings?section=account
     if (new URLSearchParams(window.location.search).get('section') === 'account') {
       this.selectSection('account');
@@ -176,6 +192,69 @@ export class Settings implements OnInit, OnDestroy {
 
   ngOnDestroy() {
     this.stopDeletionPoll();
+  }
+
+  async loadDisplay(): Promise<void> {
+    await this.display.load();
+    this.displayDraft.set({ ...this.display.settings() });
+  }
+
+  setDisplayField<K extends keyof DisplaySettings>(field: K, value: DisplaySettings[K]): void {
+    this.displayDraft.set({ ...this.displayDraft(), [field]: value });
+  }
+
+  /** Offer the browser's zone, but only when this server supports it. */
+  useDeviceTimeZone(): void {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (zone && this.display.options()?.timezones.includes(zone)) {
+      this.setDisplayField('timezone', zone);
+      this.reportDisplay(`Time zone set to ${zone}. Save to apply it.`, false);
+    } else {
+      this.reportDisplay(
+        `This device reports ${zone || 'no time zone'}, which Workout Agent does not support. Pick one from the list.`,
+        true,
+      );
+    }
+  }
+
+  async saveDisplay(): Promise<void> {
+    if (this.displaySaving()) return;
+    const current = this.display.settings();
+    const draft = this.displayDraft();
+    const changes: Partial<DisplaySettings> = {};
+    for (const key of Object.keys(draft) as (keyof DisplaySettings)[]) {
+      if (draft[key] !== current[key]) {
+        (changes as Record<string, string>)[key] = draft[key];
+      }
+    }
+    if (Object.keys(changes).length === 0) {
+      this.reportDisplay('No changes to save.', false);
+      return;
+    }
+
+    this.displaySaving.set(true);
+    try {
+      const saved = await this.display.save(changes);
+      this.displayDraft.set({ ...saved.settings });
+      const regrouped =
+        saved.regrouped_days > 0
+          ? ` ${saved.regrouped_days} workout ${saved.regrouped_days === 1 ? 'day was' : 'days were'} regrouped for the new time zone; your recorded times are unchanged.`
+          : '';
+      this.reportDisplay(`Saved.${regrouped}`, false);
+    } catch (err) {
+      const detail = err instanceof HttpErrorResponse ? err.error?.detail : null;
+      this.reportDisplay(
+        typeof detail === 'string' ? detail : 'Could not save your settings. Try again.',
+        true,
+      );
+    } finally {
+      this.displaySaving.set(false);
+    }
+  }
+
+  private reportDisplay(message: string, isError: boolean): void {
+    this.displayStatus.set(message);
+    this.displayStatusIsError.set(isError);
   }
 
   selectSection(name: string) {
@@ -589,20 +668,70 @@ export class Settings implements OnInit, OnDestroy {
       });
   }
 
+  private confirmRetention(provider: string, mode: string): boolean {
+    if (mode === 'purge') {
+      return confirm(
+        `Disconnect ${provider} and permanently delete the data it imported plus ` +
+          'insights derived from it? Workouts and check-ins you entered are kept.',
+      );
+    }
+    return true;
+  }
+
   disconnectGoogleHealth(): void {
     if (this.disconnectingHealth()) return;
+    const mode = this.retentionMode();
+    if (!this.confirmRetention('Google Health', mode)) return;
     this.disconnectingHealth.set(true);
-    this.http.post('/google-health/disconnect', {}, { responseType: 'text' }).subscribe({
-      next: () => {
-        this.disconnectingHealth.set(false);
-        this.healthStatus.set('Google Health disconnected.');
-        this.loadSettings(false);
-      },
-      error: () => {
-        this.disconnectingHealth.set(false);
-        this.healthStatus.set('Could not disconnect Google Health. Please try again.');
-      },
-    });
+    this.http
+      .post(
+        '/google-health/disconnect',
+        { mode, confirmed: mode === 'purge' },
+        { responseType: 'text' },
+      )
+      .subscribe({
+        next: () => {
+          this.disconnectingHealth.set(false);
+          this.healthStatus.set(
+            mode === 'purge'
+              ? 'Google Health disconnected and imported data purged.'
+              : 'Google Health disconnected.',
+          );
+          this.loadSettings(false);
+        },
+        error: () => {
+          this.disconnectingHealth.set(false);
+          this.healthStatus.set('Could not disconnect Google Health. Please try again.');
+        },
+      });
+  }
+
+  setConnectorRetention(provider: string, mode: string): void {
+    this.connectorRetention[provider] = mode;
+  }
+
+  disconnectConnector(connector: ConnectorSummary): void {
+    if (!connector?.connection_id) return;
+    const mode = this.connectorRetention[connector.provider] || 'revoke_only';
+    if (!this.confirmRetention(connector.name || connector.provider, mode)) return;
+    this.http
+      .delete(`/api/health/connections/${encodeURIComponent(connector.connection_id)}`, {
+        params: { mode, confirmed: String(mode === 'purge') },
+        responseType: 'text',
+      })
+      .subscribe({
+        next: () => {
+          this.healthStatus.set(
+            mode === 'purge'
+              ? `${connector.name} disconnected and imported data purged.`
+              : `${connector.name} disconnected.`,
+          );
+          this.loadSettings(false);
+        },
+        error: () => {
+          this.healthStatus.set(`Could not disconnect ${connector.name}. Please try again.`);
+        },
+      });
   }
 
   async checkPushSubscription(): Promise<void> {

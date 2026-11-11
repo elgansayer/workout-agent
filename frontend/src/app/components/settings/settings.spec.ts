@@ -1,8 +1,65 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { DEFAULT_DISPLAY_SETTINGS, DisplayOptions } from '../../services/display-settings';
+import { vi } from 'vitest';
 import { Settings } from './settings';
 import { SettingsResponse } from './settings.types';
+
+const retentionOptions = [
+  {
+    mode: 'revoke_only',
+    label: 'Revoke access only',
+    explanation: 'Revoke the credential and keep imported data.',
+    deletes_imported_data: false,
+    deletes_derived_data: false,
+  },
+  {
+    mode: 'retain',
+    label: 'Disconnect and retain imported data',
+    explanation: 'Disconnect but keep imported data and derived insights.',
+    deletes_imported_data: false,
+    deletes_derived_data: false,
+  },
+  {
+    mode: 'purge',
+    label: 'Disconnect and purge imported data',
+    explanation: 'Delete imported data and derived insights, keeping your own records.',
+    deletes_imported_data: true,
+    deletes_derived_data: true,
+  },
+] as const;
+
+const displayOptions: DisplayOptions = {
+  defaults: DEFAULT_DISPLAY_SETTINGS,
+  timezones: ['UTC', 'Europe/London', 'America/New_York', 'Pacific/Auckland'],
+  locales: [
+    { value: 'en-GB', label: 'English (United Kingdom)' },
+    { value: 'en-US', label: 'English (United States)' },
+  ],
+  unit_systems: [
+    { value: 'metric', label: 'Metric (kg)' },
+    { value: 'imperial', label: 'Imperial (lb)' },
+  ],
+  motion: [
+    { value: 'system', label: 'Follow my device setting' },
+    { value: 'reduce', label: 'Always reduce motion' },
+  ],
+  contrast: [
+    { value: 'system', label: 'Follow my device setting' },
+    { value: 'more', label: 'Always increase contrast' },
+  ],
+  text_size: [
+    { value: 'default', label: 'Default' },
+    { value: 'large', label: 'Large' },
+    { value: 'x-large', label: 'Extra large' },
+  ],
+};
+
+const displayResponse = {
+  settings: { ...DEFAULT_DISPLAY_SETTINGS, timezone: 'Europe/London' },
+  options: displayOptions,
+};
 
 const providers = [
   { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-3.8-flash' },
@@ -60,6 +117,7 @@ const settingsResponse: SettingsResponse = {
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
+  retention_options: retentionOptions,
   vapid_public_key: null,
 };
 
@@ -90,7 +148,11 @@ describe('Settings AI provider parity', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => http.verify());
+  afterEach(() => {
+    // These suites do not exercise the display section; settle its load.
+    http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
+    http.verify();
+  });
 
   async function loadSettings(
     response: SettingsResponse = settingsResponse,
@@ -98,6 +160,7 @@ describe('Settings AI provider parity', () => {
     const fixture = TestBed.createComponent(Settings);
     fixture.detectChanges();
     http.expectOne('/api/settings').flush(response);
+    http.expectOne('/api/settings/display').flush(displayResponse);
     await fixture.whenStable();
     fixture.detectChanges();
     return fixture;
@@ -176,6 +239,57 @@ describe('Settings AI provider parity', () => {
     request.flush('');
     http.expectOne('/api/settings').flush(settingsResponse);
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
+  });
+
+  it('renders explicit retain, purge and revoke-only choices for a connected provider', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush({
+      ...settingsResponse,
+      gh_configured: true,
+      gh_connected: true,
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const labels = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('.retention-option strong'),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual([
+      'Revoke access only',
+      'Disconnect and retain imported data',
+      'Disconnect and purge imported data',
+    ]);
+  });
+
+  it('purges a connector through the tenant-scoped DELETE route when chosen', async () => {
+    const connector = {
+      provider: 'garmin',
+      name: 'Garmin',
+      state: 'connected',
+      message: null,
+      connection_id: 'conn-1',
+      retention_options: retentionOptions,
+    };
+    const response = { ...settingsResponse, connectors_info: [connector] };
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(response);
+    await fixture.whenStable();
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fixture.componentInstance.setConnectorRetention('garmin', 'purge');
+    fixture.componentInstance.disconnectConnector(connector);
+
+    const request = http.expectOne(
+      (candidate) => candidate.url === '/api/health/connections/conn-1',
+    );
+    expect(request.request.method).toBe('DELETE');
+    expect(request.request.params.get('mode')).toBe('purge');
+    expect(request.request.params.get('confirmed')).toBe('true');
+    request.flush('');
+    http.expectOne('/api/settings').flush(response);
+    confirmSpy.mockRestore();
+    expect(fixture.componentInstance.healthStatus()).toContain('purged');
   });
 
   it('loads and displays structured training rules in the accessible editor', async () => {
@@ -269,7 +383,6 @@ describe('Settings AI provider parity', () => {
     });
     await fixture.whenStable();
     fixture.detectChanges();
-
     expect(component.ruleViolations().length).toBe(1);
     expect(component.rulesStatus()).toContain('contradicts the saved training rules');
     const element = fixture.nativeElement as HTMLElement;
@@ -488,6 +601,7 @@ describe('Settings account and data deletion', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     window.history.pushState({}, '', '/');
+    http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
     http.verify();
   });
 
@@ -778,5 +892,194 @@ describe('Settings account and data deletion', () => {
     expect((query(fixture, '#settings-account') as HTMLElement).textContent).toContain(
       'signed in with your own account',
     );
+  });
+});
+
+describe('Settings region and accessibility', () => {
+  let http: HttpTestingController;
+  const root = document.documentElement;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Settings],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => {
+    http.verify();
+    root.removeAttribute('lang');
+    delete root.dataset['motion'];
+    delete root.dataset['contrast'];
+    delete root.dataset['textSize'];
+  });
+
+  async function open(): Promise<ComponentFixture<Settings>> {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    http.expectOne('/api/settings/display').flush(displayResponse);
+    await fixture.whenStable();
+    fixture.componentInstance.section.set('display');
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  const control = <T extends HTMLElement>(fixture: ComponentFixture<Settings>, id: string): T =>
+    (fixture.nativeElement as HTMLElement).querySelector<T>(`#${id}`)!;
+
+  it('is reachable from the section navigation and shows the saved values', async () => {
+    const fixture = await open();
+    const element = fixture.nativeElement as HTMLElement;
+    const sections = Array.from(element.querySelectorAll('.settings-sections button')).map((b) =>
+      b.textContent?.trim(),
+    );
+
+    expect(sections).toContain('Region & accessibility');
+    expect(control<HTMLInputElement>(fixture, 'display-timezone').value).toBe('Europe/London');
+    expect(control<HTMLSelectElement>(fixture, 'display-locale').value).toBe('en-GB');
+    expect(
+      element.querySelector<HTMLInputElement>('input[name="display-unit-system"]:checked')?.value,
+    ).toBe('metric');
+    expect(element.querySelectorAll('#display-timezones option').length).toBe(4);
+  });
+
+  it('labels every control for assistive technology', async () => {
+    const fixture = await open();
+    const element = fixture.nativeElement as HTMLElement;
+
+    for (const id of [
+      'display-timezone',
+      'display-locale',
+      'display-motion',
+      'display-contrast',
+      'display-text-size',
+    ]) {
+      expect(element.querySelector(`label[for="${id}"]`), id).toBeTruthy();
+    }
+    expect(element.querySelector('fieldset legend')?.textContent).toContain('Units');
+    expect(control(fixture, 'display-status').getAttribute('role')).toBe('status');
+  });
+
+  it('saves only the fields that changed and applies them immediately', async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    component.setDisplayField('unit_system', 'imperial');
+    component.setDisplayField('text_size', 'large');
+    component.setDisplayField('motion', 'reduce');
+
+    const saving = component.saveDisplay();
+    const request = http.expectOne('/api/settings/display');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({
+      unit_system: 'imperial',
+      motion: 'reduce',
+      text_size: 'large',
+    });
+    request.flush({
+      status: 'ok',
+      settings: {
+        ...displayResponse.settings,
+        unit_system: 'imperial',
+        motion: 'reduce',
+        text_size: 'large',
+      },
+      changed: ['unit_system', 'motion', 'text_size'],
+      regrouped_days: 0,
+    });
+    await saving;
+    fixture.detectChanges();
+
+    expect(component.displayStatus()).toBe('Saved.');
+    expect(control(fixture, 'display-status').getAttribute('role')).toBe('status');
+    expect(root.dataset['textSize']).toBe('large');
+    expect(root.dataset['motion']).toBe('reduce');
+  });
+
+  it('explains how many workout days a time-zone change regrouped', async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    component.setDisplayField('timezone', 'Pacific/Auckland');
+
+    const saving = component.saveDisplay();
+    http.expectOne('/api/settings/display').flush({
+      status: 'ok',
+      settings: { ...displayResponse.settings, timezone: 'Pacific/Auckland' },
+      changed: ['timezone'],
+      regrouped_days: 2,
+    });
+    await saving;
+
+    expect(component.displayStatus()).toContain('2 workout days were regrouped');
+    expect(component.displayStatus()).toContain('recorded times are unchanged');
+  });
+
+  it('does not call the server when nothing changed', async () => {
+    const fixture = await open();
+
+    await fixture.componentInstance.saveDisplay();
+
+    expect(fixture.componentInstance.displayStatus()).toBe('No changes to save.');
+  });
+
+  it("shows the server's reason when a value is rejected", async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    component.setDisplayField('timezone', 'Mars/Base');
+
+    const saving = component.saveDisplay();
+    http
+      .expectOne('/api/settings/display')
+      .flush(
+        { detail: 'Unsupported time zone. Use an IANA name such as Europe/London.' },
+        { status: 400, statusText: 'Bad Request' },
+      );
+    await saving;
+    fixture.detectChanges();
+
+    expect(component.displayStatus()).toContain('Unsupported time zone');
+    expect(control(fixture, 'display-error').getAttribute('role')).toBe('alert');
+    expect(control(fixture, 'display-error').textContent).toContain('Unsupported time zone');
+    expect(control(fixture, 'display-status').textContent?.trim()).toBe('');
+    expect(component.displaySaving()).toBe(false);
+  });
+
+  it('ignores a second save while one is in flight', async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    component.setDisplayField('contrast', 'more');
+
+    const first = component.saveDisplay();
+    const second = component.saveDisplay();
+    http.expectOne('/api/settings/display').flush({
+      status: 'ok',
+      settings: { ...displayResponse.settings, contrast: 'more' },
+      changed: ['contrast'],
+      regrouped_days: 0,
+    });
+    await Promise.all([first, second]);
+  });
+
+  it("offers the device's time zone only when the server supports it", async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    const resolved = vi.spyOn(Intl.DateTimeFormat.prototype, 'resolvedOptions');
+
+    resolved.mockReturnValue({
+      timeZone: 'America/New_York',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    component.useDeviceTimeZone();
+    expect(component.displayDraft().timezone).toBe('America/New_York');
+    expect(component.displayStatusIsError()).toBe(false);
+
+    resolved.mockReturnValue({
+      timeZone: 'Antarctica/Troll',
+    } as Intl.ResolvedDateTimeFormatOptions);
+    component.useDeviceTimeZone();
+    expect(component.displayDraft().timezone).toBe('America/New_York');
+    expect(component.displayStatus()).toContain('does not support');
+    expect(component.displayStatusIsError()).toBe(true);
+    resolved.mockRestore();
   });
 });

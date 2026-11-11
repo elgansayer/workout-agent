@@ -72,7 +72,7 @@
           <p class="muted" role="status">{{ data.rotation_message }}</p>
         }
         @if (data.last_completed_at) {
-          <p class="muted">Last synced workout: {{ data.last_completed_at | date: 'medium' }}</p>
+          <p class="muted">Last synced workout: {{ data.last_completed_at | localDate: 'medium' }}</p>
         }
         @if (data.rows?.length) {
           <p class="muted">Select an exercise for previous results and coaching notes.</p>

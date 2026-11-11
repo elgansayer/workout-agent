@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from localisation import derive_local_day, local_today, resolve_timezone
 import encryption
 import provenance_ledger as ledger
 from canonical_programme import (
@@ -137,6 +138,9 @@ USER_OWNED_TABLES = (
     "programme_decisions",
     "hevy_connections",
     "training_rules",
+    "health_connections",
+    "health_metrics",
+    "health_sync_runs",
 )
 
 
@@ -403,7 +407,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 body_fat_pct REAL,
                 muscle_pct REAL,
                 resting_hr INTEGER,
-                hrv REAL
+                hrv REAL,
+                source TEXT NOT NULL DEFAULT 'legacy'
             )
             """,
         )
@@ -531,6 +536,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """,
         )
+        # Per-user locale/accessibility columns and the immutable workout
+        # instant. Runs before any user row is created so the one-time upgrade
+        # step only ever sees accounts that predate per-user settings.
+        from user_settings import ensure_settings_schema
+
+        ensure_settings_schema(cursor)
         _migrate_user_model(cursor)
 
         # ---- Account access policy (issue #753) ----
@@ -813,6 +824,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
             "ON body_metrics (user_id, date DESC, id DESC)",
         )
+
+        # Migration: Record which connector imported a body-metric reading so a
+        # connector purge can remove only its own data. Existing rows predate
+        # provenance and stay as 'legacy' rather than being guessed.
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        bm_columns = {row[1] for row in cursor.fetchall()}
+        if "source" not in bm_columns:
+            cursor.execute(
+                "ALTER TABLE body_metrics "
+                "ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'",
+            )
 
         # ---- Programme templates table (multi-user) ----
         cursor.execute(
@@ -1731,6 +1753,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Server-side registry behind the browser session cookie (issue #752).
         ensure_user_sessions_schema(conn)
 
+        # Additive canonical health schema. Created before the owner guards so
+        # every tenant-scoped health table is covered by them.
+        from health_schema import HEALTH_SCHEMA_SQL
+
+        cursor.executescript(HEALTH_SCHEMA_SQL)
+
         # Last, after every table rebuild above: a drop-and-rename discards the
         # table's triggers, so the guards are installed once the schema is final.
         _install_owner_guards(cursor)
@@ -1825,7 +1853,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
 
-
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
 
@@ -1918,12 +1945,29 @@ def ensure_user_sessions_schema(conn: sqlite3.Connection) -> None:
             created_at INTEGER NOT NULL,
             last_seen_at INTEGER NOT NULL,
             revoked_at INTEGER,
-            revoked_reason TEXT
+            revoked_reason TEXT,
+            device TEXT,
+            location TEXT
         )
         """
     )
+    # Additive migration for registries created before device visibility existed.
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(user_sessions)").fetchall()
+    }
+    # A concurrent first request may win the ALTER; the column is then already
+    # present, which is the same successful outcome.
+    with contextlib.suppress(sqlite3.OperationalError):
+        if "device" not in columns:
+            conn.execute("ALTER TABLE user_sessions ADD COLUMN device TEXT")
+        if "location" not in columns:
+            conn.execute("ALTER TABLE user_sessions ADD COLUMN location TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_user_sessions_user "
+        "ON user_sessions (user_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_user_sessions_user_active "
         "ON user_sessions (user_id, revoked_at)"
     )
 
@@ -2536,22 +2580,28 @@ def save_progress(
 
     The progress is owned by *user_id* (required outside the explicit local mode).
     One provenance revision is recorded per workout (keyed by the Hevy workout id).
+
+    ``date`` is the workout's calendar day in the owner's time zone, derived
+    from the source instant that is persisted untouched as ``performed_at``.
+    A later time-zone change re-derives ``date`` from that instant.
     """
     if summary is None:
         return
-    today = (
-        summary.date[:10]
-        if summary.date
-        else datetime.now(tz=timezone.utc).date().isoformat()
-    )
     uid = require_tenant(user_id, db_path)
     with _connect(db_path) as conn:
+        zone_row = conn.execute(
+            "SELECT timezone FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+        zone_name = zone_row[0] if zone_row else None
+        day, performed_at = derive_local_day(summary.date, zone_name)
+        today = day or local_today(resolve_timezone(zone_name)).isoformat()
         for exercise in summary.exercises:
             conn.execute(
                 """
                 INSERT INTO exercise_progress
-                    (date, exercise_name, top_weight_kg, top_reps, sets, user_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (date, exercise_name, top_weight_kg, top_reps, sets, user_id,
+                     performed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     today,
@@ -2560,6 +2610,7 @@ def save_progress(
                     exercise.top_reps,
                     exercise.sets,
                     uid,
+                    performed_at,
                 ),
             )
         if summary.exercises:
@@ -3493,18 +3544,30 @@ def _replace_body_metrics_row(
     user_id: str | None,
     when: str,
     values: Mapping[str, Any],
+    *,
+    source: str = "legacy",
 ) -> None:
-    """One current row per date and owner; superseded values live in the ledger."""
+    """One current row per date and owner; superseded values live in the ledger.
+
+    *source* records the connector that supplied the current reading so a
+    connector-scoped purge can remove only its own imported rows.
+    """
     conn.execute(
         "DELETE FROM body_metrics WHERE date = ? AND user_id IS ?", (when, user_id)
     )
     conn.execute(
         """
         INSERT INTO body_metrics
-            (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id,
+             source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (when, *(values.get(field) for field in BODY_METRIC_FIELDS), user_id),
+        (
+            when,
+            *(values.get(field) for field in BODY_METRIC_FIELDS),
+            user_id,
+            source.strip() or "legacy",
+        ),
     )
 
 
@@ -3544,7 +3607,9 @@ def save_body_metrics(
     revision and the stored row is left untouched).
 
     *provenance* names the source of the reading and *field_sources* optionally
-    attributes individual fields when a row merges several sources.
+    attributes individual fields when a row merges several sources. The
+    declared source is also recorded on the current row so a connector-specific
+    purge can remove only that connector's imported readings.
 
     The metrics are owned by *user_id* (required outside the explicit local
     mode). A same-day replacement only ever removes that user's own reading.
@@ -3584,7 +3649,7 @@ def save_body_metrics(
                 "Kept the user-entered body metrics for %s; automated import held.", when
             )
             return
-        _replace_body_metrics_row(conn, uid, when, values)
+        _replace_body_metrics_row(conn, uid, when, values, source=declared.source)
 
 
 def correct_body_metrics(

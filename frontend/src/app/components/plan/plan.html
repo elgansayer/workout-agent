@@ -67,8 +67,8 @@
             }
             <h3>Block {{ block.number }}: {{ block.name }}</h3>
             <p class="muted">
-              Weeks {{ block.weeks }} · {{ block.start_date | date: 'shortDate' }} to
-              {{ block.end_date | date: 'shortDate' }}
+              Weeks {{ block.weeks }} · {{ block.start_date | localDate: 'shortDate' }} to
+              {{ block.end_date | localDate: 'shortDate' }}
             </p>
             <p>{{ block.focus }}</p>
             <ul class="block-schemes">

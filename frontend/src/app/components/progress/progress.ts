@@ -4,6 +4,8 @@ import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { BodyReading, Provenance } from '../../shared/provenance';
 import { Component, inject, signal, computed, OnInit } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
+import { DisplaySettingsService } from '../../services/display-settings';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
@@ -32,13 +34,14 @@ const emptyDraft = (): CorrectionDraft => ({
 @Component({
   selector: 'app-progress',
   standalone: true,
-  imports: [ListControls, ProvenanceBadge, CommonModule, FormsModule, SetupNotice],
+  imports: [ListControls, ProvenanceBadge, CommonModule, FormsModule, SetupNotice, LocalDatePipe],
   templateUrl: './progress.html',
   styleUrl: './progress.css',
 })
 export class Progress implements OnInit {
   private http = inject(HttpClient);
   private sanitizer = inject(DomSanitizer);
+  private readonly display = inject(DisplaySettingsService);
 
   data = signal<any>(null);
   loading = signal<boolean>(true);
@@ -113,7 +116,7 @@ export class Progress implements OnInit {
     }
 
     this.xaiReasoning.set({ ...current, [exerciseName]: 'Analyzing history...' });
-    const today = new Date().toISOString().split('T')[0];
+    const today = this.display.localToday();
     const contextId = `${today}_${exerciseName}`;
 
     this.http.get(`/api/xai_reasoning/${encodeURIComponent(contextId)}`).subscribe({

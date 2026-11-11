@@ -1,0 +1,45 @@
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid #262c37;
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.session-info {
+  min-width: 0;
+}
+
+.session-info p {
+  margin: 0.25rem 0 0;
+}
+
+.status {
+  margin-left: 0.5rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.status.on {
+  color: #4ade80;
+}

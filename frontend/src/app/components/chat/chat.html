@@ -139,7 +139,9 @@
           <div class="bubble-body">
             <div class="bubble-meta">
               <span class="bubble-name">{{ msg.role === 'assistant' ? 'Coach' : 'You' }}</span>
-              <span class="bubble-time">{{ msg.created_at || 'just now' }}</span>
+              <span class="bubble-time">{{
+                msg.created_at ? (msg.created_at | localDate: 'shortTime') : 'just now'
+              }}</span>
             </div>
             <div class="bubble-content" [innerHTML]="renderMarkdown(msg.content)"></div>
           </div>

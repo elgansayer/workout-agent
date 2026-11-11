@@ -129,6 +129,15 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from health_connection_store import get_connection, list_connections
+from health_disconnect import disconnect_connector
+from health_purge import purge_imported_data_at
+from health_retention import (
+    DisconnectMode,
+    DisconnectRequest,
+    parse_mode,
+    retention_options_payload,
+)
 from hevy_client import HevyAuthError, HevyError, HevyRateLimitError
 from hevy_connection import (
     HevyCredentialState,
@@ -138,6 +147,15 @@ from hevy_connection import (
 from hevy_history import analyse_history, build_snapshot
 from hevy_parser import normalise_name
 from hevy_reader import HevySourceSnapshot, HevyTrainingData
+from localisation import (
+    convert_weight,
+    format_weight,
+    load_step,
+    local_today,
+    prompt_context,
+    spelling_for,
+    weight_unit,
+)
 from permissions import (
     Permission,
     PermissionDeniedError,
@@ -162,6 +180,7 @@ from provenance import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 from secret_vault import (
+    LEGACY_GOOGLE_HEALTH_META_KEY,
     CredentialExistsError,
     CredentialNotFoundError,
     CredentialSummary,
@@ -184,6 +203,17 @@ from security_audit import (
     AuditSubjectType,
     resolve_audit_key,
 )
+from session_registry import (
+    SESSION_COOKIE_KEY,
+    approximate_location,
+    current_session_row_id,
+    describe_device,
+    list_user_sessions,
+    request_metadata,
+    revoke_other_sessions,
+    revoke_session,
+    rotate_session,
+)
 from setup_state import (
     AccountSetup,
     build_account_setup,
@@ -196,6 +226,14 @@ from tenant_isolation import OwnerIdentity, OwnershipError, owner_scoped_key
 from training_rules import (
     StructuredTrainingRules,
     format_rules_for_prompt,
+)
+from user_settings import (
+    SettingsValidationError,
+    UserNotFoundError,
+    UserSettings,
+    get_user_settings,
+    settings_options,
+    update_user_settings,
 )
 
 from webapp import ai_widgets, charts
@@ -343,6 +381,12 @@ def _vault_http_error(exc: VaultError) -> HTTPException:
 def _settings_key_payload(summary: CredentialSummary) -> dict[str, Any]:
     """Public credential metadata; never contains secret material."""
     return summary.to_public_dict()
+
+
+def _regional_prompt_context(user_id: str) -> str:
+    """The acting user's time zone, locale and unit instructions for a prompt."""
+    settings = get_user_settings(user_id, DB_PATH)
+    return prompt_context(settings.timezone, settings.locale, settings.unit_system)
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -545,6 +589,17 @@ def _check_api_auth(request: Request, *, allow_closing: bool = False) -> str:
         if implicit_single_user_allowed():
             return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _request_session_metadata(request: Request) -> tuple[str, str, str]:
+    validated_ip = getattr(request.state, "validated_client_ip", "")
+    client_ip = str(validated_ip or (request.client.host if request.client else ""))
+    return request_metadata(request.headers, client_ip)
+
+
+def _current_session_id(request: Request) -> str | None:
+    session_id = request.session.get(SESSION_COOKIE_KEY)
+    return session_id if isinstance(session_id, str) and session_id else None
 
 
 def _account_setup(user_id: str) -> AccountSetup:
@@ -832,6 +887,72 @@ def get_current_permissions_api(request: Request) -> Any:
         },
         headers={"Cache-Control": "private, no-store"},
     )
+@app.get("/api/sessions")
+def api_list_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    sessions = list_user_sessions(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    return {"sessions": sessions}
+
+
+@app.delete("/api/sessions/{session_id}")
+def api_revoke_session(request: Request, session_id: int) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    current_id = current_session_row_id(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    if not revoke_session(user_id, session_id, DB_PATH):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if current_id == session_id:
+        request.session.clear()
+        return {"status": "ok", "logged_out": True}
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        _current_session_id(request),
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "logged_out": False,
+        "current_session_id": rotated["id"] if rotated else current_id,
+    }
+
+
+@app.post("/api/sessions/revoke-others")
+def api_revoke_other_sessions(request: Request) -> dict[str, Any]:
+    user_id = _check_api_auth(request)
+    session_id = _current_session_id(request)
+    revoked = revoke_other_sessions(user_id, session_id, DB_PATH)
+
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    rotated = rotate_session(
+        user_id,
+        session_id,
+        user_agent=user_agent,
+        client_ip=client_ip,
+        country_code=country_code,
+        db_path=DB_PATH,
+    )
+    if rotated:
+        request.session[SESSION_COOKIE_KEY] = rotated["sid"]
+    return {
+        "status": "ok",
+        "revoked": revoked,
+        "current_session_id": rotated["id"] if rotated else None,
+    }
 
 
 def _claim_is_true(value: Any) -> bool:
@@ -970,11 +1091,14 @@ async def auth(request: Request) -> Any:
         # session from a partially populated result (fail closed).
         request.session.clear()
         return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+    user_agent, client_ip, country_code = _request_session_metadata(request)
     await run_in_threadpool(
         SESSION_LIFECYCLE.establish,
         request.session,
         user_id=approved_user_id,
         email=approved_email,
+        device=describe_device(user_agent),
+        location=approximate_location(client_ip, country_code),
     )
     # ``establish`` clears the session, so record the policy epoch (issue #753)
     # after it; the per-request guard compares this against the stored account.
@@ -1049,7 +1173,11 @@ def _rep_top(rep_range: str) -> int | None:
     return digits[-1] if digits else None
 
 
-def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
+def _overload_nudge(
+    planned_rep_range: str,
+    best: dict[str, Any] | None,
+    unit_system: str = UserSettings().unit_system,
+) -> str:
     """Suggest the next progressive-overload step for an exercise."""
     if not best or best.get("top_reps") is None:
         return "Log this lift to start tracking progress."
@@ -1058,20 +1186,25 @@ def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
     weight = best.get("top_weight_kg")
     if top is not None and reps >= top:
         if weight:
-            return "You hit the top of the range. Add 2.5 kg next time."
+            return (
+                "You hit the top of the range. "
+                f"Add {load_step(unit_system)} next time."
+            )
         return "You hit the top of the range. Add a rep or a little load."
     if top is not None:
         return f"Chase {top} clean reps, then add load."
     return "Keep the reps strict and progress when it feels easy."
 
 
-def _format_best(best: dict[str, Any] | None) -> str:
+def _format_best(
+    best: dict[str, Any] | None, unit_system: str = UserSettings().unit_system
+) -> str:
     if not best:
         return "No data yet"
     weight = best.get("top_weight_kg")
     reps = best.get("top_reps")
     if weight is not None and reps is not None:
-        return f"{weight:g} kg x {reps}"
+        return f"{format_weight(weight, unit_system)} x {reps}"
     if reps is not None:
         return f"{reps} reps"
     return "No data yet"
@@ -1088,10 +1221,13 @@ def _training_levels(user_id: str | None = None) -> dict[str, int]:
     return levels
 
 
-def _current_streak(levels: dict[str, int]) -> int:
-    """Count consecutive recent days that had any logged activity."""
+def _current_streak(levels: dict[str, int], today: date | None = None) -> int:
+    """Count consecutive recent days that had any logged activity.
+
+    ``today`` is the viewer's local calendar day; UTC is only the fallback.
+    """
     streak = 0
-    day = datetime.now(tz=UTC).date()
+    day = today or datetime.now(tz=UTC).date()
     # Allow today to be empty (the morning run may not have happened yet).
     if levels.get(day.isoformat(), 0) == 0:
         day -= timedelta(days=1)
@@ -1108,8 +1244,9 @@ def _dashboard_context(
     """Build a dashboard from the active programme, or an explicit setup state."""
     from programme_runtime import load_programme_runtime, local_today
 
-    user = get_user_by_id(user_id, DB_PATH) if user_id else None
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    settings = get_user_settings(user_id, DB_PATH) if user_id else UserSettings()
+    timezone_name = settings.timezone
+    unit_system = settings.unit_system
     today = today or local_today(timezone_name)
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
@@ -1170,8 +1307,8 @@ def _dashboard_context(
                             or f"{exercise.get('sets', 0)} × {rep_range}"
                         ),
                         "note": exercise.get("note", ""),
-                        "last": _format_best(best),
-                        "nudge": _overload_nudge(rep_range, best),
+                        "last": _format_best(best, unit_system),
+                        "nudge": _overload_nudge(rep_range, best, unit_system),
                         "role": exercise.get("role"),
                     }
                 )
@@ -1191,7 +1328,7 @@ def _dashboard_context(
     )
 
     levels = _training_levels(user_id=user_id)
-    streak = _current_streak(levels)
+    streak = _current_streak(levels, today)
     weight_spark = charts.sparkline(
         [metric["weight_kg"] for metric in metrics if metric["weight_kg"]]
     )
@@ -1211,6 +1348,7 @@ def _dashboard_context(
         get_progress_history(db_path=DB_PATH, user_id=user_id),
         metrics,
         None,
+        unit_system=unit_system,
     )
 
     cycle_progress = week / cycle_weeks * 100 if cycle_weeks else 0
@@ -1262,7 +1400,8 @@ def _dashboard_context(
         ),
         "streak": streak,
         "calendar": charts.calendar_heatmap(levels),
-        "weight": f"{latest_weight:g} kg" if latest_weight else None,
+        "weight": format_weight(latest_weight, unit_system) if latest_weight else None,
+        "weight_unit": weight_unit(unit_system),
         "weight_spark": weight_spark,
         "body_fat": f"{latest_fat:g} %" if latest_fat else None,
         "fat_spark": fat_spark,
@@ -1340,18 +1479,26 @@ def api_dashboard(request: Request) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(ctx))
 
 
-def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
+def _body_charts(
+    *, user_id: str | None = None, unit_system: str = UserSettings().unit_system
+) -> dict[str, str | None]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
+        weight = key == "weight_kg"
+        shown = weight_unit(unit_system) if weight else unit
         points = [
-            {"date": r["date"][5:], "value": r[key], "label": f"{r[key]:g} {unit}"}
+            {
+                "date": r["date"][5:],
+                "value": convert_weight(r[key], unit_system) if weight else r[key],
+                "label": f"{convert_weight(r[key], unit_system) if weight else r[key]:g} {shown}",
+            }
             for r in readings
             if r[key] is not None
         ]
         if len(points) < 2:
             return None
-        return charts.line_chart(points, unit=unit, colour=colour)
+        return charts.line_chart(points, unit=shown, colour=colour)
 
     return {
         "weight": _series("weight_kg", "kg", charts.ACCENT),
@@ -1362,11 +1509,16 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
 
 
 def _project_lift(
-    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
+    label: str,
+    entries: list[Any],
+    target_ordinal: int,
+    *,
+    metric: str = "auto",
+    unit_system: str = UserSettings().unit_system,
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
-    unit = "kg"
+    unit = weight_unit(unit_system)
     use_e1rm = metric == "e1rm"
     if metric == "auto":
         use_e1rm = any(e["top_weight_kg"] for e in entries)
@@ -1394,6 +1546,12 @@ def _project_lift(
         residuals = [y - (slope * x + intercept) for x, y in points]
         variance = sum(r * r for r in residuals) / max(1, len(points) - 2)
         uncertainty = round(variance**0.5, 1)
+    if use_e1rm:
+        # Fit and compare in kilograms; only the presented numbers are converted.
+        current = convert_weight(current, unit_system) or 0.0
+        projected = convert_weight(projected, unit_system) or 0.0
+        if uncertainty:
+            uncertainty = convert_weight(uncertainty, unit_system) or 0.0
     return {
         "label": label,
         "current": f"{current:g} {unit}",
@@ -1415,6 +1573,11 @@ def _block_lift_str(lift: dict | None) -> str:
     if not sets or not rep_range:
         return ""
     return f"{sets} x {rep_range}"
+
+
+def _local_start_date(user_id: str) -> date:
+    """The user's calendar day today: the default programme start date."""
+    return local_today(get_user_settings(user_id, DB_PATH).timezone)
 
 
 HEVY_SYNC_META_KEY = "hevy_source_sync"
@@ -1536,6 +1699,8 @@ def preview_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    if "start_date" not in payload.model_fields_set:
+        payload = payload.model_copy(update={"start_date": _local_start_date(user_id)})
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
     profile_rules = prefs.get("constraints")
@@ -1565,6 +1730,8 @@ def activate_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    if "start_date" not in payload.model_fields_set:
+        payload = payload.model_copy(update={"start_date": _local_start_date(user_id)})
     training_data = _load_hevy_training_for_user(user_id)
     prefs = get_user_preferences(user_id, DB_PATH)
     payload.rules = get_training_rules(user_id, DB_PATH)
@@ -1786,8 +1953,9 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     provider = _resolve_provider_for_request(request, config)
 
     history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    context = _regional_prompt_context(user_id)
 
-    prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
+    prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences.\n\n{context}"
     try:
         response = provider.generate(prompt)
         response_text = response if isinstance(response, str) else "".join(response)
@@ -1871,7 +2039,8 @@ def project_peak(request: Request) -> dict[str, Any]:
     prompt = (
         "Explain these deterministic programme projections. Do not change any "
         f"number or invent a metric: {json.dumps(deterministic)}. "
-        "Return JSON with a single 'validation' string."
+        "Return JSON with a single 'validation' string.\n\n"
+        f"{_regional_prompt_context(user_id)}"
     )
     try:
         response = provider.generate(prompt)
@@ -2050,6 +2219,7 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
+    settings = get_user_settings(user_id, DB_PATH)
     cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
     mode, required_cap = classify_coaching_query(q)
 
@@ -2112,9 +2282,11 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
 
 Important constraints:
 - This is a general educational inquiry. Do NOT fabricate, assume, or invent any user-specific training history, past workouts, personal records, or biometrics.
-- Keep your answer clear, evidence-based, concise, and structured. Use British English.
+- Keep your answer clear, evidence-based, concise, and structured. Use {spelling_for(settings.locale)}.
 - Start your response exactly with this header line:
 **Educational Guidance** (General advice — not personalised to your training history)
+
+{prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 Conversation so far:
 {conversation_text}
@@ -2150,7 +2322,9 @@ Important constraints:
 **Personalised Analysis** (Grounded in your training data)
 - Reference specific numbers, dates, and exercises from the context.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
-- Use British English.
+- Use {spelling_for(settings.locale)}.
+
+{prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 {rules_text}
 
@@ -2750,6 +2924,64 @@ async def save_user_training_rules(request: Request) -> JSONResponse:
     return JSONResponse(jsonable_encoder(response))
 
 
+class DisplaySettingsUpdate(BaseModel):
+    """Partial update of the caller's regional and accessibility preferences.
+
+    Unknown fields (including any owner identifier) are rejected; the owner is
+    always the authenticated session, never the request body.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str | None = None
+    locale: str | None = None
+    unit_system: str | None = None
+    motion: str | None = None
+    contrast: str | None = None
+    text_size: str | None = None
+
+
+@app.get("/api/settings/display")
+def api_display_settings(request: Request) -> JSONResponse:
+    """Return the caller's time zone, locale, units and accessibility choices."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "settings": get_user_settings(user_id, DB_PATH).as_dict(),
+                "options": settings_options(),
+            }
+        )
+    )
+
+
+@app.post("/api/settings/display")
+def save_display_settings(
+    body: DisplaySettingsUpdate, request: Request
+) -> dict[str, Any]:
+    """Persist a partial settings update for the authenticated user.
+
+    A time-zone change regroups only that user's derived workout days; stored
+    source timestamps are never rewritten.
+    """
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        result = update_user_settings(
+            user_id, body.model_dump(exclude_unset=True), DB_PATH
+        )
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Account not found") from exc
+    return {
+        "status": "ok",
+        "settings": result.settings.as_dict(),
+        "changed": list(result.changed),
+        "regrouped_days": result.regrouped_days,
+    }
+
+
 @app.post("/api/settings/push-subscribe")
 async def save_push_subscription_route(request: Request) -> dict[str, str]:
     """Save a push subscription for the current user."""
@@ -2875,11 +3107,48 @@ def google_health_callback(request: Request) -> RedirectResponse:
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
+async def _disconnect_options(request: Request) -> tuple[DisconnectMode, bool]:
+    """Read and validate the retention choice from a disconnect request."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    raw_mode: Any = request.query_params.get("mode")
+    confirmed = request.query_params.get("confirmed", "").lower() in {"1", "true", "yes"}
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            raw_mode = body.get("mode") or body.get("retention") or raw_mode
+            confirmed = confirmed or bool(body.get("confirmed"))
+    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        raw_mode = form.get("mode") or form.get("retention") or raw_mode
+        confirmed = confirmed or str(form.get("confirmed", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+    try:
+        mode = parse_mode(raw_mode if raw_mode is not None else DisconnectMode.REVOKE_ONLY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data and not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Purging imported health data requires explicit confirmation.",
+        )
+    return mode, confirmed
+
+
 @app.post("/google-health/disconnect")
-def google_health_disconnect(request: Request) -> RedirectResponse:
-    """Forget the stored refresh token so the agent stops syncing."""
+async def google_health_disconnect(request: Request) -> RedirectResponse:
+    """Revoke the stored Google Health token and apply the retention choice."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    mode, _confirmed = await _disconnect_options(request)
     try:
         _vault().revoke(user_id, "google_health")
     except CredentialNotFoundError:
@@ -2896,6 +3165,10 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
             metadata={"provider": "google_health", "method": "oauth"},
         )
         return RedirectResponse("/settings?gh=error", status_code=303)
+    # Clear a token left by the pre-vault helper so it cannot be reused.
+    set_meta(LEGACY_GOOGLE_HEALTH_META_KEY, "", DB_PATH, user_id=user_id)
+    if mode.purges_imported_data:
+        purge_imported_data_at(DB_PATH, user_id=user_id, provider="google_health")
     _audit(
         request,
         AuditEventType.CONNECTOR_DISCONNECTED,
@@ -2905,7 +3178,11 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
         user_id=user_id,
         metadata={"provider": "google_health", "method": "oauth"},
     )
-    return RedirectResponse("/settings?gh=disconnected", status_code=303)
+    return RedirectResponse(
+        f"/settings?gh=disconnected&retention="
+        f"{(DisconnectMode.PURGE if mode.purges_imported_data else mode).value}",
+        status_code=303,
+    )
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -2926,9 +3203,123 @@ def service_worker() -> FileResponse:
 from fastapi.encoders import jsonable_encoder
 
 
+@app.get("/api/health/connections")
+def api_health_connections(request: Request) -> JSONResponse:
+    """List the authenticated tenant's connections and retention choices."""
+
+    user_id = _check_api_auth(request)
+    options = retention_options_payload()
+    registry = build_builtin_registry()
+    connections: list[dict[str, Any]] = []
+    for row in list_connections(user_id, DB_PATH):
+        entry: dict[str, Any] = {
+            "id": row["id"],
+            "provider": row["provider"],
+            "state": row["state"],
+            "last_sync_at": row["last_sync_at"],
+            "retention_options": options,
+        }
+        try:
+            connector = registry.get(row["provider"])
+        except KeyError:
+            connector = None
+        if connector is not None:
+            try:
+                status = connector.status(
+                    ConnectorContext(user_id=str(user_id), connection_id=row["id"])
+                )
+                entry["state"] = status.state.value
+                entry["message"] = status.message
+            except Exception:  # pragma: no cover - defensive status guard
+                logger.exception(
+                    "Could not read status for connector %s.", row["provider"]
+                )
+        connections.append(entry)
+    return JSONResponse(
+        jsonable_encoder(
+            {"connections": connections, "retention_options": options}
+        )
+    )
+
+
+@app.delete("/api/health/connections/{connection_id}")
+def api_health_disconnect(request: Request, connection_id: str) -> JSONResponse:
+    """Disconnect one tenant-owned connection using an explicit retention mode."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        mode = parse_mode(
+            request.query_params.get("mode") or DisconnectMode.REVOKE_ONLY.value
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    confirmed = request.query_params.get("confirmed", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    connection = get_connection(user_id, connection_id, DB_PATH)
+    if connection is None:
+        # Non-enumerating: another tenant's connection is indistinguishable
+        # from a missing one.
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    provider = str(connection["provider"])
+    disconnect_request = DisconnectRequest(
+        user_id=user_id,
+        connection_id=connection_id,
+        mode=mode,
+        confirmed=confirmed,
+    )
+    try:
+        disconnect_request.validate(authenticated_user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    registry = build_builtin_registry()
+    try:
+        connector = registry.get(provider)
+    except KeyError:
+        connector = None
+
+    purged = None
+    if connector is not None:
+        try:
+            disconnect_connector(
+                connector,
+                ConnectorContext(user_id=str(user_id), connection_id=connection_id),
+                disconnect_request,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data:
+        purged = purge_imported_data_at(
+            DB_PATH,
+            user_id=user_id,
+            provider=provider,
+            connection_id=connection_id,
+        )
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "connection_id": connection_id,
+                "provider": provider,
+                "mode": (DisconnectMode.PURGE if mode.purges_imported_data else mode).value,
+                "upstream_revoked": connector is not None,
+                "purged": purged.as_dict() if purged else None,
+            }
+        )
+    )
+
+
 @app.get("/api/progress")
 def api_progress(request: Request):
     user_id = _check_api_auth(request)
+    unit_system = get_user_settings(user_id, DB_PATH).unit_system
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     charts_data = []
     for name in sorted(series):
@@ -2936,18 +3327,20 @@ def api_progress(request: Request):
         points = [
             {
                 "date": e["date"][5:],
-                "value": e["top_weight_kg"],
-                "label": _format_best(e),
+                "value": convert_weight(e["top_weight_kg"], unit_system),
+                "label": _format_best(e, unit_system),
             }
             for e in entries
         ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
         e1rms_filtered = [v for v in e1rms if v is not None]
-        best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
+        best_e1rm = convert_weight(
+            max(e1rms_filtered) if e1rms_filtered else None, unit_system
+        )
         charts_data.append(
             {
                 "name": name,
-                "svg": charts.line_chart(points, unit="kg"),
+                "svg": charts.line_chart(points, unit=weight_unit(unit_system)),
                 "best_e1rm": best_e1rm,
                 "sessions": len(entries),
             }
@@ -2959,7 +3352,8 @@ def api_progress(request: Request):
         jsonable_encoder(
             {
                 "charts": charts_data,
-                "body": _body_charts(user_id=user_id),
+                "body": _body_charts(user_id=user_id, unit_system=unit_system),
+                "weight_unit": weight_unit(unit_system),
                 # Newest first, each with its source / correction provenance.
                 "body_readings": list(reversed(body_readings)),
                 "setup": _setup_payload(user_id, "progress"),
@@ -3041,11 +3435,13 @@ def api_record_lineage(
 @app.get("/api/stats")
 def api_stats(request: Request):
     user_id = _check_api_auth(request)
+    settings = get_user_settings(user_id, DB_PATH)
+    unit_system = settings.unit_system
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    today = datetime.now(tz=timezone.utc).date()
+    today = local_today(settings.timezone)
 
     from programme_runtime import load_programme_runtime
 
@@ -3053,7 +3449,7 @@ def api_stats(request: Request):
     start = runtime.start_date
 
     total_sessions = len(volumes)
-    total_volume = sum(v["volume"] for v in volumes)
+    total_volume = convert_weight(sum(v["volume"] for v in volumes), unit_system)
     days_on_programme = (today - start).days if start else 0
 
     # Prefer programme routine identifiers over free-text daily-log focus names.
@@ -3127,10 +3523,14 @@ def api_stats(request: Request):
     volume_bars = (
         charts.bar_chart(
             [
-                {"label": v["date"][5:], "value": v["volume"], "caption": v["date"]}
+                {
+                    "label": v["date"][5:],
+                    "value": convert_weight(v["volume"], unit_system),
+                    "caption": v["date"],
+                }
                 for v in recent
             ],
-            unit="kg",
+            unit=weight_unit(unit_system),
         )
         if recent
         else None
@@ -3200,7 +3600,7 @@ def api_stats(request: Request):
         else today.toordinal()
     )
     projections = [
-        _project_lift(name, series[name], target_ordinal)
+        _project_lift(name, series[name], target_ordinal, unit_system=unit_system)
         for name in priority_names[:3]
     ]
     projections = [p for p in projections if p]
@@ -3208,8 +3608,8 @@ def api_stats(request: Request):
     pr_rows = [
         {
             "exercise": pr["exercise"],
-            "e1rm": f"{pr['e1rm']:g}",
-            "detail": f"{pr['weight_kg']:g} kg x {pr['reps']}",
+            "e1rm": f"{convert_weight(pr['e1rm'], unit_system):g}",
+            "detail": f"{format_weight(pr['weight_kg'], unit_system)} x {pr['reps']}",
             "date": pr["date"],
         }
         for pr in prs
@@ -3220,6 +3620,7 @@ def api_stats(request: Request):
             {
                 "total_sessions": total_sessions,
                 "total_volume": total_volume,
+                "weight_unit": weight_unit(unit_system),
                 "days_on_programme": days_on_programme,
                 "exercises_tracked": len(series),
                 "has_distribution": bool(focus_counts),
@@ -3706,12 +4107,17 @@ def api_settings(request: Request):
 
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
+    health_connections = {
+        str(row["provider"]): row for row in list_connections(user_id, DB_PATH)
+    }
+    retention_choices = retention_options_payload()
     connectors_info = []
     for connector in registry.all():
         try:
             status = connector.status(ctx)
             if status.state == "pending":
                 continue
+            active_connection = health_connections.get(connector.provider)
             connectors_info.append(
                 {
                     "provider": connector.provider,
@@ -3719,6 +4125,11 @@ def api_settings(request: Request):
                     "state": status.state,
                     "message": status.message,
                     "authorize_supported": connector.capabilities.authorize,
+                    "purge_supported": connector.capabilities.purge,
+                    "connection_id": (
+                        active_connection["id"] if active_connection else None
+                    ),
+                    "retention_options": retention_choices,
                 }
             )
         except Exception:
@@ -3740,6 +4151,7 @@ def api_settings(request: Request):
                 "credential_events": credential_events,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
+                "retention_options": retention_choices,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
