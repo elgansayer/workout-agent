@@ -127,6 +127,9 @@ USER_OWNED_TABLES = (
     "programme_decisions",
     "hevy_connections",
     "training_rules",
+    "health_connections",
+    "health_metrics",
+    "health_sync_runs",
 )
 
 
@@ -392,7 +395,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 body_fat_pct REAL,
                 muscle_pct REAL,
                 resting_hr INTEGER,
-                hrv REAL
+                hrv REAL,
+                source TEXT NOT NULL DEFAULT 'legacy'
             )
             """,
         )
@@ -800,6 +804,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
             "ON body_metrics (user_id, date DESC, id DESC)",
         )
+
+        # Migration: Record which connector imported a body-metric reading so a
+        # connector purge can remove only its own data. Existing rows predate
+        # provenance and stay as 'legacy' rather than being guessed.
+        cursor.execute("PRAGMA table_info(body_metrics)")
+        bm_columns = {row[1] for row in cursor.fetchall()}
+        if "source" not in bm_columns:
+            cursor.execute(
+                "ALTER TABLE body_metrics "
+                "ADD COLUMN source TEXT NOT NULL DEFAULT 'legacy'",
+            )
 
         # ---- Programme templates table (multi-user) ----
         cursor.execute(
@@ -1718,6 +1733,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Server-side registry behind the browser session cookie (issue #752).
         ensure_user_sessions_schema(conn)
 
+        # Additive canonical health schema. Created before the owner guards so
+        # every tenant-scoped health table is covered by them.
+        from health_schema import HEALTH_SCHEMA_SQL
+
+        cursor.executescript(HEALTH_SCHEMA_SQL)
+
         # Last, after every table rebuild above: a drop-and-rename discards the
         # table's triggers, so the guards are installed once the schema is final.
         _install_owner_guards(cursor)
@@ -1811,7 +1832,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
-
 
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
@@ -3476,18 +3496,30 @@ def _replace_body_metrics_row(
     user_id: str | None,
     when: str,
     values: Mapping[str, Any],
+    *,
+    source: str = "legacy",
 ) -> None:
-    """One current row per date and owner; superseded values live in the ledger."""
+    """One current row per date and owner; superseded values live in the ledger.
+
+    *source* records the connector that supplied the current reading so a
+    connector-scoped purge can remove only its own imported rows.
+    """
     conn.execute(
         "DELETE FROM body_metrics WHERE date = ? AND user_id IS ?", (when, user_id)
     )
     conn.execute(
         """
         INSERT INTO body_metrics
-            (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv, user_id,
+             source)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (when, *(values.get(field) for field in BODY_METRIC_FIELDS), user_id),
+        (
+            when,
+            *(values.get(field) for field in BODY_METRIC_FIELDS),
+            user_id,
+            source.strip() or "legacy",
+        ),
     )
 
 
@@ -3527,7 +3559,9 @@ def save_body_metrics(
     revision and the stored row is left untouched).
 
     *provenance* names the source of the reading and *field_sources* optionally
-    attributes individual fields when a row merges several sources.
+    attributes individual fields when a row merges several sources. The
+    declared source is also recorded on the current row so a connector-specific
+    purge can remove only that connector's imported readings.
 
     The metrics are owned by *user_id* (required outside the explicit local
     mode). A same-day replacement only ever removes that user's own reading.
@@ -3567,7 +3601,7 @@ def save_body_metrics(
                 "Kept the user-entered body metrics for %s; automated import held.", when
             )
             return
-        _replace_body_metrics_row(conn, uid, when, values)
+        _replace_body_metrics_row(conn, uid, when, values, source=declared.source)
 
 
 def correct_body_metrics(

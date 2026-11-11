@@ -126,6 +126,15 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
+from health_connection_store import get_connection, list_connections
+from health_disconnect import disconnect_connector
+from health_purge import purge_imported_data_at
+from health_retention import (
+    DisconnectMode,
+    DisconnectRequest,
+    parse_mode,
+    retention_options_payload,
+)
 from hevy_client import HevyAuthError, HevyError, HevyRateLimitError
 from hevy_connection import (
     HevyCredentialState,
@@ -153,6 +162,7 @@ from provenance import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 from secret_vault import (
+    LEGACY_GOOGLE_HEALTH_META_KEY,
     CredentialExistsError,
     CredentialNotFoundError,
     CredentialSummary,
@@ -2843,11 +2853,48 @@ def google_health_callback(request: Request) -> RedirectResponse:
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
+async def _disconnect_options(request: Request) -> tuple[DisconnectMode, bool]:
+    """Read and validate the retention choice from a disconnect request."""
+
+    content_type = request.headers.get("content-type", "").lower()
+    raw_mode: Any = request.query_params.get("mode")
+    confirmed = request.query_params.get("confirmed", "").lower() in {"1", "true", "yes"}
+
+    if "application/json" in content_type:
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            raw_mode = body.get("mode") or body.get("retention") or raw_mode
+            confirmed = confirmed or bool(body.get("confirmed"))
+    elif "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        form = await request.form()
+        raw_mode = form.get("mode") or form.get("retention") or raw_mode
+        confirmed = confirmed or str(form.get("confirmed", "")).lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+
+    try:
+        mode = parse_mode(raw_mode if raw_mode is not None else DisconnectMode.REVOKE_ONLY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data and not confirmed:
+        raise HTTPException(
+            status_code=400,
+            detail="Purging imported health data requires explicit confirmation.",
+        )
+    return mode, confirmed
+
+
 @app.post("/google-health/disconnect")
-def google_health_disconnect(request: Request) -> RedirectResponse:
-    """Forget the stored refresh token so the agent stops syncing."""
+async def google_health_disconnect(request: Request) -> RedirectResponse:
+    """Revoke the stored Google Health token and apply the retention choice."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    mode, _confirmed = await _disconnect_options(request)
     try:
         _vault().revoke(user_id, "google_health")
     except CredentialNotFoundError:
@@ -2864,6 +2911,10 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
             metadata={"provider": "google_health", "method": "oauth"},
         )
         return RedirectResponse("/settings?gh=error", status_code=303)
+    # Clear a token left by the pre-vault helper so it cannot be reused.
+    set_meta(LEGACY_GOOGLE_HEALTH_META_KEY, "", DB_PATH, user_id=user_id)
+    if mode.purges_imported_data:
+        purge_imported_data_at(DB_PATH, user_id=user_id, provider="google_health")
     _audit(
         request,
         AuditEventType.CONNECTOR_DISCONNECTED,
@@ -2873,7 +2924,11 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
         user_id=user_id,
         metadata={"provider": "google_health", "method": "oauth"},
     )
-    return RedirectResponse("/settings?gh=disconnected", status_code=303)
+    return RedirectResponse(
+        f"/settings?gh=disconnected&retention="
+        f"{(DisconnectMode.PURGE if mode.purges_imported_data else mode).value}",
+        status_code=303,
+    )
 
 
 @app.get("/sw.js", include_in_schema=False)
@@ -2892,6 +2947,119 @@ def service_worker() -> FileResponse:
 
 # --- AUTO-GENERATED API ROUTES FOR ANGULAR ---
 from fastapi.encoders import jsonable_encoder
+
+
+@app.get("/api/health/connections")
+def api_health_connections(request: Request) -> JSONResponse:
+    """List the authenticated tenant's connections and retention choices."""
+
+    user_id = _check_api_auth(request)
+    options = retention_options_payload()
+    registry = build_builtin_registry()
+    connections: list[dict[str, Any]] = []
+    for row in list_connections(user_id, DB_PATH):
+        entry: dict[str, Any] = {
+            "id": row["id"],
+            "provider": row["provider"],
+            "state": row["state"],
+            "last_sync_at": row["last_sync_at"],
+            "retention_options": options,
+        }
+        try:
+            connector = registry.get(row["provider"])
+        except KeyError:
+            connector = None
+        if connector is not None:
+            try:
+                status = connector.status(
+                    ConnectorContext(user_id=str(user_id), connection_id=row["id"])
+                )
+                entry["state"] = status.state.value
+                entry["message"] = status.message
+            except Exception:  # pragma: no cover - defensive status guard
+                logger.exception(
+                    "Could not read status for connector %s.", row["provider"]
+                )
+        connections.append(entry)
+    return JSONResponse(
+        jsonable_encoder(
+            {"connections": connections, "retention_options": options}
+        )
+    )
+
+
+@app.delete("/api/health/connections/{connection_id}")
+def api_health_disconnect(request: Request, connection_id: str) -> JSONResponse:
+    """Disconnect one tenant-owned connection using an explicit retention mode."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        mode = parse_mode(
+            request.query_params.get("mode") or DisconnectMode.REVOKE_ONLY.value
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    confirmed = request.query_params.get("confirmed", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+    connection = get_connection(user_id, connection_id, DB_PATH)
+    if connection is None:
+        # Non-enumerating: another tenant's connection is indistinguishable
+        # from a missing one.
+        raise HTTPException(status_code=404, detail="Connection not found")
+
+    provider = str(connection["provider"])
+    disconnect_request = DisconnectRequest(
+        user_id=user_id,
+        connection_id=connection_id,
+        mode=mode,
+        confirmed=confirmed,
+    )
+    try:
+        disconnect_request.validate(authenticated_user_id=user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    registry = build_builtin_registry()
+    try:
+        connector = registry.get(provider)
+    except KeyError:
+        connector = None
+
+    purged = None
+    if connector is not None:
+        try:
+            disconnect_connector(
+                connector,
+                ConnectorContext(user_id=str(user_id), connection_id=connection_id),
+                disconnect_request,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if mode.purges_imported_data:
+        purged = purge_imported_data_at(
+            DB_PATH,
+            user_id=user_id,
+            provider=provider,
+            connection_id=connection_id,
+        )
+
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "connection_id": connection_id,
+                "provider": provider,
+                "mode": (DisconnectMode.PURGE if mode.purges_imported_data else mode).value,
+                "upstream_revoked": connector is not None,
+                "purged": purged.as_dict() if purged else None,
+            }
+        )
+    )
 
 
 @app.get("/api/progress")
@@ -3674,12 +3842,17 @@ def api_settings(request: Request):
 
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
+    health_connections = {
+        str(row["provider"]): row for row in list_connections(user_id, DB_PATH)
+    }
+    retention_choices = retention_options_payload()
     connectors_info = []
     for connector in registry.all():
         try:
             status = connector.status(ctx)
             if status.state == "pending":
                 continue
+            active_connection = health_connections.get(connector.provider)
             connectors_info.append(
                 {
                     "provider": connector.provider,
@@ -3687,6 +3860,11 @@ def api_settings(request: Request):
                     "state": status.state,
                     "message": status.message,
                     "authorize_supported": connector.capabilities.authorize,
+                    "purge_supported": connector.capabilities.purge,
+                    "connection_id": (
+                        active_connection["id"] if active_connection else None
+                    ),
+                    "retention_options": retention_choices,
                 }
             )
         except Exception:
@@ -3708,6 +3886,7 @@ def api_settings(request: Request):
                 "credential_events": credential_events,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
+                "retention_options": retention_choices,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),

@@ -1,8 +1,33 @@
 import { provideHttpClient } from '@angular/common/http';
 import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { vi } from 'vitest';
 import { Settings } from './settings';
 import { SettingsResponse } from './settings.types';
+
+const retentionOptions = [
+  {
+    mode: 'revoke_only',
+    label: 'Revoke access only',
+    explanation: 'Revoke the credential and keep imported data.',
+    deletes_imported_data: false,
+    deletes_derived_data: false,
+  },
+  {
+    mode: 'retain',
+    label: 'Disconnect and retain imported data',
+    explanation: 'Disconnect but keep imported data and derived insights.',
+    deletes_imported_data: false,
+    deletes_derived_data: false,
+  },
+  {
+    mode: 'purge',
+    label: 'Disconnect and purge imported data',
+    explanation: 'Delete imported data and derived insights, keeping your own records.',
+    deletes_imported_data: true,
+    deletes_derived_data: true,
+  },
+] as const;
 
 const providers = [
   { id: 'gemini', name: 'Google Gemini', default_model: 'gemini-3.8-flash' },
@@ -60,6 +85,7 @@ const settingsResponse: SettingsResponse = {
   gh_connected: false,
   gh_configured: false,
   connectors_info: [],
+  retention_options: retentionOptions,
   vapid_public_key: null,
 };
 
@@ -178,6 +204,57 @@ describe('Settings AI provider parity', () => {
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
   });
 
+  it('renders explicit retain, purge and revoke-only choices for a connected provider', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush({
+      ...settingsResponse,
+      gh_configured: true,
+      gh_connected: true,
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const labels = Array.from(
+      (fixture.nativeElement as HTMLElement).querySelectorAll('.retention-option strong'),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual([
+      'Revoke access only',
+      'Disconnect and retain imported data',
+      'Disconnect and purge imported data',
+    ]);
+  });
+
+  it('purges a connector through the tenant-scoped DELETE route when chosen', async () => {
+    const connector = {
+      provider: 'garmin',
+      name: 'Garmin',
+      state: 'connected',
+      message: null,
+      connection_id: 'conn-1',
+      retention_options: retentionOptions,
+    };
+    const response = { ...settingsResponse, connectors_info: [connector] };
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(response);
+    await fixture.whenStable();
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fixture.componentInstance.setConnectorRetention('garmin', 'purge');
+    fixture.componentInstance.disconnectConnector(connector);
+
+    const request = http.expectOne(
+      (candidate) => candidate.url === '/api/health/connections/conn-1',
+    );
+    expect(request.request.method).toBe('DELETE');
+    expect(request.request.params.get('mode')).toBe('purge');
+    expect(request.request.params.get('confirmed')).toBe('true');
+    request.flush('');
+    http.expectOne('/api/settings').flush(response);
+    confirmSpy.mockRestore();
+    expect(fixture.componentInstance.healthStatus()).toContain('purged');
+  });
+
   it('loads and displays structured training rules in the accessible editor', async () => {
     const fixture = await loadSettings();
     const component = fixture.componentInstance;
@@ -269,7 +346,6 @@ describe('Settings AI provider parity', () => {
     });
     await fixture.whenStable();
     fixture.detectChanges();
-
     expect(component.ruleViolations().length).toBe(1);
     expect(component.rulesStatus()).toContain('contradicts the saved training rules');
     const element = fixture.nativeElement as HTMLElement;
