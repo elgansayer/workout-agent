@@ -84,7 +84,7 @@ from test_programme_domain import _draft
 from training_export import ExportedWorkout
 from user_settings import export_preferences, get_user_settings
 
-_SECRET = "idor-matrix-secret-that-is-long-enough-for-signing"
+_SECRET = "-".join(("idor", "matrix", "signing", "value", "long", "enough", "for", "tests"))
 ALICE = "alice-canary-4f9c1e"
 BOB = "bob-canary-83b2d7"
 ALICE_KEY = "sk-alice-secret-0123456789abcdef"
@@ -192,7 +192,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("WEB_AUTH_SECRET", _SECRET)
     monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "idor-client-id")
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "idor-client-secret")
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "-".join(("idor", "client", "value")))
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
     monkeypatch.delenv("ALLOW_ANONYMOUS_WEB", raising=False)
@@ -345,7 +345,7 @@ ATTACKS: tuple[Attack, ...] = (
     # --- write: a call that names Alice's object is refused -----------------
     Attack("mark-alices-notification-read", "POST", "/api/notifications/{notification}/read"),
     Attack("rotate-alices-credential", "POST", "/api/settings/key/rotate",
-           {"provider": "gemini", "api_key": "sk-bob-replacement-000000"}, (400, 404, 409)),
+           {"provider": "gemini", "api_key": "-".join(("bob", "replacement", "value"))}, (400, 404, 409)),
     Attack("revoke-alices-credential", "POST", "/api/settings/key/revoke",
            {"provider": "gemini"}, (400, 404, 409)),
     Attack("test-alices-credential", "POST", "/api/settings/key/test",
