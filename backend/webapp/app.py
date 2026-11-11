@@ -42,7 +42,7 @@ from accounts import (
     require_active_user,
     resolve_oauth_user,
 )
-from ai_provider import PROVIDERS, AIProvider, available_providers
+from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
 from coach_capability import (
@@ -55,6 +55,12 @@ from coaching_capabilities import (
     get_coaching_capabilities,
 )
 from config import Config
+from connector_operations import (
+    OperationBusyError,
+    OperationPhase,
+    clear_sync_outcome,
+    tracked_operation,
+)
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
 from database import (
@@ -87,7 +93,6 @@ from database import (
     get_session_volumes,
     get_training_rules,
     get_unread_notification_count,
-    get_user_api_keys,
     get_user_by_id,
     get_user_preferences,
     init_db,
@@ -213,6 +218,9 @@ from session_registry import (
 )
 from setup_state import (
     AccountSetup,
+    AiProviderStatus,
+    ProviderState,
+    ai_provider_status,
     build_account_setup,
     surface_setup_payload,
 )
@@ -2141,22 +2149,31 @@ def _coach_capability_for_user(
     body_metrics: list[dict[str, Any]] | None = None,
     personal_records: list[dict[str, Any]] | None = None,
     programme_available: bool | None = None,
+    provider_resolved: bool = False,
 ) -> CoachCapabilityState:
-    """Derive Coach capability from this tenant's records and provider state."""
+    """Derive Coach capability from this tenant's records and provider state.
 
-    keys = get_user_api_keys(user_id, DB_PATH)
-    prefs = get_user_preferences(user_id, DB_PATH)
-    provider_name = str(prefs.get("preferred_ai") or "gemini").strip().lower()
-    provider_supported = provider_name in PROVIDERS
+    ``provider_resolved`` is set by a caller that has just built the tenant's
+    provider: a provider that resolved is configured by definition, so the
+    capability agrees with the resolver instead of guessing from key presence.
+    Verification is never assumed: it comes only from the last connection test
+    of the tenant's own stored credential.
+    """
 
-    provider_configured = False
-    if provider_supported:
-        provider_key = str(
-            keys.get(provider_name, {}).get("api_key") or ""
-        ).strip()
-        if not provider_key and provider_name == "gemini":
-            provider_key = str(get_config().gemini_api_key or "").strip()
-        provider_configured = bool(provider_key)
+    provider = ai_provider_status(
+        user_id=user_id,
+        db_path=DB_PATH,
+        server_api_key=get_config().gemini_api_key,
+    )
+    if provider_resolved and not provider.configured and provider.supported:
+        provider = AiProviderStatus(
+            provider=provider.provider,
+            supported=True,
+            configured=True,
+            source="server",
+            state=ProviderState.UNVERIFIED,
+        )
+    account = _account_setup(user_id)
 
     if logs is None:
         logs = get_daily_logs(limit=1, db_path=DB_PATH, user_id=user_id)
@@ -2190,13 +2207,69 @@ def _coach_capability_for_user(
     }
 
     return derive_coach_capability(
-        provider_name=provider_name,
-        provider_configured=provider_configured,
-        provider_supported=provider_supported,
-        sync_configured=bool(keys.get("hevy", {}).get("api_key")),
+        provider_name=provider.provider,
+        provider_configured=provider.configured,
+        provider_supported=provider.supported,
+        provider_test_status=provider.last_test_status,
+        provider_source=provider.source,
+        sync_configured=account.checks["hevy_connected"],
+        readiness=account.state.value,
         observed_at=observed_at,
         programme_available=programme_available,
         now=datetime.now(tz=UTC),
+    )
+
+
+def _run_hevy_sync(user_id: str, hevy_key: str) -> dict[str, int | str]:
+    """Rebuild one tenant's history inside that tenant's connector lease.
+
+    Runs in a worker thread, so the lease starts and ends with the work itself:
+    a client that disconnects mid-sync cannot release the lease early or record
+    a failure for a sync that is still running.
+    """
+
+    from scripts.sync_history import sync_all
+
+    with tracked_operation(
+        user_id, OperationPhase.SYNCING, db_path=DB_PATH
+    ) as operation:
+        result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+        if "error" in result:
+            operation.failed(str(result.get("error_code") or "sync_failed"))
+        else:
+            operation.succeeded(records=int(result.get("workouts_found", 0)))
+    return result
+
+
+def _verify_hevy_tracked(user_id: str, api_key: str) -> HevyCredentialTest:
+    """Check a Hevy key inside the tenant's lease, so "connecting" is observable."""
+
+    with tracked_operation(user_id, OperationPhase.CONNECTING, db_path=DB_PATH):
+        return verify_hevy_credentials(api_key)
+
+
+def _operation_busy(exc: OperationBusyError) -> HTTPException:
+    """The refusal for a connect or sync while another one is still running."""
+
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"A Hevy {exc.phase.value} is already running for this account. "
+            "Try again when it finishes."
+        ),
+    )
+
+
+def _coach_unavailable(capability: CoachCapabilityState) -> HTTPException:
+    """The refusal Coach gives when the state the UI shows says it cannot answer."""
+
+    return HTTPException(
+        status_code=409,
+        detail={
+            "code": capability.status.value,
+            "message": capability.blocked_message()
+            or "Coach is not available for this account yet.",
+        },
     )
 
 
@@ -2288,7 +2361,12 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
         body_metrics=biometrics,
         personal_records=prs,
         programme_available=active_prog is not None,
+        provider_resolved=True,
     )
+    # Enforce exactly what the UI shows: when the capability says Coach cannot
+    # answer, nothing is saved and no model is called.
+    if not capability.can_chat:
+        raise _coach_unavailable(capability)
     access_block = capability_prompt_block(capability)
 
     # If data-specific prompt and prerequisites failed:
@@ -2507,7 +2585,12 @@ async def save_api_key(request: Request) -> dict[str, Any]:
         # The verification performs a bounded set of outbound requests; run it
         # off the event loop so a slow provider cannot stall other tenants.
         # The candidate is proven usable before it is ever persisted.
-        verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+        try:
+            verification = await run_in_threadpool(
+                _verify_hevy_tracked, user_id, api_key
+            )
+        except OperationBusyError as exc:
+            raise _operation_busy(exc) from exc
         if not verification.connected:
             raise HTTPException(
                 status_code=_hevy_verification_status(verification.state),
@@ -2541,6 +2624,9 @@ async def save_api_key(request: Request) -> dict[str, Any]:
             account_id=verification.account_id,
             db_path=DB_PATH,
         )
+        # A newly verified credential starts afresh: a failure recorded for the
+        # previous key says nothing about this one.
+        clear_sync_outcome(user_id, db_path=DB_PATH)
         _audit_key_change(
             request,
             user_id,
@@ -2750,7 +2836,10 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
             detail="No Hevy API key is stored for this account.",
         )
 
-    verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+    try:
+        verification = await run_in_threadpool(_verify_hevy_tracked, user_id, api_key)
+    except OperationBusyError as exc:
+        raise _operation_busy(exc) from exc
     if verification.connected:
         if verifies_stored_key:
             save_hevy_connection(
@@ -4225,9 +4314,13 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
             detail="No Hevy API key configured. Save your Hevy API key in Settings first.",
         )
 
-    from scripts.sync_history import sync_all
-
-    result = sync_all(hevy_key, DB_PATH, user_id=user_id)
+    # The rebuild runs off the event loop, so a long sync never stalls other
+    # tenants and the "syncing" state stays observable while it runs.  The lease
+    # also keeps two rebuilds of one tenant's history from interleaving.
+    try:
+        result = await run_in_threadpool(_run_hevy_sync, user_id, hevy_key)
+    except OperationBusyError as exc:
+        raise _operation_busy(exc) from exc
     sync_failed = "error" in result
     # The provider's error text is never audited; only a fixed reason code.
     _audit(
@@ -4406,8 +4499,8 @@ def api_test_coach_notification(request: Request):
     user_id = _check_api_auth(request)
     nid = save_notification(
         user_id,
-        title="✨ Coach Status Update",
-        message="Coach analysis active: Keep recovery high and log your sets accurately today!",
+        title="Test notification",
+        message="Notifications are working. This is a test message, not coaching advice.",
         type="coach",
         link="/dashboard",
         db_path=DB_PATH,

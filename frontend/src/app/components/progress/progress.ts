@@ -10,7 +10,12 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { SetupNotice } from '../../shared/setup-notice';
-import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
+import {
+  SetupState,
+  ViewState,
+  needsAttention,
+  resolveViewState,
+} from '../../shared/setup-state';
 
 export const CORRECTABLE_FIELDS = [
   { key: 'weight_kg', label: 'Weight (kg)', unit: 'kg' },
@@ -55,7 +60,7 @@ export class Progress implements OnInit {
       loading: this.loading(),
       error: this.error(),
       hasData: this.hasData(),
-      stale: this.setup()?.stale ?? false,
+      attention: needsAttention(this.setup()),
     }),
   );
 

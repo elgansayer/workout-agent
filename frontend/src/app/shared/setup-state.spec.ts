@@ -1,9 +1,36 @@
 import {
   SetupState,
+  SetupStateKind,
+  isLive,
+  navBadge,
+  needsAttention,
   needsSetup,
   resolveViewState,
   setupAction,
 } from './setup-state';
+
+function setup(state: SetupStateKind, overrides: Partial<SetupState> = {}): SetupState {
+  return {
+    state,
+    label: state,
+    reason: '',
+    action: null,
+    missing: [],
+    last_activity_at: null,
+    age_days: null,
+    stale: false,
+    ...overrides,
+  };
+}
+
+const ALL_STATES: SetupStateKind[] = [
+  'setup_required',
+  'connecting',
+  'syncing',
+  'ready',
+  'stale',
+  'degraded',
+];
 
 describe('setup-state', () => {
   describe('resolveViewState', () => {
@@ -37,26 +64,32 @@ describe('setup-state', () => {
       ).toBe('empty');
     });
 
-    it('returns stale when has data and stale is true', () => {
+    it('returns attention when there is data but a notice must accompany it', () => {
       expect(
         resolveViewState({
           loading: false,
           error: null,
           hasData: true,
-          stale: true,
+          attention: true,
         }),
-      ).toBe('stale');
+      ).toBe('attention');
     });
 
-    it('returns ready when has data and not stale', () => {
+    it('returns ready when has data and nothing needs attention', () => {
       expect(
         resolveViewState({
           loading: false,
           error: null,
           hasData: true,
-          stale: false,
+          attention: false,
         }),
       ).toBe('ready');
+    });
+
+    it('keeps a failed request distinguishable from an empty account', () => {
+      const failed = resolveViewState({ loading: false, error: 'x', hasData: false });
+      const empty = resolveViewState({ loading: false, error: null, hasData: false });
+      expect(failed).not.toBe(empty);
     });
   });
 
@@ -65,21 +98,11 @@ describe('setup-state', () => {
       expect(setupAction(null)).toBeNull();
       expect(setupAction(undefined)).toBeNull();
       expect(
-        setupAction({
-          state: 'ready',
-          label: 'Ready',
-          reason: '',
-          action: {
-            id: 'sync',
-            label: 'Sync',
-            href: '/settings',
-            description: '',
-          },
-          missing: [],
-          last_activity_at: null,
-          age_days: null,
-          stale: false,
-        }),
+        setupAction(
+          setup('ready', {
+            action: { id: 'sync', label: 'Sync', href: '/settings', description: '' },
+          }),
+        ),
       ).toBeNull();
     });
 
@@ -90,51 +113,40 @@ describe('setup-state', () => {
         href: '/settings',
         description: 'Connect account',
       };
-      const setup: SetupState = {
-        state: 'new',
-        label: 'Finish setting up',
-        reason: 'Hevy not connected',
-        action,
-        missing: ['hevy_connected'],
-        last_activity_at: null,
-        age_days: null,
-        stale: false,
-      };
-      expect(setupAction(setup)).toEqual(action);
+      expect(setupAction(setup('setup_required', { action }))).toEqual(action);
+    });
+
+    it('offers nothing while a connect or sync is running', () => {
+      expect(setupAction(setup('syncing'))).toBeNull();
+      expect(setupAction(setup('connecting'))).toBeNull();
     });
   });
 
-  describe('needsSetup', () => {
-    it('returns false for null, undefined or ready setup', () => {
+  describe('readiness helpers', () => {
+    it('only a ready state needs no setup or attention', () => {
+      for (const state of ALL_STATES) {
+        const expected = state !== 'ready';
+        expect(needsSetup(setup(state))).toBe(expected);
+        expect(needsAttention(setup(state))).toBe(expected);
+      }
       expect(needsSetup(null)).toBe(false);
-      expect(needsSetup(undefined)).toBe(false);
-      expect(
-        needsSetup({
-          state: 'ready',
-          label: 'Ready',
-          reason: '',
-          action: null,
-          missing: [],
-          last_activity_at: null,
-          age_days: null,
-          stale: false,
-        }),
-      ).toBe(false);
+      expect(needsAttention(undefined)).toBe(false);
     });
 
-    it('returns true when state is not ready', () => {
-      expect(
-        needsSetup({
-          state: 'new',
-          label: 'Setup required',
-          reason: '',
-          action: null,
-          missing: [],
-          last_activity_at: null,
-          age_days: null,
-          stale: false,
-        }),
-      ).toBe(true);
+    it('treats only connecting and syncing as live', () => {
+      expect(ALL_STATES.filter((state) => isLive(setup(state)))).toEqual(['connecting', 'syncing']);
+      expect(isLive(null)).toBe(false);
+    });
+
+    it('gives every non-ready state its own badge and none to ready', () => {
+      const badges = ALL_STATES.map((state) => navBadge(setup(state)));
+
+      expect(badges[ALL_STATES.indexOf('ready')]).toBeNull();
+      const labels = badges.filter((badge) => badge !== null).map((badge) => badge!.label);
+      expect(labels).toEqual(['Setup', 'Connecting', 'Syncing', 'Stale', 'Attention']);
+      expect(navBadge(setup('degraded'))?.spoken).toBe('needs attention');
+      expect(navBadge(setup('syncing'))?.spoken).toBe('syncing');
+      expect(navBadge(null)).toBeNull();
     });
   });
 });

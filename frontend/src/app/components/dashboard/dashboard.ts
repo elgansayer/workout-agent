@@ -7,7 +7,12 @@ import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { SetupNotice } from '../../shared/setup-notice';
-import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
+import {
+  SetupState,
+  ViewState,
+  needsAttention,
+  resolveViewState,
+} from '../../shared/setup-state';
 import { OnboardingState } from '../../services/onboarding.service';
 
 @Component({
@@ -34,7 +39,7 @@ export class Dashboard implements OnInit {
       loading: this.loading(),
       error: this.error(),
       hasData: (this.data()?.rows?.length ?? 0) > 0,
-      stale: this.setup()?.stale ?? false,
+      attention: needsAttention(this.setup()),
     }),
   );
 

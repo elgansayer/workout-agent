@@ -47,10 +47,10 @@
     @if (viewState() === 'empty') {
       <app-setup-notice [setup]="setup()" />
   }
-  @if (viewState() === 'stale') {
+  @if (viewState() === 'attention') {
     <app-setup-notice [setup]="setup()" />
   }
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+  @if (viewState() === 'ready' || viewState() === 'attention') {
     @if (!data.setup_required) {
       <details class="panel programme-overview">
         <summary>
