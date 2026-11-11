@@ -96,6 +96,18 @@
     @if (setup.settingsBadge(); as badge) {
       <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
     }
+    @if (onboarding.state(); as onboardingState) {
+      @if (!onboardingState.account_ready) {
+        <a
+          routerLink="/onboarding"
+          routerLinkActive="on"
+          ariaCurrentWhenActive="page"
+          aria-label="Setup (steps remaining)"
+          >Setup</a
+        >
+        <span class="nav-badge">To do</span>
+      }
+    }
     @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
       <a routerLink="/profile" routerLinkActive="on" ariaCurrentWhenActive="page">Account</a>
       <button class="nav-logout" type="button" (click)="auth.logout()">Log out</button>

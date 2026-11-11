@@ -9,6 +9,7 @@
   ],
   "routes": [
     "login",
+    "onboarding",
     "profile",
     "dashboard",
     "chat",

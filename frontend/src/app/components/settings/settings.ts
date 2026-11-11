@@ -219,9 +219,15 @@ export class Settings implements OnInit, OnDestroy {
   ngOnInit() {
     this.loadSettings();
     void this.loadDisplay();
-    // Deep link from the Account page: /settings?section=account
-    if (new URLSearchParams(window.location.search).get('section') === 'account') {
-      this.selectSection('account');
+    // Deep links from the Account page and first-run setup: /settings?section=...
+    const requested = new URLSearchParams(window.location.search).get('section');
+    if (
+      requested &&
+      ['connections', 'ai', 'profile', 'display', 'notifications', 'account'].includes(
+        requested,
+      )
+    ) {
+      this.selectSection(requested);
     }
   }
 
