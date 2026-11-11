@@ -86,9 +86,9 @@ from database import (
     get_routine_match_overrides,
     get_session_volumes,
     get_training_rules,
-    get_user_by_id,
     get_unread_notification_count,
     get_user_api_keys,
+    get_user_by_id,
     get_user_preferences,
     init_db,
     mark_all_notifications_read,
@@ -115,7 +115,6 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from google_health_auth import build_authorize_url, exchange_code
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
@@ -126,6 +125,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
+from google_health_auth import build_authorize_url, exchange_code
 from health_connection_store import get_connection, list_connections
 from health_disconnect import disconnect_connector
 from health_purge import purge_imported_data_at
@@ -152,6 +152,12 @@ from localisation import (
     prompt_context,
     spelling_for,
     weight_unit,
+)
+from onboarding import (
+    OnboardingError,
+    build_onboarding,
+    resume_step,
+    skip_step,
 )
 from programme_service import (
     ProgrammeValidationError,
@@ -218,7 +224,6 @@ from training_rules import (
     StructuredTrainingRules,
     format_rules_for_prompt,
 )
-
 from user_settings import (
     SettingsValidationError,
     UserNotFoundError,
@@ -227,6 +232,7 @@ from user_settings import (
     settings_options,
     update_user_settings,
 )
+
 from webapp import ai_widgets, charts
 from webapp.audit_events import audit_request_event, audit_runtime_posture
 from webapp.auth_boundary import has_verified_identity
@@ -616,6 +622,16 @@ def _setup_payload(
         surface,
         programme_status=programme_status,
     )
+
+
+def _onboarding_payload(user_id: str) -> dict[str, Any]:
+    """Return this tenant's resumable first-run setup state."""
+
+    return build_onboarding(
+        user_id=user_id,
+        db_path=DB_PATH,
+        server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+    ).as_dict()
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -1343,6 +1359,7 @@ def _dashboard_context(
         "setup_required": setup_required,
         "setup": setup_payload,
         "coach_setup": coach_setup_payload,
+        "onboarding": _onboarding_payload(user_id) if user_id else None,
         "active_programme_name": runtime.name or None,
         "quote": _daily_quote(today),
         "week": week,
@@ -1437,6 +1454,66 @@ def api_setup_state(request: Request) -> JSONResponse:
     return JSONResponse(
         jsonable_encoder({"account": account.as_dict(), "surfaces": surfaces})
     )
+
+
+class OnboardingStepSelection(BaseModel):
+    """One step chosen by the authenticated browser.
+
+    Unknown fields (including any owner identifier) are rejected; the tenant is
+    always the session identity.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    step: str
+
+
+@app.get("/api/onboarding")
+def api_onboarding(request: Request) -> JSONResponse:
+    """Return this tenant's resumable first-run setup sequence."""
+
+    user_id = _check_api_auth(request)
+    return JSONResponse(jsonable_encoder(_onboarding_payload(user_id)))
+
+
+@app.post("/api/onboarding/skip")
+def api_skip_onboarding_step(
+    body: OnboardingStepSelection, request: Request
+) -> JSONResponse:
+    """Persist the caller's explicit skip of one optional setup step."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        state = skip_step(
+            user_id,
+            body.step,
+            db_path=DB_PATH,
+            server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+        )
+    except OnboardingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state.as_dict()))
+
+
+@app.post("/api/onboarding/resume")
+def api_resume_onboarding_step(
+    body: OnboardingStepSelection, request: Request
+) -> JSONResponse:
+    """Forget a previous skip so the caller can revisit that setup step."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        state = resume_step(
+            user_id,
+            body.step,
+            db_path=DB_PATH,
+            server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+        )
+    except OnboardingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state.as_dict()))
 
 
 @app.get("/api/dashboard")

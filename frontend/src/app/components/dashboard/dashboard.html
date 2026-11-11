@@ -21,6 +21,21 @@
     </button>
   </div>
 }
+@if (onboarding(); as onboarding) {
+  @if (!onboarding.account_ready && onboarding.next_step; as next) {
+    <section class="panel onboarding-next" aria-labelledby="onboarding-next-heading">
+      <p class="eyebrow">
+        Finish setup · {{ onboarding.completed_count }} of {{ onboarding.total_steps }} steps done
+      </p>
+      <h2 id="onboarding-next-heading">{{ next.title }}</h2>
+      <p>{{ next.description }}</p>
+      <p class="setup-next">
+        <a class="btn" [href]="next.href">{{ next.optional ? 'Set up' : 'Continue' }}</a>
+        <a href="/onboarding">See all setup steps</a>
+      </p>
+    </section>
+  }
+}
 @if (data(); as data) {
   @if (data.programme_status && data.programme_status !== 'active') {
     <section class="panel">

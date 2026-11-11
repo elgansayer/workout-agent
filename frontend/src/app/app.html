@@ -84,6 +84,18 @@
     @if (setup.needsSetup('coach')) {
       <span class="nav-badge">Setup</span>
     }
+    @if (onboarding.state(); as onboardingState) {
+      @if (!onboardingState.account_ready) {
+        <a
+          routerLink="/onboarding"
+          routerLinkActive="on"
+          ariaCurrentWhenActive="page"
+          aria-label="Setup (steps remaining)"
+          >Setup</a
+        >
+        <span class="nav-badge">To do</span>
+      }
+    }
     <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
     @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
       <a routerLink="/profile" routerLinkActive="on" ariaCurrentWhenActive="page">Account</a>

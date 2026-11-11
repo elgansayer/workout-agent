@@ -208,6 +208,7 @@ USER_DATA_STORES: tuple[DataStore, ...] = (
     DataStore("adaptation_decisions", Step.PRIMARY_RECORDS),
     DataStore("programme_decisions", Step.PRIMARY_RECORDS),
     DataStore("user_preferences", Step.PRIMARY_RECORDS),
+    DataStore("onboarding_skips", Step.PRIMARY_RECORDS),
     DataStore("training_rules", Step.PRIMARY_RECORDS),
     DataStore("hevy_routines", Step.PRIMARY_RECORDS),
     DataStore("hevy_routine_snapshots", Step.PRIMARY_RECORDS),

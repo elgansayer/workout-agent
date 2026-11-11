@@ -177,3 +177,74 @@ describe('Coach status provenance', () => {
     http.verify();
   });
 });
+
+describe('First-run onboarding', () => {
+  it('shows the next highest-value setup action until the account is ready', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: true,
+      focus: 'Select routines from Hevy',
+      rows: [],
+      onboarding: {
+        steps: [],
+        next_step: {
+          id: 'hevy',
+          title: 'Connect Hevy',
+          description: 'Import routines and logged workouts.',
+          href: '/settings?section=connections',
+          optional: false,
+          status: 'pending',
+          skip_consequence: null,
+        },
+        account_ready: false,
+        completed_count: 0,
+        skipped_count: 0,
+        total_steps: 6,
+        progress_percent: 0,
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent).toContain('Connect Hevy');
+    expect(el.querySelector('.onboarding-next a[href="/onboarding"]')).toBeTruthy();
+    http.verify();
+  });
+
+  it('does not show a setup prompt once onboarding is ready', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: false,
+      focus: 'Upper body',
+      rows: [{ name: 'Bench Press', planned: '3 × 8' }],
+      onboarding: {
+        steps: [],
+        next_step: null,
+        account_ready: true,
+        completed_count: 2,
+        skipped_count: 0,
+        total_steps: 6,
+        progress_percent: 33,
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector('.onboarding-next')).toBeNull();
+    http.verify();
+  });
+});

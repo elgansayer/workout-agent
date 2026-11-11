@@ -8,6 +8,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { SetupNotice } from '../../shared/setup-notice';
 import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
+import { OnboardingState } from '../../services/onboarding.service';
 
 @Component({
   selector: 'app-dashboard',
@@ -26,6 +27,7 @@ export class Dashboard implements OnInit {
 
   setup = signal<SetupState | null>(null);
   coachSetup = signal<SetupState | null>(null);
+  onboarding = signal<OnboardingState | null>(null);
 
   readonly viewState = computed<ViewState>(() =>
     resolveViewState({
@@ -76,6 +78,7 @@ export class Dashboard implements OnInit {
         this.data.set(data);
         this.setup.set(data?.setup ?? null);
         this.coachSetup.set(data?.coach_setup ?? null);
+        this.onboarding.set(data?.onboarding ?? null);
         this.loading.set(false);
       },
       error: () => {
