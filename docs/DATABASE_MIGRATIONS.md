@@ -49,6 +49,14 @@ part-way through schema initialization.
 
 `user_sessions` (the browser-session registry, see [Session security](SESSION_SECURITY.md)) follows the same rules: it is created by `ensure_user_sessions_schema`, which `init_db()` calls and `SessionStore` calls again on connect so a request that arrives before initialisation still finds the table. It has a `user_id` foreign key, the user-first index `idx_user_sessions_user`, and stores only a SHA-256 digest of each session identifier. It is additive, so rolling the code back simply leaves an unused table.
 
+Per-user settings add columns without a new table: `user_settings.ensure_settings_schema`
+(called from `init_db` right after `users` is created) adds `users.locale`,
+`users.motion`, `users.contrast`, `users.text_size` and
+`exercise_progress.performed_at`, each guarded by `PRAGMA table_info`. When the
+`users` columns first appear on an existing database, accounts still holding the
+untouched `UTC` default inherit the deployment `TZ` once, so the upgrade keeps
+each daily run where it was. See `docs/USER_SETTINGS.md`.
+
 Never use a client-supplied owner identifier to choose the backfill tenant.
 Runtime requests must continue to derive tenant identity from the authenticated
 session.

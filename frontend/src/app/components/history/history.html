@@ -41,7 +41,7 @@
           @for (log of logs.visible(); track log.date + (logs.start() + $index)) {
             <details class="log-row" [class.rest]="log.day === null || log.day === undefined">
               <summary class="log-head">
-                <span class="log-date">{{ log.date | date: 'shortDate' }}</span>
+                <span class="log-date">{{ log.date | localDate: 'shortDate' }}</span>
                 <span class="log-focus">{{ log.focus }}</span>
                 @if (log.carb_tier) {
                   <span class="chip ghost">{{ log.carb_tier }} carb</span>

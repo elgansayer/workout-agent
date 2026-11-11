@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import account_deletion
@@ -68,6 +68,7 @@ from secret_vault import (
 )
 from tenancy import TenantRequiredError, implicit_single_user_allowed
 from tenant_isolation import OwnershipError, authorize_owner
+from user_settings import UserSettings, get_user_settings_or_defaults
 
 logging.basicConfig(
     level=logging.INFO,
@@ -187,7 +188,10 @@ def _maybe_check_in(
     *,
     user_id: str,
 ) -> None:
-    """Run a programme check-in at an active programme review point."""
+    """Run a programme check-in at an active programme review point.
+
+    ``checkin`` dates the review in the acting user's local time zone.
+    """
     if not config.checkin_enabled:
         return
     try:
@@ -216,16 +220,25 @@ def _maybe_self_review(
     preview: bool,
     *,
     user_id: str,
+    today: date | None = None,
+    settings: UserSettings | None = None,
 ) -> None:
-    """On the configured weekday, send a self-review of how training is going."""
+    """On the configured weekday, send a self-review of how training is going.
+
+    The weekday is the acting user's local one, so each tenant's review lands
+    on their own Sunday rather than the server's.
+    """
     if not config.self_review_enabled:
         return
-    if datetime.now(tz=timezone.utc).date().weekday() != config.self_review_weekday:
+    settings = settings or get_user_settings_or_defaults(user_id, config.database_path)
+    today = today or local_today(settings.timezone, datetime.now(tz=timezone.utc))
+    if today.weekday() != config.self_review_weekday:
         return
     review = insights_engine.build_insights(
         get_progress_history(db_path=config.database_path, user_id=user_id),
         get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
+        unit_system=settings.unit_system,
     )
     if not review.lifts:
         logger.info("Self-review skipped: not enough logged history yet.")
@@ -396,7 +409,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - source sync must not block the run
         logger.warning("Hevy routine synchronisation failed: %s", exc)
 
-    today = local_today(_user_timezone(user_id, config.database_path))
+    settings = get_user_settings_or_defaults(user_id, config.database_path)
+    today = local_today(settings.timezone)
     when = today.isoformat()
     runtime = load_programme_runtime(
         user_id,
@@ -447,6 +461,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         runtime,
         preview,
         user_id=user_id,
+        today=today,
+        settings=settings,
     )
 
     day = runtime.next_day
@@ -476,6 +492,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         get_progress_history(db_path=config.database_path, user_id=user_id),
         get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
+        unit_system=settings.unit_system,
     )
     logger.info("%s", review.headline)
 
@@ -500,6 +517,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
             insights=review,
             last_plan=last_plan,
             rules=rules,
+            settings=settings,
         )
     guidance = (
         lifestyle.daily_guidance(

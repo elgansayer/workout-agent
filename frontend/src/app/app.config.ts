@@ -17,6 +17,9 @@ export const appConfig: ApplicationConfig = {
       withInMemoryScrolling({ scrollPositionRestoration: 'enabled', anchorScrolling: 'enabled' }),
     ),
     provideHttpClient(withInterceptors([apiInterceptor])),
+    // Build-time default for Angular's built-in locale pipes only. Nothing user-facing
+    // relies on it: dates and numbers go through DisplaySettingsService (localDate,
+    // localNumber), which follows each signed-in user's saved locale and time zone.
     { provide: LOCALE_ID, useValue: 'en-GB' },
   ],
 };

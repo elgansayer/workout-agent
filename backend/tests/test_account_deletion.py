@@ -1368,9 +1368,7 @@ def test_scheduler_runs_due_deletions_first_and_survives_their_failure(
     monkeypatch.setattr(
         scheduler, "run_daily_insight", lambda cfg: calls.append("daily")
     )
-    monkeypatch.setattr(
-        scheduler, "_now_in_zone", lambda tz: datetime(2026, 11, 9, tzinfo=timezone.utc)
-    )
+    monkeypatch.setattr(scheduler, "get_all_users", lambda _path: [])
 
     assert scheduler.run_account_deletions(config) == 2
     calls.clear()

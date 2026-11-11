@@ -5,13 +5,14 @@ import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { SetupNotice } from '../../shared/setup-notice';
 import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
 
 @Component({
   selector: 'app-dashboard',
   standalone: true,
-  imports: [CommonModule, ListControls, ProvenanceBadge, SetupNotice],
+  imports: [CommonModule, ListControls, LocalDatePipe, ProvenanceBadge, SetupNotice],
   templateUrl: './dashboard.html',
   styleUrl: './dashboard.css',
 })

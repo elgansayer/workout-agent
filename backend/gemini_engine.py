@@ -14,6 +14,7 @@ from typing import Any
 from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
+from localisation import format_weight, load_step, prompt_context, spelling_for
 from programme_runtime import ProgrammeRuntime
 from training_rules import (
     StructuredTrainingRules,
@@ -21,11 +22,20 @@ from training_rules import (
     format_rules_for_prompt,
 )
 from provenance import GeneratedText
+from user_settings import UserSettings
 
 logger = logging.getLogger(__name__)
 
 
-def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
+def _regional_context(settings: UserSettings) -> str:
+    """The user's time zone, locale and unit instructions for any prompt."""
+    return prompt_context(settings.timezone, settings.locale, settings.unit_system)
+
+
+def _format_history(
+    history: dict[str, dict[str, Any]] | None,
+    unit_system: str = UserSettings().unit_system,
+) -> str:
     if not history:
         return "None on record yet."
     lines = []
@@ -34,7 +44,7 @@ def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
         weight = record.get("top_weight_kg")
         reps = record.get("top_reps")
         if weight is not None and reps is not None:
-            lines.append(f"- {name}: {weight:g} kg x {reps}")
+            lines.append(f"- {name}: {format_weight(weight, unit_system)} x {reps}")
         elif reps is not None:
             lines.append(f"- {name}: {reps} reps (bodyweight)")
     return "\n".join(lines) if lines else "None on record yet."
@@ -91,13 +101,19 @@ def _build_prompt(
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
 ) -> str:
+    settings = settings or UserSettings()
     focus = str(day.get("focus") or "Training")
     baseline = _baseline_plan(runtime, day)
     structured_rules_str = format_rules_for_prompt(rules)
-    workout_text = workout_summary.as_text() if workout_summary else "None available."
+    workout_text = (
+        workout_summary.as_text(settings.unit_system)
+        if workout_summary
+        else "None available."
+    )
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
-    history_text = _format_history(history)
+    history_text = _format_history(history, settings.unit_system)
     insights_text = insights.as_text() if insights else "Not enough history yet."
     last_plan_text = last_plan if last_plan else "None available."
 
@@ -112,6 +128,8 @@ re-order, or change any exercise, set, rep target, load, tempo, or rest period.
 Do not infer a load that is not in the prescription. If you mention an
 adjustment, it must already be present in the prescription or the structured
 rules.
+
+{_regional_context(settings)}
 
 {structured_rules_str}
 
@@ -145,9 +163,11 @@ Strict output format:
 - Plain text only. No markdown, no asterisks, no bold, no headings.
 - First line exactly: "{focus} - Week {runtime.week}".
 - Then one exercise per line as "Name: sets x reps".
+- Add a short note in round brackets ONLY for an already prescribed adjustment,
+  e.g. "(+{load_step(settings.unit_system)})" or "(+1 rep)".
 - No intro, no assessment, no motivation, no tips, no closing line.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_next_workout(
@@ -161,6 +181,7 @@ def generate_next_workout(
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
     **_kwargs: Any,
 ) -> str:
     """Format the deterministic prescription, falling back to the baseline."""
@@ -181,6 +202,7 @@ def generate_next_workout(
             insights,
             last_plan,
             rules=rules_obj,
+            settings=settings,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -238,13 +260,17 @@ def _build_rest_prompt(
     runtime: ProgrammeRuntime,
     recovery: dict[str, Any] | None,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
 ) -> str:
+    settings = settings or UserSettings()
     structured_rules_str = format_rules_for_prompt(rules)
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
 
     return f"""You are the user's training coach.
 
 {_programme_header(runtime)}
+
+{_regional_context(settings)}
 
 Today has no prescribed training exposure in the active programme, so this is a
 recovery day. Do not invent a workout.
@@ -260,7 +286,7 @@ Your task:
    metrics only where they are present and fresh.
 3. Keep it short and practical.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_rest_day_message(
@@ -268,6 +294,7 @@ def generate_rest_day_message(
     runtime: ProgrammeRuntime | None = None,
     recovery: dict[str, Any] | None = None,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate a short recovery message, falling back on error."""
@@ -276,7 +303,9 @@ def generate_rest_day_message(
         runtime = runtime or _kwargs.get("runtime")
         if runtime is None:
             return GeneratedText.fallback(_fallback_rest_message())
-        prompt = _build_rest_prompt(runtime, recovery, rules=effective_rules)
+        prompt = _build_rest_prompt(
+            runtime, recovery, rules=effective_rules, settings=settings
+        )
         text = str(provider.generate(prompt)).strip()
         if text:
             return GeneratedText.from_provider(text, provider)
@@ -305,11 +334,15 @@ def _build_checkin_prompt(
     weeks: int,
     analysis_text: str,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
 ) -> str:
+    settings = settings or UserSettings()
     structured_rules_str = format_rules_for_prompt(rules)
     return f"""You are the user's training coach.
 
 {_programme_header(runtime)}
+
+{_regional_context(settings)}
 
 This is programme check-in number {number}. The user logged {workouts_done}
 sessions over the last {weeks} weeks.
@@ -329,7 +362,7 @@ Your task: write a short, factual check-in.
 - Never invent exercises, loads, or programme changes.
 - End with one short line of encouragement.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_checkin_message(
@@ -342,6 +375,7 @@ def generate_checkin_message(
     analysis_text: str,
     fallback: str,
     rules: StructuredTrainingRules | dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate a periodic check-in message, falling back on error."""
@@ -354,6 +388,7 @@ def generate_checkin_message(
             weeks,
             analysis_text,
             rules=effective_rules,
+            settings=settings,
         )
         text = str(provider.generate(prompt)).strip()
         if text:

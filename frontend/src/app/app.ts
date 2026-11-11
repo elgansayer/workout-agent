@@ -2,6 +2,7 @@ import { Component, ElementRef, HostListener, ViewChild, inject, signal } from '
 import { NavigationEnd, Router, RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Auth } from './services/auth';
+import { DisplaySettingsService } from './services/display-settings';
 import { SetupStateService } from './services/setup-state.service';
 
 @Component({
@@ -12,6 +13,7 @@ import { SetupStateService } from './services/setup-state.service';
 })
 export class App {
   protected auth = inject(Auth);
+  private readonly displaySettings = inject(DisplaySettingsService);
   protected setup = inject(SetupStateService);
   protected menuOpen = signal(false);
   @ViewChild('menuButton') private menuButton?: ElementRef<HTMLButtonElement>;
@@ -19,6 +21,7 @@ export class App {
 
   constructor() {
     this.auth.checkAuth();
+    void this.displaySettings.load();
     this.setup.load();
     inject(Router)
       .events.pipe(takeUntilDestroyed())

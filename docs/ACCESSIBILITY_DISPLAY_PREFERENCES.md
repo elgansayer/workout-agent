@@ -18,6 +18,24 @@ Angular navigation links expose `aria-current="page"` through `ariaCurrentWhenAc
 
 When `prefers-contrast: more` is active, foreground/background separation increases, borders become heavier, focus indicators become thicker, and selected/error/warning/success states gain persistent outlines or left borders.
 
+### Per-user preferences
+
+The signed-in user can also store motion, contrast and text-size choices
+(Settings > Region & accessibility, `docs/USER_SETTINGS.md`). The app shell mirrors
+them onto `<html data-motion data-contrast data-text-size>` and
+`accessibility-preferences.css` styles those attributes:
+
+- `data-motion="reduce"` applies the same reduced-motion rules as the media query.
+- `data-contrast="more"` applies the same increased-contrast palette, borders and
+  status treatments as `prefers-contrast: more`.
+- `data-text-size="large"` / `"x-large"` scale the root font size to 112.5% / 125%
+  (every measurement is `rem` based).
+
+Stored choices only add an accommodation. `system`/`default` emit no rule, so an
+operating-system request is never weakened. The per-user contrast rules are
+declared at `:root` specificity before the forced-colours block, so system colours
+still win when the browser forces them.
+
 ## Automated contract
 
 Run from `frontend/`:
@@ -38,7 +56,10 @@ The legacy peer-resolution flag matches the existing frontend Docker build contr
 - reduced-motion rules cover ambient animation, loading, chat, cards, and scrolling;
 - forced-colour rules retain focus, current/selected state, errors, warnings, success, forms, charts, and legends;
 - all concrete Angular component routes are represented in `frontend/accessibility-preferences.matrix.json`;
-- every primary navigation link using `routerLinkActive` exposes `ariaCurrentWhenActive="page"`.
+- every primary navigation link using `routerLinkActive` exposes `ariaCurrentWhenActive="page"`;
+- the per-user `data-motion`, `data-contrast` and `data-text-size` selectors exist, the
+  contrast override precedes the forced-colours block, and the settings service sets
+  those attributes.
 
 Adding a component route therefore requires updating the accessibility matrix before CI passes.
 
