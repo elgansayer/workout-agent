@@ -161,6 +161,26 @@ const payloads: Record<string, unknown> = {
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
   },
+  '/api/sessions': {
+    sessions: [
+      {
+        id: 1,
+        device: 'Chrome on Linux',
+        location: 'Approx. network 198.51.100.0/24',
+        created_at: '2026-11-10T09:00:00+00:00',
+        last_used_at: '2026-11-10T10:00:00+00:00',
+        current: true,
+      },
+      {
+        id: 2,
+        device: 'Safari on iOS',
+        location: 'Local network',
+        created_at: '2026-11-09T09:00:00+00:00',
+        last_used_at: '2026-11-09T10:00:00+00:00',
+        current: false,
+      },
+    ],
+  },
   '/api/dashboard': dashboard,
   '/api/history': {
     calendar,
