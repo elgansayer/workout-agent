@@ -88,7 +88,6 @@ from database import (
     get_training_rules,
     get_user_by_id,
     get_unread_notification_count,
-    get_user_api_keys,
     get_user_preferences,
     init_db,
     mark_all_notifications_read,
@@ -263,6 +262,14 @@ def _vault_credential(
         return None
     except VaultUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _has_usable_credential(user_id: str, provider: str) -> bool:
+    """Yes/no for the owner's credential; the secret never leaves the vault."""
+    try:
+        return _vault().has_usable_credential(user_id, provider)
+    except VaultError:
+        return False
 
 
 def _verify_hevy_credential(credential: ResolvedCredential) -> VerificationResult:
@@ -2067,19 +2074,19 @@ def _coach_capability_for_user(
 ) -> CoachCapabilityState:
     """Derive Coach capability from this tenant's records and provider state."""
 
-    keys = get_user_api_keys(user_id, DB_PATH)
     prefs = get_user_preferences(user_id, DB_PATH)
     provider_name = str(prefs.get("preferred_ai") or "gemini").strip().lower()
     provider_supported = provider_name in PROVIDERS
 
     provider_configured = False
     if provider_supported:
-        provider_key = str(
-            keys.get(provider_name, {}).get("api_key") or ""
-        ).strip()
-        if not provider_key and provider_name == "gemini":
-            provider_key = str(get_config().gemini_api_key or "").strip()
-        provider_configured = bool(provider_key)
+        provider_configured = _has_usable_credential(user_id, provider_name)
+        if (
+            not provider_configured
+            and provider_name == "gemini"
+            and str(get_config().gemini_api_key or "").strip()
+        ):
+            provider_configured = True
 
     if logs is None:
         logs = get_daily_logs(limit=1, db_path=DB_PATH, user_id=user_id)
@@ -2116,7 +2123,7 @@ def _coach_capability_for_user(
         provider_name=provider_name,
         provider_configured=provider_configured,
         provider_supported=provider_supported,
-        sync_configured=bool(keys.get("hevy", {}).get("api_key")),
+        sync_configured=_has_usable_credential(user_id, "hevy"),
         observed_at=observed_at,
         programme_available=programme_available,
         now=datetime.now(tz=UTC),

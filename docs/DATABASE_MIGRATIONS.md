@@ -100,6 +100,12 @@ additive and idempotent, and both covered by
 See `docs/ACCOUNT_ACCESS_POLICY.md` for the behaviour these columns and tables
 drive.
 
+## Push-subscription ownership
+
+A web-push endpoint identifies one browser profile, so it belongs to one account at a time; otherwise a notification for the account that left a shared device would still be delivered to whoever signs in there next. `init_db()` removes any repeated endpoint, keeping the newest registration (the account that most recently took the device), and then creates the unique index `idx_push_subscriptions_endpoint`. Both steps run only while the index is absent, so the migration is idempotent and later starts do not touch the table. `save_push_subscription` hands the device to the registering account by deleting every registration of that endpoint in the same transaction before inserting its own.
+
+Rollback: the index is additive. Dropping it restores the previous behaviour, but the duplicate rows removed on upgrade are not recoverable; each was a registration for a browser another account had since taken. `backend/tests/test_push_subscription_ownership.py` covers the hand-over, the database constraint and the upgrade of a database that already holds repeated endpoints.
+
 ## Regression coverage
 
 The user-model migration, tenant policy and ownership assignment are covered by

@@ -13,6 +13,7 @@ from secret_vault import (
     SecretVault,
     UnavailableReason,
 )
+from tenancy import TenantRequiredError, implicit_single_user_allowed
 
 
 def _user_credential(
@@ -57,7 +58,21 @@ def resolve_provider(
 
     The optional server key is a backwards-compatible Gemini fallback only.
     It is never used for another provider or another user's credential.
+
+    An AI call always acts for an owner. Omitting *user_id* is accepted only in
+    the explicit local single-user mode (:mod:`tenancy`); anywhere else it
+    raises :class:`~tenancy.TenantRequiredError` instead of quietly handing the
+    shared server key to a caller nobody authenticated.
     """
+    if user_id is None:
+        if not implicit_single_user_allowed():
+            raise TenantRequiredError(
+                "an AI provider is resolved for an authenticated user: implicit "
+                "single-user access is disabled outside an explicit "
+                "non-production runtime."
+            )
+    elif not isinstance(user_id, str) or not user_id.strip():
+        raise TenantRequiredError("user_id must be a non-empty string.")
     server_gemini_key = server_gemini_key or fallback_api_key
     server_gemini_model = server_gemini_model or fallback_model
 

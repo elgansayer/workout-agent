@@ -2,6 +2,8 @@
 
 Request handlers prove who owns data through the signed session. Schedulers, jobs and shared in-process state run without one, so a leak there is silent: a cache key without an owner, a credential looked up "for whoever is first", or an id taken from a flag or a queue. `backend/tenant_isolation.py` is the single place that defines how a worker knows its owner, and every recurring job must go through it.
 
+A generated matrix proves, for every route, store, job and sender, that one account cannot read, change, export, queue or receive another's data: see [Tenant-isolation matrix](TENANT_ISOLATION_MATRIX.md).
+
 ## Contract
 
 1. **Identity is a value.** `OwnerIdentity` is a frozen dataclass. It cannot be reassigned after construction, and blank or malformed ids are rejected.
@@ -10,7 +12,7 @@ Request handlers prove who owns data through the signed session. Schedulers, job
 4. **Keys are derived from the owner.** Cache, lock, cursor and notification-batch keys are built with `owner_scoped_key(owner, namespace, *parts)`. The owner is always the second segment and every later segment is percent-encoded, so a caller-supplied part can neither impersonate another owner nor collide with a different key.
 5. **Locks never span owners.** `OwnerLocks` is keyed by owner and job kind. An overlapping duplicate for the same owner is skipped; one owner's slow job never delays another's.
 6. **Prompt and notification input carries its owner.** `OwnedContext` binds the owner to the data read for them. Persistence and delivery take the owner from the context, never from an ambient loop variable.
-7. **Credentials resolve per owner.** `main._scope_config_to_user` gives an owner only their own stored connector keys. The server-wide `HEVY_API_KEY`, `GOOGLE_HEALTH_*` and `HEALTH_CONNECT_FILE` settings belong to the legacy tenant (`legacy@local`) and are withheld from every other user. `ai_resolver.resolve_provider` uses the owner's key, and the server Gemini key is a Gemini-only fallback.
+7. **Credentials resolve per owner.** `main._scope_config_to_user` gives an owner only their own stored connector keys. The server-wide `HEVY_API_KEY`, `GOOGLE_HEALTH_*` and `HEALTH_CONNECT_FILE` settings belong to the legacy tenant (`legacy@local`) and are withheld from every other user. `ai_resolver.resolve_provider` uses the owner's key, refuses a call with no owner outside the explicit local single-user mode (`TenantRequiredError`), and treats the server Gemini key as a Gemini-only fallback for an owner without a key of their own. Readiness and capability checks ask `SecretVault.has_usable_credential` for a yes/no; production code never reads a stored secret to find out whether one exists (`test_credential_boundary_policy.py`).
 8. **Database helpers always receive `user_id`.** Several helpers in `database.py` read or delete across *all* tenants when `user_id` is omitted. `backend/tests/test_tenant_isolation_policy.py` scans every production module and fails when such a helper is called without an owner.
 9. **A failure stays inside its job.** `run_owned_job` returns a `JobOutcome` (`completed`, `failed`, `denied` or `skipped`). A failed outcome carries only the exception class name, never its message, and never reaches the next owner's job.
 

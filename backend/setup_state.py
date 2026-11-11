@@ -297,11 +297,13 @@ def ai_provider_configured(
     """Return whether this tenant can reach an AI provider.
 
     The tenant's own encrypted key for their preferred provider counts, as does
-    the server-side Gemini fallback.  No other tenant's credential is read.
+    the server-side Gemini fallback.  No other tenant's credential is read, and
+    the key itself never leaves the vault: only a yes/no does.
     """
 
     from ai_provider import PROVIDERS
-    from database import get_user_api_key, get_user_preferences
+    from database import get_user_preferences
+    from secret_vault import SecretVault, VaultError
 
     try:
         prefs = get_user_preferences(user_id, db_path=db_path)
@@ -312,10 +314,10 @@ def ai_provider_configured(
         provider = "gemini"
 
     try:
-        record = get_user_api_key(user_id, provider, db_path=db_path)
-    except Exception:  # noqa: BLE001 - decryption failures mean "not usable"
-        record = None
-    if record and str(record.get("api_key") or "").strip():
+        usable = SecretVault(db_path).has_usable_credential(user_id, provider)
+    except VaultError:  # no such account: nothing is usable
+        usable = False
+    if usable:
         return True
     return provider == "gemini" and bool((server_api_key or "").strip())
 
@@ -334,12 +336,14 @@ def build_account_setup(
         get_daily_logs,
         get_progress_history,
         get_session_volumes,
-        get_user_api_keys,
     )
+    from secret_vault import SecretVault, VaultError
 
     now = now or datetime.now(tz=timezone.utc)
-    keys = get_user_api_keys(user_id, db_path=db_path)
-    hevy_key = str((keys.get("hevy") or {}).get("api_key") or "").strip()
+    try:
+        has_hevy_key = SecretVault(db_path).has_usable_credential(user_id, "hevy")
+    except VaultError:  # no such account: nothing is usable
+        has_hevy_key = False
 
     programme = get_active_programme(user_id, db_path=db_path)
     progress = get_progress_history(db_path=db_path, user_id=user_id)
@@ -355,7 +359,7 @@ def build_account_setup(
     last_activity_at = _latest_datetime(candidates)
 
     return derive_account_state(
-        has_hevy_key=bool(hevy_key),
+        has_hevy_key=has_hevy_key,
         has_programme=bool(programme),
         has_training_data=bool(progress),
         has_session_history=bool(sessions or logs),
