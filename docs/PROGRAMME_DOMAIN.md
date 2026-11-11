@@ -31,20 +31,22 @@ per user. Database triggers reject updates and deletes of
 
 ```python
 from programme_domain import ProgrammeService
+from tenant_isolation import authorize_owner
 
+owner = authorize_owner(db_path, user_id)  # re-reads the account; fails closed
 service = ProgrammeService(db_path)
-service.preview_draft(user_id, draft)
-service.persist_draft(user_id, draft)
-service.activate(user_id, programme_id)
-service.pause(user_id, programme_id)
-service.complete(user_id, programme_id)
-service.archive(user_id, programme_id)
-service.get_active_programme(user_id)
-service.get_active_revision(user_id)
-service.get_programme_week(user_id, programme_id, week_number)
-service.create_revision_from_adaptation(user_id, programme_id, draft, decision)
-service.create_revision_from_rebase(user_id, programme_id, draft)
-service.list_revision_history(user_id, programme_id)
+service.preview_draft(owner, draft)
+service.persist_draft(owner, draft)
+service.activate(owner, programme_id)
+service.pause(owner, programme_id)
+service.complete(owner, programme_id)
+service.archive(owner, programme_id)
+service.get_active_programme(owner)
+service.get_active_revision(owner)
+service.get_programme_week(owner, programme_id, week_number)
+service.create_revision_from_adaptation(owner, programme_id, draft, decision)
+service.create_revision_from_rebase(owner, programme_id, draft)
+service.list_revision_history(owner, programme_id)
 ```
 
 Drafts carry typed selected routine snapshots, explicit rotation positions,

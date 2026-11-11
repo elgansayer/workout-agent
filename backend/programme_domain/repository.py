@@ -1,8 +1,9 @@
 """Tenant-scoped SQL repository for immutable programme revisions.
 
-Every public method requires an authenticated ``user_id``.  Reads, writes and
-deletes include that identifier in their predicates; caller-supplied programme
-or revision identifiers are never treated as authorisation.
+Every public method requires an :class:`~tenant_isolation.AuthenticatedOwner`
+(never a bare ``user_id``).  Reads, writes and deletes include the owner's
+identifier in their predicates; caller-supplied programme or revision
+identifiers are never treated as authorisation.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from database import DEFAULT_DB_PATH, _connect
+from tenant_isolation import AuthenticatedOwner, require_owner
 
 from .models import (
     AdaptationDecision,
@@ -65,8 +67,9 @@ class ProgrammeRepository:
     # Draft creation and revisions
     # ------------------------------------------------------------------
 
-    def create_draft(self, user_id: str, draft: ProgrammeDraft) -> Programme:
+    def create_draft(self, owner: AuthenticatedOwner, draft: ProgrammeDraft) -> Programme:
         """Persist a complete draft revision in a single transaction."""
+        user_id = require_owner(owner).user_id
 
         self._assert_snapshot_ownership(user_id, draft)
         with self.transaction() as conn:
@@ -112,7 +115,7 @@ class ProgrammeRepository:
 
     def create_revision(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         programme_id: int,
         draft: ProgrammeDraft,
         *,
@@ -120,6 +123,7 @@ class ProgrammeRepository:
         adaptation: AdaptationDecisionInput | None = None,
     ) -> ProgrammeRevision:
         """Append an immutable revision and optionally an adaptation record."""
+        user_id = require_owner(owner).user_id
 
         self._assert_snapshot_ownership(user_id, draft)
         with self.transaction() as conn:
@@ -334,8 +338,9 @@ class ProgrammeRepository:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def activate(self, user_id: str, programme_id: int) -> Programme:
+    def activate(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
         """Activate one programme, archiving any previous active programme."""
+        user_id = require_owner(owner).user_id
 
         with self.transaction() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -373,12 +378,13 @@ class ProgrammeRepository:
 
     def set_status(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         programme_id: int,
         status: str,
         *,
         archive: bool = False,
     ) -> Programme:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             programme = self._programme_row(conn, user_id, programme_id)
             if programme is None:
@@ -402,14 +408,16 @@ class ProgrammeRepository:
     # Tenant-scoped reads
     # ------------------------------------------------------------------
 
-    def get_programme(self, user_id: str, programme_id: int) -> Programme | None:
+    def get_programme(self, owner: AuthenticatedOwner, programme_id: int) -> Programme | None:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             row = self._programme_row(conn, user_id, programme_id)
             if row is None:
                 return None
             return self._load_programme(conn, user_id, programme_id)
 
-    def get_active_programme(self, user_id: str) -> Programme | None:
+    def get_active_programme(self, owner: AuthenticatedOwner) -> Programme | None:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM programmes "
@@ -422,8 +430,9 @@ class ProgrammeRepository:
             return self._load_programme(conn, user_id, int(row["id"]))
 
     def list_revisions(
-        self, user_id: str, programme_id: int
+        self, owner: AuthenticatedOwner, programme_id: int
     ) -> list[ProgrammeRevision]:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if self._programme_row(conn, user_id, programme_id) is None:
                 return []
@@ -440,8 +449,9 @@ class ProgrammeRepository:
             ]
 
     def get_revision(
-        self, user_id: str, programme_id: int, revision_number: int
+        self, owner: AuthenticatedOwner, programme_id: int, revision_number: int
     ) -> ProgrammeRevision | None:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             row = conn.execute(
                 """
@@ -456,12 +466,13 @@ class ProgrammeRepository:
 
     def get_programme_week(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         programme_id: int,
         week_number: int,
         *,
         revision_number: int | None = None,
     ) -> ProgrammeWeek | None:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             programme = self._programme_row(conn, user_id, programme_id)
             if programme is None:
@@ -531,11 +542,12 @@ class ProgrammeRepository:
 
     def save_week_state(
         self,
-        user_id: str,
+        owner: AuthenticatedOwner,
         programme_id: int,
         revision_id: int,
         state: ProgrammeWeekState,
     ) -> ProgrammeWeekState:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if not self._revision_belongs_to(
                 conn, user_id, programme_id, revision_id
@@ -585,8 +597,9 @@ class ProgrammeRepository:
             return self._row_to_week_state(row)
 
     def save_routine_workout_match(
-        self, user_id: str, match: RoutineWorkoutMatch
+        self, owner: AuthenticatedOwner, match: RoutineWorkoutMatch
     ) -> RoutineWorkoutMatch:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if not self._revision_belongs_to(
                 conn, user_id, match.programme_id, match.revision_id
@@ -661,8 +674,9 @@ class ProgrammeRepository:
             )
 
     def list_routine_workout_matches(
-        self, user_id: str, programme_id: int
+        self, owner: AuthenticatedOwner, programme_id: int
     ) -> list[RoutineWorkoutMatch]:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if self._programme_row(conn, user_id, programme_id) is None:
                 return []
@@ -692,8 +706,9 @@ class ProgrammeRepository:
             ]
 
     def list_adaptation_decisions(
-        self, user_id: str, programme_id: int
+        self, owner: AuthenticatedOwner, programme_id: int
     ) -> list[AdaptationDecision]:
+        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if self._programme_row(conn, user_id, programme_id) is None:
                 return []

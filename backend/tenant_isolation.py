@@ -37,9 +37,14 @@ class OwnershipError(PermissionError):
     """Raised when an owner cannot be proven or does not match a resource."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class OwnerIdentity:
-    """Tenant identity carried by every key, lock, job and AI context."""
+    """Tenant identity carried by every key, lock, job and AI context.
+
+    Two identities are equal when they name the same account, whether or not one
+    of them was authenticated; authority is decided by type
+    (:class:`AuthenticatedOwner`), never by equality.
+    """
 
     user_id: str
 
@@ -50,11 +55,55 @@ class OwnerIdentity:
         if len(value) > _MAX_USER_ID_LENGTH or not value.isprintable():
             raise OwnershipError("owner identity is malformed")
 
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, OwnerIdentity):
+            return self.user_id == other.user_id
+        return NotImplemented
 
-def authorize_owner(db_path: str, claimed_user_id: str | None) -> OwnerIdentity:
+    def __hash__(self) -> int:
+        return hash(self.user_id)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class AuthenticatedOwner(OwnerIdentity):
+    """An owner whose account was verified against the user store.
+
+    Repositories and services require this instead of a bare ``user_id``. A
+    string a client sent, a queued payload, a CLI flag or an unverified
+    :class:`OwnerIdentity` cannot be passed where it is required. The only
+    issuer is :func:`authorize_owner`, which re-reads the account; constructing
+    one directly, or copying one with ``dataclasses.replace`` to name a
+    different account, fails closed.
+    """
+
+    def __post_init__(self) -> None:
+        raise OwnershipError(
+            "an authenticated owner can only be issued by authorize_owner"
+        )
+
+    @classmethod
+    def _issue(cls, user_id: str) -> AuthenticatedOwner:
+        OwnerIdentity(user_id)  # validates the identifier
+        owner = object.__new__(cls)
+        object.__setattr__(owner, "user_id", user_id)
+        return owner
+
+
+def require_owner(owner: object) -> AuthenticatedOwner:
+    """Return *owner* if it is an authenticated owner, otherwise fail closed.
+
+    Used at the top of every repository and service method, so a ``str`` or an
+    unverified identity is refused at runtime and not only by the type checker.
+    """
+    if not isinstance(owner, AuthenticatedOwner):
+        raise OwnershipError("an authenticated owner is required")
+    return owner
+
+
+def authorize_owner(db_path: str, claimed_user_id: str | None) -> AuthenticatedOwner:
     """Re-authorize a claimed user id against the user store, failing closed.
 
-    The returned identity is built from the stored row, not from the claim, so
+    The returned owner is built from the stored row, not from the claim, so
     callers continue with the canonical id. A missing id, an unknown user or an
     unreachable store all raise :class:`OwnershipError`; there is deliberately
     no fallback to shared or unscoped data.
@@ -68,7 +117,7 @@ def authorize_owner(db_path: str, claimed_user_id: str | None) -> OwnerIdentity:
         raise OwnershipError("owner could not be verified") from exc
     if row is None:
         raise OwnershipError("owner does not exist")
-    return OwnerIdentity(row["id"])
+    return AuthenticatedOwner._issue(row["id"])
 
 
 def owner_scoped_key(owner: OwnerIdentity, namespace: str, *parts: str) -> str:

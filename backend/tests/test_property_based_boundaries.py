@@ -33,6 +33,7 @@ from hevy_reader import (
 )
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
+from owned_rows import ensure_users
 from pydantic import ValidationError
 
 GOALS = (
@@ -393,6 +394,7 @@ def test_workout_imports_remain_tenant_isolated(
     with TemporaryDirectory() as directory:
         db_path = str(Path(directory) / "property.db")
         init_db(db_path)
+        ensure_users(db_path, "property-user-a", "property-user-b")
 
         for value in values_a:
             save_workout(

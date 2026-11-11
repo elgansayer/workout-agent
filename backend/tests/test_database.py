@@ -31,6 +31,7 @@ from database import (
     set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
+from owned_rows import ensure_users
 
 
 def _db(tmp_path: Any) -> str:
@@ -323,6 +324,7 @@ def test_workout_history_user_isolation(tmp_path: Any) -> None:
     """Two users writing to workout_history do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -343,6 +345,7 @@ def test_workout_history_user_isolation_same_payload(tmp_path: Any) -> None:
     """Scoped reads only return the correct user's data."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -452,6 +455,7 @@ def test_exercise_progress_user_isolation(tmp_path: Any) -> None:
     """Two users writing exercise_progress do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -470,6 +474,7 @@ def test_progress_history_user_isolation(tmp_path: Any) -> None:
     """get_progress_history scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -489,6 +494,7 @@ def test_session_volumes_user_isolation(tmp_path: Any) -> None:
     """get_session_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -507,6 +513,7 @@ def test_exercise_volumes_user_isolation(tmp_path: Any) -> None:
     """get_exercise_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -525,6 +532,7 @@ def test_personal_records_user_isolation(tmp_path: Any) -> None:
     """get_personal_records scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -599,6 +607,7 @@ def test_body_metrics_user_isolation(tmp_path: Any) -> None:
     """Two users writing body_metrics do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -619,6 +628,7 @@ def test_body_metrics_same_date_different_users_preserved(tmp_path: Any) -> None
     """Dedup only within the same user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -696,6 +706,7 @@ def test_chat_messages_user_isolation(tmp_path: Any) -> None:
     """Two users writing to chat_messages don't see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import clear_chat_messages, get_chat_messages, save_chat_message
 
@@ -766,6 +777,7 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import (
         get_dashboard_insight,
@@ -844,6 +856,7 @@ def test_daily_log_user_isolation(tmp_path: Any) -> None:
     """Two different user_ids don't see each other's daily_log rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a", "user-b")
 
     from database import get_daily_logs, save_daily_log
 
@@ -903,6 +916,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
     """Same user/date writes replace the prior entry; different users don't clash."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "u1", "u2")
 
     from database import get_daily_logs, save_daily_log
 
@@ -990,6 +1004,7 @@ def test_check_ins_user_isolation(tmp_path: Any) -> None:
     """Two different user_ids don't see each other's check_ins rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "u1", "u2")
 
     from database import get_checkins, save_checkin
 
@@ -1042,6 +1057,7 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import (
         get_deep_correlation,
@@ -1526,6 +1542,7 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a", "user-b")
 
     save_reasoning_log(
         "shared-context",

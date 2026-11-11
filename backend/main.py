@@ -668,7 +668,7 @@ def _persist_week_state(
             review_state="planned",
         )
         ProgrammeService(config.database_path).save_week_state(
-            user_id,
+            authorize_owner(config.database_path, user_id),
             runtime.programme_id,
             runtime.revision_id,
             state,
