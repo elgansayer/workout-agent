@@ -158,6 +158,15 @@ const payloads: Record<string, unknown> = {
       ]),
     ),
   },
+  '/api/onboarding': {
+    steps: [],
+    next_step: null,
+    account_ready: true,
+    completed_count: 6,
+    skipped_count: 0,
+    total_steps: 6,
+    progress_percent: 100,
+  },
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
   },
