@@ -272,6 +272,43 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         )
         cursor.execute(
             """
+            CREATE TABLE IF NOT EXISTS invitations (
+                id TEXT PRIMARY KEY,
+                token_hash TEXT NOT NULL UNIQUE,
+                email TEXT NOT NULL,
+                policy TEXT NOT NULL DEFAULT 'beta',
+                created_by_user_id TEXT NOT NULL REFERENCES users(id),
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                accepted_at TEXT,
+                accepted_user_id TEXT REFERENCES users(id),
+                revoked_at TEXT,
+                revoke_reason TEXT
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invitations_email_created "
+            "ON invitations (email, created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invitations_lifecycle "
+            "ON invitations (accepted_at, revoked_at, expires_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS invitation_rate_limits (
+                key TEXT NOT NULL,
+                timestamp REAL NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_invitation_rate_limits_key_ts "
+            "ON invitation_rate_limits (key, timestamp)"
+        )
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS user_api_keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id TEXT NOT NULL REFERENCES users(id),
@@ -1903,6 +1940,29 @@ def get_or_create_user(
             timezone="UTC",
             units="metric",
         )
+
+
+def get_user_by_email(
+    email: str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> UserRow | None:
+    """Return the user row for an email, or None without creating one."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT id, email, display_name, created_at, timezone, units "
+            "FROM users WHERE email = ? COLLATE NOCASE",
+            (email.strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    return UserRow(
+        id=row[0],
+        email=row[1],
+        display_name=row[2],
+        created_at=row[3],
+        timezone=row[4],
+        units=row[5],
+    )
 
 
 def get_user_by_id(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow | None:

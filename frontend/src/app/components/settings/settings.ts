@@ -1,8 +1,15 @@
 import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 
+
+interface Invitation {
+  id: string;
+  intended_email: string;
+  status: 'pending' | 'accepted' | 'expired' | 'revoked';
+  expires_at: string;
+}
 @Component({
   selector: 'app-settings',
   standalone: true,
@@ -37,6 +44,13 @@ export class Settings implements OnInit {
   selectedExperience = signal<string>('intermediate');
   constraintsInput = '';
 
+  invitations = signal<Invitation[]>([]);
+  invitationsLoading = signal(false);
+  invitationEmail = '';
+  invitationTtlHours = 72;
+  invitationStatus = signal('');
+  inviteLink = signal('');
+
   ngOnInit() {
     this.loadSettings();
   }
@@ -66,6 +80,62 @@ export class Settings implements OnInit {
       error: () => {
         this.error.set('Failed to load settings');
         this.loading.set(false);
+      },
+    });
+  }
+
+  openInvitations() {
+    this.section.set('invitations');
+    this.loadInvitations();
+  }
+
+  loadInvitations() {
+    this.invitationsLoading.set(true);
+    this.http.get<{ invitations: Invitation[] }>('/api/admin/invitations').subscribe({
+      next: (res) => {
+        this.invitations.set(res.invitations || []);
+        this.invitationsLoading.set(false);
+      },
+      error: (err: HttpErrorResponse) => {
+        this.invitationsLoading.set(false);
+        this.invitationStatus.set(err.error?.detail || 'Could not load invitations.');
+      },
+    });
+  }
+
+  createInvitation() {
+    const email = this.invitationEmail.trim();
+    if (!email) {
+      this.invitationStatus.set('Enter the intended email address.');
+      return;
+    }
+    this.http
+      .post<{ token: string; invite_url: string }>('/api/admin/invitations', {
+        email,
+        ttl_hours: this.invitationTtlHours,
+      })
+      .subscribe({
+        next: (res) => {
+          this.inviteLink.set(`${window.location.origin}${res.invite_url}`);
+          this.invitationEmail = '';
+          this.invitationStatus.set('Invitation created. Copy the link now; it is shown once.');
+          this.loadInvitations();
+        },
+        error: (err: HttpErrorResponse) => {
+          this.invitationStatus.set(err.error?.detail || 'Could not create the invitation.');
+        },
+      });
+  }
+
+  revokeInvitation(id: string) {
+    if (!confirm('Revoke this invitation?')) return;
+    this.http.post(`/api/admin/invitations/${id}/revoke`, {}).subscribe({
+      next: () => {
+        this.invitationStatus.set('Invitation revoked.');
+        this.loadInvitations();
+      },
+      error: (err: HttpErrorResponse) => {
+        this.invitationStatus.set(err.error?.detail || 'Could not revoke the invitation.');
       },
     });
   }
@@ -110,7 +180,7 @@ export class Settings implements OnInit {
           }
           this.loadSettings(false);
         },
-        error: (err: any) => {
+        error: (err: HttpErrorResponse) => {
           const msg = err.error?.detail || 'Error saving key.';
           if (provider === 'hevy') this.hevyStatus.set(msg);
           else this.aiStatus.set(msg);
@@ -124,7 +194,7 @@ export class Settings implements OnInit {
       next: () => {
         this.loadSettings(false);
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         alert(err.error?.detail || 'Could not delete key.');
       },
     });
@@ -142,7 +212,7 @@ export class Settings implements OnInit {
             this.hevyStatus.set(res.detail || 'Verification failed.');
           }
         },
-        error: (err: any) => {
+        error: (err: HttpErrorResponse) => {
           this.hevyStatus.set(err.error?.detail || 'Verification failed.');
         },
       });
@@ -157,7 +227,7 @@ export class Settings implements OnInit {
           `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         this.hevyStatus.set(err.error?.detail || 'Sync failed.');
       },
     });
@@ -184,7 +254,7 @@ export class Settings implements OnInit {
         this.prefStatus.set('Profile saved!');
         setTimeout(() => this.prefStatus.set(''), 4000);
       },
-      error: (err: any) => {
+      error: (err: HttpErrorResponse) => {
         this.prefStatus.set(err.error?.detail || 'Could not save preferences.');
       },
     });

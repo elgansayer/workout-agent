@@ -114,4 +114,39 @@ describe('Settings AI provider parity', () => {
     http.expectOne('/api/settings').flush(settingsResponse);
     expect(fixture.componentInstance.healthStatus()).toContain('disconnected');
   });
+
+  it('lets administrators list and create invitations without exposing tokens in the list', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush({ ...settingsResponse, is_admin: true });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const component = fixture.componentInstance;
+    component.openInvitations();
+    http.expectOne('/api/admin/invitations').flush({
+      invitations: [
+        {
+          id: 'inv-1',
+          intended_email: 'invitee@example.test',
+          status: 'pending',
+          expires_at: '2026-12-01T00:00:00+00:00',
+        },
+      ],
+    });
+    await fixture.whenStable();
+    expect(component.invitations().length).toBe(1);
+
+    component.invitationEmail = 'new@example.test';
+    component.invitationTtlHours = 24;
+    component.createInvitation();
+    const create = http.expectOne('/api/admin/invitations');
+    expect(create.request.method).toBe('POST');
+    expect(create.request.body).toEqual({ email: 'new@example.test', ttl_hours: 24 });
+    create.flush({ token: 'synthetic-token', invite_url: '/invite/synthetic-token' });
+    http.expectOne('/api/admin/invitations').flush({ invitations: [] });
+
+    expect(component.inviteLink()).toContain('/invite/synthetic-token');
+    expect(component.invitationStatus()).toContain('shown once');
+  });
 });

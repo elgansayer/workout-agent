@@ -30,6 +30,16 @@
         {{ option[1] }}
       </button>
     }
+    @if (data.is_admin) {
+      <button
+        type="button"
+        class="btn btn-ghost"
+        [attr.aria-pressed]="section() === 'invitations'"
+        (click)="openInvitations()"
+      >
+        Invitations
+      </button>
+    }
   </div>
 
   <!-- ──────────── Hevy Integration ──────────── -->
@@ -308,4 +318,98 @@
       <div id="pref-status" class="key-status" role="status">{{ prefStatus() }}</div>
     </div>
   </section>
+
+  @if (data.is_admin) {
+    <section class="card" id="settings-invitations" [hidden]="section() !== 'invitations'">
+      <div class="card-head">
+        <h2>Beta invitations</h2>
+        @if (data.invite_only_beta) {
+          <span class="status on">Invite-only</span>
+        } @else {
+          <span class="status off">Open sign-up</span>
+        }
+      </div>
+      <p class="muted">
+        Invitation links are single-use, bound to the intended email address, and expire
+        automatically. The link is shown only once after creation.
+      </p>
+
+      <div class="input-row">
+        <input
+          type="email"
+          id="invitation-email"
+          class="key-input"
+          aria-label="Intended email address"
+          autocomplete="off"
+          [(ngModel)]="invitationEmail"
+        />
+        <label class="muted" for="invitation-ttl">Expires in hours</label>
+        <input
+          type="number"
+          id="invitation-ttl"
+          class="model-input"
+          min="1"
+          max="720"
+          [(ngModel)]="invitationTtlHours"
+        />
+        <button class="btn btn-sm" type="button" (click)="createInvitation()">
+          Create invitation
+        </button>
+      </div>
+
+      <p role="status">{{ invitationStatus() }}</p>
+
+      @if (inviteLink()) {
+        <div class="panel">
+          <label for="invitation-link">Invitation link (shown once)</label>
+          <input
+            id="invitation-link"
+            type="text"
+            readonly
+            [value]="inviteLink()"
+            aria-label="Invitation link"
+          />
+        </div>
+      }
+
+      @if (invitationsLoading()) {
+        <p class="muted" role="status">Loading invitations...</p>
+      } @else if (invitations().length === 0) {
+        <p class="muted">No invitations yet.</p>
+      } @else {
+        <table class="invitations-table">
+          <thead>
+            <tr>
+              <th scope="col">Email</th>
+              <th scope="col">Status</th>
+              <th scope="col">Expires</th>
+              <th scope="col">Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (invitation of invitations(); track invitation.id) {
+              <tr>
+                <td>{{ invitation.intended_email }}</td>
+                <td>{{ invitation.status }}</td>
+                <td>{{ invitation.expires_at }}</td>
+                <td>
+                  @if (invitation.status === 'pending') {
+                    <button
+                      class="btn btn-ghost btn-sm btn-danger"
+                      type="button"
+                      (click)="revokeInvitation(invitation.id)"
+                    >
+                      Revoke
+                    </button>
+                  } @else {
+                    <span class="muted">—</span>
+                  }
+                </td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      }
+    </section>
+  }
 }

@@ -62,6 +62,7 @@ from database import (
     get_session_volumes,
     get_unread_notification_count,
     get_user_api_keys,
+    get_user_by_email,
     get_user_by_id,
     get_user_preferences,
     init_db,
@@ -98,6 +99,18 @@ from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from invitations import (
+    DEFAULT_TTL_HOURS,
+    InvalidInvitation,
+    InvitationConflict,
+    InvitationNotFound,
+    InvitationRateLimited,
+    accept_invitation,
+    create_invitation,
+    enforce_rate_limit,
+    list_invitations,
+    revoke_invitation,
+)
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
@@ -106,7 +119,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -164,7 +176,43 @@ WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
 ALLOWED_EMAILS = [
     e.strip() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()
 ]
+ADMIN_EMAILS = frozenset(
+    e.strip().lower()
+    for e in os.environ.get("ADMIN_EMAILS", "").split(",")
+    if e.strip()
+)
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+BETA_INVITE_ONLY = (
+    os.environ.get("BETA_INVITE_ONLY", "").strip().lower() in _TRUE_VALUES
+)
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
+
+
+def _session_email(request: Request) -> str | None:
+    """Return the signed-session email without trusting client input."""
+
+    user = request.session.get("user") if hasattr(request, "session") else None
+    if isinstance(user, str) and user.strip():
+        return user.strip().lower()
+    if isinstance(user, dict):
+        email = user.get("email")
+        if isinstance(email, str) and email.strip():
+            return email.strip().lower()
+    return None
+
+
+def _is_admin_request(request: Request) -> bool:
+    email = _session_email(request)
+    return bool(email and email in ADMIN_EMAILS)
+
+
+def _require_admin(request: Request) -> str:
+    """Return the authenticated administrator's user id, failing closed."""
+
+    user_id = _check_api_auth(request)
+    if not _is_admin_request(request):
+        raise HTTPException(status_code=403, detail="Administrator access required")
+    return user_id
 
 
 def _check_api_auth(request: Request) -> str:
@@ -266,7 +314,7 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
             path = request.url.path
             # Allow static files, assets, JS/CSS/image/font assets, and auth endpoints
             if (
-                path.startswith(("/static", "/assets"))
+                path.startswith(("/static", "/assets", "/invite/"))
                 or path.endswith(
                     (
                         ".js",
@@ -331,6 +379,22 @@ async def login_google(request: Request) -> Any:
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
+@app.get("/invite/{token}")
+def accept_invitation_link(token: str, request: Request) -> Any:
+    """Remember an invitation token and continue through Google sign-in."""
+
+    _check_rate_limit(request, limit=30, window=3600)
+    if not WEB_GOOGLE_CLIENT_ID:
+        return HTMLResponse(
+            "Invitations require Google sign-in to be configured.",
+            status_code=503,
+        )
+    if not token or len(token) > 512:
+        return HTMLResponse("Invitation is invalid or unavailable.", status_code=404)
+    request.session["invitation_token"] = token
+    return RedirectResponse("/login/google", status_code=303)
+
+
 @app.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
     request.session.clear()
@@ -356,15 +420,52 @@ async def auth(request: Request) -> Any:
         return RedirectResponse("/login")
     user = token.get("userinfo")
     if user:
-        email = user.get("email", "")
-        if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
-            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
-        # Create or retrieve the user record on first login.
-        user_record = get_or_create_user(
-            email,
-            display_name=user.get("name"),
-            db_path=DB_PATH,
-        )
+        email = str(user.get("email", "")).strip()
+        email_key = email.lower()
+        allowed = {value.lower() for value in ALLOWED_EMAILS}
+        if allowed and email_key not in allowed:
+            return HTMLResponse("Unauthorized account", status_code=403)
+
+        invitation_token = request.session.pop("invitation_token", None)
+        if isinstance(invitation_token, str) and invitation_token:
+            # Invitations are bound to an email, so the identity provider must
+            # assert that the address is verified. Fail closed otherwise.
+            if user.get("email_verified") is not True:
+                return HTMLResponse(
+                    "Invitation is invalid, expired, or revoked.",
+                    status_code=403,
+                )
+            try:
+                user_record = accept_invitation(
+                    invitation_token,
+                    email=email,
+                    display_name=user.get("name"),
+                    db_path=DB_PATH,
+                )
+            except InvitationRateLimited:
+                return HTMLResponse(
+                    "Too many invitation attempts. Try again later.",
+                    status_code=429,
+                )
+            except (InvalidInvitation, ValueError):
+                return HTMLResponse(
+                    "Invitation is invalid, expired, or revoked.",
+                    status_code=403,
+                )
+        else:
+            existing_user = get_user_by_email(email, db_path=DB_PATH)
+            if existing_user is None:
+                if BETA_INVITE_ONLY:
+                    return HTMLResponse(
+                        "An invitation is required to create an account.",
+                        status_code=403,
+                    )
+                existing_user = get_or_create_user(
+                    email,
+                    display_name=user.get("name"),
+                    db_path=DB_PATH,
+                )
+            user_record = existing_user
         request.session["user"] = email
         request.session["user_id"] = user_record["id"]
     return RedirectResponse("/")
@@ -1705,9 +1806,131 @@ def api_settings(request: Request):
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
                 "key_status": request.query_params.get("key_status"),
                 "pref_status": request.query_params.get("pref_status"),
+                "is_admin": _is_admin_request(request),
+                "invite_only_beta": BETA_INVITE_ONLY,
             }
         )
     )
+
+
+@app.get("/api/admin/invitations")
+def list_invitations_endpoint(request: Request) -> Any:
+    """List invitations for administrators without account-existence signals."""
+
+    _require_admin(request)
+    status = request.query_params.get("status", "all")
+    try:
+        invitations = list_invitations(status=status, db_path=DB_PATH)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse({"invitations": [item.as_dict() for item in invitations]})
+
+
+@app.post("/api/admin/invitations")
+async def create_invitation_endpoint(request: Request) -> Any:
+    """Create a single-use invitation and reveal its bearer link once."""
+
+    _check_rate_limit(request, limit=10)
+    admin_user_id = _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    email = body.get("email")
+    if not isinstance(email, str):
+        raise HTTPException(status_code=400, detail="email is required")
+    policy_value = body.get("policy", "beta")
+    if not isinstance(policy_value, str):
+        raise HTTPException(status_code=400, detail="policy must be a string")
+    ttl_value = body.get("ttl_hours", DEFAULT_TTL_HOURS)
+    if isinstance(ttl_value, bool) or not isinstance(ttl_value, (int, str)):
+        raise HTTPException(status_code=400, detail="ttl_hours must be an integer")
+    try:
+        ttl_hours = int(ttl_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="ttl_hours must be an integer",
+        ) from exc
+
+    try:
+        enforce_rate_limit(
+            f"invite-create:{admin_user_id}",
+            limit=20,
+            window_seconds=3600,
+            db_path=DB_PATH,
+        )
+    except InvitationRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Invitation creation rate limit exceeded",
+        ) from exc
+
+    try:
+        invitation, token = create_invitation(
+            email,
+            created_by_user_id=admin_user_id,
+            policy=policy_value,
+            ttl_hours=ttl_hours,
+            db_path=DB_PATH,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(
+        {
+            "invitation": invitation.as_dict(),
+            "token": token,
+            "invite_url": f"/invite/{token}",
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/admin/invitations/{invitation_id}/revoke")
+async def revoke_invitation_endpoint(invitation_id: str, request: Request) -> Any:
+    """Revoke a pending invitation."""
+
+    _check_rate_limit(request, limit=30)
+    admin_user_id = _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    reason: str | None = None
+    if isinstance(body, dict):
+        reason_value = body.get("reason")
+        if isinstance(reason_value, str):
+            reason = reason_value
+
+    try:
+        enforce_rate_limit(
+            f"invite-revoke:{admin_user_id}",
+            limit=60,
+            window_seconds=3600,
+            db_path=DB_PATH,
+        )
+    except InvitationRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="Invitation revoke rate limit exceeded",
+        ) from exc
+
+    try:
+        invitation = revoke_invitation(
+            invitation_id,
+            actor_user_id=admin_user_id,
+            reason=reason,
+            db_path=DB_PATH,
+        )
+    except InvitationNotFound as exc:
+        raise HTTPException(status_code=404, detail="Invitation not found") from exc
+    except (InvitationConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"invitation": invitation.as_dict()}
 
 
 @app.post("/api/settings/sync-history")
@@ -1836,7 +2059,7 @@ def api_chat_history(request: Request):
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
 async def catch_all(full_path: str, request: Request):
     if full_path.startswith(
-        ("api/", "static/", "login/google", "auth", "google-health/")
+        ("api/", "static/", "login/google", "auth", "google-health/", "invite/")
     ):
         raise HTTPException(status_code=404, detail="Not found")
 

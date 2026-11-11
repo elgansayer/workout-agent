@@ -28,7 +28,7 @@ PUBLIC_EXACT_PATHS = frozenset(
         "/login",
         "/login/google",
         "/auth",
-        
+        "/invite/{token}",
         "/livez",
         "/readyz",
         "/favicon.ico",
@@ -37,6 +37,7 @@ PUBLIC_EXACT_PATHS = frozenset(
 )
 
 PUBLIC_STATIC_PREFIXES = ("/static/", "/assets/")
+_PUBLIC_INVITATION_PATH = re.compile(r"^/invite/[A-Za-z0-9_-]{1,512}$")
 
 # Angular can emit fingerprinted bundles at the web root.  Recognise only a
 # root-level fingerprinted asset filename.  Never treat a nested path or a
@@ -55,6 +56,8 @@ def is_public_path(path: str) -> bool:
     if path in PUBLIC_EXACT_PATHS:
         return True
     if path in {"/static", "/assets"} or path.startswith(PUBLIC_STATIC_PREFIXES):
+        return True
+    if _PUBLIC_INVITATION_PATH.fullmatch(path):
         return True
     return bool(_ROOT_FINGERPRINTED_ASSET.fullmatch(path))
 
@@ -178,9 +181,9 @@ def install_authentication_boundary() -> None:
 
 
 __all__ = [
-    "AuthenticationBoundaryMiddleware",
     "PUBLIC_EXACT_PATHS",
     "PUBLIC_STATIC_PREFIXES",
+    "AuthenticationBoundaryMiddleware",
     "has_verified_identity",
     "install_authentication_boundary",
     "is_public_path",

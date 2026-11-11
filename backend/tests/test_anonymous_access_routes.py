@@ -22,7 +22,6 @@ pytest.importorskip("httpx")
 
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
 from webapp.auth_boundary import (
     PUBLIC_EXACT_PATHS,
     PUBLIC_STATIC_PREFIXES,
@@ -141,6 +140,9 @@ def test_static_policy_never_uses_generic_suffixes() -> None:
     assert is_public_path("/static/manifest.webmanifest")
     assert is_public_path("/assets/icons/icon-192.png")
     assert is_public_path("/main-ABCDEF12.js")
+    assert is_public_path("/invite/synthetic-invitation-token")
+    assert not is_public_path("/invite/../api/export")
+    assert not is_public_path("/invite/token/extra")
     assert not is_public_path("/api/export.json")
     assert not is_public_path("/reports/user-chart.svg")
     assert not is_public_path("/downloads/programme.pdf")
