@@ -1,5 +1,6 @@
 import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
+import { DisplaySettingsService } from '../../services/display-settings';
 import { CommonModule } from '@angular/common';
 import { HttpClient } from '@angular/common/http';
 import { Component, OnInit, inject, signal } from '@angular/core';
@@ -26,6 +27,7 @@ import { HlmCardImports } from '@spartan-ng/ui/card';
 })
 export class Programmes implements OnInit {
   private readonly http = inject(HttpClient);
+  private readonly display = inject(DisplaySettingsService);
 
   data = signal<any>(null);
   preview = signal<any>(null);
@@ -55,7 +57,7 @@ export class Programmes implements OnInit {
   );
   durationWeeks = 12;
   goal = 'general_fitness';
-  startDate = new Date().toISOString().slice(0, 10);
+  startDate = this.display.localToday();
   sessionsPerWeek: number | null = null;
   experience = 'intermediate';
   maxSessionMinutes: number | null = null;

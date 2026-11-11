@@ -68,7 +68,8 @@ COACHING_RULES = [
         "Log every set in Hevy, take a morning weigh-in and body-fat reading, and film the "
         "top deadlift and pull-up set each week."
     ),
-    "Use British English spelling (e.g. programme). Never use the em dash.",
+    # Spelling and locale are per-user settings, not a fixed rule: every prompt
+    # built by gemini_engine ends with the user's own "Use <spelling>." line.
 ]
 
 

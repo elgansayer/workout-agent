@@ -16,7 +16,7 @@ import logging
 import os
 import sys
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import checkin
@@ -48,6 +48,7 @@ from health_connect import body_metrics_from_recovery, read_recovery_metrics
 from hevy_client import fetch_latest_workout
 from hevy_parser import parse_workout
 from hevy_sync import sync_routines
+from localisation import local_today
 from program import (
     REST_DAY_FOCUS,
     Block,
@@ -58,6 +59,7 @@ from program import (
     week_in_cycle,
 )
 from push_notifier import send_push_notification
+from user_settings import UserSettings, get_user_settings_or_defaults
 
 logging.basicConfig(
     level=logging.INFO,
@@ -155,7 +157,10 @@ def _maybe_check_in(
     *,
     user_id: str,
 ) -> None:
-    """Run a programme check-in if one is due, delivering it as its own message."""
+    """Run a programme check-in if one is due, delivering it as its own message.
+
+    ``checkin`` dates the review in the acting user's local time zone.
+    """
     if not config.checkin_enabled:
         return
     try:
@@ -185,16 +190,25 @@ def _maybe_self_review(
     preview: bool,
     *,
     user_id: str,
+    today: date | None = None,
+    settings: UserSettings | None = None,
 ) -> None:
-    """On the configured weekday, send a self-review of how training is going."""
+    """On the configured weekday, send a self-review of how training is going.
+
+    The weekday is the acting user's local one, so each tenant's review lands
+    on their own Sunday rather than the server's.
+    """
     if not config.self_review_enabled:
         return
-    if datetime.now(tz=timezone.utc).date().weekday() != config.self_review_weekday:
+    settings = settings or get_user_settings_or_defaults(user_id, config.database_path)
+    today = today or local_today(settings.timezone, datetime.now(tz=timezone.utc))
+    if today.weekday() != config.self_review_weekday:
         return
     review = insights_engine.build_insights(
         get_progress_history(db_path=config.database_path, user_id=user_id),
         get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
+        unit_system=settings.unit_system,
     )
     if not review.lifts:
         logger.info("Self-review skipped: not enough logged history yet.")
@@ -279,7 +293,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     statuses = _sync_hevy_routines(config, user_id=user_id)
     footer = _changes_footer(statuses)
 
-    today = datetime.now(tz=timezone.utc).date()
+    settings = get_user_settings_or_defaults(user_id, config.database_path)
+    today = local_today(settings.timezone, datetime.now(tz=timezone.utc))
     when = today.isoformat()
     week = week_in_cycle(
         get_programme_start_date(config.database_path, user_id=user_id), today
@@ -314,6 +329,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         block,
         preview,
         user_id=user_id,
+        today=today,
+        settings=settings,
     )
 
     try:
@@ -325,7 +342,9 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
 
     if day is None:
         logger.info("Today is %s: a scheduled rest day.", today.strftime("%A"))
-        message = generate_rest_day_message(provider, recovery=recovery)
+        message = generate_rest_day_message(
+            provider, recovery=recovery, settings=settings
+        )
         guidance = (
             lifestyle.daily_guidance(None, True, recovery)
             if config.lifestyle_enabled
@@ -360,6 +379,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         get_progress_history(db_path=config.database_path, user_id=user_id),
         get_body_metrics(db_path=config.database_path, user_id=user_id),
         recovery,
+        unit_system=settings.unit_system,
     )
     logger.info("%s", review.headline)
 
@@ -380,6 +400,7 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
         history=history,
         insights=review,
         last_plan=last_plan,
+        settings=settings,
     )
     guidance = (
         lifestyle.daily_guidance(day, False, recovery)

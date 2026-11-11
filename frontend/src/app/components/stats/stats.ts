@@ -7,11 +7,20 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { LocalDatePipe, LocalNumberPipe } from '../../shared/local-format.pipes';
 
 @Component({
   selector: 'app-stats',
   standalone: true,
-  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports],
+  imports: [
+    ListControls,
+    CommonModule,
+    FormsModule,
+    HlmCardImports,
+    HlmAlertImports,
+    LocalDatePipe,
+    LocalNumberPipe,
+  ],
   templateUrl: './stats.html',
   styleUrl: './stats.css',
 })

@@ -10,6 +10,7 @@ from typing import Any
 from ai_provider import AIProvider
 from hevy_parser import WorkoutSummary
 from insights import TrainingInsights
+from localisation import format_weight, load_step, prompt_context, spelling_for
 from program import (
     COACHING_RULES,
     SPLIT_NAME,
@@ -18,11 +19,20 @@ from program import (
     day_focus,
     format_day,
 )
+from user_settings import UserSettings
 
 logger = logging.getLogger(__name__)
 
 
-def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
+def _regional_context(settings: UserSettings) -> str:
+    """The user's time zone, locale and unit instructions for any prompt."""
+    return prompt_context(settings.timezone, settings.locale, settings.unit_system)
+
+
+def _format_history(
+    history: dict[str, dict[str, Any]] | None,
+    unit_system: str = UserSettings().unit_system,
+) -> str:
     if not history:
         return "None on record yet."
     lines = []
@@ -31,7 +41,7 @@ def _format_history(history: dict[str, dict[str, Any]] | None) -> str:
         weight = record.get("top_weight_kg")
         reps = record.get("top_reps")
         if weight is not None and reps is not None:
-            lines.append(f"- {name}: {weight:g} kg x {reps}")
+            lines.append(f"- {name}: {format_weight(weight, unit_system)} x {reps}")
         elif reps is not None:
             lines.append(f"- {name}: {reps} reps (bodyweight)")
     return "\n".join(lines) if lines else "None on record yet."
@@ -46,13 +56,19 @@ def _build_prompt(
     history: dict[str, dict[str, Any]] | None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    settings: UserSettings | None = None,
 ) -> str:
+    settings = settings or UserSettings()
     baseline = format_day(day, block)
     focus = day_focus(day)
     rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
-    workout_text = workout_summary.as_text() if workout_summary else "None available."
+    workout_text = (
+        workout_summary.as_text(settings.unit_system)
+        if workout_summary
+        else "None available."
+    )
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
-    history_text = _format_history(history)
+    history_text = _format_history(history, settings.unit_system)
     insights_text = insights.as_text() if insights else "Not enough history yet."
     last_plan_text = last_plan if last_plan else "None available."
 
@@ -68,6 +84,8 @@ in Block {block.number}: {block.name} ({block.focus}).
 - Accessory emphasis this block: {block.accessory_emphasis}
 
 Today is Day {day}: {focus}.
+
+{_regional_context(settings)}
 
 Coaching rules you must always respect:
 {rules}
@@ -117,10 +135,10 @@ Strict output format (this is read on a phone push notification, keep it minimal
 - First line exactly: "{focus} - Week {week} ({block.name})".
 - Then one exercise per line, in the form "Name: sets x reps".
 - Add a short note in round brackets ONLY when you change something from the
-  baseline, e.g. "(+2.5 kg)" or "(+1 rep)". Otherwise add no note.
+  baseline, e.g. "(+{load_step(settings.unit_system)})" or "(+1 rep)". Otherwise add no note.
 - No intro, no assessment, no motivation, no tips, no closing line.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_next_workout(
@@ -134,6 +152,7 @@ def generate_next_workout(
     history: dict[str, dict[str, Any]] | None = None,
     insights: TrainingInsights | None = None,
     last_plan: str | None = None,
+    settings: UserSettings | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate today's plan, falling back to the baseline plan on error.
@@ -141,6 +160,8 @@ def generate_next_workout(
     Args:
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
+        settings: The acting user's regional preferences (explicit defaults
+            when omitted).
     """
     try:
         prompt = _build_prompt(
@@ -152,6 +173,7 @@ def generate_next_workout(
             history,
             insights,
             last_plan,
+            settings,
         )
         text = str(provider.generate(prompt)).strip()
         if text:
@@ -171,13 +193,18 @@ def _fallback_plan(day: int, week: int, block: Block) -> str:
     return "\n".join(lines)
 
 
-def _build_rest_prompt(recovery: dict[str, Any] | None) -> str:
+def _build_rest_prompt(
+    recovery: dict[str, Any] | None, settings: UserSettings | None = None
+) -> str:
+    settings = settings or UserSettings()
     rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
     recovery_json = json.dumps(recovery, indent=2) if recovery else "None available."
 
     return f"""You are an elite bodybuilding and stage-prep coach for Elgan.
 
 Today is a scheduled rest day in his 6-day "{SPLIT_NAME}".
+
+{_regional_context(settings)}
 
 Coaching rules you must always respect:
 {rules}
@@ -192,12 +219,13 @@ Your task:
    protein target of around 2 g per kg of bodyweight, gentle movement only).
 3. Keep it short and motivating.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_rest_day_message(
     provider: AIProvider,
     recovery: dict[str, Any] | None = None,
+    settings: UserSettings | None = None,
     **_kwargs: Any,
 ) -> str:
     """Generate a short rest-day recovery message, falling back on error.
@@ -205,9 +233,10 @@ def generate_rest_day_message(
     Args:
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
+        settings: The acting user's regional preferences.
     """
     try:
-        prompt = _build_rest_prompt(recovery)
+        prompt = _build_rest_prompt(recovery, settings)
         text = str(provider.generate(prompt)).strip()
         if text:
             return text
@@ -237,13 +266,17 @@ def _build_checkin_prompt(
     workouts_done: int,
     weeks: int,
     analysis_text: str,
+    settings: UserSettings | None = None,
 ) -> str:
+    settings = settings or UserSettings()
     rules = "\n".join(f"- {rule}" for rule in COACHING_RULES)
     return f"""You are an elite powerbuilding and stage-prep coach for Elgan.
 
 This is programme check-in number {number}. He has logged {workouts_done}
 sessions over the last {weeks} weeks, and is in Week {week} of 12, Block
 {block.number}: {block.name} ({block.focus}).
+
+{_regional_context(settings)}
 
 Coaching rules you must always respect:
 {rules}
@@ -260,7 +293,7 @@ Your task: write a short, motivating check-in he reads on his phone.
   a stalled lift), consistent with the coaching rules.
 - End with one short line of genuine encouragement.
 
-Use British English. Never use the em dash."""
+Use {spelling_for(settings.locale)}. Never use the em dash."""
 
 
 def generate_checkin_message(
@@ -272,12 +305,14 @@ def generate_checkin_message(
     weeks: int,
     analysis_text: str,
     fallback: str,
+    settings: UserSettings | None = None,
 ) -> str:
     """Generate a periodic check-in message, falling back on error.
 
     Args:
         provider: A resolved AI provider instance from
             :func:`ai_resolver.resolve_provider`.
+        settings: The acting user's regional preferences.
     """
     try:
         prompt = _build_checkin_prompt(
@@ -287,6 +322,7 @@ def generate_checkin_message(
             workouts_done,
             weeks,
             analysis_text,
+            settings,
         )
         text = str(provider.generate(prompt)).strip()
         if text:

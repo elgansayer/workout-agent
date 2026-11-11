@@ -7,11 +7,19 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 
 @Component({
   selector: 'app-checkins',
   standalone: true,
-  imports: [ListControls, CommonModule, FormsModule, HlmCardImports, HlmAlertImports],
+  imports: [
+    ListControls,
+    CommonModule,
+    FormsModule,
+    HlmCardImports,
+    HlmAlertImports,
+    LocalDatePipe,
+  ],
   templateUrl: './checkins.html',
   styleUrl: './checkins.css',
 })

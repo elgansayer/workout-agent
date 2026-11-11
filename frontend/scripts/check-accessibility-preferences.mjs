@@ -41,6 +41,24 @@ for (const token of requiredReducedMotionTokens) {
   assert.ok(css.includes(token), `reduced-motion contract is missing ${token}`);
 }
 
+const userPreferenceSelectors = [
+  'html[data-motion="reduce"]',
+  'html[data-contrast="more"]',
+  'html[data-text-size="large"]',
+  'html[data-text-size="x-large"]',
+];
+for (const selector of userPreferenceSelectors) {
+  assert.ok(css.includes(selector), `per-user preference contract is missing ${selector}`);
+}
+assert.ok(
+  css.indexOf(':where(html)[data-contrast="more"]') < css.indexOf('@media (forced-colors: active)'),
+  'per-user contrast must precede the forced-colours block so system colours still win',
+);
+const displaySettings = read('src/app/services/display-settings.ts');
+for (const attribute of ["dataset['motion']", "dataset['contrast']", "dataset['textSize']"]) {
+  assert.ok(displaySettings.includes(attribute), `settings service must set ${attribute}`);
+}
+
 const requiredForcedColourSelectors = [
   ':focus-visible',
   '[aria-current="page"]',

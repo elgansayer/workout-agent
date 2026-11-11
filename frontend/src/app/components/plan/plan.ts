@@ -6,18 +6,26 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 
 @Component({
   selector: 'app-plan',
   standalone: true,
-  imports: [CommonModule, FormsModule, HlmCardImports, HlmBadgeImports, HlmAlertImports],
+  imports: [
+    CommonModule,
+    FormsModule,
+    HlmCardImports,
+    HlmBadgeImports,
+    HlmAlertImports,
+    LocalDatePipe,
+  ],
   templateUrl: './plan.html',
-  styleUrl: './plan.css'
+  styleUrl: './plan.css',
 })
 export class Plan implements OnInit {
   private http = inject(HttpClient);
   protected sanitizer = inject(DomSanitizer);
-  
+
   data = signal<any>(null);
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
@@ -31,10 +39,10 @@ export class Plan implements OnInit {
       error: (err) => {
         this.error.set('Failed to load plan data');
         this.loading.set(false);
-      }
+      },
     });
   }
-  
+
   safeHtml(html: string): SafeHtml {
     if (!html) return '';
     return this.sanitizer.bypassSecurityTrustHtml(html);

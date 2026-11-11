@@ -125,6 +125,11 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "endpoint": DataClass.IDENTIFIER,
     "device_id": DataClass.IDENTIFIER,
     "external_user_id": DataClass.IDENTIFIER,
+    # per-user regional preferences: tenant scoped, exportable, redacted in logs
+    "timezone": DataClass.IDENTIFIER,
+    "locale": DataClass.IDENTIFIER,
+    "unit_system": DataClass.IDENTIFIER,
+    "units": DataClass.IDENTIFIER,
     # health
     "weight_kg": DataClass.HEALTH,
     "body_fat_pct": DataClass.HEALTH,
@@ -134,6 +139,10 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "sleep": DataClass.HEALTH,
     "recovery": DataClass.HEALTH,
     "health_payload": DataClass.HEALTH,
+    # accessibility choices can reveal a disability or condition: never log raw values
+    "motion": DataClass.HEALTH,
+    "contrast": DataClass.HEALTH,
+    "text_size": DataClass.HEALTH,
     # workout/training
     "hevy_payload": DataClass.WORKOUT,
     "workout": DataClass.WORKOUT,

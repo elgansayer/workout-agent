@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from encryption import decrypt, encrypt
+from localisation import derive_local_day, local_today, resolve_timezone
 from program import SPLIT_NAME, TOTAL_DAYS
 
 logger = logging.getLogger(__name__)
@@ -270,6 +271,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """,
         )
+        # Per-user locale/accessibility columns and the immutable workout
+        # instant. Runs before any user row is created so the one-time upgrade
+        # step only ever sees accounts that predate per-user settings.
+        from user_settings import ensure_settings_schema
+
+        ensure_settings_schema(cursor)
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS user_api_keys (
@@ -939,22 +946,28 @@ def save_progress(
     """Persist the per-exercise top sets from a parsed workout summary.
 
     If *user_id* is provided, the progress is scoped to that user.
+
+    ``date`` is the workout's calendar day in the owner's time zone, derived
+    from the source instant that is persisted untouched as ``performed_at``.
+    A later time-zone change re-derives ``date`` from that instant.
     """
     if summary is None:
         return
-    today = (
-        summary.date[:10]
-        if summary.date
-        else datetime.now(tz=timezone.utc).date().isoformat()
-    )
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
+        zone_row = conn.execute(
+            "SELECT timezone FROM users WHERE id = ?", (uid,)
+        ).fetchone()
+        zone_name = zone_row[0] if zone_row else None
+        day, performed_at = derive_local_day(summary.date, zone_name)
+        today = day or local_today(resolve_timezone(zone_name)).isoformat()
         for exercise in summary.exercises:
             conn.execute(
                 """
                 INSERT INTO exercise_progress
-                    (date, exercise_name, top_weight_kg, top_reps, sets, user_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (date, exercise_name, top_weight_kg, top_reps, sets, user_id,
+                     performed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     today,
@@ -963,6 +976,7 @@ def save_progress(
                     exercise.top_reps,
                     exercise.sets,
                     uid,
+                    performed_at,
                 ),
             )
 

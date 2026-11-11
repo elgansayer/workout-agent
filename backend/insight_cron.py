@@ -18,6 +18,8 @@ from database import (
     save_deep_correlation,
     save_notification,
 )
+from localisation import local_today, prompt_context, spelling_for
+from user_settings import UserSettings, get_user_settings_or_defaults
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
@@ -30,6 +32,19 @@ def _resolve_insight_user(db_path: str) -> str | None:
         return get_legacy_user_id(db_path)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _settings_for(config: Config, user_id: str | None) -> UserSettings:
+    """The acting user's preferences, or explicit defaults with no tenant."""
+    if not user_id:
+        return UserSettings()
+    return get_user_settings_or_defaults(user_id, config.database_path)
+
+
+def _local_cutoff(settings: UserSettings, days: int) -> str:
+    """ISO date ``days`` before the user's *local* today (never server UTC)."""
+    today = local_today(settings.timezone, datetime.now(tz=timezone.utc))
+    return (today - timedelta(days=days)).isoformat()
 
 
 def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
@@ -47,8 +62,9 @@ def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     uid = user_id or _resolve_insight_user(config.database_path)
     provider = _resolve_provider(config, user_id=uid)
 
-    # Fetch last 7 days of data
-    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=7)).isoformat()
+    # Fetch last 7 days of data, counted in the user's own calendar days.
+    settings = _settings_for(config, uid)
+    cutoff = _local_cutoff(settings, 7)
 
     metrics = [
         m
@@ -67,12 +83,14 @@ def generate_daily_header(config: Config, user_id: str | None = None) -> None:
 
 {json.dumps(data, indent=2)}
 
+{prompt_context(settings.timezone, settings.locale, settings.unit_system)}
+
 Provide a 3-bullet point executive summary for a dashboard header:
 1. Current fatigue state (Green/Yellow/Red) based on training volume vs. sleep/recovery.
 2. The most critical "wins" or "stalls" in the current training block.
 3. One actionable adjustment for today's session.
 
-Keep it brutally concise. Output ONLY valid JSON in this exact format, with no markdown code blocks:
+Keep it brutally concise. Write the text values in {spelling_for(settings.locale)}. Output ONLY valid JSON in this exact format, with no markdown code blocks:
 {{"fatigue": "string", "wins_stalls": "string", "advice": "string"}}"""
 
     try:
@@ -110,8 +128,9 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     uid = user_id or _resolve_insight_user(config.database_path)
     provider = _resolve_provider(config, user_id=uid)
 
-    # Fetch 60-day trailing window
-    cutoff = (datetime.now(tz=timezone.utc).date() - timedelta(days=60)).isoformat()
+    # Fetch 60-day trailing window, counted in the user's own calendar days.
+    settings = _settings_for(config, uid)
+    cutoff = _local_cutoff(settings, 60)
 
     metrics = [
         m
@@ -149,6 +168,8 @@ Your goal is to hunt for invisible bottlenecks. For example, you might identify 
 
 Here is the data:
 {json.dumps(data, indent=2)}
+
+{prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 Analyze this data and produce a "Deep Correlation Engine" report. 
 Highlight hidden correlations, potential burnout indicators, and specific tactical recommendations.

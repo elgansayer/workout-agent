@@ -2,6 +2,7 @@ import { PagedList } from '../../shared/paged-list';
 import { ListControls } from '../../shared/list-controls';
 import { Component, inject, signal, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
+import { DisplaySettingsService } from '../../services/display-settings';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 
@@ -15,6 +16,7 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 export class Progress implements OnInit {
   private http = inject(HttpClient);
   private sanitizer = inject(DomSanitizer);
+  private readonly display = inject(DisplaySettingsService);
 
   data = signal<any>(null);
   loading = signal<boolean>(true);
@@ -60,7 +62,7 @@ export class Progress implements OnInit {
     }
 
     this.xaiReasoning.set({ ...current, [exerciseName]: 'Analyzing history...' });
-    const today = new Date().toISOString().split('T')[0];
+    const today = this.display.localToday();
     const contextId = `${today}_${exerciseName}`;
 
     this.http.get(`/api/xai_reasoning/${encodeURIComponent(contextId)}`).subscribe({

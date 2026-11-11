@@ -17,6 +17,7 @@
         ['connections', 'Connections'],
         ['ai', 'AI coach'],
         ['profile', 'Profile'],
+        ['display', 'Region & accessibility'],
         ['notifications', 'Notifications'],
       ];
       track option[0]
@@ -247,6 +248,139 @@
       <p class="panel muted">Push notifications are not available on this server.</p>
     }
   }
+  <!-- ──────────── Region & accessibility ──────────── -->
+  <section class="card" id="settings-display" [hidden]="section() !== 'display'">
+    <div class="card-head">
+      <h2>Region &amp; accessibility</h2>
+    </div>
+    <p class="muted">
+      Saved to your account and used on every device: dates and times, number formats, weights, your
+      daily plan and reminder times, notifications, and Coach replies.
+    </p>
+
+    @if (display.options(); as options) {
+      <form class="pref-form" (submit)="$event.preventDefault(); saveDisplay()">
+        <div class="pref-group">
+          <label for="display-timezone" class="pref-label">Time zone</label>
+          <input
+            id="display-timezone"
+            class="pref-control"
+            list="display-timezones"
+            autocomplete="off"
+            spellcheck="false"
+            aria-describedby="display-timezone-hint"
+            [value]="displayDraft().timezone"
+            (input)="setDisplayField('timezone', $any($event.target).value)"
+          />
+          <datalist id="display-timezones">
+            @for (zone of options.timezones; track zone) {
+              <option [value]="zone"></option>
+            }
+          </datalist>
+          <p id="display-timezone-hint" class="muted">
+            Your daily plan runs at your local time and workout days are grouped by it. Changing it
+            regroups days but never alters recorded times.
+          </p>
+          <button type="button" class="btn btn-ghost btn-sm" (click)="useDeviceTimeZone()">
+            Use this device's time zone
+          </button>
+        </div>
+
+        <div class="pref-group">
+          <label for="display-locale" class="pref-label">Language and region</label>
+          <select
+            id="display-locale"
+            class="pref-control"
+            (change)="setDisplayField('locale', $any($event.target).value)"
+          >
+            @for (option of options.locales; track option.value) {
+              <option [value]="option.value" [selected]="displayDraft().locale === option.value">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+        </div>
+
+        <fieldset class="pref-group pref-fieldset">
+          <legend class="pref-label">Units</legend>
+          @for (option of options.unit_systems; track option.value) {
+            <label class="pref-radio">
+              <input
+                type="radio"
+                name="display-unit-system"
+                [value]="option.value"
+                [checked]="displayDraft().unit_system === option.value"
+                (change)="setDisplayField('unit_system', $any(option.value))"
+              />
+              {{ option.label }}
+            </label>
+          }
+        </fieldset>
+
+        <div class="pref-group">
+          <label for="display-motion" class="pref-label">Motion</label>
+          <select
+            id="display-motion"
+            class="pref-control"
+            (change)="setDisplayField('motion', $any($event.target).value)"
+          >
+            @for (option of options.motion; track option.value) {
+              <option [value]="option.value" [selected]="displayDraft().motion === option.value">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+        </div>
+
+        <div class="pref-group">
+          <label for="display-contrast" class="pref-label">Contrast</label>
+          <select
+            id="display-contrast"
+            class="pref-control"
+            (change)="setDisplayField('contrast', $any($event.target).value)"
+          >
+            @for (option of options.contrast; track option.value) {
+              <option [value]="option.value" [selected]="displayDraft().contrast === option.value">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+        </div>
+
+        <div class="pref-group">
+          <label for="display-text-size" class="pref-label">Text size</label>
+          <select
+            id="display-text-size"
+            class="pref-control"
+            (change)="setDisplayField('text_size', $any($event.target).value)"
+          >
+            @for (option of options.text_size; track option.value) {
+              <option [value]="option.value" [selected]="displayDraft().text_size === option.value">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn" type="submit" [disabled]="displaySaving()">
+            {{ displaySaving() ? 'Saving…' : 'Save region & accessibility' }}
+          </button>
+        </div>
+        <div id="display-status" class="key-status" role="status">
+          {{ displayStatusIsError() ? '' : displayStatus() }}
+        </div>
+        @if (displayStatusIsError()) {
+          <div id="display-error" class="key-status error" role="alert">
+            {{ displayStatus() }}
+          </div>
+        }
+      </form>
+    } @else {
+      <p class="muted" role="status">Loading your regional settings…</p>
+    }
+  </section>
+
   <!-- ──────────── Profile & Goals ──────────── -->
   <section class="card" id="settings-profile" [hidden]="section() !== 'profile'">
     <div class="card-head">

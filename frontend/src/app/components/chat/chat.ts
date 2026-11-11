@@ -4,11 +4,12 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { environment } from '../../../environments/environment';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 
 @Component({
   selector: 'app-chat',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, LocalDatePipe],
   templateUrl: './chat.html',
   styleUrl: './chat.css',
 })
@@ -68,7 +69,7 @@ export class Chat implements OnInit, OnDestroy {
     const userMsg = {
       role: 'user',
       content: query,
-      created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      created_at: new Date().toISOString(),
     };
     this.messages.set([...this.messages(), userMsg]);
     this.scrollToBottom();
@@ -125,7 +126,7 @@ export class Chat implements OnInit, OnDestroy {
         {
           role: 'assistant',
           content: fullText,
-          created_at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          created_at: new Date().toISOString(),
         },
       ]);
     } catch (err: any) {

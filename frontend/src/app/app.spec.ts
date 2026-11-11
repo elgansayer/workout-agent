@@ -1,8 +1,11 @@
+import { provideHttpClient } from '@angular/common/http';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { signal } from '@angular/core';
 import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { App } from './app';
 import { Auth } from './services/auth';
+import { DEFAULT_DISPLAY_SETTINGS, DisplaySettingsService } from './services/display-settings';
 
 describe('App', () => {
   const authStub = {
@@ -16,9 +19,39 @@ describe('App', () => {
       imports: [App],
       providers: [
         provideRouter([]),
+        provideHttpClient(),
+        provideHttpClientTesting(),
         { provide: Auth, useValue: authStub },
       ],
     }).compileComponents();
+  });
+
+  it("loads the signed-in user's display settings and applies them to the page", async () => {
+    const fixture = TestBed.createComponent(App);
+    TestBed.inject(HttpTestingController)
+      .expectOne('/api/settings/display')
+      .flush({
+        settings: {
+          ...DEFAULT_DISPLAY_SETTINGS,
+          locale: 'en-US',
+          motion: 'reduce',
+          contrast: 'more',
+          text_size: 'large',
+        },
+        options: null,
+      });
+    await fixture.whenStable();
+
+    const root = document.documentElement;
+    expect(TestBed.inject(DisplaySettingsService).settings().locale).toBe('en-US');
+    expect(root.lang).toBe('en-US');
+    expect(root.dataset['motion']).toBe('reduce');
+    expect(root.dataset['contrast']).toBe('more');
+    expect(root.dataset['textSize']).toBe('large');
+    root.removeAttribute('lang');
+    delete root.dataset['motion'];
+    delete root.dataset['contrast'];
+    delete root.dataset['textSize'];
   });
 
   it('should create the app', () => {

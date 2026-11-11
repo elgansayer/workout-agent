@@ -8,6 +8,7 @@ import { HttpClient } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
+import { LocalDatePipe } from '../../shared/local-format.pipes';
 
 @Component({
   selector: 'app-history',
@@ -19,6 +20,7 @@ import { FormsModule } from '@angular/forms';
     HlmCardImports,
     HlmBadgeImports,
     HlmAlertImports,
+    LocalDatePipe,
   ],
   templateUrl: './history.html',
   styleUrl: './history.css',

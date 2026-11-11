@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 from ai_resolver import resolve_provider
@@ -24,7 +24,15 @@ from database import (
 )
 from gemini_engine import generate_checkin_message
 from hevy_client import get_exercise_history, get_workout_count
+from localisation import (
+    DEFAULT_UNIT_SYSTEM,
+    convert_weight,
+    format_weight,
+    local_today,
+    weight_unit,
+)
 from program import Block, day_exercises
+from user_settings import UserSettings, get_user_settings_or_defaults
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +67,18 @@ class LiftReview:
     stalled: bool
 
 
+def _user_settings(config: Config, user_id: str | None) -> UserSettings:
+    """Explicit defaults when no tenant is acting, otherwise their preferences."""
+    if user_id is None:
+        return UserSettings()
+    return get_user_settings_or_defaults(user_id, config.database_path)
+
+
+def _today(config: Config, user_id: str | None) -> date:
+    """The acting user's local calendar day, not the server's UTC day."""
+    return local_today(_user_settings(config, user_id).timezone)
+
+
 def _top_rep(rep_range: str) -> int | None:
     numbers = re.findall(r"\d+", rep_range)
     return int(numbers[-1]) if numbers else None
@@ -89,7 +109,7 @@ def _seed_baseline_if_missing(
         set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
         set_meta(
             _KEY_LAST_DATE,
-            datetime.now(tz=timezone.utc).date().isoformat(),
+            _today(config, user_id).isoformat(),
             config.database_path,
             user_id=user_id,
         )
@@ -113,7 +133,7 @@ def due(
 ) -> CheckinDue | None:
     """Return check-in details if one is due, otherwise None."""
     if today is None:
-        today = datetime.now(tz=timezone.utc).date()
+        today = _today(config, user_id)
 
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
@@ -167,7 +187,11 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict]
+    name: str,
+    planned: str,
+    rep_range: str,
+    history: list[dict],
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
@@ -193,7 +217,7 @@ def _review_exercise(
     )
 
     if latest_w is not None and latest_r is not None:
-        latest = f"{latest_w:g} kg x {latest_r}"
+        latest = f"{format_weight(latest_w, unit_system)} x {latest_r}"
     elif latest_r is not None:
         latest = f"{latest_r} reps"
     else:
@@ -207,6 +231,7 @@ def _analyse(
     block: Block,
     *,
     user_id: str | None = None,
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> list[LiftReview]:
     """Compare planned targets to logged data for each lift in the block."""
     if not config.hevy_api_key:
@@ -224,11 +249,15 @@ def _analyse(
                 or []
             )
             planned = f"{ex.sets} x {ex.rep_range}"
-            reviews.append(_review_exercise(ex.name, planned, ex.rep_range, history))
+            reviews.append(
+                _review_exercise(ex.name, planned, ex.rep_range, history, unit_system)
+            )
     return reviews
 
 
-def _analysis_text(reviews: list[LiftReview]) -> str:
+def _analysis_text(
+    reviews: list[LiftReview], unit_system: str = DEFAULT_UNIT_SYSTEM
+) -> str:
     if not reviews:
         return "No logged Hevy data is available for this period."
     lines = []
@@ -237,7 +266,8 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
             f"- {r.name}: planned {r.planned}; latest {r.latest}; {r.sessions} sessions"
         )
         if r.change_kg is not None and r.change_kg != 0:
-            line += f"; weight change {r.change_kg:+g} kg"
+            change = convert_weight(r.change_kg, unit_system)
+            line += f"; weight change {change:+g} {weight_unit(unit_system)}"
         if r.stalled:
             line += "; STALLED (hitting top reps but load not moving)"
         elif r.hit_top:
@@ -247,7 +277,10 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+    due_info: CheckinDue,
+    block: Block,
+    reviews: list[LiftReview],
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> str:
     lines = [
         f"Check-in {due_info.number}: Block {block.number} ({block.name})",
@@ -263,7 +296,8 @@ def _fallback_message(
             if r.stalled:
                 note = " - stalled, consider a small deload then rebuild"
             elif r.change_kg is not None and r.change_kg > 0:
-                note = f" - up {r.change_kg:+g} kg, keep pushing"
+                gain = convert_weight(r.change_kg, unit_system)
+                note = f" - up {gain:+g} {weight_unit(unit_system)}, keep pushing"
             lines.append(f"{r.name}: {r.planned}, now {r.latest}{note}")
     lines.append("")
     lines.append("Keep logging every set and filming your top deadlift and pull-up.")
@@ -279,8 +313,9 @@ def run_checkin(
     user_id: str | None = None,
 ) -> str:
     """Build the acting user's check-in with their selected AI provider."""
-    reviews = _analyse(config, block, user_id=user_id)
-    fallback = _fallback_message(due_info, block, reviews)
+    settings = _user_settings(config, user_id)
+    reviews = _analyse(config, block, user_id=user_id, unit_system=settings.unit_system)
+    fallback = _fallback_message(due_info, block, reviews, settings.unit_system)
     provider = resolve_provider(
         user_id=user_id,
         server_gemini_key=config.gemini_api_key,
@@ -294,8 +329,9 @@ def run_checkin(
         block=block,
         workouts_done=due_info.workouts_done,
         weeks=due_info.weeks_elapsed,
-        analysis_text=_analysis_text(reviews),
+        analysis_text=_analysis_text(reviews, settings.unit_system),
         fallback=fallback,
+        settings=settings,
     )
 
 
@@ -309,7 +345,7 @@ def record(
 ) -> None:
     """Persist the completed check-in and reset this user's tracking baseline."""
     if today is None:
-        today = datetime.now(tz=timezone.utc).date()
+        today = _today(config, user_id)
     set_meta(
         _KEY_NUMBER,
         str(due_info.number),

@@ -21,6 +21,14 @@ part-way through schema initialization.
 - Seed rows use `INSERT OR IGNORE` or a conflict-safe upsert. Re-running
   `init_db()` must preserve current programme state and existing metadata.
 
+Per-user settings add columns without a new table: `user_settings.ensure_settings_schema`
+(called from `init_db` right after `users` is created) adds `users.locale`,
+`users.motion`, `users.contrast`, `users.text_size` and
+`exercise_progress.performed_at`, each guarded by `PRAGMA table_info`. When the
+`users` columns first appear on an existing database, accounts still holding the
+untouched `UTC` default inherit the deployment `TZ` once, so the upgrade keeps
+each daily run where it was. See `docs/USER_SETTINGS.md`.
+
 Never use a client-supplied owner identifier to choose the backfill tenant.
 Runtime requests must continue to derive tenant identity from the authenticated
 session.

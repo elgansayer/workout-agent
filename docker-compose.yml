@@ -9,7 +9,9 @@ services:
     environment:
       # schedule | once | preview
       MODE: schedule
-      # Local time(s) of the daily message (comma separated), and your timezone.
+      # Local time(s) of the daily message (comma separated). Each user is run at
+      # these times in their own saved time zone; TZ only seeds accounts that
+      # predate per-user settings (see docs/USER_SETTINGS.md).
       RUN_AT: "00:00,05:00"
       TZ: "Europe/London"
       DATABASE_PATH: /data/workout_agent.db

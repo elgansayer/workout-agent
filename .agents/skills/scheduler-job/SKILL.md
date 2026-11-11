@@ -15,12 +15,12 @@ These have been **consolidated** into a single `scheduler.py` process that
 wakes every minute, iterates over all users, and dispatches both coaching
 runs (`main.py`) and insight jobs (`insight_cron.py --daily`/`--weekly`) at
 the configured `RUN_AT` times. Per-user schedule isolation (different users
-at different run times) still needs per-user timezone/run-time preferences
-once multi-tenancy lands.
+at different run times) is handled by per-user time zones (`users.timezone`,
+`docs/USER_SETTINGS.md`): `RUN_AT` and `INSIGHT_*_AT` are local wall-clock times.
 The agent container runs a single unified scheduler (`scheduler.py`) that
-wakes every 60 seconds, checks each user's local time against the configured
-`RUN_AT` times, and dispatches due coaching runs (`main.py`) and insight
-jobs (`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is
+wakes every 30 seconds, evaluates each user's local time with `due_jobs`
+(once per user per local day, DST-safe), and dispatches due coaching runs
+(`main.py`) and insight jobs (`insight_cron.py --daily`/`--weekly`). Each per-user dispatch is
 isolated so one user's failures do not block another's. All scheduling is
 consolidated into this one process — do not add additional sleep loops.
 

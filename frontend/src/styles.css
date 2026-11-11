@@ -1309,6 +1309,20 @@ nav a.nav-coach.on {
     box-shadow: 0 0 0 2px rgba(74, 222, 128, 0.12);
 }
 .pref-textarea::placeholder { color: var(--muted); }
+.pref-control {
+    width: 100%;
+    max-width: 28rem;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.55rem 0.8rem;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+}
+.pref-fieldset { border: 0; padding: 0; margin-inline: 0; }
+.pref-fieldset legend { padding: 0; }
+.pref-radio { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem; }
 
 .card a:not(.btn):not(.google-btn) { color: var(--accent-2); text-decoration: none; }
 .card a:not(.btn):not(.google-btn):hover { text-decoration: underline; }

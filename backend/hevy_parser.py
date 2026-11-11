@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from localisation import DEFAULT_UNIT_SYSTEM, convert_weight, weight_unit
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,10 +25,11 @@ class ExerciseSummary:
     sets: int
     hit_top_of_range: bool | None = None
 
-    def as_line(self) -> str:
+    def as_line(self, unit_system: str = DEFAULT_UNIT_SYSTEM) -> str:
         parts = [f"{self.name}:"]
         if self.top_weight_kg is not None and self.top_reps is not None:
-            parts.append(f"{self.top_weight_kg:g} kg x {self.top_reps}")
+            shown = convert_weight(self.top_weight_kg, unit_system)
+            parts.append(f"{shown:g} {weight_unit(unit_system)} x {self.top_reps}")
         elif self.top_reps is not None:
             parts.append(f"{self.top_reps} reps (bodyweight)")
         else:
@@ -51,16 +54,18 @@ class WorkoutSummary:
         if self.exercises is None:
             object.__setattr__(self, "exercises", [])
 
-    def as_text(self) -> str:
+    def as_text(self, unit_system: str = DEFAULT_UNIT_SYSTEM) -> str:
         header = self.title
         if self.date:
             header += f" ({self.date})"
         if self.duration_seconds is not None:
             mins = self.duration_seconds // 60
-            density = self.total_volume_kg / mins if mins > 0 else 0
-            header += f"\nDuration: {mins} mins | Volume: {self.total_volume_kg:g} kg | Density: {density:.1f} kg/min"
+            unit = weight_unit(unit_system)
+            volume = convert_weight(self.total_volume_kg, unit_system) or 0.0
+            density = volume / mins if mins > 0 else 0
+            header += f"\nDuration: {mins} mins | Volume: {volume:g} {unit} | Density: {density:.1f} {unit}/min"
         lines = [header]
-        lines.extend(f"- {ex.as_line()}" for ex in self.exercises)
+        lines.extend(f"- {ex.as_line(unit_system)}" for ex in self.exercises)
         return "\n".join(lines)
 
 

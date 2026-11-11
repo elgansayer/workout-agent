@@ -29,12 +29,26 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from authlib.integrations.starlette_client import OAuth
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    StreamingResponse,
+)
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.sessions import SessionMiddleware
+
 import analytics
 import insights
 import lifestyle
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
-from authlib.integrations.starlette_client import OAuth
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
@@ -62,7 +76,6 @@ from database import (
     get_session_volumes,
     get_unread_notification_count,
     get_user_api_keys,
-    get_user_by_id,
     get_user_preferences,
     init_db,
     mark_all_notifications_read,
@@ -85,31 +98,40 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import (
-    FileResponse,
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    StreamingResponse,
-)
-from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
 from hevy_parser import normalise_name
 from hevy_reader import HevyTrainingData
+from localisation import (
+    convert_weight,
+    format_weight,
+    load_step,
+    local_today,
+    prompt_context,
+    spelling_for,
+    weight_unit,
+)
 from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
-
+from user_settings import (
+    SettingsValidationError,
+    UserNotFoundError,
+    UserSettings,
+    get_user_settings,
+    settings_options,
+    update_user_settings,
+)
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+
+
+def _regional_prompt_context(user_id: str) -> str:
+    """The acting user's time zone, locale and unit instructions for a prompt."""
+    settings = get_user_settings(user_id, DB_PATH)
+    return prompt_context(settings.timezone, settings.locale, settings.unit_system)
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -428,7 +450,11 @@ def _rep_top(rep_range: str) -> int | None:
     return digits[-1] if digits else None
 
 
-def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
+def _overload_nudge(
+    planned_rep_range: str,
+    best: dict[str, Any] | None,
+    unit_system: str = UserSettings().unit_system,
+) -> str:
     """Suggest the next progressive-overload step for an exercise."""
     if not best or best.get("top_reps") is None:
         return "Log this lift to start tracking progress."
@@ -437,20 +463,25 @@ def _overload_nudge(planned_rep_range: str, best: dict[str, Any] | None) -> str:
     weight = best.get("top_weight_kg")
     if top is not None and reps >= top:
         if weight:
-            return "You hit the top of the range. Add 2.5 kg next time."
+            return (
+                "You hit the top of the range. "
+                f"Add {load_step(unit_system)} next time."
+            )
         return "You hit the top of the range. Add a rep or a little load."
     if top is not None:
         return f"Chase {top} clean reps, then add load."
     return "Keep the reps strict and progress when it feels easy."
 
 
-def _format_best(best: dict[str, Any] | None) -> str:
+def _format_best(
+    best: dict[str, Any] | None, unit_system: str = UserSettings().unit_system
+) -> str:
     if not best:
         return "No data yet"
     weight = best.get("top_weight_kg")
     reps = best.get("top_reps")
     if weight is not None and reps is not None:
-        return f"{weight:g} kg x {reps}"
+        return f"{format_weight(weight, unit_system)} x {reps}"
     if reps is not None:
         return f"{reps} reps"
     return "No data yet"
@@ -467,10 +498,13 @@ def _training_levels(user_id: str | None = None) -> dict[str, int]:
     return levels
 
 
-def _current_streak(levels: dict[str, int]) -> int:
-    """Count consecutive recent days that had any logged activity."""
+def _current_streak(levels: dict[str, int], today: date | None = None) -> int:
+    """Count consecutive recent days that had any logged activity.
+
+    ``today`` is the viewer's local calendar day; UTC is only the fallback.
+    """
     streak = 0
-    day = datetime.now(tz=timezone.utc).date()
+    day = today or datetime.now(tz=timezone.utc).date()
     # Allow today to be empty (the morning run may not have happened yet).
     if levels.get(day.isoformat(), 0) == 0:
         day -= timedelta(days=1)
@@ -487,8 +521,9 @@ def _dashboard_context(
     """Build a dashboard from the active Hevy programme, or a setup state."""
     from programme_runtime import local_today, resolve_programme_runtime
 
-    user = get_user_by_id(user_id, DB_PATH) if user_id else None
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    settings = get_user_settings(user_id, DB_PATH) if user_id else UserSettings()
+    timezone_name = settings.timezone
+    unit_system = settings.unit_system
     today = today or local_today(timezone_name)
     active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
     definition = active.get("definition") if active else None
@@ -546,8 +581,8 @@ def _dashboard_context(
                             or f"{exercise.get('sets', 0)} × {rep_range}"
                         ),
                         "note": exercise.get("note", ""),
-                        "last": _format_best(best),
-                        "nudge": _overload_nudge(rep_range, best),
+                        "last": _format_best(best, unit_system),
+                        "nudge": _overload_nudge(rep_range, best, unit_system),
                         "role": exercise.get("role"),
                     }
                 )
@@ -567,7 +602,7 @@ def _dashboard_context(
     )
 
     levels = _training_levels(user_id=user_id)
-    streak = _current_streak(levels)
+    streak = _current_streak(levels, today)
     weight_spark = charts.sparkline(
         [metric["weight_kg"] for metric in metrics if metric["weight_kg"]]
     )
@@ -587,6 +622,7 @@ def _dashboard_context(
         get_progress_history(db_path=DB_PATH, user_id=user_id),
         metrics,
         None,
+        unit_system=unit_system,
     )
 
     cycle_progress = week / cycle_weeks * 100 if cycle_weeks else 0
@@ -627,7 +663,8 @@ def _dashboard_context(
         ),
         "streak": streak,
         "calendar": charts.calendar_heatmap(levels),
-        "weight": f"{latest_weight:g} kg" if latest_weight else None,
+        "weight": format_weight(latest_weight, unit_system) if latest_weight else None,
+        "weight_unit": weight_unit(unit_system),
         "weight_spark": weight_spark,
         "body_fat": f"{latest_fat:g} %" if latest_fat else None,
         "fat_spark": fat_spark,
@@ -671,18 +708,26 @@ def api_dashboard(request: Request) -> JSONResponse:
     return JSONResponse(content=jsonable_encoder(ctx))
 
 
-def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
+def _body_charts(
+    *, user_id: str | None = None, unit_system: str = UserSettings().unit_system
+) -> dict[str, str | None]:
     readings = get_body_metrics(db_path=DB_PATH, user_id=user_id)
 
     def _series(key: str, unit: str, colour: str) -> str | None:
+        weight = key == "weight_kg"
+        shown = weight_unit(unit_system) if weight else unit
         points = [
-            {"date": r["date"][5:], "value": r[key], "label": f"{r[key]:g} {unit}"}
+            {
+                "date": r["date"][5:],
+                "value": convert_weight(r[key], unit_system) if weight else r[key],
+                "label": f"{convert_weight(r[key], unit_system) if weight else r[key]:g} {shown}",
+            }
             for r in readings
             if r[key] is not None
         ]
         if len(points) < 2:
             return None
-        return charts.line_chart(points, unit=unit, colour=colour)
+        return charts.line_chart(points, unit=shown, colour=colour)
 
     return {
         "weight": _series("weight_kg", "kg", charts.ACCENT),
@@ -693,11 +738,16 @@ def _body_charts(*, user_id: str | None = None) -> dict[str, str | None]:
 
 
 def _project_lift(
-    label: str, entries: list[Any], target_ordinal: int, *, metric: str = "auto"
+    label: str,
+    entries: list[Any],
+    target_ordinal: int,
+    *,
+    metric: str = "auto",
+    unit_system: str = UserSettings().unit_system,
 ) -> dict[str, Any] | None:
     """Build a projection card for a lift at the end of the cycle."""
     points: list[tuple[float, float]] = []
-    unit = "kg"
+    unit = weight_unit(unit_system)
     use_e1rm = metric == "e1rm"
     if metric == "auto":
         use_e1rm = any(e["top_weight_kg"] for e in entries)
@@ -719,6 +769,10 @@ def _project_lift(
     if projected is None:
         return None
     projected = max(projected, current)  # never project a regression below today
+    if use_e1rm:
+        # Fit and compare in kilograms; only the presented numbers are converted.
+        current = convert_weight(current, unit_system) or 0.0
+        projected = convert_weight(projected, unit_system) or 0.0
     return {
         "label": label,
         "current": f"{current:g} {unit}",
@@ -739,6 +793,11 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
+def _local_start_date(user_id: str) -> date:
+    """The user's calendar day today: the default programme start date."""
+    return local_today(get_user_settings(user_id, DB_PATH).timezone)
+
+
 @app.post("/api/programmes/preview")
 def preview_programme(
     payload: ProgrammePreviewRequest,
@@ -748,6 +807,8 @@ def preview_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    if "start_date" not in payload.model_fields_set:
+        payload = payload.model_copy(update={"start_date": _local_start_date(user_id)})
     training_data = _load_hevy_training_for_user(user_id)
     try:
         preview = build_programme_preview(training_data, payload)
@@ -766,6 +827,8 @@ def activate_programme(
 
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
+    if "start_date" not in payload.model_fields_set:
+        payload = payload.model_copy(update={"start_date": _local_start_date(user_id)})
     training_data = _load_hevy_training_for_user(user_id)
     preview_request = ProgrammePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_token"})
@@ -864,7 +927,7 @@ async def select_programme(request: Request) -> JSONResponse:
             selected_routine_ids=[routine.id for routine in training_data.routines],
             duration_weeks=int(body.get("duration_weeks") or 12),
             goal=body.get("goal") or "general_fitness",
-            start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
+            start_date=body.get("start_date") or _local_start_date(user_id),
             sessions_per_week=body.get("sessions_per_week"),
             experience=body.get("experience") or "intermediate",
             max_session_minutes=body.get("max_session_minutes"),
@@ -952,8 +1015,9 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
     provider = _resolve_provider_for_request(request, config)
 
     history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
+    context = _regional_prompt_context(user_id)
 
-    prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences."
+    prompt = f"Why did my volume/performance change for {ex_name} around {when}? Here is my history: {json.dumps(history)}. Provide a clear causal explanation in a few sentences.\n\n{context}"
     try:
         response = provider.generate(prompt)
         response_text = response if isinstance(response, str) else "".join(response)
@@ -976,8 +1040,9 @@ def project_peak(request: Request) -> dict[str, Any]:
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     dl_entries = series.get("Deadlift", [])
     pu_entries = series.get("Pull-ups", [])
+    context = _regional_prompt_context(user_id)
 
-    prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
+    prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}\n\n{context}"
     try:
         response = provider.generate(prompt)
         text = (response if isinstance(response, str) else "".join(response)).strip()
@@ -1007,6 +1072,8 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
+
+    settings = get_user_settings(user_id, DB_PATH)
 
     # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
@@ -1044,7 +1111,9 @@ Your personality:
 - Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
 - Reference specific numbers, dates, and exercises from the context when relevant.
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
-- Use British English.
+- Use {spelling_for(settings.locale)}.
+
+{prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 Conversation so far:
 {conversation_text}
@@ -1236,6 +1305,64 @@ async def save_preferences(request: Request) -> dict[str, str]:
     return {"status": "ok"}
 
 
+class DisplaySettingsUpdate(BaseModel):
+    """Partial update of the caller's regional and accessibility preferences.
+
+    Unknown fields (including any owner identifier) are rejected; the owner is
+    always the authenticated session, never the request body.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    timezone: str | None = None
+    locale: str | None = None
+    unit_system: str | None = None
+    motion: str | None = None
+    contrast: str | None = None
+    text_size: str | None = None
+
+
+@app.get("/api/settings/display")
+def api_display_settings(request: Request) -> JSONResponse:
+    """Return the caller's time zone, locale, units and accessibility choices."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "settings": get_user_settings(user_id, DB_PATH).as_dict(),
+                "options": settings_options(),
+            }
+        )
+    )
+
+
+@app.post("/api/settings/display")
+def save_display_settings(
+    body: DisplaySettingsUpdate, request: Request
+) -> dict[str, Any]:
+    """Persist a partial settings update for the authenticated user.
+
+    A time-zone change regroups only that user's derived workout days; stored
+    source timestamps are never rewritten.
+    """
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        result = update_user_settings(
+            user_id, body.model_dump(exclude_unset=True), DB_PATH
+        )
+    except SettingsValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Account not found") from exc
+    return {
+        "status": "ok",
+        "settings": result.settings.as_dict(),
+        "changed": list(result.changed),
+        "regrouped_days": result.regrouped_days,
+    }
+
+
 @app.post("/api/settings/push-subscribe")
 async def save_push_subscription_route(request: Request) -> dict[str, str]:
     """Save a push subscription for the current user."""
@@ -1332,6 +1459,7 @@ from fastapi.encoders import jsonable_encoder
 @app.get("/api/progress")
 def api_progress(request: Request):
     user_id = _check_api_auth(request)
+    unit_system = get_user_settings(user_id, DB_PATH).unit_system
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     charts_data = []
     for name in sorted(series):
@@ -1339,40 +1467,50 @@ def api_progress(request: Request):
         points = [
             {
                 "date": e["date"][5:],
-                "value": e["top_weight_kg"],
-                "label": _format_best(e),
+                "value": convert_weight(e["top_weight_kg"], unit_system),
+                "label": _format_best(e, unit_system),
             }
             for e in entries
         ]
         e1rms = [_epley_1rm(e["top_weight_kg"], e["top_reps"]) for e in entries]
         e1rms_filtered = [v for v in e1rms if v is not None]
-        best_e1rm = max(e1rms_filtered) if e1rms_filtered else None
+        best_e1rm = convert_weight(
+            max(e1rms_filtered) if e1rms_filtered else None, unit_system
+        )
         charts_data.append(
             {
                 "name": name,
-                "svg": charts.line_chart(points, unit="kg"),
+                "svg": charts.line_chart(points, unit=weight_unit(unit_system)),
                 "best_e1rm": best_e1rm,
                 "sessions": len(entries),
             }
         )
     return JSONResponse(
-        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+        jsonable_encoder(
+            {
+                "charts": charts_data,
+                "body": _body_charts(user_id=user_id, unit_system=unit_system),
+                "weight_unit": weight_unit(unit_system),
+            }
+        )
     )
 
 
 @app.get("/api/stats")
 def api_stats(request: Request):
     user_id = _check_api_auth(request)
+    settings = get_user_settings(user_id, DB_PATH)
+    unit_system = settings.unit_system
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
     start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    today = datetime.now(tz=timezone.utc).date()
+    today = local_today(settings.timezone)
     week = week_in_cycle(start, today)
 
     total_sessions = len(volumes)
-    total_volume = sum(v["volume"] for v in volumes)
+    total_volume = convert_weight(sum(v["volume"] for v in volumes), unit_system)
     days_on_programme = (today - start).days
 
     focus_counts: dict[str, int] = {}
@@ -1407,10 +1545,14 @@ def api_stats(request: Request):
     volume_bars = (
         charts.bar_chart(
             [
-                {"label": v["date"][5:], "value": v["volume"], "caption": v["date"]}
+                {
+                    "label": v["date"][5:],
+                    "value": convert_weight(v["volume"], unit_system),
+                    "caption": v["date"],
+                }
                 for v in recent
             ],
-            unit="kg",
+            unit=weight_unit(unit_system),
         )
         if recent
         else None
@@ -1454,16 +1596,27 @@ def api_stats(request: Request):
 
     target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
     projections = [
-        _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
-        _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
+        _project_lift(
+            "Deadlift",
+            dl_entries,
+            target_ordinal,
+            metric="e1rm",
+            unit_system=unit_system,
+        ),
+        _project_lift(
+            "Pull-ups",
+            _find_lift_series(series, "pull")[1],
+            target_ordinal,
+            unit_system=unit_system,
+        ),
     ]
     projections = [p for p in projections if p]
 
     pr_rows = [
         {
             "exercise": pr["exercise"],
-            "e1rm": f"{pr['e1rm']:g}",
-            "detail": f"{pr['weight_kg']:g} kg x {pr['reps']}",
+            "e1rm": f"{convert_weight(pr['e1rm'], unit_system):g}",
+            "detail": f"{format_weight(pr['weight_kg'], unit_system)} x {pr['reps']}",
             "date": pr["date"],
         }
         for pr in prs
@@ -1474,6 +1627,7 @@ def api_stats(request: Request):
             {
                 "total_sessions": total_sessions,
                 "total_volume": total_volume,
+                "weight_unit": weight_unit(unit_system),
                 "days_on_programme": days_on_programme,
                 "exercises_tracked": len(series),
                 "has_distribution": bool(focus_counts),
@@ -1538,8 +1692,7 @@ def api_plan(request: Request) -> JSONResponse:
         )
 
     spec = definition.get("programme_spec") or {}
-    user = get_user_by_id(user_id, DB_PATH)
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
+    timezone_name = get_user_settings(user_id, DB_PATH).timezone
     runtime = resolve_programme_runtime(
         active,
         get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
