@@ -12,7 +12,8 @@ sit behind a reverse proxy on a trusted host (e.g. Apache -> Docker ->
 gym.example.com). All motivation is automated; nothing here calls out to an API
 on a page view.
 
-Run locally:   uvicorn webapp.app:app --reload
+Run locally:   APP_ENV=development ALLOW_ANONYMOUS_WEB=1 \
+                   uvicorn webapp.secure_app:app --reload
 In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 """
 
@@ -21,45 +22,73 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import secrets
+import sqlite3
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import account_deletion
+import admin_service
 import analytics
 import insights
 import lifestyle
-from ai_provider import AIProvider, available_providers
+from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
+from accounts import (
+    AccountError,
+    AccountInactiveError,
+    AccountNotFoundError,
+    require_active_user,
+    resolve_oauth_user,
+)
+from ai_provider import PROVIDERS, AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
+from coach_capability import (
+    CoachCapabilityState,
+    capability_prompt_block,
+    derive_coach_capability,
+)
+from coaching_capabilities import (
+    classify_coaching_query,
+    get_coaching_capabilities,
+)
 from config import Config
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
 from database import (
     clear_all_notifications,
     clear_chat_messages,
+    correct_body_metrics,
+    delete_hevy_connection,
     delete_notification,
-    delete_user_api_key,
     get_active_programme,
     get_body_metrics,
+    get_cached_workout_payloads,
     get_chat_messages,
     get_checkins,
     get_daily_logs,
     get_dashboard_insight,
     get_exercise_volumes,
+    get_hevy_connection,
+    get_legacy_user_id,
     get_meta,
     get_notifications,
-    get_or_create_user,
     get_personal_records,
-    get_programme_start_date,
     get_progress_history,
+    get_provenance_summary,
     get_reasoning_log,
     get_recent_bests,
     get_recent_hevy_logs,
+    get_record_lineage,
+    get_record_provenance,
+    get_routine_match_overrides,
     get_session_volumes,
+    get_training_rules,
     get_unread_notification_count,
     get_user_api_keys,
     get_user_by_id,
@@ -68,12 +97,15 @@ from database import (
     mark_all_notifications_read,
     mark_notification_read,
     save_chat_message,
+    save_hevy_connection,
     save_notification,
     save_push_subscription,
     save_reasoning_log,
-    save_user_api_key,
+    save_routine_match_override,
+    save_routine_snapshots,
+    save_routine_workout_matches,
+    save_training_rules,
     save_user_preferences,
-    set_active_programme,
     set_meta,
 )
 from dynamic_programme import (
@@ -82,6 +114,7 @@ from dynamic_programme import (
     ProgrammeActivationRequest,
     ProgrammePreviewRequest,
     build_programme_preview,
+    detect_source_drift,
     goal_options,
     serialise_hevy_source,
 )
@@ -96,20 +129,220 @@ from fastapi.responses import (
 )
 from fastapi.staticfiles import StaticFiles
 from google_health_auth import build_authorize_url, exchange_code
-from hevy_parser import normalise_name
-from hevy_reader import HevyTrainingData
-from program import (
-    CYCLE_WEEKS,
-    week_in_cycle,
+from hevy_client import HevyAuthError, HevyError, HevyRateLimitError
+from hevy_connection import (
+    HevyCredentialState,
+    HevyCredentialTest,
+    verify_hevy_credentials,
 )
+from hevy_history import analyse_history, build_snapshot
+from hevy_parser import normalise_name
+from hevy_reader import HevySourceSnapshot, HevyTrainingData
+from permissions import (
+    Permission,
+    PermissionDeniedError,
+    authorize,
+    permissions_for_user,
+)
+from programme_service import (
+    ProgrammeValidationError,
+    conflict_remediation,
+    detect_source_conflicts,
+)
+from programme_service import (
+    activate_programme as activate_generated_programme,
+)
+from programme_validator import validate_programme
+from provenance import (
+    RETRIEVAL_GUIDANCE,
+    RecordType,
+    ai_provenance,
+    annotate_for_retrieval,
+    programme_view,
+)
+from pydantic import BaseModel, ConfigDict, Field
+from secret_vault import (
+    CredentialExistsError,
+    CredentialNotFoundError,
+    CredentialSummary,
+    CredentialUnavailableError,
+    InvalidSecretError,
+    ResolvedCredential,
+    SecretVault,
+    UnknownProviderError,
+    UnknownUserError,
+    VaultError,
+    VaultUnavailableError,
+    VerificationResult,
+    VerificationUnsupportedError,
+    migrate_legacy_credentials,
+    provider_spec,
+)
+from security_audit import (
+    AuditEventType,
+    AuditOutcome,
+    AuditSubjectType,
+    resolve_audit_key,
+)
+from setup_state import (
+    AccountSetup,
+    build_account_setup,
+    surface_setup_payload,
+)
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.middleware.sessions import SessionMiddleware
+from tenancy import implicit_single_user_allowed
+from tenant_isolation import OwnerIdentity, OwnershipError, owner_scoped_key
+from training_rules import (
+    StructuredTrainingRules,
+    format_rules_for_prompt,
+)
 
 from webapp import ai_widgets, charts
-
+from webapp.audit_events import audit_request_event, audit_runtime_posture
+from webapp.auth_boundary import has_verified_identity
+from webapp.request_correlation import RequestCorrelationMiddleware
+from webapp.runtime_security import validate_web_runtime
+from webapp.session_security import (
+    HardenedSessionMiddleware,
+    SessionLifecycle,
+    SessionStore,
+    load_session_security_config,
+)
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+_WEB_RUNTIME = validate_web_runtime()
+_SESSION_LIFETIME_SECONDS = 14 * 24 * 60 * 60
+
+
+def _vault() -> SecretVault:
+    """Construct the narrow credential service for the current database."""
+    return SecretVault(DB_PATH)
+
+
+def _vault_credential(
+    user_id: str,
+    provider: str,
+    *,
+    purpose: str,
+) -> ResolvedCredential | None:
+    """Return the owner's credential or ``None`` when it is not configured."""
+    try:
+        return _vault().resolve(user_id, provider, purpose=purpose)
+    except CredentialUnavailableError:
+        return None
+    except VaultUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+def _verify_hevy_credential(credential: ResolvedCredential) -> VerificationResult:
+    from hevy_client import get_workout_count
+
+    key = credential.api_key.reveal() if credential.api_key is not None else ""
+    if not key:
+        return VerificationResult(False, "not_configured", "No Hevy key provided.")
+    count = get_workout_count(key)
+    if count is None:
+        return VerificationResult(
+            False,
+            "unreachable",
+            "Could not connect to Hevy. Check the API key.",
+        )
+    return VerificationResult(
+        True,
+        "ok",
+        f"Connected to Hevy ({count} workouts).",
+        {"workout_count": count},
+    )
+
+
+def _verify_ai_credential(credential: ResolvedCredential) -> VerificationResult:
+    from ai_provider import get_provider
+
+    key = credential.api_key.reveal() if credential.api_key is not None else ""
+    if not key:
+        return VerificationResult(False, "not_configured", "No API key provided.")
+    try:
+        provider = get_provider(
+            credential.provider,
+            api_key=key,
+            model=credential.model,
+        )
+        response = provider.generate("Reply with the single word OK.")
+        if not isinstance(response, str):
+            response = "".join(response)
+        if response.strip():
+            return VerificationResult(True, "ok", "The provider accepted the key.")
+    except Exception as exc:  # noqa: BLE001 - provider SDKs raise arbitrary types
+        logger.warning(
+            "AI credential test failed for %s (%s).",
+            credential.provider,
+            type(exc).__name__,
+        )
+    return VerificationResult(
+        False,
+        "rejected",
+        "The provider rejected the key or could not be reached.",
+    )
+
+
+def _verifier_for(provider: str) -> Callable[[ResolvedCredential], VerificationResult]:
+    spec = provider_spec(provider)
+    if not spec.testable:
+        raise VerificationUnsupportedError("This credential cannot be tested.")
+    if spec.provider == "hevy":
+        return _verify_hevy_credential
+    return _verify_ai_credential
+
+
+def _test_credential(
+    user_id: str,
+    provider: str,
+    api_key: str,
+    model: str | None,
+) -> dict[str, Any]:
+    vault = _vault()
+    verifier = _verifier_for(provider)
+    if api_key and api_key != "__stored__":
+        result = vault.verify_candidate(
+            user_id,
+            provider,
+            verifier=verifier,
+            api_key=api_key,
+            model=model,
+        )
+    else:
+        result = vault.verify_stored(user_id, provider, verifier=verifier)
+    payload: dict[str, Any] = {
+        "status": "ok" if result.ok else "error",
+        "provider": provider,
+        "code": result.code,
+        "detail": result.message,
+    }
+    workout_count = result.details.get("workout_count")
+    if isinstance(workout_count, int):
+        payload["workout_count"] = workout_count
+    return payload
+
+
+def _vault_http_error(exc: VaultError) -> HTTPException:
+    if isinstance(exc, (UnknownProviderError, InvalidSecretError)):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, CredentialNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, CredentialExistsError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, VaultUnavailableError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, (CredentialUnavailableError, UnknownUserError)):
+        return HTTPException(status_code=400, detail=str(exc))
+    return HTTPException(status_code=400, detail="The credential operation failed.")
+
+
+def _settings_key_payload(summary: CredentialSummary) -> dict[str, Any]:
+    """Public credential metadata; never contains secret material."""
+    return summary.to_public_dict()
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -139,8 +372,25 @@ def get_config():
 _RATE_LIMITS: dict[str, list[float]] = {}
 
 
-def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
-    now = time.time()
+def _rate_limit_key(request: Request) -> str:
+    """Return the throttle bucket for *request*.
+
+    A signed-in request is throttled per owner, so one tenant's traffic (or a
+    spoofed ``X-Forwarded-For``) cannot exhaust a neighbour's quota behind the
+    same proxy or NAT. Only a request with no session identity falls back to
+    the client address.
+    """
+    session = request.session if hasattr(request, "session") else {}
+    user = session.get("user")
+    candidate = session.get("user_id") or (
+        user.get("id") if isinstance(user, dict) else None
+    )
+    if candidate:
+        try:
+            return owner_scoped_key(OwnerIdentity(str(candidate)), "rate-limit")
+        except OwnershipError:
+            logger.warning("Throttling a malformed session identity by address.")
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
@@ -148,37 +398,178 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
         ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
     else:
         ip = request.client.host if request.client else "unknown"
+    return f"rate-limit-ip:{ip}"
 
-    if ip not in _RATE_LIMITS:
-        _RATE_LIMITS[ip] = []
-    _RATE_LIMITS[ip] = [t for t in _RATE_LIMITS[ip] if now - t < window]
-    if len(_RATE_LIMITS[ip]) >= limit:
+
+def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> None:
+    now = time.time()
+    key = _rate_limit_key(request)
+
+    if key not in _RATE_LIMITS:
+        _RATE_LIMITS[key] = []
+    _RATE_LIMITS[key] = [t for t in _RATE_LIMITS[key] if now - t < window]
+    if len(_RATE_LIMITS[key]) >= limit:
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
-    _RATE_LIMITS[ip].append(now)
+    _RATE_LIMITS[key].append(now)
 
 
 WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
 WEB_GOOGLE_CLIENT_SECRET = os.environ.get("WEB_GOOGLE_CLIENT_SECRET", "").strip()
 WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
-ALLOWED_EMAILS = [
-    e.strip() for e in os.environ.get("ALLOWED_EMAILS", "").split(",") if e.strip()
-]
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
 
+# The one place the deployment's access policy (ALLOWED_EMAILS, INVITE_ONLY and
+# the stored account status) is composed. Login completion below and the global
+# authentication boundary both decide through this object; an invalid setting
+# raises here so the server refuses to start rather than run unrestricted.
+ACCESS_POLICY = AccessPolicy(
+    AccessPolicyConfig.from_environ(
+        {
+            "ALLOWED_EMAILS": os.environ.get("ALLOWED_EMAILS", ""),
+            "INVITE_ONLY": os.environ.get("INVITE_ONLY", ""),
+        }
+    ),
+    DB_PATH,
+)
 
-def _check_api_auth(request: Request) -> str:
-    user = request.session.get("user") if hasattr(request, "session") else None
-    uid = request.session.get("user_id") if hasattr(request, "session") else None
+# Canonical allow-list addresses, or ``None`` when no allowlist is configured.
+# Derived from the composed policy so login and the per-request session check
+# never disagree about which addresses are admitted.
+ALLOWED_EMAILS = ACCESS_POLICY.config.allowed_emails
+
+# Fixed, content-free destinations for a refused sign-in. They are identical for
+# every denial reason so a response cannot reveal why an address was refused.
+_LOGIN_DENIED_URL = "/login?error=access_denied"
+_LOGIN_UNAVAILABLE_URL = "/login?error=unavailable"
+
+# Cookie attributes, idle/absolute lifetimes and the server-side session
+# registry. Validated at import so unsafe limits stop startup (issue #752).
+SESSION_SECURITY = load_session_security_config()
+if _WEB_RUNTIME.production and not SESSION_SECURITY.cookie.secure:
+    raise RuntimeError("Production sessions must use Secure cookies.")
+SESSION_STORE = SessionStore(DB_PATH, SESSION_SECURITY.lifetime)
+SESSION_LIFECYCLE = SessionLifecycle(SESSION_STORE)
+
+
+def _identity_allowed(email: object) -> bool:
+    """Re-apply the e-mail allow-list to sessions that already exist.
+
+    Removing an address from ``ALLOWED_EMAILS`` therefore ends its sessions on
+    their next request instead of leaving them valid until they age out.
+    """
+    if not ALLOWED_EMAILS:
+        return True
+    return isinstance(email, str) and email in ALLOWED_EMAILS
+
+
+def _audit(
+    request: Request,
+    event_type: AuditEventType,
+    outcome: AuditOutcome,
+    subject_type: AuditSubjectType,
+    subject_id: str | None = None,
+    *,
+    user_id: str | None = None,
+    attempted_identity: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Record a security event for this request; audit failures never reach callers."""
+    audit_request_event(
+        request,
+        DB_PATH,
+        event_type,
+        outcome,
+        subject_type=subject_type,
+        subject_id=subject_id,
+        user_id=user_id,
+        attempted_identity=attempted_identity,
+        metadata=metadata,
+    )
+
+
+def _audit_posture(detected_by: str, request: Request | None = None) -> None:
+    """Alert if a production-configured process is running without complete auth."""
+    audit_runtime_posture(
+        DB_PATH,
+        authentication_enabled=bool(
+            WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET
+        ),
+        anonymous_enabled=ALLOW_ANONYMOUS_WEB,
+        detected_by=detected_by,
+        request=request,
+    )
+
+
+def _enforce_account_gate(request: Request, uid: Any, *, allow_closing: bool) -> None:
+    """Fail closed for accounts that deletion has locked or closed.
+
+    A closed (tombstoned) account's signed cookie is stateless, so it is rejected
+    here on every request and the session is cleared. While erasure runs the
+    account is locked; only the deletion status endpoint may pass
+    ``allow_closing`` so progress stays visible.
+    """
+    if not isinstance(uid, str):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    gate = account_deletion.account_gate(DB_PATH, uid)
+    if gate is account_deletion.AccountGate.CLOSED:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if gate is account_deletion.AccountGate.LOCKED and not allow_closing:
+        raise HTTPException(status_code=423, detail="Account deletion is in progress.")
+
+
+def _check_api_auth(request: Request, *, allow_closing: bool = False) -> str:
+    """Return the authenticated, active account id for this request.
+
+    A signed session is not enough on its own: the account it names must still
+    exist and be ``active``, so suspending or removing an account takes effect on
+    its very next request. The only unauthenticated path is the explicit
+    non-production local mode; production has no shared fallback user.
+    """
+    session = request.session if hasattr(request, "session") else {}
+    user = session.get("user")
+    uid = session.get("user_id")
+    if not uid and isinstance(user, dict) and user.get("id"):
+        uid = user["id"]
     if uid:
-        return uid
-    if user and isinstance(user, dict) and user.get("id"):
-        return user["id"]
+        _enforce_account_gate(request, uid, allow_closing=allow_closing)
+        try:
+            return require_active_user(str(uid), DB_PATH)["id"]
+        except AccountError as exc:
+            raise HTTPException(status_code=401, detail="Unauthorized") from exc
     if ALLOW_ANONYMOUS_WEB:
-        from database import get_legacy_user_id
-
-        return get_legacy_user_id(DB_PATH)
+        # Never reachable in a correctly configured production process; if it is,
+        # raise the critical "production auth disabled" alert and fail closed.
+        _audit_posture("anonymous_request", request)
+        if implicit_single_user_allowed():
+            return get_legacy_user_id(DB_PATH)
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _account_setup(user_id: str) -> AccountSetup:
+    """Derive this tenant's account setup state from their own records."""
+
+    return build_account_setup(
+        user_id=user_id,
+        db_path=DB_PATH,
+        server_ai_key=os.environ.get("GEMINI_API_KEY", "").strip() or None,
+    )
+
+
+def _setup_payload(
+    user_id: str,
+    surface: str,
+    *,
+    programme_status: str | None = None,
+) -> dict[str, Any]:
+    """Return the setup contract for one surface of this tenant."""
+
+    return surface_setup_payload(
+        _account_setup(user_id),
+        surface,
+        programme_status=programme_status,
+    )
 
 
 # Google Health linking is opt-in: set the OAuth client in the web service's
@@ -189,7 +580,6 @@ GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 # scheme/host match exactly what is registered with Google). When unset it is
 # derived from the incoming request.
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
-_GH_TOKEN_KEY = "google_health_refresh_token"
 _GH_STATE_KEY = "google_health_oauth_state"
 
 oauth = OAuth()
@@ -215,6 +605,20 @@ _ASSET_VERSIONS: dict[str, str] = {}
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Safe even if the agent already created the database (CREATE IF NOT EXISTS).
     init_db(DB_PATH)
+    # Fail startup on a malformed AUDIT_LOG_HMAC_KEY instead of silently running
+    # without a usable audit chain.
+    resolve_audit_key()
+    _audit_posture("startup")
+    # Re-seal any pre-vault Fernet/plaintext rows under per-user encryption.
+    migrate_legacy_credentials(DB_PATH)
+    if not ALLOW_ANONYMOUS_WEB:
+        logger.info("Account access policy: %s", ACCESS_POLICY.config.describe())
+        ended = ACCESS_POLICY.reconcile()
+        if ended:
+            logger.info(
+                "Ended sessions for %d account(s) outside the configured allowlist.",
+                ended,
+            )
     yield
 
 
@@ -228,6 +632,9 @@ else:
         _BASE_DIR.parent.parent / "frontend/dist/frontend/browser"
     )  # Local dev
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
+# Read by the authentication boundary when it builds its middleware stack, so the
+# per-request session check uses the same policy and database as login does.
+app.state.access_policy = ACCESS_POLICY
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 app.mount(
     "/assets",
@@ -310,15 +717,30 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
 
     app.add_middleware(AuthMiddleware)
 
-# Always mount SessionMiddleware so templates and routes can safely access
+# Always mount the session middleware so templates and routes can safely access
 # request.session even when web auth is disabled. Without it, any access to
 # request.session raises an AssertionError -> 500 Internal Server Error.
 # When WEB_AUTH_SECRET is unset we fall back to a per-process random key; this
 # is fine because there is nothing sensitive to protect when auth is off.
+#
+# The cookie is HttpOnly (Starlette default), host-only, SameSite=Lax and bounded
+# to the same 14-day lifetime the CSRF token signer accepts. In production the
+# runtime boundary requires HTTPS, so the cookie is also marked Secure and can
+# never be sent over a plaintext connection.
+# HardenedSessionMiddleware is Starlette's SessionMiddleware with a Secure /
+# HttpOnly / SameSite / host-only cookie and a server-side registry: a session
+# is honoured only while it is unexpired (idle and absolute), unrevoked and
+# owned by the user its cookie claims. See docs/SESSION_SECURITY.md.
 app.add_middleware(
-    SessionMiddleware,
+    HardenedSessionMiddleware,
     secret_key=WEB_AUTH_SECRET or secrets.token_hex(32),
+    config=SESSION_SECURITY,
+    store=SESSION_STORE,
+    identity_allowed=_identity_allowed,
 )
+# Outermost: every response carries X-Request-ID and every audit event written
+# while serving the request shares that correlation id.
+app.add_middleware(RequestCorrelationMiddleware)
 
 
 @app.get("/login/google")
@@ -333,8 +755,46 @@ async def login_google(request: Request) -> Any:
 
 @app.get("/logout")
 async def logout(request: Request) -> RedirectResponse:
-    request.session.clear()
+    # Legacy navigation endpoint, kept for bookmarks. A state change on GET must
+    # not be triggerable from another site, so only a browser-reported
+    # same-origin or user-typed navigation signs out. Cross-site and same-site
+    # (sibling subdomain) navigations are ignored; a browser that sends no
+    # Fetch Metadata is allowed. The SPA signs out with POST /api/auth/logout,
+    # which is CSRF protected.
+    fetch_site = request.headers.get("sec-fetch-site", "").lower()
+    if fetch_site and fetch_site not in {"same-origin", "none"}:
+        return RedirectResponse("/")
+    # Audit before clearing so the event is attributed to the revoked session's
+    # user. An anonymous visit has nothing to revoke and is not recorded.
+    if has_verified_identity(request.session):
+        _audit(
+            request,
+            AuditEventType.SESSION_REVOKED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.SESSION,
+            metadata={"reason": "logout"},
+        )
+    await run_in_threadpool(SESSION_LIFECYCLE.end, request.session)
     return RedirectResponse("/login")
+
+
+@app.post("/api/auth/logout")
+def api_logout(request: Request) -> dict[str, str]:
+    """Revoke this browser's session server-side and delete its cookie."""
+    SESSION_LIFECYCLE.end(request.session)
+    return {"status": "ok"}
+
+
+@app.post("/api/auth/logout-all")
+def api_logout_all(request: Request) -> dict[str, Any]:
+    """Revoke every session of the authenticated user, on every device.
+
+    The owner comes from the verified session, never from the request, so one
+    tenant can never end another tenant's sessions.
+    """
+    user_id = _check_api_auth(request)
+    revoked = SESSION_LIFECYCLE.end_all(request.session, user_id)
+    return {"status": "ok", "revoked": revoked}
 
 
 @app.get("/api/me")
@@ -342,7 +802,41 @@ async def get_current_user_api(request: Request) -> Any:
     user = request.session.get("user")
     if not user:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        # A session whose account was suspended or removed is no longer a login.
+        # A closing account stays visible so the SPA can show deletion progress.
+        _check_api_auth(request, allow_closing=True)
+    except HTTPException:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
     return JSONResponse({"user": user})
+
+
+@app.get("/api/me/permissions")
+def get_current_permissions_api(request: Request) -> Any:
+    """Return the current role and permissions so the SPA can hide controls.
+
+    This is a convenience for presentation only. Every administrative route
+    re-checks the same matrix server-side, so hiding or forging this response
+    cannot grant access.
+    """
+    user_id = _check_api_auth(request, allow_closing=True)
+    account = get_user_by_id(user_id, DB_PATH)
+    if account is None:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(
+        {
+            "role": account["role"],
+            "permissions": sorted(
+                permission.value for permission in permissions_for_user(account)
+            ),
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+def _claim_is_true(value: Any) -> bool:
+    """Interpret an OIDC boolean claim (providers differ on bool vs string)."""
+    return value is True or (isinstance(value, str) and value.lower() == "true")
 
 
 @app.get("/auth")
@@ -353,43 +847,170 @@ async def auth(request: Request) -> Any:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
         logger.warning("OAuth token exchange failed: %s", e)
-        return RedirectResponse("/login")
-    user = token.get("userinfo")
-    if user:
-        email = user.get("email", "")
-        if ALLOWED_EMAILS and email not in ALLOWED_EMAILS:
-            return HTMLResponse(f"Unauthorized email: {email}", status_code=403)
-        # Create or retrieve the user record on first login.
-        user_record = get_or_create_user(
-            email,
-            display_name=user.get("name"),
-            db_path=DB_PATH,
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "oauth_exchange_failed", "error_type": type(e).__name__},
         )
-        request.session["user"] = email
-        request.session["user_id"] = user_record["id"]
+        return RedirectResponse("/login")
+    userinfo = token.get("userinfo")
+    claims: dict[str, Any] = userinfo if isinstance(userinfo, dict) else {}
+    # A sign-in is bound to the provider's stable subject. Refuse a missing
+    # subject before the access policy can create an account, so a failed
+    # callback never leaves an identity-less account behind.
+    subject = str(claims.get("sub") or "").strip()
+    if not subject:
+        logger.warning("Sign-in rejected: the provider supplied no stable subject.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "missing_subject"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    # Authenticating with Google proves who the person is, not that this
+    # deployment admits them. Allowlist, invitation, suspension and deletion
+    # state are all decided here, server-side, before any session exists.
+    try:
+        decision = await run_in_threadpool(ACCESS_POLICY.admit_login, claims)
+    except sqlite3.Error:
+        # An unreadable policy store is an outage, not a verdict on the person:
+        # refuse the sign-in (fail closed) but say so, and keep no session.
+        logger.exception("Account policy lookup failed during login completion.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "policy_lookup_failed"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+
+    if not decision.allowed:
+        # Always start from an empty session on denial too: drop leftover
+        # pre-login state (OAuth correlation keys, a previous identity).
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            attempted_identity=str(claims.get("email") or "") or None,
+            metadata={"reason": "access_policy_denied"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    # Bind the canonical (provider, subject) identity to the admitted account.
+    # Email alone never selects an account; the identity cannot be re-pointed,
+    # and a subject already bound elsewhere refuses this sign-in.
+    try:
+        user_record = await run_in_threadpool(
+            lambda: resolve_oauth_user(
+                provider="google",
+                subject=subject,
+                email=str(claims.get("email") or ""),
+                email_verified=_claim_is_true(claims.get("email_verified")),
+                display_name=claims.get("name"),
+                db_path=DB_PATH,
+            )
+        )
+    except sqlite3.Error:
+        logger.exception("Identity lookup failed during login completion.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "identity_lookup_failed"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_UNAVAILABLE_URL, status_code=303)
+    except AccountError as exc:
+        # Unverified or missing claims, an identity conflict, or an identity
+        # whose account no longer exists: all refuse the sign-in rather than
+        # surfacing a 500. The messages never contain the email or subject.
+        logger.warning("Sign-in rejected: %s", exc)
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "invalid_identity"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    if user_record["id"] != decision.user_id:
+        # The stable subject names a different account than the policy admitted:
+        # never mint a session from that mismatch (fail closed).
+        logger.warning("Sign-in rejected: identity/policy account mismatch.")
+        _audit(
+            request,
+            AuditEventType.LOGIN,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "identity_policy_mismatch"},
+        )
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+
+    # Rotate on login: a fresh session identifier is registered, whatever
+    # identifier the browser held is revoked, and all pre-login session data
+    # (including leftover OAuth state) is discarded.
+    approved_user_id = decision.user_id
+    approved_email = decision.email
+    if approved_user_id is None or approved_email is None:  # pragma: no cover
+        # Defensive: an allowed decision always carries both, but never mint a
+        # session from a partially populated result (fail closed).
+        request.session.clear()
+        return RedirectResponse(_LOGIN_DENIED_URL, status_code=303)
+    await run_in_threadpool(
+        SESSION_LIFECYCLE.establish,
+        request.session,
+        user_id=approved_user_id,
+        email=approved_email,
+    )
+    # ``establish`` clears the session, so record the policy epoch (issue #753)
+    # after it; the per-request guard compares this against the stored account.
+    request.session[SESSION_EPOCH_KEY] = decision.session_epoch
+    _audit(
+        request,
+        AuditEventType.LOGIN,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        user_record["id"],
+        user_id=user_record["id"],
+        metadata={"method": "google_oauth"},
+    )
     return RedirectResponse("/")
 
 
 # Automated hype lines. One is shown per day, chosen deterministically from the
 # date, so the dashboard always greets you without an API call or a button.
 _QUOTES = [
-    "Show up today and the bar gets lighter tomorrow. One more rep than last time.",
-    "Strength is a skill you practise. Brace, pull, repeat.",
-    "Small jumps, stacked weekly, become a competition physique. Keep stacking.",
-    "Your future deadlift PR is built on the boring set you log today.",
-    "Discipline now, six-pack later. Hit your protein and your top set.",
-    "The last clean rep is where the growth lives. Earn it.",
-    "Win the morning weigh-in by winning last night's sleep.",
-    "Tight waist, wide back, heavy bar. Stay the course.",
+    "Show up today and the work gets easier tomorrow. One more rep than last time.",
+    "Strength is a skill you practise. Brace, control, repeat.",
+    "Small jumps, stacked weekly, become real progress. Keep stacking.",
+    "Your next personal best is built on the boring set you log today.",
+    "Consistency now, results later. Hit your plan and your target.",
+    "The last clean rep is where the adaptation lives. Earn it.",
+    "Win the morning by winning last night's sleep.",
+    "Train with intent, recover with purpose. Stay the course.",
     "You do not need motivation, you need the next set. Go.",
     "Consistency is the cheat code. You already have it.",
-    "Add a kilo or add a rep. Either way, move forward.",
+    "Add a rep or add a little load. Either way, move forward.",
     "Recovery is training too. Eat, sleep, repeat.",
 ]
 
 
 def _daily_quote(today: date | None = None) -> str:
-    today = today or datetime.now(tz=timezone.utc).date()
+    today = today or datetime.now(tz=UTC).date()
     return _QUOTES[today.toordinal() % len(_QUOTES)]
 
 
@@ -470,7 +1091,7 @@ def _training_levels(user_id: str | None = None) -> dict[str, int]:
 def _current_streak(levels: dict[str, int]) -> int:
     """Count consecutive recent days that had any logged activity."""
     streak = 0
-    day = datetime.now(tz=timezone.utc).date()
+    day = datetime.now(tz=UTC).date()
     # Allow today to be empty (the morning run may not have happened yet).
     if levels.get(day.isoformat(), 0) == 0:
         day -= timedelta(days=1)
@@ -484,28 +1105,32 @@ def _dashboard_context(
     today: date | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any]:
-    """Build a dashboard from the active Hevy programme, or a setup state."""
-    from programme_runtime import local_today, resolve_programme_runtime
+    """Build a dashboard from the active programme, or an explicit setup state."""
+    from programme_runtime import load_programme_runtime, local_today
 
     user = get_user_by_id(user_id, DB_PATH) if user_id else None
     timezone_name = (user.get("timezone") if user else None) or "UTC"
     today = today or local_today(timezone_name)
-    active = get_active_programme(user_id, db_path=DB_PATH) if user_id else None
-    definition = active.get("definition") if active else None
     bests = get_recent_bests(DB_PATH, user_id=user_id)
     bests_norm = {normalise_name(name): best for name, best in bests.items()}
 
-    runtime = resolve_programme_runtime(
-        active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id)
-        if user_id else [],
-        today=today,
-        timezone_name=timezone_name,
+    runtime = (
+        load_programme_runtime(
+            user_id,
+            DB_PATH,
+            today=today,
+            timezone_name=timezone_name,
+        )
+        if user_id
+        else None
     )
-    setup_required = runtime.status == "setup_required"
+    if runtime is None:
+        from programme_runtime import ProgrammeRuntime
+
+        runtime = ProgrammeRuntime()
+    setup_required = runtime.setup_required
     rows: list[dict[str, Any]] = []
     focus = "Select routines from Hevy"
-    current_day_number: int | None = None
     is_rest_day = True
     cycle_weeks = 0
     week = 0
@@ -531,7 +1156,6 @@ def _dashboard_context(
             week_in_block = week - start_week + 1
         active_day = runtime.next_day
         if active_day:
-            current_day_number = int(active_day.get("number") or 1)
             focus = str(active_day.get("focus") or "Training")
             is_rest_day = False
             for exercise in active_day.get("exercises", []):
@@ -561,7 +1185,7 @@ def _dashboard_context(
     latest_weight = metrics[-1]["weight_kg"] if metrics else None
     recovery_like = {"weight_kg": latest_weight} if latest_weight else None
     guidance = lifestyle.daily_guidance(
-        current_day_number,
+        None if is_rest_day else focus,
         is_rest_day,
         recovery_like,
     )
@@ -593,6 +1217,15 @@ def _dashboard_context(
     block_progress = week_in_block / block_weeks * 100 if week_in_block else 0
     block_label = str(block.get("name") or "Setup").split(" ")[0]
 
+    setup_payload = (
+        _setup_payload(user_id, "dashboard", programme_status=runtime.status)
+        if user_id
+        else None
+    )
+    coach_setup_payload = (
+        _setup_payload(user_id, "coach") if user_id else None
+    )
+
     return {
         "active": "today",
         "programme_status": runtime.status,
@@ -600,7 +1233,9 @@ def _dashboard_context(
         "last_completed_at": runtime.last_completed_at,
         "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
         "setup_required": setup_required,
-        "active_programme_name": (definition.get("name") if definition else None),
+        "setup": setup_payload,
+        "coach_setup": coach_setup_payload,
+        "active_programme_name": runtime.name or None,
         "quote": _daily_quote(today),
         "week": week,
         "cycle_weeks": cycle_weeks,
@@ -635,6 +1270,18 @@ def _dashboard_context(
         "review_recovery": review.recovery.as_text(),
         "review_lifts": review.lifts,
         "dashboard_insight": get_dashboard_insight(db_path=DB_PATH, user_id=user_id),
+        "programme_provenance": (
+            programme_view(get_active_programme(user_id, db_path=DB_PATH))
+            if user_id
+            else None
+        ),
+        "dashboard_insight_provenance": (
+            get_record_provenance(
+                user_id, RecordType.DASHBOARD_INSIGHT, "current", DB_PATH
+            )
+            if user_id
+            else None
+        ),
     }
 
 
@@ -656,8 +1303,30 @@ def api_checkins(request: Request):
                 )
                 if not checkins
                 else None,
+                "setup": _setup_payload(user_id, "checkins"),
             }
         )
+    )
+
+
+@app.get("/api/setup/state")
+def api_setup_state(request: Request) -> JSONResponse:
+    """Return this tenant's setup state for every surface.
+
+    The navigation shell uses it to show which surfaces still need setup, and
+    the coach uses it to explain why it has nothing to answer from.
+    """
+
+    from setup_state import SURFACE_REQUIREMENTS
+
+    user_id = _check_api_auth(request)
+    account = _account_setup(user_id)
+    surfaces = {
+        surface: surface_setup_payload(account, surface)
+        for surface in sorted(SURFACE_REQUIREMENTS)
+    }
+    return JSONResponse(
+        jsonable_encoder({"account": account.as_dict(), "surfaces": surfaces})
     )
 
 
@@ -718,12 +1387,21 @@ def _project_lift(
     projected = analytics.project(points, target_ordinal)
     if projected is None:
         return None
-    projected = max(projected, current)  # never project a regression below today
+    fit = analytics.linear_fit([p[0] for p in points], [p[1] for p in points])
+    uncertainty = None
+    if fit is not None and len(points) >= 3:
+        slope, intercept = fit
+        residuals = [y - (slope * x + intercept) for x, y in points]
+        variance = sum(r * r for r in residuals) / max(1, len(points) - 2)
+        uncertainty = round(variance**0.5, 1)
     return {
         "label": label,
         "current": f"{current:g} {unit}",
         "projected": f"{projected:g} {unit}",
         "metric": "est. 1RM" if use_e1rm else "top reps",
+        "model": "linear trend" if use_e1rm else "linear reps trend",
+        "evidence_sessions": len(points),
+        "uncertainty": f"±{uncertainty:g} {unit}" if uncertainty else "unquantified",
         "gain": round(projected - current, 1),
     }
 
@@ -739,6 +1417,116 @@ def _block_lift_str(lift: dict | None) -> str:
     return f"{sets} x {rep_range}"
 
 
+HEVY_SYNC_META_KEY = "hevy_source_sync"
+HEVY_SYNC_STALE_HOURS = 24
+
+
+def _read_hevy_sync_state(user_id: str) -> dict[str, Any]:
+    """Return the tenant's stored Hevy sync metadata."""
+
+    raw = get_meta(HEVY_SYNC_META_KEY, DB_PATH, user_id=user_id)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _record_hevy_sync_state(user_id: str, snapshot: HevySourceSnapshot) -> None:
+    """Store the last successful Hevy sync for this tenant only.
+
+    A partial read does not replace the last successful sync: the account was
+    not read completely, so the previous complete sync stays the reference.
+    """
+
+    if snapshot.is_partial:
+        return
+    set_meta(
+        HEVY_SYNC_META_KEY,
+        json.dumps(
+            {
+                "synced_at": snapshot.fetched_at,
+                "status": snapshot.status,
+                "counts": snapshot.counts,
+            },
+            default=str,
+        ),
+        DB_PATH,
+        user_id=user_id,
+    )
+
+
+def _hevy_sync_is_stale(sync_state: dict[str, Any]) -> bool:
+    """True when the last successful sync is missing or older than a day."""
+
+    synced_at = sync_state.get("synced_at")
+    if not synced_at:
+        return True
+    try:
+        parsed = datetime.fromisoformat(str(synced_at))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    age = datetime.now(tz=UTC) - parsed
+    return age > timedelta(hours=HEVY_SYNC_STALE_HOURS)
+
+
+def _connection_state_for_status(status_code: int) -> str:
+    """Map an API status code onto a builder connection state."""
+
+    if status_code == 400:
+        return "disconnected"
+    if status_code == 401:
+        return "auth_error"
+    if status_code == 429:
+        return "rate_limited"
+    return "error"
+
+
+def _authenticated_owner(user_id: str) -> str | None:
+    """Return the authenticated owner's account label for the builder."""
+
+    user = get_user_by_id(user_id, DB_PATH)
+    if not user:
+        return None
+    return str(user.get("email") or user.get("display_name") or "") or None
+
+
+def _active_definition(user_id: str) -> dict[str, Any] | None:
+    """Return the active programme definition for drift comparison."""
+
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    if not active:
+        return None
+    definition = active.get("definition")
+    return definition if isinstance(definition, dict) else None
+
+
+def _blocking_violation_detail(violation: Any) -> str:
+    """Render a blocking violation for an API error, accepting both shapes.
+
+    The shared validator emits structured dicts; the preview validator emits
+    code/message dicts. Both must produce a readable 422 detail.
+    """
+    if isinstance(violation, dict):
+        if {"exercise", "prescription", "rule", "permitted_remediation"} <= set(
+            violation
+        ):
+            return (
+                f"Activation blocked by profile constraint: {violation['exercise']} "
+                f"({violation['prescription']}) violates '{violation['rule']}'. "
+                f"Permitted remediation: {violation['permitted_remediation']}"
+            )
+        message = violation.get("message")
+        if message:
+            return str(message)
+        return f"Activation blocked by training rules: {violation}"
+    return f"Activation blocked by training rules: {violation}"
+
+
 @app.post("/api/programmes/preview")
 def preview_programme(
     payload: ProgrammePreviewRequest,
@@ -749,8 +1537,19 @@ def preview_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    prefs = get_user_preferences(user_id, DB_PATH)
+    profile_rules = prefs.get("constraints")
+    payload.rules = get_training_rules(user_id, DB_PATH)
+    active = get_active_programme(user_id, db_path=DB_PATH)
+    active_definition = active.get("definition") if active else None
     try:
-        preview = build_programme_preview(training_data, payload)
+        preview = build_programme_preview(
+            training_data,
+            payload,
+            history_overrides=get_routine_match_overrides(user_id, DB_PATH),
+            active_definition=active_definition,
+            profile_rules=profile_rules,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -767,162 +1566,160 @@ def activate_programme(
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
+    prefs = get_user_preferences(user_id, DB_PATH)
+    payload.rules = get_training_rules(user_id, DB_PATH)
     preview_request = ProgrammePreviewRequest.model_validate(
-        payload.model_dump(exclude={"preview_token"})
+        payload.model_dump(
+            exclude={"preview_token", "source_hashes"},
+        )
     )
+    profile_rules = prefs.get("constraints")
     try:
-        preview = build_programme_preview(training_data, preview_request)
+        preview = build_programme_preview(
+            training_data,
+            preview_request,
+            history_overrides=get_routine_match_overrides(user_id, DB_PATH),
+            active_definition=_active_definition(user_id),
+            profile_rules=profile_rules,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    if preview["preview_token"] != payload.preview_token:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "The Hevy routines or programme settings changed after preview. "
-                "Generate a fresh preview before activation."
-            ),
-        )
-
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
-    save_notification(
-        user_id,
-        title="Hevy programme activated",
-        message=(
-            f"{preview['name']} is active for "
-            f"{preview['cycle_weeks']} weeks using "
-            f"{preview['total_days']} selected routines."
-        ),
-        type="programme",
-        link="/plan",
-        db_path=DB_PATH,
-    )
-
-    return JSONResponse(
-        jsonable_encoder(
+    current_hashes = [
+        {
+            "routine_id": snapshot_item["id"],
+            "source_hash": snapshot_item["source_hash"],
+        }
+        for snapshot_item in preview["source_snapshots"]
+    ]
+    titles = {
+        str(item["id"]): str(item["title"])
+        for item in preview["source_snapshots"]
+    }
+    conflict = detect_source_conflicts(
+        [
             {
-                "status": "ok",
-                "active_programme": get_active_programme(
-                    user_id,
-                    db_path=DB_PATH,
-                ),
+                "routine_id": item.routine_id,
+                "source_hash": item.source_hash,
             }
-        )
-    )
+            for item in payload.source_hashes
+        ],
+        current_hashes,
+        titles=titles,
+    ) if payload.source_hashes else {
+        "changed_routines": [],
+        "added_routines": [],
+        "removed_routines": [],
+        "has_conflicts": False,
+    }
 
-
-@app.post("/api/programmes/select")
-async def select_programme(request: Request) -> JSONResponse:
-    """Compatibility adapter for clients using the retired template endpoint."""
-
-    _check_rate_limit(request, limit=5)
-    user_id = _check_api_auth(request)
-    try:
-        body = await request.json()
-    except (json.JSONDecodeError, TypeError):
-        body = {}
-
-    template_key = str(body.get("template_key") or "").strip()
-    if template_key == "hybrid_powerbuilding":
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "Hybrid Powerbuilding has been removed. "
-                "Select routines from Hevy and generate a programme preview."
-            ),
-        )
-    if template_key != "infer_from_hevy":
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "Static programme selection has been removed. "
-                "Use /api/programmes/preview and /api/programmes/activate."
-            ),
-        )
-
-    training_data = _load_hevy_training_for_user(user_id)
-    if not training_data.routines:
+    blocking_violations = preview.get("blocking_violations") or []
+    if blocking_violations:
+        first_violation = blocking_violations[0]
+        if isinstance(first_violation, dict) and {
+            "exercise",
+            "prescription",
+            "rule",
+            "permitted_remediation",
+        } <= set(first_violation):
+            raise HTTPException(
+                status_code=422,
+                detail=_blocking_violation_detail(first_violation),
+            )
         raise HTTPException(
             status_code=422,
-            detail="No Hevy routines are available for programme generation.",
+            detail={
+                "message": "The programme preview violates blocking constraints.",
+                "violations": blocking_violations,
+            },
+        )
+
+    if preview["preview_token"] != payload.preview_token or conflict["has_conflicts"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": (
+                    "The Hevy routines or programme settings changed after the "
+                    "preview. Generate a fresh preview before activation."
+                ),
+                "conflict": conflict,
+                "remediation": conflict_remediation(conflict),
+            },
         )
 
     try:
-        preview_request = ProgrammePreviewRequest(
-            selected_routine_ids=[routine.id for routine in training_data.routines],
-            duration_weeks=int(body.get("duration_weeks") or 12),
-            goal=body.get("goal") or "general_fitness",
-            start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
-            sessions_per_week=body.get("sessions_per_week"),
-            experience=body.get("experience") or "intermediate",
-            max_session_minutes=body.get("max_session_minutes"),
-            adaptation_aggressiveness=(
-                body.get("adaptation_aggressiveness") or "balanced"
-            ),
-        )
-        preview = build_programme_preview(training_data, preview_request)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        active = activate_generated_programme(user_id, preview, db_path=DB_PATH)
+    except ProgrammeValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": exc.message,
+                "violations": exc.details.get("violations", []),
+            },
+        ) from exc
 
-    set_active_programme(
-        user_id,
-        source="hevy",
-        template_key=f"hevy:{preview['preview_token'][:20]}",
-        definition=preview,
-        db_path=DB_PATH,
-    )
-    set_meta(
-        "programme_start_date",
-        str(preview["programme_spec"]["start_date"]),
-        DB_PATH,
-        user_id=user_id,
-    )
     return JSONResponse(
         jsonable_encoder(
             {
                 "status": "ok",
-                "source": "hevy",
-                "preview_token": preview["preview_token"],
+                "active_programme": active,
             }
         )
     )
 
 
-def _load_hevy_training_for_user(
-    user_id: str,
-    *,
-    workout_limit: int = 56,
-) -> HevyTrainingData:
-    """Fetch the current user's Hevy source data or raise a useful API error."""
+def _hevy_api_key_for_user(user_id: str) -> str:
+    """Return the tenant's Hevy API key or raise a useful API error."""
 
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    credential = _vault_credential(user_id, "hevy", purpose="programme_import")
+    hevy_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
     if not hevy_key:
         raise HTTPException(
             status_code=400,
             detail="No Hevy API key configured. Add your key in Settings first.",
         )
+    return hevy_key
 
-    from hevy_reader import fetch_user_training
+
+def _load_hevy_snapshot_for_user(
+    user_id: str,
+    *,
+    workout_limit: int = 56,
+) -> HevySourceSnapshot:
+    """Fetch the current user's Hevy source data or raise a useful API error.
+
+    Provider failures are mapped onto distinct status codes so the builder can
+    show authentication, rate-limit and outage states separately.
+    """
+
+    hevy_key = _hevy_api_key_for_user(user_id)
+
+    from hevy_reader import fetch_user_training_snapshot
 
     try:
-        return fetch_user_training(
+        snapshot = fetch_user_training_snapshot(
             hevy_key,
             workout_limit=workout_limit,
         )
-    except Exception as exc:
+    except HevyAuthError as exc:
+        logger.warning("Hevy rejected the stored credential for user %s.", user_id)
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Hevy rejected your API key. Update it in Settings and refresh."
+            ),
+        ) from exc
+    except HevyRateLimitError as exc:
+        logger.warning("Hevy rate limited user %s.", user_id)
+        raise HTTPException(
+            status_code=429,
+            detail="Hevy is rate limiting requests. Try again in a few minutes.",
+        ) from exc
+    except HevyError as exc:
         logger.exception(
             "Could not fetch Hevy source data for user %s.",
             user_id,
@@ -932,6 +1729,38 @@ def _load_hevy_training_for_user(
             detail=("Hevy could not be reached. Check the connection and try again."),
         ) from exc
 
+    from hevy_history import merge_workout_history, parse_cached_workouts
+
+    # The incremental local cache from the full-history sync is the canonical
+    # evidence source. Provider calls stay bounded to recent workouts.
+    try:
+        cached = parse_cached_workouts(
+            get_cached_workout_payloads(user_id, db_path=DB_PATH),
+            snapshot.data.exercise_templates,
+        )
+    except (AttributeError, KeyError, TypeError, ValueError):
+        logger.warning("Ignoring malformed cached Hevy history for user %s.", user_id)
+        cached = []
+    if cached:
+        snapshot.data.recent_workouts = merge_workout_history(
+            snapshot.data.recent_workouts,
+            cached,
+        )
+    return snapshot
+
+
+def _load_hevy_training_for_user(
+    user_id: str,
+    *,
+    workout_limit: int = 56,
+) -> HevyTrainingData:
+    """Fetch the current user's Hevy training data through the snapshot loader."""
+
+    return _load_hevy_snapshot_for_user(
+        user_id,
+        workout_limit=workout_limit,
+    ).data
+
 
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
@@ -940,7 +1769,12 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
     if existing:
-        return {"reasoning": existing}
+        return {
+            "reasoning": existing,
+            "provenance": get_record_provenance(
+                user_id, RecordType.REASONING, context_id, DB_PATH
+            ),
+        }
 
     parts = context_id.split("_", 1)
     if len(parts) != 2:
@@ -962,8 +1796,20 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
         logger.exception("AI reasoning generation failed.")
         reasoning = "Could not determine reasoning."
 
-    save_reasoning_log(context_id, ex_name, reasoning, db_path=DB_PATH, user_id=user_id)
-    return {"reasoning": reasoning}
+    save_reasoning_log(
+        context_id,
+        ex_name,
+        reasoning,
+        db_path=DB_PATH,
+        user_id=user_id,
+        provenance=ai_provenance(provider, "xai-reasoning/1"),
+    )
+    return {
+        "reasoning": reasoning,
+        "provenance": get_record_provenance(
+            user_id, RecordType.REASONING, context_id, DB_PATH
+        ),
+    }
 
 
 @app.get("/api/project_peak")
@@ -973,32 +1819,228 @@ def project_peak(request: Request) -> dict[str, Any]:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
-    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    dl_entries = series.get("Deadlift", [])
-    pu_entries = series.get("Pull-ups", [])
+    from programme_runtime import load_programme_runtime
 
-    prompt = f"Analyze this historical progression for Deadlift: {json.dumps(dl_entries)} and Pull-ups: {json.dumps(pu_entries)}. Project the estimated 1RM at the end of the 12-week peaking phase. Adjust the forecast curve if recent sessions look 'bad'. Return JSON: {{'Deadlift_Projected': float, 'Pullups_Projected': float, 'Validation': 'string explanation'}}"
+    series = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    runtime = load_programme_runtime(user_id, DB_PATH)
+    priority_names: list[str] = []
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            name = str(exercise.get("name") or "")
+            if (
+                name
+                and name in series
+                and exercise.get("role")
+                in {"primary_strength", "secondary_compound"}
+                and name not in priority_names
+            ):
+                priority_names.append(name)
+    target = runtime.end_date or datetime.now(tz=timezone.utc).date()
+    deterministic = []
+    for name in priority_names[:3]:
+        entries = series[name]
+        points = [
+            (
+                float(date.fromisoformat(entry["date"]).toordinal()),
+                float(
+                    analytics.epley_1rm(
+                        entry["top_weight_kg"], entry["top_reps"]
+                    )
+                    or entry["top_reps"]
+                ),
+            )
+            for entry in entries
+            if entry.get("top_reps") is not None
+        ]
+        projected = analytics.project(points, float(target.toordinal()))
+        if projected is not None:
+            deterministic.append(
+                {
+                    "metric": name,
+                    "model": "linear trend",
+                    "evidence_sessions": len(points),
+                    "projected": projected,
+                }
+            )
+    if not deterministic:
+        return {
+            "projections": [],
+            "validation": "Insufficient priority-outcome history to project.",
+        }
+
+    prompt = (
+        "Explain these deterministic programme projections. Do not change any "
+        f"number or invent a metric: {json.dumps(deterministic)}. "
+        "Return JSON with a single 'validation' string."
+    )
     try:
         response = provider.generate(prompt)
         text = (response if isinstance(response, str) else "".join(response)).strip()
         text = text.removeprefix("```json").removeprefix("```")
         text = text.removesuffix("```")
-        return json.loads(text.strip())
+        parsed = json.loads(text.strip())
+        if isinstance(parsed, dict):
+            parsed.setdefault("projections", deterministic)
+            return parsed
+        return {"projections": deterministic}
     except Exception:  # noqa: BLE001
-        return {"error": "Failed to project peak."}
+        return {
+            "projections": deterministic,
+            "validation": "Explanation unavailable; deterministic projections shown.",
+        }
+
+
+@app.get("/api/coach/capabilities")
+@app.get("/api/chat/capabilities")
+def coach_capabilities(request: Request) -> JSONResponse:
+    user_id = _check_api_auth(request)
+    state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=get_config())
+    return JSONResponse(state.to_dict())
+
+
+def _parse_observed_at(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _latest_observed_at(values: list[Any]) -> datetime | None:
+    parsed = [
+        observed
+        for value in values
+        if (observed := _parse_observed_at(value)) is not None
+    ]
+    return max(parsed) if parsed else None
+
+
+def _coach_capability_for_user(
+    user_id: str,
+    *,
+    logs: list[dict[str, Any]] | None = None,
+    history: dict[str, list[dict[str, Any]]] | None = None,
+    body_metrics: list[dict[str, Any]] | None = None,
+    personal_records: list[dict[str, Any]] | None = None,
+    programme_available: bool | None = None,
+) -> CoachCapabilityState:
+    """Derive Coach capability from this tenant's records and provider state."""
+
+    keys = get_user_api_keys(user_id, DB_PATH)
+    prefs = get_user_preferences(user_id, DB_PATH)
+    provider_name = str(prefs.get("preferred_ai") or "gemini").strip().lower()
+    provider_supported = provider_name in PROVIDERS
+
+    provider_configured = False
+    if provider_supported:
+        provider_key = str(
+            keys.get(provider_name, {}).get("api_key") or ""
+        ).strip()
+        if not provider_key and provider_name == "gemini":
+            provider_key = str(get_config().gemini_api_key or "").strip()
+        provider_configured = bool(provider_key)
+
+    if logs is None:
+        logs = get_daily_logs(limit=1, db_path=DB_PATH, user_id=user_id)
+    if history is None:
+        history = get_progress_history(
+            limit_per_exercise=1, db_path=DB_PATH, user_id=user_id
+        )
+    if body_metrics is None:
+        body_metrics = get_body_metrics(limit=1, db_path=DB_PATH, user_id=user_id)
+    if personal_records is None:
+        personal_records = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    if programme_available is None:
+        programme_available = get_active_programme(user_id, DB_PATH) is not None
+
+    history_dates = [
+        entry.get("date")
+        for entries in history.values()
+        for entry in entries
+    ]
+    observed_at = {
+        "training_logs": _latest_observed_at(
+            [log.get("date") for log in logs]
+        ),
+        "progress_history": _latest_observed_at(history_dates),
+        "personal_records": _latest_observed_at(
+            [record.get("date") for record in personal_records]
+        ),
+        "body_metrics": _latest_observed_at(
+            [metric.get("date") for metric in body_metrics]
+        ),
+    }
+
+    return derive_coach_capability(
+        provider_name=provider_name,
+        provider_configured=provider_configured,
+        provider_supported=provider_supported,
+        sync_configured=bool(keys.get("hevy", {}).get("api_key")),
+        observed_at=observed_at,
+        programme_available=programme_available,
+        now=datetime.now(tz=UTC),
+    )
+
+
+@app.get("/api/coach/capability")
+def coach_capability(request: Request) -> JSONResponse:
+    """Return the authenticated user's truthful Coach capability state."""
+
+    user_id = _check_api_auth(request)
+    state = _coach_capability_for_user(user_id)
+    return JSONResponse(state.as_dict())
 
 
 @app.get("/api/chat/history")
 def chat_history(request: Request):
     user_id = _check_api_auth(request)
-    return get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    messages = get_chat_messages(limit=50, db_path=DB_PATH, user_id=user_id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "messages": messages,
+                "setup": _setup_payload(user_id, "coach"),
+            }
+        )
+    )
 
 
 @app.post("/api/chat/clear")
 def chat_clear(request: Request):
     user_id = _check_api_auth(request)
     clear_chat_messages(db_path=DB_PATH, user_id=user_id)
+    _audit(
+        request,
+        AuditEventType.DATA_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.DATA,
+        "chat_history",
+        user_id=user_id,
+    )
     return {"status": "ok"}
+
+
+def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
+    """Section-level provenance for AI context where records are not annotated."""
+    summary = get_provenance_summary(user_id, RecordType.EXERCISE_PROGRESS, DB_PATH)
+    history: dict[str, Any] = {
+        "origin": "imported",
+        "source": "Hevy",
+        "authoritative": True,
+    }
+    if summary["total"]:
+        history["sessions_with_provenance"] = summary["total"]
+        history["last_ingested"] = str(summary["latest_ingested_at"])[:10]
+    return {
+        "history": history,
+        "prs": {
+            "origin": "derived",
+            "source": "calculated from the imported Hevy history (Epley estimate)",
+            "authoritative": False,
+        },
+    }
 
 
 @app.get("/api/rag_search", response_model=None)
@@ -1008,21 +2050,48 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
-    # Gather training context
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
-    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
-    biometrics = get_body_metrics(db_path=DB_PATH, user_id=user_id)
-    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
+    mode, required_cap = classify_coaching_query(q)
 
-    context = json.dumps(
-        {
-            "logs": logs,
-            "history": history,
-            "biometrics": biometrics[-10:],
-            "prs": prs[:10],
-        },
-        default=str,
+    # Gather training context. Every record carries its provenance so the model
+    # can tell source data, user corrections and derived recommendations apart.
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
     )
+    history = get_progress_history(db_path=DB_PATH, user_id=user_id)
+    biometrics = get_body_metrics(
+        db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
+    prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
+    active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
+    capability = _coach_capability_for_user(
+        user_id,
+        logs=logs,
+        history=history,
+        body_metrics=biometrics,
+        personal_records=prs,
+        programme_available=active_prog is not None,
+    )
+    access_block = capability_prompt_block(capability)
+
+    # If data-specific prompt and prerequisites failed:
+    if mode == "data_grounded" and required_cap:
+        cap_item = cap_state.capabilities.get(required_cap)
+        if not cap_item or not cap_item.enabled:
+            save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
+            explanation_msg = (
+                f"**Data-Grounded Coaching Unavailable**\n\n"
+                f"{cap_item.explanation if cap_item else 'Required training inputs are unavailable.'}\n\n"
+                f"To prevent fabricated user history, personalised analysis is disabled until "
+                f"the prerequisite data is connected and current. You may still ask general educational "
+                f"questions about fitness, technique, and programming."
+            )
+            save_chat_message("assistant", explanation_msg, db_path=DB_PATH, user_id=user_id)
+
+            def generate_disabled_explanation() -> Iterator[str]:
+                yield explanation_msg
+
+            return StreamingResponse(generate_disabled_explanation(), media_type="text/plain")
 
     # Build multi-turn conversation from chat history
     chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
@@ -1037,24 +2106,63 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
     # Save user message
     save_chat_message("user", q, db_path=DB_PATH, user_id=user_id)
 
-    prompt = f"""You are Coach, an elite powerbuilding AI coach embedded in the user's private training dashboard.
-You have access to this user's training logs, body composition data, personal records, and programme history.
+    if mode == "educational":
+        prompt = f"""You are Coach, an elite strength and conditioning AI coach providing general educational guidance.
+{access_block}
 
-Your personality:
-- Knowledgeable, direct, and encouraging. Like a trusted coach who knows the data.
-- Reference specific numbers, dates, and exercises from the context when relevant.
-- Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
-- Use British English.
+Important constraints:
+- This is a general educational inquiry. Do NOT fabricate, assume, or invent any user-specific training history, past workouts, personal records, or biometrics.
+- Keep your answer clear, evidence-based, concise, and structured. Use British English.
+- Start your response exactly with this header line:
+**Educational Guidance** (General advice — not personalised to your training history)
 
 Conversation so far:
 {conversation_text}
 
-Training data context (recent logs, progress history, biometrics, PRs):
+User's question: {q}"""
+    else:
+        active_def = (active_prog.get("definition") if active_prog else None) or {}
+        prog_name = active_def.get("name") or "active programme"
+        spec = active_def.get("programme_spec") or {}
+        prog_goal = spec.get("goal_label") or spec.get("goal") or "strength and conditioning"
+        rules = get_training_rules(user_id, DB_PATH)
+        rules_text = format_rules_for_prompt(rules)
+        context = json.dumps(
+            {
+                "logs": annotate_for_retrieval(logs),
+                "history": history,
+                "biometrics": annotate_for_retrieval(biometrics[-10:]),
+                "prs": prs[:10],
+                "active_programme": prog_name if active_prog else None,
+                "data_sources": _retrieval_data_sources(user_id),
+            },
+            default=str,
+        )
+
+        prompt = f"""You are Coach, an elite {prog_goal} AI coach embedded in the user's private training dashboard.
+The user's active programme is "{prog_name}".
+{access_block}
+
+Important constraints:
+- All analysis must be strictly grounded in the verified data context below.
+- Do NOT fabricate or hallucinate any numbers, dates, exercises, sets, or reps not present in the context.
+- Start your response exactly with this header line:
+**Personalised Analysis** (Grounded in your training data)
+- Reference specific numbers, dates, and exercises from the context.
+- Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
+- Use British English.
+
+{rules_text}
+
+Conversation so far:
+{conversation_text}
+
+{RETRIEVAL_GUIDANCE}
+
+Verified training data context (recent logs, progress history, biometrics, PRs, active programme):
 {context[:25000]}
 
-User's new message: {q}
-
-Respond naturally as Coach. If the question is about their training data, reference the actual numbers. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
+User's question: {q}"""
 
     def generate() -> Iterator[str]:
         collected: list[str] = []
@@ -1089,9 +2197,173 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
+def _audit_key_change(
+    request: Request,
+    user_id: str,
+    provider: str,
+    known_providers: set[str],
+    *,
+    saved: bool,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    """Audit a stored-key change, plus the connector change when it is Hevy's key.
+
+    Only a recognised provider id is recorded; an arbitrary client string is never
+    written to the audit trail. The key itself is never passed to the audit log.
+    """
+    recorded = provider if provider in known_providers else "unknown"
+    is_connector = recorded == "hevy"
+    _audit(
+        request,
+        AuditEventType.CREDENTIAL_SAVED if saved else AuditEventType.CREDENTIAL_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.CREDENTIAL,
+        recorded,
+        user_id=user_id,
+        metadata={
+            "provider": recorded,
+            "credential_kind": "connector" if is_connector else "ai_provider",
+            **(metadata or {}),
+        },
+    )
+    if is_connector:
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_CONNECTED
+            if saved
+            else AuditEventType.CONNECTOR_DISCONNECTED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.CONNECTOR,
+            recorded,
+            user_id=user_id,
+            metadata={"provider": recorded, "method": "api_key"},
+        )
+
+
+def _hevy_verification_status(state: HevyCredentialState) -> int:
+    """Map a verification outcome to an HTTP status code."""
+    if state is HevyCredentialState.UNVERIFIED:
+        # Hevy could not be reached; the credential was not disproved.
+        return 502
+    return 400
+
+
 @app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, str]:
-    """Save or update an API key for the current user."""
+async def save_api_key(request: Request) -> dict[str, Any]:
+    """Save or update an API key for the current user.
+
+    A Hevy credential is verified before it is stored: an unusable key is
+    rejected and never activated. The secret is only ever persisted through the
+    tenant-scoped vault, never returned to the browser.
+    """
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider_value = body.get("provider") if isinstance(body, dict) else None
+    api_key_value = body.get("api_key") if isinstance(body, dict) else None
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+
+    if not provider or not api_key:
+        raise HTTPException(status_code=400, detail="Provider and api_key are required")
+    try:
+        provider_spec(provider)
+    except UnknownProviderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    model_value = body.get("model")
+    if model_value is not None and not isinstance(model_value, str):
+        raise HTTPException(status_code=400, detail="Model must be a string")
+    model = model_value.strip() if isinstance(model_value, str) else ""
+    if len(model) > 200:
+        raise HTTPException(status_code=400, detail="Model is too long")
+
+    verification: HevyCredentialTest | None = None
+    if provider == "hevy":
+        # The verification performs a bounded set of outbound requests; run it
+        # off the event loop so a slow provider cannot stall other tenants.
+        # The candidate is proven usable before it is ever persisted.
+        verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+        if not verification.connected:
+            raise HTTPException(
+                status_code=_hevy_verification_status(verification.state),
+                detail=verification.detail,
+            )
+
+    vault = _vault()
+    try:
+        if vault.describe(user_id, provider).configured:
+            summary = vault.rotate(user_id, provider, api_key=api_key, model=model or None)
+        else:
+            summary = vault.store(user_id, provider, api_key=api_key, model=model or None)
+    except CredentialExistsError:
+        try:
+            summary = vault.rotate(
+                user_id, provider, api_key=api_key, model=model or None
+            )
+        except VaultError as exc:
+            raise _vault_http_error(exc) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+
+    if verification is not None:
+        save_hevy_connection(
+            user_id,
+            state=verification.state.value,
+            api_version=verification.api_version,
+            capabilities=dict(verification.capabilities),
+            tested_at=verification.tested_at.isoformat(),
+            account_username=verification.account_username,
+            account_id=verification.account_id,
+            db_path=DB_PATH,
+        )
+        _audit_key_change(
+            request,
+            user_id,
+            provider,
+            {"hevy", *(item["id"] for item in available_providers())},
+            saved=True,
+            metadata={"model_configured": bool(model)},
+        )
+        return {
+            "status": "ok",
+            "provider": provider,
+            "connection": verification.as_public_metadata(),
+            "credential": _settings_key_payload(summary),
+        }
+
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
+        preferences = get_user_preferences(user_id, DB_PATH)
+        if preferences.get("preferred_ai") == provider:
+            save_user_preferences(
+                user_id,
+                ai_model=model or ai_provider_defaults[provider],
+                db_path=DB_PATH,
+            )
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=True,
+        metadata={"model_configured": bool(model)},
+    )
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
+
+
+@app.post("/api/settings/key/rotate")
+async def rotate_api_key(request: Request) -> dict[str, Any]:
+    """Replace an existing credential, keeping its audit history."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
@@ -1102,51 +2374,64 @@ async def save_api_key(request: Request) -> dict[str, str]:
     api_key_value = body.get("api_key")
     provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
     api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
-
     if not provider or not api_key:
         raise HTTPException(status_code=400, detail="Provider and api_key are required")
 
-    ai_provider_defaults = {
-        item["id"]: item["default_model"] for item in available_providers()
-    }
-    ai_provider_ids = set(ai_provider_defaults)
-    valid_providers = {"hevy", *ai_provider_ids}
-    if provider not in valid_providers:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unknown provider '{provider}'. "
-                f"Use: {', '.join(sorted(valid_providers))}"
-            ),
-        )
-
     model_value = body.get("model")
-    if model_value is not None and not isinstance(model_value, str):
-        raise HTTPException(status_code=400, detail="Model must be a string")
-    model = model_value.strip() if isinstance(model_value, str) else ""
-    if len(model) > 200:
-        raise HTTPException(status_code=400, detail="Model is too long")
-
-    save_user_api_key(
+    model = model_value.strip() if isinstance(model_value, str) else None
+    try:
+        summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    _audit_key_change(
+        request,
         user_id,
         provider,
-        api_key,
-        extra={"model": model} if model else None,
-        db_path=DB_PATH,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=True,
+        metadata={"model_configured": bool(model)},
     )
-    if provider in ai_provider_ids:
-        preferences = get_user_preferences(user_id, DB_PATH)
-        if preferences.get("preferred_ai") == provider:
-            save_user_preferences(
-                user_id,
-                ai_model=model or ai_provider_defaults[provider],
-                db_path=DB_PATH,
-            )
-    return {"status": "ok", "provider": provider}
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
+
+
+@app.post("/api/settings/key/revoke")
+async def revoke_api_key(request: Request) -> dict[str, Any]:
+    """Invalidate a credential and destroy its secret material."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
+
+    try:
+        summary = _vault().revoke(user_id, provider)
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=False,
+    )
+    return {
+        "status": "ok",
+        "provider": provider,
+        "credential": _settings_key_payload(summary),
+    }
 
 
 @app.post("/api/settings/key/delete")
-async def remove_api_key(request: Request) -> dict[str, str]:
+async def remove_api_key(request: Request) -> dict[str, Any]:
     """Remove a stored API key for the current user."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -1154,41 +2439,165 @@ async def remove_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    provider = body.get("provider", "").strip().lower()
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
     if not provider:
         raise HTTPException(status_code=400, detail="Provider is required")
 
-    delete_user_api_key(user_id, provider, db_path=DB_PATH)
-    return {"status": "ok", "provider": provider}
+    try:
+        deleted = _vault().delete(user_id, provider)
+    except UnknownProviderError as exc:
+        # Reject an unrecognised provider id, but keep a safe record of the
+        # attempt. The client-supplied string is never written to the trail.
+        _audit(
+            request,
+            AuditEventType.CREDENTIAL_DELETED,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.CREDENTIAL,
+            "unknown",
+            user_id=user_id,
+            metadata={"provider": "unknown", "credential_kind": "ai_provider"},
+        )
+        raise _vault_http_error(exc) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+    if provider == "hevy":
+        delete_hevy_connection(user_id, db_path=DB_PATH)
+    _audit_key_change(
+        request,
+        user_id,
+        provider,
+        {"hevy", *(item["id"] for item in available_providers())},
+        saved=False,
+    )
+    return {"status": "ok", "provider": provider, "deleted": deleted}
 
 
-@app.post("/api/settings/verify-hevy")
-async def verify_hevy_key(request: Request) -> dict[str, Any]:
-    """Test a Hevy API key by calling /v1/workouts/count."""
+@app.post("/api/settings/key/test")
+async def test_api_key(request: Request) -> dict[str, Any]:
+    """Test a stored or candidate credential without returning it."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
-    api_key = body.get("api_key", "").strip()
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if not provider:
+        raise HTTPException(status_code=400, detail="Provider is required")
+
+    api_key_value = body.get("api_key")
+    api_key = api_key_value.strip() if isinstance(api_key_value, str) else ""
+    model_value = body.get("model")
+    model = model_value.strip() if isinstance(model_value, str) else None
+    try:
+        return _test_credential(user_id, provider, api_key, model)
+    except VerificationUnsupportedError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VaultError as exc:
+        raise _vault_http_error(exc) from exc
+
+
+@app.post("/api/settings/verify-hevy")
+async def verify_hevy_key(request: Request) -> dict[str, Any]:
+    """Verify a Hevy API key and record the resulting connection metadata.
+
+    Without an ``api_key`` in the body the stored key of the authenticated
+    user is verified. A credential is only ever activated when the check
+    succeeds, and the plaintext key is never echoed in the response.
+    """
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+    candidate = body.get("api_key") if isinstance(body, dict) else None
+    api_key = candidate.strip() if isinstance(candidate, str) else ""
+    verifies_stored_key = not api_key
+    if verifies_stored_key:
+        credential = _vault_credential(user_id, "hevy", purpose="credential_test")
+        api_key = (
+            credential.api_key.reveal()
+            if credential is not None and credential.api_key is not None
+            else ""
+        )
     if not api_key:
-        raise HTTPException(status_code=400, detail="api_key is required")
+        raise HTTPException(
+            status_code=400,
+            detail="No Hevy API key is stored for this account.",
+        )
 
-    from hevy_client import get_workout_count
+    verification = await run_in_threadpool(verify_hevy_credentials, api_key)
+    if verification.connected:
+        if verifies_stored_key:
+            save_hevy_connection(
+                user_id,
+                state=verification.state.value,
+                api_version=verification.api_version,
+                capabilities=dict(verification.capabilities),
+                tested_at=verification.tested_at.isoformat(),
+                account_username=verification.account_username,
+                account_id=verification.account_id,
+                db_path=DB_PATH,
+            )
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_TEST,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.CONNECTOR,
+            "hevy",
+            user_id=user_id,
+            metadata={"provider": "hevy"},
+        )
+        return {
+            "status": "ok",
+            **verification.as_public_metadata(),
+            "workout_count": verification.workout_count,
+        }
 
-    count = get_workout_count(api_key)
-    if count is not None:
-        return {"status": "ok", "workout_count": count}
+    if verifies_stored_key:
+        # The stored credential stopped working: record the truthful state
+        # instead of leaving a stale "connected" record behind.
+        save_hevy_connection(
+            user_id,
+            state=verification.state.value,
+            api_version=verification.api_version,
+            capabilities=dict(verification.capabilities),
+            tested_at=verification.tested_at.isoformat(),
+            db_path=DB_PATH,
+        )
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_TEST,
+        AuditOutcome.FAILURE,
+        AuditSubjectType.CONNECTOR,
+        "hevy",
+        user_id=user_id,
+        metadata={"provider": "hevy", "reason": "provider_rejected"},
+    )
+    raise HTTPException(
+        status_code=_hevy_verification_status(verification.state),
+        detail=verification.detail,
+    )
+
+
+@app.get("/api/settings/credentials/audit")
+def credential_audit(request: Request, limit: int = Query(50, ge=1, le=200)):
+    """Return the owner's credential lifecycle audit trail (metadata only)."""
+    user_id = _check_api_auth(request)
     return {
-        "status": "error",
-        "detail": "Could not connect to Hevy. Check the API key.",
+        "events": [
+            event.to_public_dict()
+            for event in _vault().recent_events(user_id, limit=limit)
+        ]
     }
 
 
 @app.post("/api/settings/preferences")
-async def save_preferences(request: Request) -> dict[str, str]:
-    """Save user training preferences."""
+async def save_preferences(request: Request) -> dict[str, Any]:
+    """Save user training preferences and validate active programme."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
@@ -1222,6 +2631,19 @@ async def save_preferences(request: Request) -> dict[str, str]:
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
 
+    previous_ai = get_user_preferences(user_id, DB_PATH).get("preferred_ai")
+    training_rules_payload = body.get("training_rules")
+    if training_rules_payload is not None:
+        try:
+            StructuredTrainingRules.from_raw(training_rules_payload)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400, detail=f"Invalid training rules: {exc}"
+            )
+
+    active_before = None
+    if body.get("constraints") is not None or training_rules_payload is not None:
+        active_before = get_active_programme(user_id, DB_PATH)
     save_user_preferences(
         user_id,
         goals=body.get("goals"),
@@ -1231,9 +2653,101 @@ async def save_preferences(request: Request) -> dict[str, str]:
         preferred_ai=preferred_ai,
         ai_model=ai_model,
         custom_rules=body.get("custom_rules"),
+        training_rules=training_rules_payload,
         db_path=DB_PATH,
     )
-    return {"status": "ok"}
+    if preferred_ai is not None and preferred_ai != previous_ai:
+        # Choosing the AI provider decides which third party receives the user's
+        # coaching context, so a real change is a permission change. Only the
+        # validated provider id is recorded, never goals or constraints.
+        _audit(
+            request,
+            AuditEventType.PERMISSION_CHANGED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.PERMISSION,
+            "ai_processor",
+            user_id=user_id,
+            metadata={"change": "provider_selected", "provider": preferred_ai},
+        )
+
+    # Edit lifecycle: validate the existing active programme against the edited
+    # legacy constraints and the versioned structured training rules.
+    response: dict[str, Any] = {"status": "ok"}
+    if body.get("constraints") is not None or training_rules_payload is not None:
+        effective_constraints = body.get("constraints")
+        effective_training_rules = training_rules_payload
+        if effective_constraints is None or effective_training_rules is None:
+            stored_prefs = get_user_preferences(user_id, DB_PATH)
+            if effective_constraints is None:
+                effective_constraints = stored_prefs.get("constraints")
+            if effective_training_rules is None:
+                effective_training_rules = get_training_rules(user_id, DB_PATH)
+        active = active_before
+        if active and active.get("definition"):
+            val = validate_programme(
+                active["definition"],
+                profile_rules=effective_constraints,
+                training_rules=effective_training_rules,
+            )
+            if val.blocking_violations:
+                response["blocking_violations"] = val.blocking_violations
+                response["reconciliation"] = {
+                    "status": "deactivated_requires_remediation",
+                    "message": (
+                        "The active programme contradicts the updated profile "
+                        "constraints, was deactivated, and must be regenerated "
+                        "before activation."
+                    ),
+                }
+            else:
+                response["reconciliation"] = {"status": "reconciled"}
+
+    return response
+
+
+@app.get("/api/settings/rules")
+def get_user_training_rules(request: Request) -> JSONResponse:
+    """Return the current user's versioned structured training rules."""
+    user_id = _check_api_auth(request)
+    rules = get_training_rules(user_id, DB_PATH)
+    return JSONResponse(jsonable_encoder(rules))
+
+
+@app.post("/api/settings/rules")
+async def save_user_training_rules(request: Request) -> JSONResponse:
+    """Validate and save user's structured training rules."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    body = await request.json()
+    try:
+        validated = StructuredTrainingRules.model_validate(body)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Invalid training rules: {exc}")
+    active = get_active_programme(user_id, DB_PATH)
+    validation = None
+    if active and active.get("definition"):
+        prefs = get_user_preferences(user_id, DB_PATH)
+        validation = validate_programme(
+            active["definition"],
+            profile_rules=prefs.get("constraints"),
+            training_rules=validated,
+        )
+    saved = save_training_rules(user_id, validated, DB_PATH)
+
+    response: dict[str, Any] = {"status": "ok", "rules": saved}
+    if validation is not None:
+        if validation.blocking_violations:
+            response["blocking_violations"] = validation.blocking_violations
+            response["reconciliation"] = {
+                "status": "deactivated_requires_remediation",
+                "message": (
+                    "The active programme contradicts the saved training rules "
+                    "and was deactivated. Regenerate it before activation."
+                ),
+            }
+        else:
+            response["reconciliation"] = {"status": "reconciled"}
+    return JSONResponse(jsonable_encoder(response))
 
 
 @app.post("/api/settings/push-subscribe")
@@ -1255,6 +2769,16 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
 
     save_push_subscription(
         user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
+    )
+    # The endpoint and keys are delivery credentials and are never audited.
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        "push_notifications",
+        user_id=user_id,
+        metadata={"change": "granted"},
     )
     return {"status": "ok"}
 
@@ -1281,14 +2805,31 @@ def google_health_callback(request: Request) -> RedirectResponse:
     """Receive Google's redirect, swap the code for a refresh token, store it."""
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
-    if request.query_params.get("error"):
-        return RedirectResponse("/settings?gh=denied", status_code=303)
     user_id = _check_api_auth(request)
+
+    def audit_connect(outcome: AuditOutcome, reason: str | None = None) -> None:
+        details: dict[str, Any] = {"provider": "google_health", "method": "oauth"}
+        if reason:
+            details["reason"] = reason
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_CONNECTED,
+            outcome,
+            AuditSubjectType.CONNECTOR,
+            "google_health",
+            user_id=user_id,
+            metadata=details,
+        )
+
+    if request.query_params.get("error"):
+        audit_connect(AuditOutcome.DENIED, "consent_denied")
+        return RedirectResponse("/settings?gh=denied", status_code=303)
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
     set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
     if not code or not state or not expected or state != expected:
+        audit_connect(AuditOutcome.FAILURE, "state_mismatch")
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
         GH_CLIENT_ID,
@@ -1297,8 +2838,40 @@ def google_health_callback(request: Request) -> RedirectResponse:
         redirect_uri=_gh_redirect_uri(request),
     )
     if not tokens or not tokens.get("refresh_token"):
+        audit_connect(AuditOutcome.FAILURE, "token_exchange_failed")
         return RedirectResponse("/settings?gh=error", status_code=303)
-    set_meta(_GH_TOKEN_KEY, tokens["refresh_token"], DB_PATH, user_id=user_id)
+    try:
+        vault = _vault()
+        if vault.describe(user_id, "google_health").configured:
+            vault.rotate(
+                user_id,
+                "google_health",
+                refresh_token=tokens["refresh_token"],
+                actor="owner",
+                source="oauth_callback",
+            )
+        else:
+            try:
+                vault.store(
+                    user_id,
+                    "google_health",
+                    refresh_token=tokens["refresh_token"],
+                    actor="owner",
+                    source="oauth_callback",
+                )
+            except CredentialExistsError:
+                vault.rotate(
+                    user_id,
+                    "google_health",
+                    refresh_token=tokens["refresh_token"],
+                    actor="owner",
+                    source="oauth_callback",
+                )
+    except VaultError:
+        logger.warning("Could not store a Google Health credential.")
+        audit_connect(AuditOutcome.FAILURE, "credential_store_failed")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    audit_connect(AuditOutcome.SUCCESS)
     return RedirectResponse("/settings?gh=connected", status_code=303)
 
 
@@ -1307,7 +2880,31 @@ def google_health_disconnect(request: Request) -> RedirectResponse:
     """Forget the stored refresh token so the agent stops syncing."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
-    set_meta(_GH_TOKEN_KEY, "", DB_PATH, user_id=user_id)
+    try:
+        _vault().revoke(user_id, "google_health")
+    except CredentialNotFoundError:
+        pass
+    except VaultError:
+        logger.warning("Could not revoke a Google Health credential.")
+        _audit(
+            request,
+            AuditEventType.CONNECTOR_DISCONNECTED,
+            AuditOutcome.FAILURE,
+            AuditSubjectType.CONNECTOR,
+            "google_health",
+            user_id=user_id,
+            metadata={"provider": "google_health", "method": "oauth"},
+        )
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_DISCONNECTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.CONNECTOR,
+        "google_health",
+        user_id=user_id,
+        metadata={"provider": "google_health", "method": "oauth"},
+    )
     return RedirectResponse("/settings?gh=disconnected", status_code=303)
 
 
@@ -1355,8 +2952,89 @@ def api_progress(request: Request):
                 "sessions": len(entries),
             }
         )
+    body_readings = get_body_metrics(
+        limit=14, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     return JSONResponse(
-        jsonable_encoder({"charts": charts_data, "body": _body_charts(user_id=user_id)})
+        jsonable_encoder(
+            {
+                "charts": charts_data,
+                "body": _body_charts(user_id=user_id),
+                # Newest first, each with its source / correction provenance.
+                "body_readings": list(reversed(body_readings)),
+                "setup": _setup_payload(user_id, "progress"),
+            }
+        )
+    )
+
+
+class BodyMetricCorrection(BaseModel):
+    """A user correction (or manual entry) for one day's body-metric reading.
+
+    The owner is always the authenticated session; owner claims are rejected.
+    Value bounds are enforced by ``database.validate_body_metric_changes``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    weight_kg: float | None = None
+    body_fat_pct: float | None = None
+    muscle_pct: float | None = None
+    resting_hr: float | None = None
+    hrv: float | None = None
+    reason: str | None = Field(default=None, max_length=280)
+
+
+@app.post("/api/body-metrics/corrections")
+def correct_body_metric(
+    payload: BodyMetricCorrection, request: Request
+) -> JSONResponse:
+    """Correct a body-metric reading while preserving the original in its lineage."""
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    changes = payload.model_dump(exclude={"date", "reason"}, exclude_none=True)
+    try:
+        result = correct_body_metrics(
+            user_id, payload.date, changes, reason=payload.reason, db_path=DB_PATH
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    result["lineage"] = get_record_lineage(
+        user_id, RecordType.BODY_METRIC, result["date"], DB_PATH
+    )
+    return JSONResponse(jsonable_encoder(result))
+
+
+_RECORD_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_.:@+-]{1,200}$")
+
+
+@app.get("/api/provenance/{record_type}/{record_key}")
+def api_record_lineage(
+    record_type: str, record_key: str, request: Request
+) -> JSONResponse:
+    """Return the authenticated user's revision history for one record."""
+    _check_rate_limit(request, limit=60)
+    user_id = _check_api_auth(request)
+    try:
+        family = RecordType(record_type)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Record not found") from None
+    if not _RECORD_KEY_PATTERN.fullmatch(record_key):
+        raise HTTPException(status_code=404, detail="Record not found")
+    revisions = get_record_lineage(user_id, family, record_key, DB_PATH)
+    if not revisions:
+        raise HTTPException(status_code=404, detail="Record not found")
+    current = next((item for item in revisions if item["applied"]), None)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "record_type": family.value,
+                "record_key": record_key,
+                "current": current,
+                "revisions": revisions,
+            }
+        )
     )
 
 
@@ -1366,21 +3044,63 @@ def api_stats(request: Request):
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
-    start = get_programme_start_date(db_path=DB_PATH, user_id=user_id)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     today = datetime.now(tz=timezone.utc).date()
-    week = week_in_cycle(start, today)
+
+    from programme_runtime import load_programme_runtime
+
+    runtime = load_programme_runtime(user_id, DB_PATH, today=today)
+    start = runtime.start_date
 
     total_sessions = len(volumes)
     total_volume = sum(v["volume"] for v in volumes)
-    days_on_programme = (today - start).days
+    days_on_programme = (today - start).days if start else 0
 
+    # Prefer programme routine identifiers over free-text daily-log focus names.
+    routine_focus = {
+        str(day.get("routine_id")): str(day.get("focus") or "")
+        for day in runtime.days
+        if day.get("routine_id")
+    }
+    focus_names = {
+        str(day.get("focus") or "").strip().lower()
+        for day in runtime.days
+        if day.get("focus")
+    }
     focus_counts: dict[str, int] = {}
-    for log in logs:
-        f = log.get("focus") if isinstance(log, dict) else getattr(log, "focus", None)
-        d = log.get("day") if isinstance(log, dict) else getattr(log, "day", None)
-        if d is not None and f:
-            focus_counts[f] = focus_counts.get(f, 0) + 1
+    try:
+        workout_logs = get_recent_hevy_logs(
+            limit=400, db_path=DB_PATH, user_id=user_id
+        )
+    except Exception:  # noqa: BLE001 - history is optional for statistics
+        workout_logs = []
+    for workout in workout_logs:
+        if not isinstance(workout, dict):
+            continue
+        routine_id = str(workout.get("routine_id") or workout.get("routineId") or "")
+        focus = routine_focus.get(routine_id)
+        if not focus:
+            title = str(workout.get("title") or "")
+            if title.strip().lower() in focus_names:
+                focus = title
+        if focus:
+            focus_counts[focus] = focus_counts.get(focus, 0) + 1
+
+    if not focus_counts:
+        # Legacy history without provider routine IDs still gets a distribution.
+        for log in logs:
+            f = (
+                log.get("focus")
+                if isinstance(log, dict)
+                else getattr(log, "focus", None)
+            )
+            d = (
+                log.get("day")
+                if isinstance(log, dict)
+                else getattr(log, "day", None)
+            )
+            if d is not None and f:
+                focus_counts[f] = focus_counts.get(f, 0) + 1
     distribution = (
         charts.donut(
             [{"label": k, "value": v} for k, v in sorted(focus_counts.items())]
@@ -1422,9 +3142,31 @@ def api_stats(request: Request):
     vol_dist_svg = ai_widgets.volume_distribution(groups)
 
     weights = [(m["date"], m["weight_kg"]) for m in biometrics if m["weight_kg"]]
-    _, dl_entries = _find_lift_series(series, "deadlift")
+    priority_names: list[str] = []
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            name = str(exercise.get("name") or "")
+            if (
+                name
+                and name in series
+                and exercise.get("role")
+                in {"primary_strength", "secondary_compound"}
+                and name not in priority_names
+            ):
+                priority_names.append(name)
+    strength_name = priority_names[0] if priority_names else None
+    if strength_name is None:
+        strength_name = next(
+            (
+                name
+                for name, entries in series.items()
+                if any(e.get("top_weight_kg") for e in entries)
+            ),
+            None,
+        )
+    strength_entries = series.get(strength_name, []) if strength_name else []
     dots_points, ratio_points = [], []
-    for e in dl_entries:
+    for e in strength_entries:
         e1rm = analytics.epley_1rm(e["top_weight_kg"], e["top_reps"])
         bw = _weight_on_or_before(weights, e["date"])
         if not e1rm or not bw:
@@ -1452,10 +3194,14 @@ def api_stats(request: Request):
         else None
     )
 
-    target_ordinal = today.toordinal() + max(0, (CYCLE_WEEKS - week)) * 7
+    target_ordinal = (
+        runtime.end_date.toordinal()
+        if runtime.end_date and runtime.status == "active"
+        else today.toordinal()
+    )
     projections = [
-        _project_lift("Deadlift", dl_entries, target_ordinal, metric="e1rm"),
-        _project_lift("Pull-ups", _find_lift_series(series, "pull")[1], target_ordinal),
+        _project_lift(name, series[name], target_ordinal)
+        for name in priority_names[:3]
     ]
     projections = [p for p in projections if p]
 
@@ -1489,6 +3235,7 @@ def api_stats(request: Request):
                 "ratio_chart": ratio_chart,
                 "projections": projections,
                 "prs": pr_rows,
+                "setup": _setup_payload(user_id, "stats"),
             }
         )
     )
@@ -1497,25 +3244,38 @@ def api_stats(request: Request):
 @app.get("/api/history")
 def api_history(request: Request):
     user_id = _check_api_auth(request)
-    logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
+    logs = get_daily_logs(
+        limit=30, db_path=DB_PATH, user_id=user_id, include_provenance=True
+    )
     levels = _training_levels(user_id=user_id)
-    return JSONResponse(jsonable_encoder({"logs": logs, "calendar": charts.calendar_heatmap(levels)}))
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "logs": logs,
+                "calendar": charts.calendar_heatmap(levels),
+                "setup": _setup_payload(user_id, "history"),
+            }
+        )
+    )
 
 
 @app.get("/api/plan")
 def api_plan(request: Request) -> JSONResponse:
-    """Render only an activated Hevy-native programme; never a static fallback."""
-    from programme_runtime import local_today, resolve_programme_runtime
+    """Render only the tenant's active dynamic programme; never a static fallback."""
+    from programme_runtime import load_programme_runtime
 
     user_id = _check_api_auth(request)
+    runtime = load_programme_runtime(user_id, DB_PATH)
+
+    # Keep the raw activated definition available for backwards-compatible
+    # clients, but every runtime decision below comes from the shared service.
     active = get_active_programme(user_id, db_path=DB_PATH)
     raw_definition = active.get("definition") if active else None
     definition: dict[str, Any] = (
         raw_definition if isinstance(raw_definition, dict) else {}
     )
-    source = active.get("source") if active else None
 
-    if source != "hevy" or not definition:
+    if runtime.setup_required:
         return JSONResponse(
             jsonable_encoder(
                 {
@@ -1533,48 +3293,68 @@ def api_plan(request: Request) -> JSONResponse:
                     "analysis": {},
                     "warnings": [],
                     "programme_spec": {},
+                    "programme_status": runtime.status,
+                    "start_date": None,
+                    "end_date": None,
+                    "requested_duration_weeks": 0,
+                    "rotation_message": runtime.message,
+                    "next_routine_id": None,
+                    "setup": _setup_payload(
+                        user_id,
+                        "plan",
+                        programme_status="setup_required",
+                    ),
                 }
             )
         )
 
-    spec = definition.get("programme_spec") or {}
-    user = get_user_by_id(user_id, DB_PATH)
-    timezone_name = (user.get("timezone") if user else None) or "UTC"
-    runtime = resolve_programme_runtime(
-        active,
-        get_recent_hevy_logs(limit=56, db_path=DB_PATH, user_id=user_id),
-        today=local_today(timezone_name),
-        timezone_name=timezone_name,
+    spec = definition.get("programme_spec") or {
+        "start_date": runtime.start_date.isoformat() if runtime.start_date else None,
+        "duration_weeks": runtime.cycle_weeks,
+        "goal": runtime.goal,
+    }
+    split_name = (
+        runtime.name
+        or definition.get("name")
+        or (active or {}).get("name")
+        or "Hevy programme"
     )
-    cycle_weeks = runtime.cycle_weeks
-    week = runtime.week
-    blocks = runtime.blocks
-    current_block = runtime.block
 
     return JSONResponse(
         jsonable_encoder(
             {
                 "setup_required": False,
-                "is_active_programme": True,
-                "source": "hevy",
+                "is_active_programme": runtime.status == "active",
+                "source": "hevy" if runtime.status != "setup_required" else None,
                 "active_programme": active,
-                "split_name": (
-                    definition.get("name")
-                    or (active or {}).get("name")
-                    or "Hevy programme"
+                "split_name": split_name,
+                "week": runtime.week,
+                "cycle_weeks": runtime.cycle_weeks,
+                "current_block": (
+                    runtime.block.get("name") if runtime.block else None
                 ),
-                "week": week,
-                "cycle_weeks": cycle_weeks,
-                "current_block": (current_block.get("name") if current_block else None),
-                "blocks": blocks,
+                "blocks": runtime.blocks,
                 "days": runtime.days,
                 "programme_status": runtime.status,
                 "rotation_message": runtime.message,
-                "next_routine_id": runtime.next_day.get("routine_id") if runtime.next_day else None,
+                "next_session_date": runtime.next_session_date,
+                "next_routine_id": (
+                    runtime.next_day.get("routine_id") if runtime.next_day else None
+                ),
+                "start_date": runtime.start_date,
+                "end_date": runtime.end_date,
+                "requested_duration_weeks": runtime.cycle_weeks,
+                "review_weeks": runtime.review_weeks,
+                "provenance": programme_view(active),
                 "rules": definition.get("rules") or [],
                 "analysis": definition.get("analysis") or {},
                 "warnings": definition.get("warnings") or [],
                 "programme_spec": spec,
+                "setup": _setup_payload(
+                    user_id,
+                    "plan",
+                    programme_status=runtime.status,
+                ),
             }
         )
     )
@@ -1586,8 +3366,7 @@ def api_programmes(request: Request) -> JSONResponse:
 
     user_id = _check_api_auth(request)
     active = get_active_programme(user_id, db_path=DB_PATH)
-    keys = get_user_api_keys(user_id, db_path=DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    sync_state = _read_hevy_sync_state(user_id)
 
     empty_source: dict[str, Any] = {
         "username": None,
@@ -1600,33 +3379,72 @@ def api_programmes(request: Request) -> JSONResponse:
     connection: dict[str, Any]
     source = empty_source
 
-    if not hevy_key:
+    try:
+        _hevy_api_key_for_user(user_id)
+    except HTTPException as exc:
         connection = {
-            "state": "disconnected",
-            "detail": "Add your Hevy API key in Settings to import routines.",
+            "state": _connection_state_for_status(exc.status_code),
+            "detail": str(exc.detail),
             "username": None,
+            "warnings": [],
+            "counts": {},
         }
     else:
         try:
-            training_data = _load_hevy_training_for_user(user_id)
-            source = serialise_hevy_source(training_data)
+            snapshot = _load_hevy_snapshot_for_user(user_id)
+            prefs = get_user_preferences(user_id, DB_PATH)
+            source = serialise_hevy_source(
+                snapshot.data,
+                profile_rules=prefs.get("constraints"),
+                training_rules=get_training_rules(user_id, DB_PATH),
+            )
             connection = {
-                "state": "connected",
+                "state": "partial" if snapshot.is_partial else "connected",
                 "detail": None,
-                "username": training_data.username,
+                "username": snapshot.data.username,
             }
+            connection["warnings"] = list(snapshot.warnings)
+            connection["counts"] = dict(snapshot.counts)
+            connection["fetched_at"] = snapshot.fetched_at
+            _record_hevy_sync_state(user_id, snapshot)
+            sync_state = _read_hevy_sync_state(user_id)
         except HTTPException as exc:
             connection = {
-                "state": "error",
+                "state": _connection_state_for_status(exc.status_code),
                 "detail": str(exc.detail),
                 "username": None,
+                "warnings": [],
+                "counts": {},
             }
+
+    connection.setdefault("warnings", [])
+    connection.setdefault("counts", {})
+    connection["owner"] = _authenticated_owner(user_id)
+    connection["last_successful_sync"] = sync_state.get("synced_at")
+    connection["stale"] = _hevy_sync_is_stale(sync_state)
+
+    if active and active.get("source") == "hevy":
+        if connection["state"] == "connected":
+            source_drift = detect_source_drift(active.get("definition"), source)
+        else:
+            source_drift = {
+                "status": "source_unavailable",
+                "has_changes": False,
+                "routines": [],
+                "summary": {"renamed": 0, "content_changed": 0, "removed": 0},
+                "detail": (
+                    "Reconnect Hevy to check whether your selected routines have changed."
+                ),
+            }
+    else:
+        source_drift = detect_source_drift(None, source)
 
     return JSONResponse(
         jsonable_encoder(
             {
                 "active_programme": active,
                 "current_state": active,
+                "source_drift": source_drift,
                 "templates": [],
                 "connection": connection,
                 "source": source,
@@ -1636,6 +3454,194 @@ def api_programmes(request: Request) -> JSONResponse:
                     "default_weeks": 12,
                 },
                 "goals": goal_options(),
+                "cadence": {
+                    "modes": [
+                        {
+                            "key": "rolling",
+                            "label": "Rolling rotation",
+                            "description": (
+                                "Keep the routine order and advance one routine per "
+                                "training day."
+                            ),
+                        },
+                        {
+                            "key": "weekly",
+                            "label": "Weekly calendar",
+                            "description": (
+                                "Place routines on the weekdays you actually train."
+                            ),
+                        },
+                    ],
+                    "weekdays": [
+                        {"index": index, "name": name}
+                        for index, name in enumerate(
+                            (
+                                "Monday",
+                                "Tuesday",
+                                "Wednesday",
+                                "Thursday",
+                                "Friday",
+                                "Saturday",
+                                "Sunday",
+                            )
+                        )
+                    ],
+                    "roles": [
+                        {"key": "required", "label": "Required"},
+                        {"key": "optional", "label": "Optional"},
+                        {"key": "rotating", "label": "Rotating"},
+                    ],
+                },
+            }
+        )
+    )
+
+
+@app.post("/api/programmes/refresh")
+def api_programmes_refresh(request: Request) -> JSONResponse:
+    """Re-read the tenant's Hevy source and record the sync result."""
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        snapshot = _load_hevy_snapshot_for_user(user_id)
+    except HTTPException as exc:
+        return JSONResponse(
+            jsonable_encoder(
+                {
+                    "state": _connection_state_for_status(exc.status_code),
+                    "detail": str(exc.detail),
+                    "source": None,
+                    "counts": {},
+                    "warnings": [],
+                    "last_successful_sync": _read_hevy_sync_state(user_id).get(
+                        "synced_at"
+                    ),
+                    "stale": True,
+                }
+            ),
+            status_code=200,
+        )
+
+    _record_hevy_sync_state(user_id, snapshot)
+    sync_state = _read_hevy_sync_state(user_id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "state": "partial" if snapshot.is_partial else "ok",
+                "detail": None,
+                "source": serialise_hevy_source(snapshot.data),
+                "counts": dict(snapshot.counts),
+                "warnings": list(snapshot.warnings),
+                "last_successful_sync": sync_state.get("synced_at"),
+                "stale": False,
+            }
+        )
+    )
+
+
+@app.get("/api/programmes/history")
+def api_programme_history(
+    request: Request,
+    routine_ids: str | None = None,
+) -> JSONResponse:
+    """Expose deterministic workout matches and exercise baselines."""
+
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    selected = (
+        [item.strip() for item in routine_ids.split(",") if item.strip()]
+        if routine_ids
+        else None
+    )
+    overrides = get_routine_match_overrides(user_id, DB_PATH)
+    try:
+        analysis = analyse_history(
+            training_data,
+            selected,
+            overrides=overrides,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return JSONResponse(
+        jsonable_encoder({"history": analysis, "overrides": overrides})
+    )
+
+
+@app.post("/api/programmes/history/override")
+async def api_programme_history_override(request: Request) -> JSONResponse:
+    """Confirm or correct an ambiguous workout-to-routine match."""
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        body = await request.json()
+    except (json.JSONDecodeError, TypeError):
+        body = {}
+
+    pattern_type = str(body.get("pattern_type") or "").strip().lower()
+    pattern_value = str(body.get("pattern_value") or "").strip()
+    routine_id = str(body.get("routine_id") or "").strip()
+    if pattern_type not in {"workout", "title", "exercise_signature"}:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "pattern_type must be one of: workout, title, exercise_signature."
+            ),
+        )
+    if not pattern_value or not routine_id:
+        raise HTTPException(
+            status_code=422,
+            detail="pattern_value and routine_id are required.",
+        )
+
+    training_data = _load_hevy_training_for_user(user_id)
+    routine = next(
+        (item for item in training_data.routines if item.id == routine_id),
+        None,
+    )
+    if routine is None:
+        raise HTTPException(
+            status_code=422,
+            detail="The selected routine is not available in the current Hevy source.",
+        )
+    if pattern_type == "workout" and not any(
+        workout.id == pattern_value for workout in training_data.recent_workouts
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="The selected workout is not available in the current history.",
+        )
+
+    snapshot = build_snapshot(
+        routine,
+        training_data.exercise_templates,
+        user_id=user_id,
+    )
+    save_routine_snapshots(user_id, [snapshot.to_dict()], DB_PATH)
+    save_routine_match_override(
+        user_id,
+        pattern_type=pattern_type,
+        pattern_value=pattern_value,
+        routine_id=routine.id,
+        routine_snapshot_id=snapshot.id,
+        db_path=DB_PATH,
+    )
+    overrides = get_routine_match_overrides(user_id, DB_PATH)
+    analysis = analyse_history(
+        training_data,
+        overrides=overrides,
+        user_id=user_id,
+    )
+    save_routine_workout_matches(user_id, analysis["matches"], DB_PATH)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "status": "ok",
+                "snapshot": snapshot.to_dict(),
+                "history": analysis,
+                "overrides": overrides,
             }
         )
     )
@@ -1643,32 +3649,60 @@ def api_programmes(request: Request) -> JSONResponse:
 
 @app.get("/api/settings")
 def api_settings(request: Request):
-    user_id = _check_api_auth(request)
+    # Read-only and allowed while an account is locked for deletion: the Settings
+    # page hosts the deletion progress view and must stay reachable to show it.
+    user_id = _check_api_auth(request, allow_closing=True)
 
     prefs = get_user_preferences(user_id, DB_PATH)
-    keys = get_user_api_keys(user_id, DB_PATH)
     ai_providers = available_providers()
+    vault = _vault()
+    summaries = vault.list_credentials(user_id)
 
     user_keys: dict[str, dict[str, Any]] = {}
     known_providers = ["hevy", *[item["id"] for item in ai_providers]]
     for provider_id in known_providers:
-        key_data = keys.get(provider_id, {})
-        key_value = key_data.get("api_key", "")
-        masked = None
-        if key_value:
-            masked = f"••••••••{key_value[-4:]}" if len(key_value) >= 4 else "••••••••"
-
-        extra = key_data.get("extra")
-        configured_model = extra.get("model") if isinstance(extra, dict) else None
+        summary = summaries[provider_id]
+        public = summary.to_public_dict()
         user_keys[provider_id] = {
-            "has_key": bool(key_value),
-            "masked": masked,
-            "model": configured_model,
+            "has_key": public["has_key"],
+            "masked": public["masked"],
+            "model": public["model"],
+            "status": public["status"],
+            "version": public["version"],
+            "last_tested_at": public["last_tested_at"],
+            "last_test_status": public["last_test_status"],
+            "revoked_at": public["revoked_at"],
         }
 
-    gh_connected = bool(get_meta(_GH_TOKEN_KEY, DB_PATH, user_id=user_id))
+    gh_connected = summaries["google_health"].configured
+    credential_availability = vault.availability().to_public_dict()
+    try:
+        credential_events = [
+            event.to_public_dict() for event in vault.recent_events(user_id, limit=20)
+        ]
+    except VaultError:
+        credential_events = []
     gh_configured = bool(GH_CLIENT_ID and GH_CLIENT_SECRET)
     gh_status = request.query_params.get("gh")
+
+    hevy_connection = get_hevy_connection(user_id, DB_PATH)
+    hevy_connection_payload: dict[str, Any] = {
+        "state": "not_connected",
+        "account_username": None,
+        "account_id": None,
+        "api_version": None,
+        "capabilities": {},
+        "tested_at": None,
+    }
+    if hevy_connection:
+        hevy_connection_payload = {
+            "state": hevy_connection.get("state") or "unverified",
+            "account_username": hevy_connection.get("account_username"),
+            "account_id": hevy_connection.get("account_id"),
+            "api_version": hevy_connection.get("api_version"),
+            "capabilities": hevy_connection.get("capabilities") or {},
+            "tested_at": hevy_connection.get("tested_at"),
+        }
 
     registry = build_builtin_registry()
     ctx = ConnectorContext(user_id=user_id)
@@ -1696,10 +3730,14 @@ def api_settings(request: Request):
         jsonable_encoder(
             {
                 "user_prefs": prefs,
+                "training_rules": get_training_rules(user_id, DB_PATH),
                 "user_keys": user_keys,
+                "hevy_connection": hevy_connection_payload,
                 "ai_providers": ai_providers,
                 "gh_connected": gh_connected,
                 "gh_configured": gh_configured,
+                "credential_vault": credential_availability,
+                "credential_events": credential_events,
                 "gh_status": gh_status,
                 "connectors_info": connectors_info,
                 "vapid_public_key": os.environ.get("VAPID_PUBLIC_KEY"),
@@ -1716,8 +3754,12 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     _check_rate_limit(request, limit=2)
     user_id = _check_api_auth(request)
 
-    keys = get_user_api_keys(user_id, DB_PATH)
-    hevy_key = keys.get("hevy", {}).get("api_key", "").strip()
+    credential = _vault_credential(user_id, "hevy", purpose="hevy_sync")
+    hevy_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
     if not hevy_key:
         raise HTTPException(
             status_code=400,
@@ -1727,7 +3769,26 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     from scripts.sync_history import sync_all
 
     result = sync_all(hevy_key, DB_PATH, user_id=user_id)
-    if "error" in result:
+    sync_failed = "error" in result
+    # The provider's error text is never audited; only a fixed reason code.
+    _audit(
+        request,
+        AuditEventType.CONNECTOR_SYNC,
+        AuditOutcome.FAILURE if sync_failed else AuditOutcome.SUCCESS,
+        AuditSubjectType.CONNECTOR,
+        "hevy",
+        user_id=user_id,
+        metadata=(
+            {"provider": "hevy", "reason": "provider_error"}
+            if sync_failed
+            else {
+                "provider": "hevy",
+                "records_found": int(result.get("workouts_found", 0)),
+                "records_processed": int(result.get("processed", 0)),
+            }
+        ),
+    )
+    if sync_failed:
         err_msg = str(result["error"])
         save_notification(
             user_id,
@@ -1750,6 +3811,316 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
         db_path=DB_PATH,
     )
     return {"status": "ok", **result}
+
+
+class AccountDeletionBody(BaseModel):
+    """A confirmed deletion request. The owner is always the signed-in session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: Literal["account", "health_data"]
+    confirmation: str = Field(min_length=1, max_length=320)
+
+
+_DELETION_HTTP_STATUS = {
+    "invalid_scope": 422,
+    "confirmation_mismatch": 400,
+    "not_eligible": 403,
+    "already_requested": 409,
+    "not_cancellable": 409,
+    "not_found": 404,
+}
+
+
+def _deletion_http_error(exc: account_deletion.DeletionError) -> HTTPException:
+    return HTTPException(
+        status_code=_DELETION_HTTP_STATUS.get(exc.code, 400), detail=exc.code
+    )
+
+
+@app.get("/api/account/deletion")
+def api_account_deletion_status(request: Request) -> JSONResponse:
+    """Eligibility, the exact confirmation text, and the latest deletion request."""
+    user_id = _check_api_auth(request, allow_closing=True)
+    return JSONResponse(jsonable_encoder(account_deletion.describe(DB_PATH, user_id)))
+
+
+@app.post("/api/account/deletion")
+def api_account_deletion_request(
+    body: AccountDeletionBody, request: Request
+) -> JSONResponse:
+    """Confirm and start deleting health data or closing the signed-in account."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        status = account_deletion.request_deletion(
+            DB_PATH, user_id, body.scope, body.confirmation
+        )
+        # Runs now only when the request is already due (health data, or a
+        # zero-day window); otherwise the scheduler executes it after the window.
+        status = (
+            account_deletion.execute_deletion(DB_PATH, status["request_id"]) or status
+        )
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+
+    finished = status["state"] == account_deletion.DeletionState.COMPLETED
+    response = JSONResponse(
+        jsonable_encoder(status), status_code=200 if finished else 202
+    )
+    if finished and status["scope"] == account_deletion.DeletionScope.ACCOUNT:
+        request.session.clear()
+        response.headers["Clear-Site-Data"] = '"cache", "cookies", "storage"'
+    return response
+
+
+@app.post("/api/account/deletion/cancel")
+def api_account_deletion_cancel(request: Request) -> JSONResponse:
+    """Cancel the signed-in user's pending closure while its window is open."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request, allow_closing=True)
+    try:
+        status = account_deletion.cancel_deletion(DB_PATH, user_id)
+    except account_deletion.DeletionError as exc:
+        raise _deletion_http_error(exc) from exc
+    return JSONResponse(jsonable_encoder(status))
+
+
+# ---------------------------------------------------------------------------
+# Administrative surfaces
+# ---------------------------------------------------------------------------
+#
+# Every route below resolves the actor from the signed session and checks the
+# central matrix in ``permissions`` before touching another tenant. A 403 here is
+# the authoritative denial; hiding a control in the SPA is not a security
+# boundary. Target ids are administrative identifiers only, never authorisation.
+
+
+class AdminStatusBody(BaseModel):
+    """Operator status transition for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "suspended"]
+
+
+class AdminRoleBody(BaseModel):
+    """Owner-only role assignment for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["owner", "admin", "support", "user"]
+
+
+def _admin_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, AccountNotFoundError):
+        return HTTPException(status_code=404, detail="Account not found.")
+    if isinstance(exc, (PermissionDeniedError, admin_service.RoleHierarchyError)):
+        return HTTPException(status_code=403, detail="Forbidden.")
+    if isinstance(exc, admin_service.LastOwnerError):
+        return HTTPException(status_code=409, detail="The last owner cannot be removed.")
+    if isinstance(exc, admin_service.AdminValidationError):
+        return HTTPException(status_code=422, detail="Invalid administrative request.")
+    if isinstance(exc, AccountInactiveError):
+        return HTTPException(status_code=403, detail="The account is not active.")
+    if isinstance(exc, AccountError):
+        return HTTPException(status_code=400, detail="The account change was refused.")
+    if isinstance(exc, sqlite3.Error):
+        return HTTPException(status_code=503, detail="Service temporarily unavailable.")
+    return HTTPException(status_code=400, detail="The administrative request failed.")
+
+
+_ADMIN_ERRORS = (
+    AccountNotFoundError,
+    AccountInactiveError,
+    AccountError,
+    PermissionDeniedError,
+    admin_service.RoleHierarchyError,
+    admin_service.LastOwnerError,
+    admin_service.AdminValidationError,
+    sqlite3.Error,
+)
+
+
+def _check_permission(
+    request: Request,
+    permission: Permission,
+    *,
+    target_user_id: str | None = None,
+) -> str:
+    """Return the authenticated actor id after enforcing *permission*.
+
+    Authentication and the account gate come first so a suspended, closing or
+    missing account cannot reach the permission check at all. The actor id is
+    never taken from the request body.
+    """
+
+    actor_user_id = _check_api_auth(request)
+    try:
+        authorize(actor_user_id, permission, DB_PATH)
+    except PermissionDeniedError as exc:
+        _audit(
+            request,
+            AuditEventType.ADMIN_ACCESS,
+            AuditOutcome.DENIED,
+            AuditSubjectType.PERMISSION,
+            subject_id=permission.value,
+            user_id=actor_user_id,
+            metadata={
+                "permission": permission.value,
+                "target": target_user_id or "-",
+            },
+        )
+        raise HTTPException(status_code=403, detail="Forbidden.") from exc
+    _audit(
+        request,
+        AuditEventType.ADMIN_ACCESS,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id or actor_user_id,
+        user_id=actor_user_id,
+        metadata={"permission": permission.value},
+    )
+    return actor_user_id
+
+
+@app.get("/api/admin/accounts")
+def api_admin_accounts(request: Request) -> JSONResponse:
+    """List accounts for an authorised account manager."""
+    actor_user_id = _check_permission(request, Permission.ACCOUNT_MANAGEMENT)
+    accounts = admin_service.list_accounts(actor_user_id, DB_PATH)
+    return JSONResponse(
+        {"accounts": accounts}, headers={"Cache-Control": "private, no-store"}
+    )
+
+
+@app.post("/api/admin/accounts/{target_user_id}/status")
+def api_admin_account_status(
+    target_user_id: str, body: AdminStatusBody, request: Request
+) -> JSONResponse:
+    """Suspend or reactivate a lower-ranked account."""
+    actor_user_id = _check_permission(
+        request, Permission.ACCOUNT_MANAGEMENT, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_status(
+            actor_user_id, target_user_id, body.status, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:  # mapped to a stable, non-sensitive response
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/admin/accounts/{target_user_id}/role")
+def api_admin_account_role(
+    target_user_id: str, body: AdminRoleBody, request: Request
+) -> JSONResponse:
+    """Assign an administrative role. Owner-only."""
+    actor_user_id = _check_permission(
+        request, Permission.CONFIGURATION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_role(
+            actor_user_id, target_user_id, body.role, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        subject_id=body.role,
+        user_id=actor_user_id,
+        metadata={"target": target_user_id, "role": body.role},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/support")
+def api_admin_support_summary(target_user_id: str, request: Request) -> JSONResponse:
+    """Return non-secret support context for another tenant."""
+    actor_user_id = _check_permission(
+        request, Permission.SUPPORT_ACCESS, target_user_id=target_user_id
+    )
+    try:
+        summary = admin_service.support_summary(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/diagnostics")
+def api_admin_connector_diagnostics(
+    target_user_id: str, request: Request
+) -> JSONResponse:
+    """Return connector diagnostics for another tenant to a support engineer."""
+    actor_user_id = _check_permission(
+        request, Permission.CONNECTOR_DIAGNOSTICS, target_user_id=target_user_id
+    )
+    try:
+        status_code, payload = admin_service.connector_diagnostics(
+            actor_user_id, target_user_id, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/admin/accounts/{target_user_id}/export")
+def api_admin_export(target_user_id: str, request: Request) -> JSONResponse:
+    """Export a target tenant's account/programme envelope."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_EXPORT, target_user_id=target_user_id
+    )
+    try:
+        payload = admin_service.export_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_EXPORTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.DATA,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"schema_version": payload["schema_version"]},
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
+
+
+@app.delete("/api/admin/accounts/{target_user_id}")
+def api_admin_delete_account(target_user_id: str, request: Request) -> JSONResponse:
+    """Tombstone a lower-ranked account and revoke its sessions."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_DELETION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.delete_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"scope": "account_access"},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/config")
+def api_admin_config(request: Request) -> JSONResponse:
+    """Return non-secret deployment configuration to an owner."""
+    actor_user_id = _check_permission(request, Permission.CONFIGURATION)
+    summary = admin_service.configuration_summary(actor_user_id, DB_PATH)
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/notifications")
@@ -1833,6 +4204,25 @@ def api_chat_history(request: Request):
     )
 
 
+def _frontend_asset(full_path: str) -> Path | None:
+    """Return a real file inside the SPA bundle, rejecting path traversal.
+
+    ``full_path`` comes straight from the request target, so ``..`` segments (or
+    an encoded equivalent) must never be allowed to escape the bundled frontend
+    directory. The resolved candidate is checked for containment as well as
+    existence so symlinks cannot be used as an escape hatch.
+    """
+
+    root = FRONTEND_DIST.resolve()
+    try:
+        candidate = (root / full_path).resolve()
+    except (OSError, ValueError):
+        return None
+    if root in candidate.parents and candidate.is_file():
+        return candidate
+    return None
+
+
 @app.api_route("/{full_path:path}", methods=["GET", "HEAD"])
 async def catch_all(full_path: str, request: Request):
     if full_path.startswith(
@@ -1841,8 +4231,8 @@ async def catch_all(full_path: str, request: Request):
         raise HTTPException(status_code=404, detail="Not found")
 
     if full_path:
-        file_path = FRONTEND_DIST / full_path
-        if file_path.is_file():
+        file_path = _frontend_asset(full_path)
+        if file_path is not None:
             return FileResponse(file_path)
 
     return FileResponse(FRONTEND_DIST / "index.html")

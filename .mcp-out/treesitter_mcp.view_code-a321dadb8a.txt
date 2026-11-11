@@ -1,0 +1,131 @@
+# health.py (L88-L217 of 217)
+  88 | def readiness_status(db_path: str) -> tuple[int, dict[str, str]]:
+  89 |     """Return the intentionally terse public readiness response."""
+  90 | 
+  91 |     ready, _reason = database_readiness(db_path)
+  92 |     if ready:
+  93 |         return 200, {"status": "ready"}
+  94 |     return 503, {"status": "not_ready"}
+  95 | 
+  96 | 
+  97 | def _safe_user_dependency_state(db_path: str, user_id: str) -> dict[str, Any]:
+  98 |     """Read non-secret per-user dependency configuration for diagnostics."""
+  99 | 
+ 100 |     with _open_readonly(db_path) as conn:
+ 101 |         preferred_row = conn.execute(
+ 102 |             "SELECT preferred_ai FROM user_preferences WHERE user_id = ?",
+ 103 |             (user_id,),
+ 104 |         ).fetchone()
+ 105 |         preferred_ai = (
+ 106 |             str(preferred_row[0]).strip().lower()
+ 107 |             if preferred_row and preferred_row[0]
+ 108 |             else "gemini"
+ 109 |         )
+ 110 |         configured = set(configured_provider_ids(conn, user_id))
+ 111 | 
+ 112 |     registry = build_builtin_registry()
+ 113 |     connector_providers = set(registry.providers())
+ 114 |     configured_connectors = connector_providers.intersection(configured)
+ 115 | 
+ 116 |     ai_configured = preferred_ai in configured
+ 117 |     if preferred_ai == "gemini" and os.environ.get("GEMINI_API_KEY", "").strip():
+ 118 |         ai_configured = True
+ 119 | 
+ 120 |     return {
+ 121 |         "ai": {
+ 122 |             "status": "configured" if ai_configured else "not_configured",
+ 123 |             "provider": preferred_ai,
+ 124 |         },
+ 125 |         "connectors": {
+ 126 |             "status": "available",
+ 127 |             "registered": len(connector_providers),
+ 128 |             "configured": len(configured_connectors),
+ 129 |         },
+ 130 |     }
+ 131 | 
+ 132 | 
+ 133 | def authenticated_diagnostics(db_path: str, user_id: str) -> tuple[int, dict[str, Any]]:
+ 134 |     """Return safe aggregate dependency health for one authenticated user."""
+ 135 | 
+ 136 |     db_ready, db_reason = database_readiness(db_path)
+ 137 |     payload: dict[str, Any] = {
+ 138 |         "status": "ok" if db_ready else "degraded",
+ 139 |         "components": {
+ 140 |             "database": {
+ 141 |                 "status": "ok" if db_ready else "error",
+ 142 |                 "reason": db_reason,
+ 143 |             },
+ 144 |             # The current web deployment has no external queue/worker dependency;
+ 145 |             # scheduled agent work shares SQLite but is not required to serve an
+ 146 |             # authenticated HTTP request. Keep this explicit instead of inventing
+ 147 |             # a Redis/Celery dependency that does not exist.
+ 148 |             "worker_dependencies": {"status": "not_applicable"},
+ 149 |         },
+ 150 |     }
+ 151 | 
+ 152 |     if db_ready:
+ 153 |         try:
+ 154 |             payload["components"].update(_safe_user_dependency_state(db_path, user_id))
+ 155 |         except (OSError, sqlite3.Error, ValueError):
+ 156 |             payload["status"] = "degraded"
+ 157 |             payload["components"]["dependencies"] = {"status": "error"}
+ 158 | 
+ 159 |     return (200 if payload["status"] == "ok" else 503), payload
+ 160 | 
+ 161 | 
+ 162 | class OperationalHealthMiddleware:
+ 163 |     """Serve public liveness/readiness before authentication middleware.
+ 164 | 
+ 165 |     This middleware is installed only at the canonical production ASGI
+ 166 |     entrypoint and is wrapped by SecurityHeadersMiddleware, so probes remain
+ 167 |     public while still receiving the normal security headers.
+ 168 |     """
+ 169 | 
+ 170 |     def __init__(self, app: ASGIApp, *, db_path: str) -> None:
+ 171 |         self.app = app
+ 172 |         self.db_path = db_path
+ 173 | 
+ 174 |     async def __call__(self, scope: dict[str, Any], receive: Receive, send: Send) -> None:
+ 175 |         if scope.get("type") == "http" and scope.get("method") == "GET":
+ 176 |             path = scope.get("path")
+ 177 |             if path == "/livez":
+ 178 |                 response = JSONResponse(
+ 179 |                     {"status": "ok"},
+ 180 |                     headers={"Cache-Control": "no-store"},
+ 181 |                 )
+ 182 |                 await response(scope, receive, send)
+ 183 |                 return
+ 184 |             if path == "/readyz":
+ 185 |                 status_code, payload = readiness_status(self.db_path)
+ 186 |                 response = JSONResponse(
+ 187 |                     payload,
+ 188 |                     status_code=status_code,
+ 189 |                     headers={"Cache-Control": "no-store"},
+ 190 |                 )
+ 191 |                 await response(scope, receive, send)
+ 192 |                 return
+ 193 |         await self.app(scope, receive, send)
+ 194 | 
+ 195 | 
+ 196 | def install_authenticated_diagnostics(app: FastAPI, *, db_path: str) -> None:
+ 197 |     """Install the tenant-scoped diagnostics route exactly once."""
+ 198 | 
+ 199 |     path = "/api/diagnostics/health"
+ 200 |     if any(getattr(route, "path", None) == path for route in app.routes):
+ 201 |         return
+ 202 | 
+ 203 |     @app.get(path, include_in_schema=False)
+ 204 |     def diagnostics(request: Request) -> JSONResponse:
+ 205 |         # Require the same complete signed-session identity as the global
+ 206 |         # mutation boundary. Dependency details are never available in legacy
+ 207 |         # anonymous mode or from an incomplete session.
+ 208 |         user = request.session.get("user")
+ 209 |         user_id = request.session.get("user_id")
+ 210 |         if not user or not isinstance(user_id, str) or not user_id.strip():
+ 211 |             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+ 212 |         status_code, payload = authenticated_diagnostics(db_path, user_id.strip())
+ 213 |         return JSONResponse(
+ 214 |             payload,
+ 215 |             status_code=status_code,
+ 216 |             headers={"Cache-Control": "private, no-store"},
+ 217 |         )

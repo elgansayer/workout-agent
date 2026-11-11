@@ -1,0 +1,151 @@
+# secret_vault.py (L926-L1075 of 1644)
+ 926 |             and current.configured
+ 927 |         ):
+ 928 |             raise CredentialExistsError("A credential already exists; rotate it instead.")
+ 929 | 
+ 930 |         verified = False
+ 931 |         if verifier is not None:
+ 932 |             candidate = self._candidate(spec, supplied, client_id, model, current)
+ 933 |             result = _run_verifier(verifier, candidate)
+ 934 |             if not result.ok:
+ 935 |                 raise VerificationFailedError(result)
+ 936 |             verified = True
+ 937 | 
+ 938 |         sealed = {
+ 939 |             name: encryption.seal(
+ 940 |                 master,
+ 941 |                 user_id=uid,
+ 942 |                 provider=spec.provider,
+ 943 |                 field_name=name,
+ 944 |                 plaintext=value,
+ 945 |             )
+ 946 |             for name, value in supplied.items()
+ 947 |         }
+ 948 |         primary = self._primary_field(spec)
+ 949 |         now = self._now()
+ 950 | 
+ 951 |         with self._db() as conn:
+ 952 |             fresh = self._fetch(conn, uid, spec.provider)
+ 953 |             if (fresh is None) != (current is None) or (
+ 954 |                 fresh is not None
+ 955 |                 and current is not None
+ 956 |                 and fresh.key_version != current.key_version
+ 957 |             ):
+ 958 |                 raise CredentialConflictError("The credential changed; try again.")
+ 959 | 
+ 960 |             if fresh is None:
+ 961 |                 version = 1
+ 962 |                 self._insert_row(
+ 963 |                     conn,
+ 964 |                     uid,
+ 965 |                     spec.provider,
+ 966 |                     sealed,
+ 967 |                     client_id,
+ 968 |                     model,
+ 969 |                     _hint_for(supplied[primary]) if primary in supplied else "",
+ 970 |                     verified,
+ 971 |                     now,
+ 972 |                 )
+ 973 |             elif action is CredentialAction.ROTATE:
+ 974 |                 version = fresh.key_version + 1
+ 975 |                 columns = {
+ 976 |                     name: sealed.get(name, getattr(fresh, name) or None)
+ 977 |                     for name in SECRET_FIELDS
+ 978 |                 }
+ 979 |                 hint = (
+ 980 |                     _hint_for(supplied[primary])
+ 981 |                     if primary in supplied
+ 982 |                     else (fresh.key_hint or "")
+ 983 |                 )
+ 984 |                 self._update_row(
+ 985 |                     conn,
+ 986 |                     fresh,
+ 987 |                     columns,
+ 988 |                     client_id=fresh.client_id,
+ 989 |                     extra_json=self._extra_json(model, fresh),
+ 990 |                     hint=hint,
+ 991 |                     version=version,
+ 992 |                     status=CredentialStatus.ACTIVE,
+ 993 |                     created_at=fresh.created_at,
+ 994 |                     rotated_at=now,
+ 995 |                     revoked_at=None,
+ 996 |                     verified=verified,
+ 997 |                     now=now,
+ 998 |                 )
+ 999 |             else:
+1000 |                 # Re-saving after a revoke (or an empty placeholder row).
+1001 |                 version = fresh.key_version + 1
+1002 |                 columns = {name: sealed.get(name) for name in SECRET_FIELDS}
+1003 |                 self._update_row(
+1004 |                     conn,
+1005 |                     fresh,
+1006 |                     columns,
+1007 |                     client_id=client_id,
+1008 |                     extra_json=self._extra_json(model, None),
+1009 |                     hint=_hint_for(supplied[primary]) if primary in supplied else "",
+1010 |                     version=version,
+1011 |                     status=CredentialStatus.ACTIVE,
+1012 |                     created_at=now,
+1013 |                     rotated_at=None,
+1014 |                     revoked_at=None,
+1015 |                     verified=verified,
+1016 |                     now=now,
+1017 |                 )
+1018 | 
+1019 |             self._insert_audit(
+1020 |                 conn,
+1021 |                 user_id=uid,
+1022 |                 provider=spec.provider,
+1023 |                 action=action,
+1024 |                 outcome="success",
+1025 |                 detail="verified" if verified else None,
+1026 |                 actor=actor,
+1027 |                 source=source,
+1028 |                 version=version,
+1029 |                 now=now,
+1030 |             )
+1031 |             stored = self._fetch(conn, uid, spec.provider)
+1032 |         return _summary_for(spec, stored)
+1033 | 
+1034 |     @staticmethod
+1035 |     def _primary_field(spec: ProviderSpec) -> str:
+1036 |         return "api_key" if "api_key" in spec.fields else spec.fields[0]
+1037 | 
+1038 |     @staticmethod
+1039 |     def _extra_json(model: str | None, current: _Row | None) -> str | None:
+1040 |         if model is not None:
+1041 |             return json.dumps({"model": model})
+1042 |         return current.extra_json if current is not None else None
+1043 | 
+1044 |     @staticmethod
+1045 |     def _candidate(
+1046 |         spec: ProviderSpec,
+1047 |         supplied: Mapping[str, str],
+1048 |         client_id: str | None,
+1049 |         model: str | None,
+1050 |         current: _Row | None,
+1051 |     ) -> ResolvedCredential:
+1052 |         return ResolvedCredential(
+1053 |             provider=spec.provider,
+1054 |             version=0,
+1055 |             api_key=SecretValue(supplied["api_key"]) if "api_key" in supplied else None,
+1056 |             client_id=client_id,
+1057 |             client_secret=(
+1058 |                 SecretValue(supplied["client_secret"])
+1059 |                 if "client_secret" in supplied
+1060 |                 else None
+1061 |             ),
+1062 |             refresh_token=(
+1063 |                 SecretValue(supplied["refresh_token"])
+1064 |                 if "refresh_token" in supplied
+1065 |                 else None
+1066 |             ),
+1067 |             model=model or (current.model if current is not None else None),
+1068 |         )
+1069 | 
+1070 |     def _insert_row(
+1071 |         self,
+1072 |         conn: sqlite3.Connection,
+1073 |         uid: str,
+1074 |         provider: str,
+1075 |         sealed: Mapping[str, str],

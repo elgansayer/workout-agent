@@ -1,0 +1,127 @@
+# main.py (L195-L320 of 658)
+ 195 | def _resolve_provider(
+ 196 |     config: Config,
+ 197 |     *,
+ 198 |     user_id: str | None = None,
+ 199 | ) -> AIProvider:
+ 200 |     """Resolve the AI provider for a run, scoping to *user_id* when given."""
+ 201 |     return resolve_provider(
+ 202 |         user_id=user_id,
+ 203 |         db_path=config.database_path,
+ 204 |         server_gemini_key=config.gemini_api_key,
+ 205 |         server_gemini_model=config.gemini_model,
+ 206 |     )
+ 207 | 
+ 208 | 
+ 209 | def _resolve_run_user(db_path: str) -> str:
+ 210 |     """Return the user_id the run should operate under.
+ 211 | 
+ 212 |     ``$SCHEDULER_USER_ID`` (an active account chosen by the operator or the
+ 213 |     scheduler) is always honoured. Without it the only fallback is the explicit
+ 214 |     non-production local tenant; production has no shared fallback user, so the
+ 215 |     run is refused instead.
+ 216 | 
+ 217 |     Raises:
+ 218 |         TenantRequiredError: no user was selected and no local fallback applies.
+ 219 |         AccountError: the selected account does not exist or is not active.
+ 220 |     """
+ 221 |     env_id = os.environ.get("SCHEDULER_USER_ID", "").strip()
+ 222 |     if env_id:
+ 223 |         require_active_user(env_id, db_path)
+ 224 |         return env_id
+ 225 |     if implicit_single_user_allowed():
+ 226 |         return get_legacy_user_id(db_path)
+ 227 |     raise TenantRequiredError(
+ 228 |         "No user selected: pass --user-id or set SCHEDULER_USER_ID."
+ 229 |     )
+ 230 | 
+ 231 | 
+ 232 | def _vault_credential(
+ 233 |     db_path: str,
+ 234 |     user_id: str,
+ 235 |     provider: str,
+ 236 |     *,
+ 237 |     purpose: str,
+ 238 | ) -> ResolvedCredential | None:
+ 239 |     """Resolve one owner's credential, treating unavailability as absent."""
+ 240 |     try:
+ 241 |         return SecretVault(db_path).resolve(user_id, provider, purpose=purpose)
+ 242 |     except CredentialUnavailableError:
+ 243 |         return None
+ 244 | 
+ 245 | 
+ 246 | def _vault_record_exists(db_path: str, user_id: str, provider: str) -> bool:
+ 247 |     """Whether the owner has any credential row, including a revoked one."""
+ 248 |     return (
+ 249 |         SecretVault(db_path).describe(user_id, provider).status
+ 250 |         is not CredentialStatus.NOT_CONFIGURED
+ 251 |     )
+ 252 | 
+ 253 | 
+ 254 | def _scope_config_to_user(config: Config, user_id: str) -> Config:
+ 255 |     """Resolve user-owned connector secrets and fail closed on shared fallbacks.
+ 256 | 
+ 257 |     Deployment-wide connector settings (the single-user ``HEVY_API_KEY`` and the
+ 258 |     Google Health environment) are applied only for the deployment owner: the
+ 259 |     verified person the pre-account data was assigned to, or the local tenant in
+ 260 |     the explicit non-production mode. Every other user relies solely on their own
+ 261 |     vaulted credentials.
+ 262 |     """
+ 263 |     hevy_credential = _vault_credential(
+ 264 |         config.database_path,
+ 265 |         user_id,
+ 266 |         "hevy",
+ 267 |         purpose="hevy_sync",
+ 268 |     )
+ 269 |     hevy_record_exists = _vault_record_exists(
+ 270 |         config.database_path, user_id, "hevy"
+ 271 |     )
+ 272 |     user_hevy_key = (
+ 273 |         hevy_credential.api_key.reveal()
+ 274 |         if hevy_credential is not None and hevy_credential.api_key is not None
+ 275 |         else None
+ 276 |     )
+ 277 |     google_credential = _vault_credential(
+ 278 |         config.database_path,
+ 279 |         user_id,
+ 280 |         "google_health",
+ 281 |         purpose="health_sync",
+ 282 |     )
+ 283 |     google_record_exists = _vault_record_exists(
+ 284 |         config.database_path, user_id, "google_health"
+ 285 |     )
+ 286 |     user_google_token = (
+ 287 |         google_credential.refresh_token.reveal()
+ 288 |         if google_credential is not None and google_credential.refresh_token is not None
+ 289 |         else None
+ 290 |     )
+ 291 | 
+ 292 |     owns_server_config = is_deployment_owner(user_id, config.database_path)
+ 293 |     allow_legacy_hevy = owns_server_config and not hevy_record_exists
+ 294 |     allow_legacy_google = owns_server_config and not google_record_exists
+ 295 |     hevy_key = user_hevy_key or (config.hevy_api_key if allow_legacy_hevy else None)
+ 296 |     google_token = user_google_token or (
+ 297 |         config.google_health_refresh_token if allow_legacy_google else None
+ 298 |     )
+ 299 |     return replace(
+ 300 |         config,
+ 301 |         hevy_api_key=hevy_key,
+ 302 |         health_connect_file=(
+ 303 |             config.health_connect_file if owns_server_config else None
+ 304 |         ),
+ 305 |         # The OAuth *client* belongs to the deployment and is safe to share;
+ 306 |         # only the per-user refresh token is tenant scoped.
+ 307 |         google_health_client_id=config.google_health_client_id,
+ 308 |         google_health_client_secret=config.google_health_client_secret,
+ 309 |         google_health_refresh_token=google_token,
+ 310 |     )
+ 311 | 
+ 312 | 
+ 313 | def run(preview: bool = False, user_id: str | None = None) -> int:
+ 314 |     try:
+ 315 |         config = Config.load()
+ 316 |     except ConfigError as exc:
+ 317 |         logger.error("%s", exc)
+ 318 |         return 1
+ 319 | 
+ 320 |     init_db(config.database_path)

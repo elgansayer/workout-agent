@@ -14,6 +14,10 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Version of the Hevy payload -> stored workout/progress transformation. Bump it
+# when parsing changes so stored records can be traced to the code that made them.
+HEVY_PARSER_VERSION = "hevy-parser/1"
+
 
 @dataclass(frozen=True)
 class ExerciseSummary:
@@ -46,6 +50,7 @@ class WorkoutSummary:
     duration_seconds: int | None = None
     total_volume_kg: float = 0.0
     exercises: list[ExerciseSummary] = None  # type: ignore[assignment]
+    workout_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.exercises is None:
@@ -85,6 +90,19 @@ def _first_workout(payload: Any) -> dict[str, Any] | None:
         first = payload[0]
         return first if isinstance(first, dict) else None
     return None
+
+
+def _workout_id(workout: dict[str, Any]) -> str | None:
+    raw_id = workout.get("id")
+    return str(raw_id).strip() or None if raw_id is not None else None
+
+
+def workout_identity(payload: Any) -> tuple[str | None, str | None]:
+    """Return the provider's (workout id, start/end timestamp) for provenance."""
+    workout = _first_workout(payload)
+    if workout is None:
+        return None, None
+    return _workout_id(workout), workout.get("start_time") or workout.get("end_time")
 
 
 def _top_set(sets: Any) -> tuple[float | None, int | None, int]:
@@ -184,4 +202,5 @@ def parse_workout(
         duration_seconds=duration,
         total_volume_kg=total_volume,
         exercises=summaries,
+        workout_id=_workout_id(workout),
     )

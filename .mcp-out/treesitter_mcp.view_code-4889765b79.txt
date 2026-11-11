@@ -1,0 +1,151 @@
+# accounts.py (L96-L245 of 289)
+  96 | def resolve_oauth_user(
+  97 |     *,
+  98 |     provider: str,
+  99 |     subject: str,
+ 100 |     email: str,
+ 101 |     email_verified: bool,
+ 102 |     display_name: str | None = None,
+ 103 |     db_path: str = DEFAULT_DB_PATH,
+ 104 | ) -> UserRow:
+ 105 |     """Return the active account for a verified external sign-in.
+ 106 | 
+ 107 |     Resolution order, all inside one write transaction:
+ 108 | 
+ 109 |     1. ``(provider, subject)`` already bound: that account, if it is active.
+ 110 |     2. Otherwise an account already holding the (verified) email and no identity
+ 111 |        for this provider adopts the identity. This is the one-time upgrade path
+ 112 |        for accounts created before identities existed.
+ 113 |     3. Otherwise a new ``active`` account and identity are created.
+ 114 | 
+ 115 |     A verified email that belongs to an account already bound to a *different*
+ 116 |     subject for the same provider is refused: the address may have been
+ 117 |     reassigned at the provider, and binding it would hand over the account.
+ 118 | 
+ 119 |     Raises:
+ 120 |         IdentityVerificationError: missing subject/email, the reserved
+ 121 |             placeholder address, or an email the provider did not verify.
+ 122 |         IdentityConflictError: see above.
+ 123 |         AccountInactiveError: the matched account is not ``active``.
+ 124 |     """
+ 125 | 
+ 126 |     provider_key = provider.strip().lower()
+ 127 |     subject_key = subject.strip()
+ 128 |     email_key = normalise_email(email)
+ 129 |     if not provider_key or not subject_key:
+ 130 |         raise IdentityVerificationError(
+ 131 |             "The identity provider did not supply a stable subject."
+ 132 |         )
+ 133 |     if "@" not in email_key:
+ 134 |         raise IdentityVerificationError(
+ 135 |             "The identity provider did not supply an email address."
+ 136 |         )
+ 137 |     if email_key == LEGACY_TENANT_EMAIL:
+ 138 |         raise IdentityVerificationError("That email address is reserved.")
+ 139 |     if email_verified is not True:
+ 140 |         raise IdentityVerificationError(
+ 141 |             "The identity provider has not verified the email address."
+ 142 |         )
+ 143 | 
+ 144 |     now = _now_iso()
+ 145 |     with transaction(db_path) as conn:
+ 146 |         conn.execute("BEGIN IMMEDIATE")
+ 147 |         bound = conn.execute(
+ 148 |             "SELECT user_id FROM user_identities WHERE provider = ? AND subject = ?",
+ 149 |             (provider_key, subject_key),
+ 150 |         ).fetchone()
+ 151 |         if bound is not None:
+ 152 |             user = _load(conn, bound[0])
+ 153 |             _require_active(user)
+ 154 |             conn.execute(
+ 155 |                 "UPDATE user_identities SET email = ?, email_verified = 1, "
+ 156 |                 "last_login_at = ? WHERE provider = ? AND subject = ?",
+ 157 |                 (email_key, now, provider_key, subject_key),
+ 158 |             )
+ 159 |             _record_login(conn, user["id"], now)
+ 160 |             return _load(conn, user["id"])
+ 161 | 
+ 162 |         matches = conn.execute(
+ 163 |             f"SELECT {_USER_COLUMNS} FROM users WHERE lower(email) = ?",
+ 164 |             (email_key,),
+ 165 |         ).fetchall()
+ 166 |         if len(matches) > 1:
+ 167 |             # Only possible in a database that predates the case-insensitive
+ 168 |             # unique index. Picking either row could hand over the wrong account.
+ 169 |             raise IdentityConflictError(
+ 170 |                 "That email address matches more than one account."
+ 171 |             )
+ 172 |         if matches:
+ 173 |             user = _user_from_row(matches[0])
+ 174 |             _require_active(user)
+ 175 |             already_bound = conn.execute(
+ 176 |                 "SELECT 1 FROM user_identities WHERE user_id = ? AND provider = ?",
+ 177 |                 (user["id"], provider_key),
+ 178 |             ).fetchone()
+ 179 |             if already_bound is not None:
+ 180 |                 raise IdentityConflictError(
+ 181 |                     "That email address belongs to an account bound to a "
+ 182 |                     "different identity."
+ 183 |                 )
+ 184 |             user_id = user["id"]
+ 185 |         else:
+ 186 |             user_id = str(uuid.uuid4())
+ 187 |             conn.execute(
+ 188 |                 "INSERT INTO users "
+ 189 |                 "(id, email, display_name, created_at, status_changed_at, "
+ 190 |                 "updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+ 191 |                 (user_id, email_key, display_name, now, now, now),
+ 192 |             )
+ 193 |         conn.execute(
+ 194 |             "INSERT INTO user_identities "
+ 195 |             "(user_id, provider, subject, email, email_verified, created_at, "
+ 196 |             "last_login_at) VALUES (?, ?, ?, ?, 1, ?, ?)",
+ 197 |             (user_id, provider_key, subject_key, email_key, now, now),
+ 198 |         )
+ 199 |         _record_login(conn, user_id, now)
+ 200 |         return _load(conn, user_id)
+ 201 | 
+ 202 | 
+ 203 | def require_active_user(user_id: str, db_path: str = DEFAULT_DB_PATH) -> UserRow:
+ 204 |     """Return the account for *user_id* or raise if it may not act.
+ 205 | 
+ 206 |     The check every authenticated entry point (request session, scheduled run,
+ 207 |     CLI) applies before touching user-owned data.
+ 208 | 
+ 209 |     Raises:
+ 210 |         AccountNotFoundError: *user_id* is empty or matches no account.
+ 211 |         AccountInactiveError: the account exists but is not ``active``.
+ 212 |     """
+ 213 | 
+ 214 |     if not isinstance(user_id, str) or not user_id.strip():
+ 215 |         raise AccountNotFoundError("A user id is required.")
+ 216 |     user = get_user_by_id(user_id, db_path)
+ 217 |     if user is None:
+ 218 |         raise AccountNotFoundError("No such account.")
+ 219 |     _require_active(user)
+ 220 |     return user
+ 221 | 
+ 222 | 
+ 223 | def has_verified_identity(conn: sqlite3.Connection, user_id: str) -> bool:
+ 224 |     """Return whether *user_id* has authenticated through a verified identity."""
+ 225 | 
+ 226 |     return (
+ 227 |         conn.execute(
+ 228 |             "SELECT 1 FROM user_identities "
+ 229 |             "WHERE user_id = ? AND email_verified = 1 LIMIT 1",
+ 230 |             (user_id,),
+ 231 |         ).fetchone()
+ 232 |         is not None
+ 233 |     )
+ 234 | 
+ 235 | 
+ 236 | def set_account_status(
+ 237 |     user_id: str,
+ 238 |     status: AccountStatus | str,
+ 239 |     db_path: str = DEFAULT_DB_PATH,
+ 240 | ) -> UserRow:
+ 241 |     """Suspend or reactivate an account (the operator-controlled transitions).
+ 242 | 
+ 243 |     ``unclaimed``, ``retired`` and ``deleted`` are owned by system flows and are
+ 244 |     refused here. Terminal accounts never change status, and the legacy
+ 245 |     placeholder is managed exclusively by the ownership migration, so it can

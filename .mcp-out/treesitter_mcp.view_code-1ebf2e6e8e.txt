@@ -1,0 +1,69 @@
+# runtime_security.py (L61-L128 of 128)
+  61 | def validate_web_runtime(
+  62 |     environ: Mapping[str, str] | None = None,
+  63 | ) -> WebRuntimeSecurity:
+  64 |     """Validate the web authentication boundary before application startup.
+  65 | 
+  66 |     Production always requires a complete Google OAuth configuration. Anonymous
+  67 |     mode is available only when both a recognised non-production ``APP_ENV`` and
+  68 |     ``ALLOW_ANONYMOUS_WEB=1`` are set explicitly.
+  69 |     """
+  70 | 
+  71 |     source = os.environ if environ is None else environ
+  72 |     environment = _value(source, "APP_ENV").lower()
+  73 |     supported = _PRODUCTION_ENVIRONMENTS | _NON_PRODUCTION_ENVIRONMENTS
+  74 | 
+  75 |     if not environment:
+  76 |         raise WebRuntimeConfigurationError(
+  77 |             "APP_ENV must be set explicitly before the web dashboard starts. "
+  78 |             f"Supported values: {', '.join(sorted(supported))}."
+  79 |         )
+  80 |     if environment not in supported:
+  81 |         raise WebRuntimeConfigurationError(
+  82 |             f"Unsupported APP_ENV '{environment}'. "
+  83 |             f"Supported values: {', '.join(sorted(supported))}."
+  84 |         )
+  85 | 
+  86 |     configured = {name: bool(_value(source, name)) for name in _AUTH_VARIABLES}
+  87 |     present = [name for name, is_set in configured.items() if is_set]
+  88 |     missing = [name for name, is_set in configured.items() if not is_set]
+  89 | 
+  90 |     if present and missing:
+  91 |         raise WebRuntimeConfigurationError(
+  92 |             "Incomplete web authentication configuration. Missing variable(s): "
+  93 |             + ", ".join(missing)
+  94 |             + "."
+  95 |         )
+  96 | 
+  97 |     authentication_enabled = not missing
+  98 |     if authentication_enabled:
+  99 |         secret = _value(source, "WEB_AUTH_SECRET")
+ 100 |         if len(secret) < _MINIMUM_SESSION_SECRET_LENGTH:
+ 101 |             raise WebRuntimeConfigurationError(
+ 102 |                 "WEB_AUTH_SECRET must contain at least "
+ 103 |                 f"{_MINIMUM_SESSION_SECRET_LENGTH} characters."
+ 104 |             )
+ 105 |         return WebRuntimeSecurity(
+ 106 |             environment=environment,
+ 107 |             authentication_enabled=True,
+ 108 |             anonymous_enabled=False,
+ 109 |         )
+ 110 | 
+ 111 |     anonymous_enabled = _parse_bool(source, "ALLOW_ANONYMOUS_WEB")
+ 112 |     if environment in _PRODUCTION_ENVIRONMENTS:
+ 113 |         raise WebRuntimeConfigurationError(
+ 114 |             "Production web startup blocked: configure WEB_AUTH_SECRET, "
+ 115 |             "WEB_GOOGLE_CLIENT_ID, and WEB_GOOGLE_CLIENT_SECRET. Anonymous "
+ 116 |             "dashboard access is never permitted in production."
+ 117 |         )
+ 118 |     if not anonymous_enabled:
+ 119 |         raise WebRuntimeConfigurationError(
+ 120 |             "Anonymous web startup blocked. Configure Google authentication or "
+ 121 |             "set ALLOW_ANONYMOUS_WEB=1 only for a trusted non-production runtime."
+ 122 |         )
+ 123 | 
+ 124 |     return WebRuntimeSecurity(
+ 125 |         environment=environment,
+ 126 |         authentication_enabled=False,
+ 127 |         anonymous_enabled=True,
+ 128 |     )
