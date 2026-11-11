@@ -88,10 +88,10 @@ export class Chat implements OnInit, OnDestroy {
         const message =
           response.status === 401
             ? 'Your session has expired. Sign in again to use Coach.'
-            : response.status === 429
-              ? 'Too many requests. Wait a minute, then try again.'
-              : typeof payload?.detail === 'string'
-                ? payload.detail
+            : typeof payload?.detail === 'string'
+              ? payload.detail
+              : response.status === 429
+                ? 'Too many requests. Wait a minute, then try again.'
                 : 'Coach could not connect. Check your AI provider in Settings and try again.';
         throw new Error(message);
       }

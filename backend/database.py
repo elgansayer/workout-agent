@@ -822,6 +822,115 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON user_api_keys (user_id)"
         )
 
+        # ---- Per-account quotas and abuse controls (docs/ACCOUNT_QUOTAS.md) ----
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_quota_profiles (
+                user_id TEXT PRIMARY KEY REFERENCES users(id),
+                entitlement TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT REFERENCES users(id)
+            )
+            """,
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quota_overrides (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                kind TEXT NOT NULL,
+                limit_percent INTEGER NOT NULL
+                    CHECK (limit_percent BETWEEN 0 AND 1000),
+                expires_at REAL,
+                created_by TEXT NOT NULL REFERENCES users(id),
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (user_id, kind)
+            )
+            """,
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quota_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                kind TEXT NOT NULL,
+                occurred_at REAL NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quota_usage_user_kind_time "
+            "ON quota_usage (user_id, kind, occurred_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quota_denials (
+                user_id TEXT NOT NULL REFERENCES users(id),
+                kind TEXT NOT NULL,
+                bucket INTEGER NOT NULL,
+                denials INTEGER NOT NULL DEFAULT 0,
+                last_denied_at REAL NOT NULL,
+                PRIMARY KEY (user_id, kind, bucket)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quota_denials_user_time "
+            "ON quota_denials (user_id, last_denied_at)"
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS quota_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                actor_user_id TEXT NOT NULL REFERENCES users(id),
+                action TEXT NOT NULL,
+                detail_json TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_quota_audit_log_user "
+            "ON quota_audit_log (user_id, id)"
+        )
+        # Sign-in attempts precede any account, so this table is keyed by a
+        # keyed hash of the client address and holds no user identifiers.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS login_attempts (
+                subject_hash TEXT NOT NULL,
+                attempted_at REAL NOT NULL
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_login_attempts_subject_time "
+            "ON login_attempts (subject_hash, attempted_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_login_attempts_time "
+            "ON login_attempts (attempted_at)"
+        )
+        # The owning account of a quota record never changes, and the audit
+        # trail is append-only. Constant table names only; no caller input.
+        for quota_table in (
+            "account_quota_profiles",
+            "quota_overrides",
+            "quota_usage",
+            "quota_denials",
+        ):
+            cursor.execute(
+                f"CREATE TRIGGER IF NOT EXISTS trg_{quota_table}_user_id_immutable "
+                f"BEFORE UPDATE OF user_id ON {quota_table} "
+                "BEGIN SELECT RAISE(ABORT, 'user_id is immutable'); END"
+            )
+        cursor.execute(
+            "CREATE TRIGGER IF NOT EXISTS trg_quota_audit_log_append_only "
+            "BEFORE UPDATE ON quota_audit_log "
+            "BEGIN SELECT RAISE(ABORT, 'quota_audit_log is append-only'); END"
+        )
+
 
 
 def _get_or_create_legacy_user(cursor: sqlite3.Cursor) -> str:

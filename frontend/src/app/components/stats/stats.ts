@@ -1,4 +1,5 @@
 import { PagedList } from '../../shared/paged-list';
+import { quotaAwareMessage } from '../../shared/api-errors';
 import { ListControls } from '../../shared/list-controls';
 import { HlmCardImports } from '@spartan-ng/ui/card';
 import { HlmAlertImports } from '@spartan-ng/ui/alert';
@@ -41,8 +42,8 @@ export class Stats implements OnInit {
         this.data.set(data);
         this.loading.set(false);
       },
-      error: (err) => {
-        this.error.set('Failed to load stats data');
+      error: (err: unknown) => {
+        this.error.set(quotaAwareMessage(err, 'Failed to load stats data'));
         this.loading.set(false);
       },
     });

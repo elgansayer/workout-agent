@@ -11,8 +11,10 @@ import pytest
 from main import (
     _changes_footer,
     _compose,
+    _deliver,
     _parse_args,
     _scope_config_to_user,
+    _sync_hevy_routines,
     run,
 )
 
@@ -218,6 +220,25 @@ def _make_config(
     return config
 
 
+def _seed_quota_ready_database(config: Config) -> None:
+    """Create the real schema and the acting user so quota checks can run.
+
+    Production always runs ``init_db`` before delivery; ``_make_config`` stubs
+    it out, so tests that reach push delivery seed the same state explicitly.
+    """
+    import sqlite3
+
+    from database import init_db as real_init_db
+
+    real_init_db(config.database_path)
+    with sqlite3.connect(config.database_path) as conn:
+        conn.execute(
+            "INSERT INTO users (id, email, display_name, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            ("test-user-id", "agent@example.com", "Agent", "2026-08-09T00:00:00+00:00"),
+        )
+
+
 def test_run_preview_training_day(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -416,6 +437,7 @@ def test_run_preview_with_sync_statuses(
         self_review_weekday=6,
     )
     monkeypatch.setattr("main.Config.load", lambda: config2)
+    _seed_quota_ready_database(config2)
 
     monkeypatch.setattr(
         "main.datetime",
@@ -639,7 +661,8 @@ def test_run_deliver_sends_push(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Non-preview mode sends the plan via Web Push."""
-    _make_config(monkeypatch, tmp_path)
+    config = _make_config(monkeypatch, tmp_path)
+    _seed_quota_ready_database(config)
 
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
 
@@ -691,7 +714,8 @@ def test_run_deliver_returns_2_when_push_fails(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """When Push delivery fails, run returns 2."""
-    _make_config(monkeypatch, tmp_path)
+    config = _make_config(monkeypatch, tmp_path)
+    _seed_quota_ready_database(config)
 
     monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
 
@@ -734,11 +758,126 @@ def test_run_deliver_returns_2_when_push_fails(
     assert result == 2
 
 
+def _delivery_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Config, list[dict]]:
+    config = _make_config(monkeypatch, tmp_path)
+    _seed_quota_ready_database(config)
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", "test-vapid")
+    monkeypatch.setattr(
+        "main.get_push_subscriptions", lambda user, db: [{"endpoint": "test"}]
+    )
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        "main.send_push_notification",
+        lambda sub, payload, key: sent.append(payload) or True,
+    )
+    return config, sent
+
+
+def test_deliver_enforces_the_per_account_notification_quota(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Push delivery stops once the account's notification allowance is spent."""
+    import json
+
+    config, sent = _delivery_fixture(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "QUOTA_POLICY_OVERRIDES",
+        json.dumps({"entitlements": {"standard": {"notification": [[2, 3600]]}}}),
+    )
+
+    assert _deliver(config, "Plan one", False, "test-user-id") == 0
+    assert _deliver(config, "Plan two", False, "test-user-id") == 0
+    assert _deliver(config, "Plan three", False, "test-user-id") == 2
+
+    assert [payload["body"] for payload in sent] == ["Plan one", "Plan two"]
+
+
+def test_deliver_fails_closed_when_quota_state_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If limits cannot be checked, nothing is pushed to third-party services."""
+    import sqlite3
+
+    config, sent = _delivery_fixture(monkeypatch, tmp_path)
+    with sqlite3.connect(config.database_path) as conn:
+        conn.execute("DROP TABLE quota_usage")
+
+    assert _deliver(config, "Plan", False, "test-user-id") == 2
+    assert sent == []
+
+
+def _export_fixture(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> tuple[Config, list[str]]:
+    from dataclasses import replace
+
+    config = replace(_make_config(monkeypatch, tmp_path), hevy_sync_routines=True)
+    _seed_quota_ready_database(config)
+    pushed: list[str] = []
+    monkeypatch.setattr(
+        "main.sync_routines",
+        lambda cfg, **kw: pushed.append(kw["user_id"]) or ["Day 1: updated"],
+    )
+    return config, pushed
+
+
+def test_hevy_routine_export_is_limited_per_account(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Pushing routines to Hevy is an export and obeys the account's allowance."""
+    import json
+
+    config, pushed = _export_fixture(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "QUOTA_POLICY_OVERRIDES",
+        json.dumps({"entitlements": {"standard": {"export": [[1, 3600]]}}}),
+    )
+
+    assert _sync_hevy_routines(config, user_id="test-user-id") == ["Day 1: updated"]
+    assert _sync_hevy_routines(config, user_id="test-user-id") == []
+
+    assert pushed == ["test-user-id"]  # the refused run never contacted Hevy
+
+
+def test_hevy_routine_export_fails_closed_when_quota_state_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sqlite3
+
+    config, pushed = _export_fixture(monkeypatch, tmp_path)
+    with sqlite3.connect(config.database_path) as conn:
+        conn.execute("DROP TABLE quota_usage")
+
+    assert _sync_hevy_routines(config, user_id="test-user-id") == []
+    assert pushed == []
+
+
+def test_actions_without_an_account_identity_are_refused_not_sent_unmetered(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from dataclasses import replace
+
+    config, sent = _delivery_fixture(monkeypatch, tmp_path)
+    exporting = replace(config, hevy_sync_routines=True)
+    pushed: list[str] = []
+    monkeypatch.setattr(
+        "main.sync_routines", lambda cfg, **kw: pushed.append(kw["user_id"]) or ["x"]
+    )
+
+    assert _deliver(config, "Plan", False, "") == 2
+    assert _sync_hevy_routines(exporting, user_id="") == []
+
+    assert sent == [] and pushed == []
+
+
 def test_run_hevy_sync_failure_does_not_block(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """If Hevy sync raises, the daily message still goes out."""
-    _make_config(monkeypatch, tmp_path)
+    config = _make_config(monkeypatch, tmp_path)
+    _seed_quota_ready_database(config)
 
     monkeypatch.setattr(
         "main.datetime",
@@ -786,7 +925,8 @@ def test_run_checkin_due_failure_does_not_block(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """If checkin.due raises, the daily message still goes out."""
-    _make_config(monkeypatch, tmp_path, checkin_enabled=True)
+    config = _make_config(monkeypatch, tmp_path, checkin_enabled=True)
+    _seed_quota_ready_database(config)
 
     monkeypatch.setattr(
         "main.datetime",

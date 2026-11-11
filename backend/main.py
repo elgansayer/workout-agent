@@ -58,12 +58,37 @@ from program import (
     week_in_cycle,
 )
 from push_notifier import send_push_notification
+from quotas import (
+    QuotaExceededError,
+    QuotaKind,
+    QuotaUnavailableError,
+    consume,
+    describe_denial,
+)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("workout_agent")
+
+
+def _within_quota(user_id: str, kind: QuotaKind, database_path: str, action: str) -> bool:
+    """Charge one unit to the account and say whether *action* may proceed.
+
+    Fails closed: if the allowance is spent, the limits cannot be read, or there
+    is no account identity to meter, the action is skipped rather than sent
+    unmetered to a third-party service.
+    """
+    try:
+        consume(user_id, kind, database_path)
+    except QuotaExceededError as exc:
+        logger.warning("%s skipped: %s", action, describe_denial(exc.denial))
+        return False
+    except (QuotaUnavailableError, ValueError):
+        logger.error("%s skipped: usage limits could not be checked.", action)
+        return False
+    return True
 
 
 def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
@@ -103,6 +128,12 @@ def _deliver(config: Config, message: str, preview: bool, user_id: str) -> int:
         )
         return 2
 
+    # Bound outbound push traffic per account.
+    if not _within_quota(
+        user_id, QuotaKind.NOTIFICATION, config.database_path, "Push delivery"
+    ):
+        return 2
+
     success = False
     for sub in subscriptions:
         payload = {"title": "Workout Agent", "body": message}
@@ -124,6 +155,12 @@ def _sync_hevy_routines(
 ) -> list[str]:
     """Keep the acting user's Hevy routines ready to start."""
     if not config.hevy_api_key or not config.hevy_sync_routines:
+        return []
+    # Pushing routines writes to the user's Hevy account, so it is an export.
+    # Routine sync is optional for the daily plan, so skipping it is safe.
+    if not _within_quota(
+        user_id, QuotaKind.EXPORT, config.database_path, "Hevy routine export"
+    ):
         return []
     try:
         statuses = sync_routines(config, user_id=user_id)

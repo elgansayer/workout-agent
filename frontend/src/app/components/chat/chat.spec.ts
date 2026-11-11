@@ -82,6 +82,39 @@ describe('Coach connection', () => {
     expect(chat.error()).toContain('Sign in again');
     expect(chat.messages()).toHaveLength(1);
   });
+
+  it('shows the server quota message, including when to retry, on a 429', async () => {
+    const detail = 'AI requests are limited to 300 per day. Try again in 5 hours.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ detail, error: 'quota_exceeded' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', 'Retry-After': '18000' },
+        }),
+      ),
+    );
+    chat.userInput = 'Review my week';
+
+    await chat.sendMessage();
+
+    expect(chat.error()).toBe(detail);
+    expect(chat.userInput).toBe('Review my week');
+    expect(chat.isStreaming()).toBe(false);
+  });
+
+  it('falls back to a generic wait message when a 429 has no details', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('Too Many Requests', { status: 429 })),
+    );
+    chat.userInput = 'Review my week';
+
+    await chat.sendMessage();
+
+    expect(chat.error()).toBe('Too many requests. Wait a minute, then try again.');
+  });
+
   it('does not submit an IME composition or a Shift+Enter newline', () => {
     const send = vi.spyOn(chat, 'sendMessage').mockResolvedValue();
     chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter', isComposing: true }));

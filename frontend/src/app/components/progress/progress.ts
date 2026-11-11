@@ -1,4 +1,5 @@
 import { PagedList } from '../../shared/paged-list';
+import { quotaAwareMessage } from '../../shared/api-errors';
 import { ListControls } from '../../shared/list-controls';
 import { Component, inject, signal, OnInit } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
@@ -39,8 +40,8 @@ export class Progress implements OnInit {
         this.data.set(data);
         this.loading.set(false);
       },
-      error: () => {
-        this.error.set('Failed to load progress data');
+      error: (err: unknown) => {
+        this.error.set(quotaAwareMessage(err, 'Failed to load progress data'));
         this.loading.set(false);
       },
     });
@@ -71,11 +72,11 @@ export class Progress implements OnInit {
           [exerciseName]: res.reasoning || 'No explanation available.',
         });
       },
-      error: () => {
+      error: (err: unknown) => {
         if (this.explanationRequests.get(exerciseName) !== request) return;
         this.xaiReasoning.set({
           ...this.xaiReasoning(),
-          [exerciseName]: 'Error analyzing history.',
+          [exerciseName]: quotaAwareMessage(err, 'Error analyzing history.'),
         });
       },
     });

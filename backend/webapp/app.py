@@ -32,6 +32,7 @@ from typing import Any
 import analytics
 import insights
 import lifestyle
+import quotas
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -85,7 +86,7 @@ from dynamic_programme import (
     goal_options,
     serialise_hevy_source,
 )
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     FileResponse,
@@ -102,14 +103,37 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from quota_admin import (
+    abuse_overview,
+    clear_override,
+    list_audit,
+    require_admin,
+    review_abuse,
+    set_entitlement,
+    set_override,
+)
+from quotas import QuotaKind
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
+from webapp.quota_api import (
+    AbuseReviewRequest,
+    EntitlementRequest,
+    OverrideRequest,
+    client_address,
+    install_quota_error_handlers,
+    session_actor,
+)
 
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
+
+# Refuse to start with an unusable quota policy instead of serving requests that
+# would each fail closed at runtime.
+quotas.validate_policy_environment()
 
 
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
@@ -228,6 +252,7 @@ else:
         _BASE_DIR.parent.parent / "frontend/dist/frontend/browser"
     )  # Local dev
 app = FastAPI(title="Workout Agent", docs_url=None, redoc_url=None, lifespan=_lifespan)
+install_quota_error_handlers(app)
 app.mount("/static", StaticFiles(directory=str(_BASE_DIR / "static")), name="static")
 app.mount(
     "/assets",
@@ -325,6 +350,9 @@ app.add_middleware(
 async def login_google(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
+    await run_in_threadpool(
+        quotas.consume_login_attempt, client_address(request), DB_PATH
+    )
     redirect_uri = str(request.url_for("auth"))
     if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
         redirect_uri = redirect_uri.replace("http://", "https://")
@@ -349,6 +377,10 @@ async def get_current_user_api(request: Request) -> Any:
 async def auth(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return RedirectResponse("/")
+    # Throttle before the token exchange: each attempt costs an outbound call.
+    await run_in_threadpool(
+        quotas.consume_login_attempt, client_address(request), DB_PATH
+    )
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
@@ -364,6 +396,10 @@ async def auth(request: Request) -> Any:
             email,
             display_name=user.get("name"),
             db_path=DB_PATH,
+        )
+        # Per-account sign-in allowance; refuse before any session is issued.
+        await run_in_threadpool(
+            quotas.consume, user_record["id"], QuotaKind.LOGIN, DB_PATH
         )
         request.session["user"] = email
         request.session["user_id"] = user_record["id"]
@@ -746,7 +782,6 @@ def preview_programme(
 ) -> JSONResponse:
     """Generate a deterministic preview from selected Hevy routines."""
 
-    _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
     try:
@@ -764,7 +799,6 @@ def activate_programme(
 ) -> JSONResponse:
     """Reconfirm Hevy source data and activate the generated programme."""
 
-    _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     training_data = _load_hevy_training_for_user(user_id)
     preview_request = ProgrammePreviewRequest.model_validate(
@@ -827,7 +861,6 @@ def activate_programme(
 async def select_programme(request: Request) -> JSONResponse:
     """Compatibility adapter for clients using the retired template endpoint."""
 
-    _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     try:
         body = await request.json()
@@ -915,6 +948,9 @@ def _load_hevy_training_for_user(
             detail="No Hevy API key configured. Add your key in Settings first.",
         )
 
+    # Every Hevy source fetch is an import: refuse before contacting Hevy.
+    quotas.consume(user_id, QuotaKind.IMPORT, DB_PATH)
+
     from hevy_reader import fetch_user_training
 
     try:
@@ -935,7 +971,6 @@ def _load_hevy_training_for_user(
 
 @app.get("/api/xai_reasoning/{context_id}")
 def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
-    _check_rate_limit(request)
     user_id = _check_api_auth(request)
 
     existing = get_reasoning_log(context_id, db_path=DB_PATH, user_id=user_id)
@@ -950,6 +985,9 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
+    # Cached answers and unusable requests above never reach the provider, so
+    # only a real AI call is charged against the account.
+    quotas.consume(user_id, QuotaKind.AI_REQUEST, DB_PATH)
 
     history = get_progress_history(db_path=DB_PATH, user_id=user_id).get(ex_name, [])
 
@@ -968,10 +1006,10 @@ def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
 
 @app.get("/api/project_peak")
 def project_peak(request: Request) -> dict[str, Any]:
-    _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
+    quotas.consume(user_id, QuotaKind.AI_REQUEST, DB_PATH)
 
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     dl_entries = series.get("Deadlift", [])
@@ -1003,10 +1041,10 @@ def chat_clear(request: Request):
 
 @app.get("/api/rag_search", response_model=None)
 def rag_search(request: Request, q: str = Query(...)) -> Any:
-    _check_rate_limit(request, limit=15)
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
+    quotas.consume(user_id, QuotaKind.AI_REQUEST, DB_PATH)
 
     # Gather training context
     logs = get_daily_logs(limit=30, db_path=DB_PATH, user_id=user_id)
@@ -1332,6 +1370,7 @@ from fastapi.encoders import jsonable_encoder
 @app.get("/api/progress")
 def api_progress(request: Request):
     user_id = _check_api_auth(request)
+    quotas.consume(user_id, QuotaKind.REPORT, DB_PATH)
     series = get_progress_history(db_path=DB_PATH, user_id=user_id)
     charts_data = []
     for name in sorted(series):
@@ -1363,6 +1402,7 @@ def api_progress(request: Request):
 @app.get("/api/stats")
 def api_stats(request: Request):
     user_id = _check_api_auth(request)
+    quotas.consume(user_id, QuotaKind.REPORT, DB_PATH)
     volumes = get_session_volumes(db_path=DB_PATH, user_id=user_id)
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
     logs = get_daily_logs(limit=400, db_path=DB_PATH, user_id=user_id)
@@ -1713,7 +1753,6 @@ def api_settings(request: Request):
 @app.post("/api/settings/sync-history")
 async def sync_history_endpoint(request: Request) -> dict[str, Any]:
     """Rebuild user's workout history from Hevy."""
-    _check_rate_limit(request, limit=2)
     user_id = _check_api_auth(request)
 
     keys = get_user_api_keys(user_id, DB_PATH)
@@ -1723,6 +1762,10 @@ async def sync_history_endpoint(request: Request) -> dict[str, Any]:
             status_code=400,
             detail="No Hevy API key configured. Save your Hevy API key in Settings first.",
         )
+
+    # A full history rebuild is the most expensive Hevy call: bound how often
+    # an account can trigger it before contacting Hevy.
+    await run_in_threadpool(quotas.consume, user_id, QuotaKind.SYNC, DB_PATH)
 
     from scripts.sync_history import sync_all
 
@@ -1811,6 +1854,7 @@ def api_clear_notifications(request: Request):
 @app.post("/api/notifications/test-coach")
 def api_test_coach_notification(request: Request):
     user_id = _check_api_auth(request)
+    quotas.consume(user_id, QuotaKind.NOTIFICATION, DB_PATH)
     nid = save_notification(
         user_id,
         title="✨ Coach Status Update",
@@ -1821,6 +1865,89 @@ def api_test_coach_notification(request: Request):
     )
     unread_count = get_unread_notification_count(user_id, db_path=DB_PATH)
     return {"status": "ok", "id": nid, "unread_count": unread_count}
+
+
+@app.get("/api/quotas")
+def api_quotas(request: Request) -> JSONResponse:
+    """Return the signed-in account's entitlement and live quota usage."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(quotas.usage_snapshot(user_id, DB_PATH))
+
+
+def _admin_actor(request: Request) -> str:
+    """Resolve the signed-session administrator before any body validation.
+
+    The acting account comes only from the verified session; there is no
+    anonymous-mode fallback, and an empty QUOTA_ADMIN_EMAILS admits nobody.
+    """
+    actor = session_actor(request)
+    require_admin(actor, DB_PATH)
+    return actor
+
+
+@app.get("/api/admin/quotas/overview")
+def api_admin_quota_overview(actor: str = Depends(_admin_actor)) -> JSONResponse:
+    """Recent quota volume and the accounts awaiting abuse review."""
+    return JSONResponse(abuse_overview(actor, DB_PATH))
+
+
+@app.get("/api/admin/quotas/audit")
+def api_admin_quota_audit(
+    actor: str = Depends(_admin_actor),
+    account: str | None = Query(None, max_length=128),
+    limit: int = Query(50, ge=1, le=200),
+) -> JSONResponse:
+    """Quota administration audit trail, newest first."""
+    entries = list_audit(actor, DB_PATH, account_id=account, limit=limit)
+    return JSONResponse({"entries": entries})
+
+
+@app.post("/api/admin/quotas/accounts/{account_id}/entitlement")
+def api_admin_set_entitlement(
+    account_id: str,
+    payload: EntitlementRequest,
+    actor: str = Depends(_admin_actor),
+) -> JSONResponse:
+    """Move an account to another entitlement (audited)."""
+    result = set_entitlement(
+        actor, account_id, payload.entitlement, payload.reason, DB_PATH
+    )
+    return JSONResponse(result)
+
+
+@app.post("/api/admin/quotas/accounts/{account_id}/override")
+def api_admin_set_override(
+    account_id: str,
+    payload: OverrideRequest,
+    actor: str = Depends(_admin_actor),
+) -> JSONResponse:
+    """Scale, disable or (with a null limit_percent) clear one quota override."""
+    if payload.limit_percent is None:
+        result = clear_override(
+            actor, account_id, payload.kind, payload.reason, DB_PATH
+        )
+    else:
+        result = set_override(
+            actor,
+            account_id,
+            payload.kind,
+            payload.limit_percent,
+            payload.expires_in_seconds,
+            payload.reason,
+            DB_PATH,
+        )
+    return JSONResponse(result)
+
+
+@app.post("/api/admin/quotas/accounts/{account_id}/abuse-review")
+def api_admin_review_abuse(
+    account_id: str,
+    payload: AbuseReviewRequest,
+    actor: str = Depends(_admin_actor),
+) -> JSONResponse:
+    """Record an abuse-review decision for an account (audited)."""
+    result = review_abuse(actor, account_id, payload.decision, payload.reason, DB_PATH)
+    return JSONResponse(result)
 
 
 @app.get("/api/chat-history")

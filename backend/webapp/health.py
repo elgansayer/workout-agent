@@ -34,6 +34,13 @@ _REQUIRED_TABLES = frozenset(
         "workout_history",
         "notifications",
         "hevy_meta",
+        # Quota enforcement fails closed, so requests cannot be served safely
+        # without its state.
+        "account_quota_profiles",
+        "quota_overrides",
+        "quota_usage",
+        "quota_denials",
+        "login_attempts",
     }
 )
 
