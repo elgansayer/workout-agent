@@ -888,7 +888,7 @@ nav a.nav-coach.on {
 .status-dot.online { background: var(--accent); box-shadow: 0 0 6px rgba(74,222,128,0.5); }
 .status-dot.thinking { background: var(--warn); box-shadow: 0 0 6px rgba(245,158,11,0.5); animation: statusPulse 1.2s ease-in-out infinite; }
 @keyframes statusPulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
-.status-text { font-size: 0.72rem; color: var(--muted); }
+.status-text { font-size: 0.72rem; color: var(--muted); overflow-wrap: anywhere; }
 .chat-action-btn {
     width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--border);
     background: transparent; color: var(--muted); cursor: pointer;
@@ -1169,7 +1169,10 @@ nav a.nav-coach.on {
     .brand { display: none; }
     main { padding-bottom: 5rem; }
     .chat-container { height: calc(100vh - 160px); }
-    .chat-status .status-text { display: none; }
+    .chat-header { gap: 0.5rem; }
+    .chat-header-left { flex: 1; min-width: 0; }
+    .chat-header-left > div { min-width: 0; }
+    .chat-status { align-items: flex-start; }
     .suggested-grid { grid-template-columns: 1fr; }
     .suggest-card { font-size: 0.78rem; }
     .chat-bubble { max-width: 94%; }

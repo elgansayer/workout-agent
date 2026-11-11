@@ -510,6 +510,11 @@ async function mockApi(page: Page) {
     await route.fulfill({ json: payloads[path] });
   });
 }
+async function openMenuIfCollapsed(page: Page) {
+  const menuButton = page.getByRole('button', { name: 'Menu' });
+  if (await menuButton.isVisible()) await menuButton.click();
+}
+
 async function noPageOverflow(page: Page) {
   const overflow = await page.evaluate(() => ({
     width: innerWidth,
@@ -811,6 +816,7 @@ test('a degraded account is told what failed and how to repair it', async ({ pag
     page.getByRole('alert').filter({ hasText: 'Hevy rejected your stored API key' }),
   ).toBeVisible();
   await expect(page.getByRole('link', { name: 'Reconnect Hevy' })).toBeVisible();
+  await openMenuIfCollapsed(page);
   await expect(page.getByRole('link', { name: 'Stats (needs attention)' })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Settings (needs attention)' })).toBeVisible();
   await noPageOverflow(page);
