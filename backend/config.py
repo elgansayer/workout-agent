@@ -73,7 +73,7 @@ class Config:
         hevy_api_key = os.environ.get("HEVY_API_KEY", "").strip() or None
         health_file = os.environ.get("HEALTH_CONNECT_FILE", "").strip() or None
         sync_routines = os.environ.get(
-            "HEVY_SYNC_ROUTINES", "1"
+            "HEVY_SYNC_ROUTINES", "0"
         ).strip().lower() not in (
             "0",
             "false",

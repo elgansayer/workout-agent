@@ -5,24 +5,38 @@ an explicit set of login/OAuth/health routes plus narrowly recognised static
 assets needed to render the login shell.  The boundary is installed at the
 FastAPI middleware-stack level so future HTML, JSON, streaming, download, or
 diagnostic routes inherit authentication without route-by-route opt-in.
+
+A signed session cookie only proves who logged in earlier.  In authenticated
+mode every request is therefore also re-checked against the account's current
+server-side state (allowlist, suspension, deletion, revoked sessions) through a
+mandatory *session guard*.  A session the guard refuses is cleared and answered
+exactly like a request that never had a session, so the response cannot be used
+to learn why access ended.
 """
 
 from __future__ import annotations
 
-import os
+import logging
 import re
 import sqlite3
-from collections.abc import Mapping
-from typing import Any
+from collections.abc import Callable, Mapping, MutableMapping
+from typing import TYPE_CHECKING, Any
 
 from fastapi import FastAPI
-from starlette.datastructures import Headers
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from webapp.runtime_security import validate_web_runtime
+
+if TYPE_CHECKING:
+    from account_policy import SessionDecision
+
+logger = logging.getLogger(__name__)
+
+SessionGuard = Callable[[Mapping[str, Any]], "SessionDecision"]
 
 # Keep this list intentionally small.  OAuth callbacks must be reachable before
 # identity is established; liveness/readiness endpoints contain no tenant data.
@@ -80,82 +94,32 @@ def has_verified_identity(session: Mapping[str, Any] | None) -> bool:
     return False
 
 
-def _database_path() -> str:
-    return os.environ.get("DATABASE_PATH", "workout_agent.db").strip() or "workout_agent.db"
-
-
-def _client_ip(scope: Scope) -> str:
-    state = scope.get("state")
-    if isinstance(state, dict):
-        validated = state.get("validated_client_ip")
-        if isinstance(validated, str) and validated and validated != "unknown":
-            return validated
-    client = scope.get("client")
-    if isinstance(client, (tuple, list)) and client:
-        return str(client[0])
-    return ""
-
-
-def _active_session(scope: Scope, session: dict[str, Any]) -> bool:
-    """Validate, adopt, or reject the server-side session for this request.
-
-    Sessions created before the registry existed have no ``sid`` yet. They are
-    adopted once so an existing deployment keeps working and then becomes
-    revocable like any new session. Adoption stops once the user has revoked
-    any session, so a copied legacy cookie cannot be replayed after revocation. A present but unknown, revoked, expired, or
-    foreign session id fails closed.
-    """
-
-    from session_registry import (
-        SESSION_COOKIE_KEY,
-        SessionRegistryError,
-        create_session,
-        legacy_session_adoptable,
-        request_metadata,
-        validate_session,
-    )
-
-    user_id = str(session.get("user_id", "")).strip()
-    if not user_id:
-        return False
-
-    session_id = session.get(SESSION_COOKIE_KEY)
-    if isinstance(session_id, str) and session_id:
-        try:
-            return validate_session(user_id, session_id, _database_path())
-        except sqlite3.Error:
-            return False
-
-    try:
-        if not legacy_session_adoptable(user_id, _database_path()):
-            return False
-    except sqlite3.Error:
-        return False
-
-    user_agent, client_ip, country_code = request_metadata(
-        Headers(scope=scope),
-        _client_ip(scope),
-    )
-    try:
-        record = create_session(
-            user_id,
-            user_agent=user_agent,
-            client_ip=client_ip,
-            country_code=country_code,
-            db_path=_database_path(),
-        )
-    except (sqlite3.Error, SessionRegistryError):
-        return False
-    session[SESSION_COOKIE_KEY] = record["sid"]
-    return True
-
-
 class AuthenticationBoundaryMiddleware:
     """Fail closed for every non-public HTTP request without a verified user."""
 
-    def __init__(self, app: ASGIApp, *, anonymous_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        anonymous_enabled: bool = False,
+        session_guard: SessionGuard | None = None,
+    ) -> None:
+        if not anonymous_enabled and session_guard is None:
+            # Never degrade to a shape-only check: a revoked, suspended or
+            # de-listed account must not keep working on a still-signed cookie.
+            raise RuntimeError(
+                "Authenticated mode requires a session guard for the account "
+                "access policy."
+            )
         self.app = app
         self.anonymous_enabled = anonymous_enabled
+        self.session_guard = session_guard
+
+    @staticmethod
+    def _unauthenticated_response(path: str) -> Response:
+        if path.startswith("/api/"):
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
 
     async def __call__(
         self,
@@ -173,21 +137,47 @@ class AuthenticationBoundaryMiddleware:
             return
 
         session = scope.get("session")
-        if isinstance(session, dict) and has_verified_identity(session):
-            if _active_session(scope, session):
-                await self.app(scope, receive, send)
-                return
-            session.clear()
+        if not isinstance(session, Mapping) or not has_verified_identity(session):
+            response = self._unauthenticated_response(path)
+            await response(scope, receive, send)
+            return
 
-        response: Any
-        if path.startswith("/api/"):
-            response = JSONResponse(
-                {"detail": "Not authenticated"},
-                status_code=401,
-            )
-        else:
-            response = RedirectResponse("/login", status_code=303)
-        await response(scope, receive, send)
+        guard = self.session_guard
+        if guard is not None:
+            try:
+                decision = await run_in_threadpool(guard, session)
+            except (sqlite3.Error, OSError):
+                # The policy store is unreadable: refuse (fail closed) but do
+                # not clear the session. An outage must not sign everyone out.
+                logger.exception("Account policy check unavailable; refusing request.")
+                unavailable = JSONResponse(
+                    {"detail": "Service temporarily unavailable"},
+                    status_code=503,
+                    headers={"Cache-Control": "no-store"},
+                )
+                await unavailable(scope, receive, send)
+                return
+            if not decision.allowed:
+                # Dropping the session makes the outer SessionMiddleware expire
+                # the cookie, so a well-behaved browser stops presenting it.
+                if isinstance(session, MutableMapping):
+                    session.clear()
+                response = self._unauthenticated_response(path)
+                await response(scope, receive, send)
+                return
+
+        await self.app(scope, receive, send)
+
+
+def _is_session_middleware(item: Middleware) -> bool:
+    """Whether *item* mounts SessionMiddleware or a subclass of it.
+
+    ``issubclass`` rather than identity: the production stack mounts
+    ``HardenedSessionMiddleware``, which is a ``SessionMiddleware`` subclass.
+    """
+
+    mounted = getattr(item, "cls", None)
+    return isinstance(mounted, type) and issubclass(mounted, SessionMiddleware)
 
 
 def _contains_boundary(app: FastAPI) -> bool:
@@ -212,7 +202,7 @@ def _install_on_workout_app(app: FastAPI) -> None:
         (
             index
             for index, item in enumerate(app.user_middleware)
-            if getattr(item, "cls", None) is SessionMiddleware
+            if _is_session_middleware(item)
         ),
         None,
     )
@@ -222,11 +212,21 @@ def _install_on_workout_app(app: FastAPI) -> None:
         )
 
     runtime = validate_web_runtime()
+    session_guard: SessionGuard | None = None
+    if not runtime.anonymous_enabled:
+        policy = getattr(app.state, "access_policy", None)
+        if policy is None:
+            raise RuntimeError(
+                "Workout Agent authentication boundary requires "
+                "app.state.access_policy in authenticated mode"
+            )
+        session_guard = policy.check_session
     app.user_middleware.insert(
         session_index + 1,
         Middleware(
             AuthenticationBoundaryMiddleware,
             anonymous_enabled=runtime.anonymous_enabled,
+            session_guard=session_guard,
         ),
     )
 
@@ -257,6 +257,7 @@ __all__ = [
     "PUBLIC_EXACT_PATHS",
     "PUBLIC_STATIC_PREFIXES",
     "AuthenticationBoundaryMiddleware",
+    "SessionGuard",
     "has_verified_identity",
     "install_authentication_boundary",
     "is_public_path",

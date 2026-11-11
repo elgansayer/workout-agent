@@ -1,11 +1,12 @@
 # Account session management
 
-The web dashboard stores browser sessions in the `user_sessions` table. The
-signed cookie carries an opaque session id (`sid`); the database stores only a
-SHA-256 hash of that id, the owning `user_id`, a coarse device label, a coarse
-location approximation, creation time, last-used time, and an optional
-revocation timestamp. Raw user agents, full IP addresses, and session
-credentials are never stored or returned.
+The web dashboard stores browser sessions in the hardened `user_sessions`
+registry introduced for session revocation hardening (issue #752). The signed
+cookie carries an opaque session id (`sid`); the database stores only a SHA-256
+hash of that id, the owning `user_id`, a coarse device label, a coarse location
+approximation, creation time, last-used time, and an optional revocation
+timestamp. Raw user agents, full IP addresses, and session credentials are
+never stored or returned.
 
 ## User-visible behaviour
 
@@ -28,12 +29,9 @@ every non-public request. A revoked, expired, unknown, or foreign session id
 fails closed immediately, so revocation takes effect on the next request rather
 than waiting for cookie expiry.
 
-Sessions created before this registry existed have no `sid`; they are adopted
-once on their next request and become revocable like any new session. Once a
-user has revoked any session (logout, single revoke, or signing out other
-sessions), unregistered legacy cookies are rejected instead of adopted, so a
-copied legacy cookie cannot be replayed after revocation. Sessions expire after
-14 days.
+Cookies without a registered `sid` are never adopted or honoured, so a legacy
+or copied stateless cookie cannot be replayed. Sessions also expire after the
+configured absolute and idle limits, enforced server-side on every request.
 
 ## Privacy boundaries
 

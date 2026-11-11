@@ -184,7 +184,7 @@ def test_revocation_from_another_session_takes_effect_promptly(
     assert other_client.get("/api/me").status_code == 401
 
 
-def test_legacy_cookie_is_adopted_once_and_remains_revocable(
+def test_legacy_cookie_without_registered_session_is_rejected(
     app_with_users: tuple[Any, str, str, str],
 ) -> None:
     app_module, _db_path, first, _second = app_with_users
@@ -195,48 +195,23 @@ def test_legacy_cookie_is_adopted_once_and_remains_revocable(
     client = TestClient(app_module.app)
     client.cookies.set("session", legacy_cookie)
 
-    first_response = client.get("/api/sessions")
-    assert first_response.status_code == 200
-    sessions = first_response.json()["sessions"]
-    assert len(sessions) == 1
-    assert sessions[0]["current"] is True
-
-    second_response = client.get("/api/sessions")
-    assert second_response.status_code == 200
-    assert [item["id"] for item in second_response.json()["sessions"]] == [
-        sessions[0]["id"]
-    ]
-
-    revoked = client.delete(f"/api/sessions/{sessions[0]['id']}")
-    assert revoked.status_code == 200
-    assert revoked.json()["logged_out"] is True
+    # The hardened registry (issue #752) refuses every sid-less cookie rather
+    # than adopting one that cannot be individually revoked.
+    assert client.get("/api/sessions").status_code == 401
 
 
-def test_legacy_cookie_is_rejected_after_any_revocation(
+def test_legacy_cookie_is_rejected_for_every_account(
     app_with_users: tuple[Any, str, str, str],
 ) -> None:
     app_module, _db_path, first, second = app_with_users
-    payload = {"user": "first@example.test", "user_id": first}
-    encoded = base64.b64encode(json.dumps(payload).encode())
-    legacy_cookie = TimestampSigner(_SECRET).sign(encoded).decode()
+    for user_id, email in ((first, "first@example.test"), (second, "second@example.test")):
+        payload = {"user": email, "user_id": user_id}
+        encoded = base64.b64encode(json.dumps(payload).encode())
+        legacy_cookie = TimestampSigner(_SECRET).sign(encoded).decode()
 
-    adopted = TestClient(app_module.app)
-    adopted.cookies.set("session", legacy_cookie)
-    sessions = adopted.get("/api/sessions").json()["sessions"]
-    assert adopted.delete(f"/api/sessions/{sessions[0]['id']}").status_code == 200
-
-    replayed = TestClient(app_module.app)
-    replayed.cookies.set("session", legacy_cookie)
-    assert replayed.get("/api/sessions").status_code == 401
-
-    # Another account's revocations never block that account's own adoption.
-    other_payload = {"user": "second@example.test", "user_id": second}
-    other_cookie = TimestampSigner(_SECRET).sign(
-        base64.b64encode(json.dumps(other_payload).encode())
-    ).decode()
-    other = TestClient(app_module.app)
-    other.cookies.set("session", other_cookie)
-    assert other.get("/api/sessions").status_code == 200
+        client = TestClient(app_module.app)
+        client.cookies.set("session", legacy_cookie)
+        assert client.get("/api/sessions").status_code == 401
 
 
 def test_legacy_cookie_is_rejected_after_revoking_other_sessions(

@@ -55,4 +55,7 @@ CREATE TABLE IF NOT EXISTS health_sync_runs (
     skipped INTEGER NOT NULL DEFAULT 0,
     error_code TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_health_sync_runs_user
+ON health_sync_runs(user_id, started_at);
 """

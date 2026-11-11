@@ -5,6 +5,11 @@ This module persists only a hash of that id so a database leak cannot be used to
 forge a session cookie. Every lookup is scoped by ``user_id``; revocation and
 listing therefore cannot cross account boundaries.
 
+It shares the hardened ``user_sessions`` registry owned by
+``webapp.session_security.SessionStore`` (issue #752) rather than creating a
+second store, and adds the safe display metadata required for device/session
+management (issue #782).
+
 Device labels and location approximations are deliberately coarse. Raw user
 agents, full IP addresses, and session credentials are never persisted or
 returned to clients.
@@ -67,20 +72,17 @@ def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
 
 
-def _isoformat(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
+def _epoch(moment: datetime | None) -> int:
+    return int((moment or _utcnow()).timestamp())
 
 
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+def _isoformat(epoch: Any) -> str:
+    if not isinstance(epoch, (int, float)):
+        return ""
+    return (
+        datetime.fromtimestamp(float(epoch), tz=timezone.utc)
+        .isoformat(timespec="seconds")
+    )
 
 
 def _clean(value: Any) -> str:
@@ -159,18 +161,19 @@ def _insert_session(
     location: str,
     moment: datetime,
 ) -> dict[str, Any]:
-    timestamp = _isoformat(moment)
+    epoch = _epoch(moment)
     cursor = conn.execute(
         "INSERT INTO user_sessions "
-        "(user_id, session_hash, device, location, created_at, last_used_at, revoked_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, NULL)",
+        "(session_token_hash, user_id, created_at, last_seen_at, revoked_at, "
+        "revoked_reason, device, location) "
+        "VALUES (?, ?, ?, ?, NULL, NULL, ?, ?)",
         (
-            user_id,
             hash_session_id(session_id),
+            user_id,
+            epoch,
+            epoch,
             device,
             location,
-            timestamp,
-            timestamp,
         ),
     )
     return {
@@ -178,8 +181,8 @@ def _insert_session(
         "sid": session_id,
         "device": device,
         "location": location,
-        "created_at": timestamp,
-        "last_used_at": timestamp,
+        "created_at": _isoformat(epoch),
+        "last_used_at": _isoformat(epoch),
     }
 
 
@@ -215,31 +218,33 @@ def _session_row(
     session_id: str,
 ) -> tuple[Any, ...] | None:
     return conn.execute(
-        "SELECT id, user_id, created_at, last_used_at, revoked_at "
-        "FROM user_sessions WHERE session_hash = ?",
+        "SELECT rowid, user_id, created_at, last_seen_at, revoked_at "
+        "FROM user_sessions WHERE session_token_hash = ?",
         (hash_session_id(session_id),),
     ).fetchone()
 
 
 def _is_expired(created_at: Any, now: datetime) -> bool:
-    created = _parse_timestamp(created_at)
-    if created is None:
+    if not isinstance(created_at, (int, float)):
         return True
-    return now - created > timedelta(seconds=SESSION_MAX_AGE_SECONDS)
+    return now - datetime.fromtimestamp(float(created_at), tz=timezone.utc) > timedelta(
+        seconds=SESSION_MAX_AGE_SECONDS
+    )
 
 
 def _touch(
     conn: sqlite3.Connection,
     session_id: str,
-    last_used_at: Any,
+    last_seen_at: Any,
     now: datetime,
 ) -> None:
-    last_used = _parse_timestamp(last_used_at)
-    if last_used is not None and (now - last_used).total_seconds() < _TOUCH_INTERVAL_SECONDS:
+    if not isinstance(last_seen_at, (int, float)):
+        return
+    if now.timestamp() - float(last_seen_at) < _TOUCH_INTERVAL_SECONDS:
         return
     conn.execute(
-        "UPDATE user_sessions SET last_used_at = ? WHERE session_hash = ?",
-        (_isoformat(now), hash_session_id(session_id)),
+        "UPDATE user_sessions SET last_seen_at = ? WHERE session_token_hash = ?",
+        (_epoch(now), hash_session_id(session_id)),
     )
 
 
@@ -260,12 +265,12 @@ def validate_session(
         row = _session_row(conn, session_id)
         if row is None:
             return False
-        _row_id, row_user_id, created_at, last_used_at, revoked_at = row
+        _row_id, row_user_id, created_at, last_seen_at, revoked_at = row
         if revoked_at is not None or row_user_id != user_id:
             return False
         if _is_expired(created_at, moment):
             return False
-        _touch(conn, session_id, last_used_at, moment)
+        _touch(conn, session_id, last_seen_at, moment)
     return True
 
 
@@ -303,8 +308,8 @@ def current_session_row_id(
         return None
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT id FROM user_sessions "
-            "WHERE session_hash = ? AND user_id = ? AND revoked_at IS NULL",
+            "SELECT rowid FROM user_sessions "
+            "WHERE session_token_hash = ? AND user_id = ? AND revoked_at IS NULL",
             (hash_session_id(session_id), user_id),
         ).fetchone()
     return int(row[0]) if row else None
@@ -328,15 +333,16 @@ def list_user_sessions(
     )
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, session_hash, device, location, created_at, last_used_at "
+            "SELECT rowid, session_token_hash, device, location, created_at, "
+            "last_seen_at "
             "FROM user_sessions "
             "WHERE user_id = ? AND revoked_at IS NULL "
-            "ORDER BY last_used_at DESC, id DESC",
+            "ORDER BY last_seen_at DESC, rowid DESC",
             (user_id,),
         ).fetchall()
 
     sessions = []
-    for row_id, session_hash, device, location, created_at, last_used_at in rows:
+    for row_id, session_hash, device, location, created_at, last_seen_at in rows:
         if _is_expired(created_at, moment):
             continue
         sessions.append(
@@ -344,8 +350,8 @@ def list_user_sessions(
                 "id": int(row_id),
                 "device": device or "Unknown device",
                 "location": location or "Unknown location",
-                "created_at": created_at,
-                "last_used_at": last_used_at,
+                "created_at": _isoformat(created_at),
+                "last_used_at": _isoformat(last_seen_at),
                 "current": session_hash == current_hash,
             }
         )
@@ -365,7 +371,7 @@ def revoke_session(
         return False
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT user_id, revoked_at FROM user_sessions WHERE id = ?",
+            "SELECT user_id, revoked_at FROM user_sessions WHERE rowid = ?",
             (session_row_id,),
         ).fetchone()
         if row is None or row[0] != user_id:
@@ -373,8 +379,8 @@ def revoke_session(
         if row[1] is None:
             conn.execute(
                 "UPDATE user_sessions SET revoked_at = ? "
-                "WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
-                (_isoformat(now or _utcnow()), session_row_id, user_id),
+                "WHERE rowid = ? AND user_id = ? AND revoked_at IS NULL",
+                (_epoch(now), session_row_id, user_id),
             )
     return True
 
@@ -393,8 +399,8 @@ def revoke_current_session(
     with _connect(db_path) as conn:
         cursor = conn.execute(
             "UPDATE user_sessions SET revoked_at = ? "
-            "WHERE session_hash = ? AND user_id = ? AND revoked_at IS NULL",
-            (_isoformat(now or _utcnow()), hash_session_id(session_id), user_id),
+            "WHERE session_token_hash = ? AND user_id = ? AND revoked_at IS NULL",
+            (_epoch(now), hash_session_id(session_id), user_id),
         )
     return cursor.rowcount > 0
 
@@ -416,8 +422,8 @@ def revoke_other_sessions(
     with _connect(db_path) as conn:
         cursor = conn.execute(
             "UPDATE user_sessions SET revoked_at = ? "
-            "WHERE user_id = ? AND session_hash <> ? AND revoked_at IS NULL",
-            (_isoformat(now or _utcnow()), user_id, current_hash),
+            "WHERE user_id = ? AND session_token_hash <> ? AND revoked_at IS NULL",
+            (_epoch(now), user_id, current_hash),
         )
     return int(cursor.rowcount)
 
@@ -449,15 +455,15 @@ def rotate_session(
         row = _session_row(conn, current_session_id)
         if row is None:
             return None
-        _row_id, row_user_id, created_at, _last_used_at, revoked_at = row
+        _row_id, row_user_id, created_at, _last_seen_at, revoked_at = row
         if row_user_id != user_id or revoked_at is not None:
             return None
         if _is_expired(created_at, moment):
             return None
         conn.execute(
             "UPDATE user_sessions SET revoked_at = ? "
-            "WHERE session_hash = ? AND user_id = ?",
-            (_isoformat(moment), hash_session_id(current_session_id), user_id),
+            "WHERE session_token_hash = ? AND user_id = ?",
+            (_epoch(moment), hash_session_id(current_session_id), user_id),
         )
         return _insert_session(
             conn,

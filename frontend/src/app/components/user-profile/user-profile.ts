@@ -22,6 +22,9 @@ export class UserProfile implements OnInit {
   authService = inject(Auth);
   private http = inject(HttpClient);
 
+  signingOutEverywhere = signal(false);
+  error = signal<string | null>(null);
+
   sessions = signal<ActiveSession[]>([]);
   sessionsLoading = signal<boolean>(true);
   sessionsError = signal<string | null>(null);
@@ -69,23 +72,41 @@ export class UserProfile implements OnInit {
     if (!confirm('Revoke all other sessions? Every other device will be signed out.')) return;
 
     this.sessionStatus.set('');
-    this.http
-      .post<{ revoked: number }>('/api/sessions/revoke-others', {})
-      .subscribe({
-        next: (response) => {
-          const count = response.revoked || 0;
-          this.sessionStatus.set(
-            count === 0
-              ? 'No other active sessions to revoke.'
-              : `Revoked ${count} other session${count === 1 ? '' : 's'}.`,
-          );
-          this.loadSessions();
-        },
-        error: () => this.sessionStatus.set('Could not revoke other sessions. Try again.'),
-      });
+    this.http.post<{ revoked: number }>('/api/sessions/revoke-others', {}).subscribe({
+      next: (response) => {
+        const count = response.revoked || 0;
+        this.sessionStatus.set(
+          count === 0
+            ? 'No other active sessions to revoke.'
+            : `Revoked ${count} other session${count === 1 ? '' : 's'}.`,
+        );
+        this.loadSessions();
+      },
+      error: () => this.sessionStatus.set('Could not revoke other sessions. Try again.'),
+    });
   }
 
   logout() {
-    this.authService.logout();
+    void this.authService.logout();
+  }
+
+  /** Revoke every session of this account, on every device, after confirmation. */
+  async logoutAllDevices(): Promise<void> {
+    if (
+      !confirm(
+        'Sign out of every device and browser? You will need to sign in again everywhere, including here.',
+      )
+    ) {
+      return;
+    }
+    this.error.set(null);
+    this.signingOutEverywhere.set(true);
+    try {
+      // On success the page navigates to sign-in, so the busy state is kept.
+      await this.authService.logoutAllDevices();
+    } catch {
+      this.error.set('We could not sign you out of all devices. Please try again.');
+      this.signingOutEverywhere.set(false);
+    }
   }
 }
