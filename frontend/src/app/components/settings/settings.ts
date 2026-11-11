@@ -1,7 +1,20 @@
 import { Component, inject, signal, OnInit } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
+
+interface AiConnectionTestResponse {
+  status: 'ok' | 'error';
+  message?: string;
+}
+
+function errorDetail(error: unknown, fallback: string): string {
+  if (typeof error === 'object' && error !== null && 'detail' in error) {
+    const detail = Reflect.get(error, 'detail');
+    if (typeof detail === 'string' && detail) return detail;
+  }
+  return fallback;
+}
 
 @Component({
   selector: 'app-settings',
@@ -25,6 +38,9 @@ export class Settings implements OnInit {
   hevyKeyInput = '';
   hevyStatus = signal<string>('');
   aiStatus = signal<string>('');
+  aiStatusKind = signal<'' | 'success' | 'error'>('');
+  /** The AI key request (test or verifying save) in flight, if any. */
+  aiBusy = signal<{ provider: string; op: 'test' | 'save' } | null>(null);
   prefStatus = signal<string>('');
   pushSubscribed = signal<boolean>(false);
 
@@ -83,6 +99,55 @@ export class Settings implements OnInit {
     }
   }
 
+  private setAiStatus(message: string, kind: '' | 'success' | 'error' = '') {
+    this.aiStatus.set(message);
+    this.aiStatusKind.set(kind);
+  }
+
+  isAiBusy(provider: string, op: 'test' | 'save'): boolean {
+    const busy = this.aiBusy();
+    return busy?.provider === provider && busy.op === op;
+  }
+
+  canTestAiKey(provider: string): boolean {
+    const typed = (this.aiKeyInputs[provider] || '').trim();
+    return !!typed || !!this.data()?.user_keys?.[provider]?.has_key;
+  }
+
+  /**
+   * Check a provider key and model without saving anything. A typed key is
+   * tested as entered; with none typed the server tests the stored key, which
+   * is never sent back to the browser.
+   */
+  testConnection(provider: string) {
+    if (this.aiBusy()) return;
+    if (!this.canTestAiKey(provider)) {
+      this.setAiStatus('Enter an API key to test.', 'error');
+      return;
+    }
+    const key = (this.aiKeyInputs[provider] || '').trim();
+    const model = (this.aiModelInputs[provider] || '').trim();
+
+    const body: { provider: string; api_key?: string; model?: string } = { provider };
+    if (key) body.api_key = key;
+    if (model) body.model = model;
+
+    this.aiBusy.set({ provider, op: 'test' });
+    this.setAiStatus('Testing connection…');
+    this.http.post<AiConnectionTestResponse>('/api/settings/ai/test', body).subscribe({
+      next: (res: AiConnectionTestResponse) => {
+        this.aiBusy.set(null);
+        const ok = res.status === 'ok';
+        const message = res.message || (ok ? 'Connected.' : 'The connection test failed.');
+        this.setAiStatus(`${ok ? '✓' : '✗'} ${message}`, ok ? 'success' : 'error');
+      },
+      error: (err: HttpErrorResponse) => {
+        this.aiBusy.set(null);
+        this.setAiStatus(errorDetail(err.error, 'Could not test the connection.'), 'error');
+      },
+    });
+  }
+
   saveKey(provider: string) {
     const key =
       provider === 'hevy' ? this.hevyKeyInput.trim() : (this.aiKeyInputs[provider] || '').trim();
@@ -92,9 +157,17 @@ export class Settings implements OnInit {
       if (provider === 'hevy') {
         this.hevyStatus.set('Please enter an API key.');
       } else {
-        this.aiStatus.set('Please enter an API key.');
+        this.setAiStatus('Please enter an API key.', 'error');
       }
       return;
+    }
+
+    const isAi = provider !== 'hevy';
+    if (isAi) {
+      if (this.aiBusy()) return;
+      // The server verifies an AI key with the provider before it stores it.
+      this.aiBusy.set({ provider, op: 'save' });
+      this.setAiStatus('Verifying key with the provider…');
     }
 
     this.http
@@ -105,15 +178,21 @@ export class Settings implements OnInit {
             this.hevyStatus.set('Hevy key saved!');
             this.hevyKeyInput = '';
           } else {
-            this.aiStatus.set(`${provider} key saved!`);
+            this.aiBusy.set(null);
+            this.setAiStatus(`✓ ${provider} key verified and saved.`, 'success');
             this.aiKeyInputs[provider] = '';
           }
           this.loadSettings(false);
         },
         error: (err: any) => {
           const msg = err.error?.detail || 'Error saving key.';
-          if (provider === 'hevy') this.hevyStatus.set(msg);
-          else this.aiStatus.set(msg);
+          if (provider === 'hevy') {
+            this.hevyStatus.set(msg);
+          } else {
+            // The typed key stays in the field so the user can correct it.
+            this.aiBusy.set(null);
+            this.setAiStatus(`✗ ${msg}`, 'error');
+          }
         },
       });
   }

@@ -39,12 +39,14 @@ A call site counts as migrated only when the acting user is carried into the can
 
 `available_providers()` is projected from the same registry used by `get_provider()`.
 
+The Claude and DeepSeek defaults were changed under #798 because the previous values (`claude-sonnet-4-20250514`, `deepseek-chat`) are retired or deprecated at the provider; see [AI provider connection tests](AI_PROVIDER_CONNECTION_TESTS.md#registry-defaults-changed-by-this-work).
+
 | Registry ID | Adapter SDK | Python import | Default model | Agent image | Web image |
 | --- | --- | --- | --- | --- | --- |
 | `gemini` | `google-generativeai` | `google.generativeai` | `gemini-3.8-flash` | shared requirements | shared requirements |
-| `claude` | `anthropic` | `anthropic` | `claude-sonnet-4-20250514` | shared requirements | shared requirements |
+| `claude` | `anthropic` | `anthropic` | `claude-sonnet-5-5` | shared requirements | shared requirements |
 | `openai` | `openai` | `openai` | `gpt-4o` | shared requirements | shared requirements |
-| `deepseek` | `openai` (OpenAI-compatible API) | `openai` | `deepseek-chat` | shared requirements | shared requirements |
+| `deepseek` | `openai` (OpenAI-compatible API) | `openai` | `deepseek-flash` | shared requirements | shared requirements |
 
 Both `Dockerfile` and `Dockerfile.web` install `backend/requirements.txt`. Import checks run against the repository virtual environment. The production Portainer definition supplies the same mandatory `ENCRYPTION_KEY` to both services so the agent can decrypt credentials saved by the web service; an environment Gemini key is now only an optional fallback.
 
@@ -53,6 +55,8 @@ The legacy Gemini SDK resolves clients lazily from process-global configuration.
 ## Settings parity
 
 The Angular Settings page renders the provider list and default model placeholders returned by `GET /api/settings`; neither layer keeps a second hardcoded provider list. The API response is derived from `available_providers()`, returns only masked credential status, and includes non-secret model metadata. Saving preferences persists both the selected provider and its current model. Request-time provider resolution is deliberately uncached so credential and preference changes take effect without a process restart.
+
+Settings also proves a key and model before they are stored or activated: a **Test** action, verification on key save and on provider/model changes, per-user rate limiting, a brief tenant-scoped result cache and a static deprecated/unsupported-model policy. The contract, error codes and operating notes are in [AI provider connection tests](AI_PROVIDER_CONNECTION_TESTS.md).
 
 The production scheduler now invokes coaching and insights once per persisted user. Each coaching run resolves that user's encrypted Hevy key; server-level legacy Hevy and Google Health credentials are restricted to the legacy tenant so a shared fallback cannot cross tenant boundaries.
 

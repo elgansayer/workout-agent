@@ -123,8 +123,30 @@
               aria-label="{{ p.name }} API key"
               [(ngModel)]="aiKeyInputs[p.id]"
             />
-            <button class="btn btn-sm" (click)="saveKey(p.id)">
-              {{ data.user_keys?.[p.id]?.has_key ? 'Update' : 'Save' }}
+            <button
+              class="btn btn-sm"
+              id="{{ p.id }}-save-btn"
+              [disabled]="aiBusy() !== null"
+              (click)="saveKey(p.id)"
+            >
+              {{
+                isAiBusy(p.id, 'save')
+                  ? 'Verifying…'
+                  : data.user_keys?.[p.id]?.has_key
+                    ? 'Update'
+                    : 'Save'
+              }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm"
+              id="{{ p.id }}-test-btn"
+              [disabled]="aiBusy() !== null || !canTestAiKey(p.id)"
+              [attr.aria-label]="'Test ' + p.name + ' connection'"
+              title="Check the key and model with {{ p.name }} without saving"
+              (click)="testConnection(p.id)"
+            >
+              {{ isAiBusy(p.id, 'test') ? 'Testing…' : 'Test' }}
             </button>
             @if (data.user_keys?.[p.id]?.has_key) {
               <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey(p.id)">
@@ -146,7 +168,16 @@
       }
       <button type="button" class="btn" (click)="savePreferences()">Save AI preferences</button>
       <p role="status">{{ prefStatus() }}</p>
-      <div id="ai-status" class="key-status" role="status">{{ aiStatus() }}</div>
+      <div
+        id="ai-status"
+        class="key-status"
+        [class.success]="aiStatusKind() === 'success'"
+        [class.error]="aiStatusKind() === 'error'"
+        role="status"
+        aria-live="polite"
+      >
+        {{ aiStatus() }}
+      </div>
     </div>
   </section>
 

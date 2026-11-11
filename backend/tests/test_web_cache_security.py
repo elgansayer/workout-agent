@@ -100,6 +100,7 @@ def test_error_responses_are_private_no_store() -> None:
         "/api/settings/key",
         "/api/settings/key/delete",
         "/api/settings/verify-hevy",
+        "/api/settings/ai/test",
         "/google-health/connect",
         "/google-health/callback",
         "/google-health/disconnect",

@@ -32,6 +32,12 @@ from typing import Any
 import analytics
 import insights
 import lifestyle
+from ai_connection import (
+    ConnectionCheck,
+    ConnectionCheckRateLimited,
+    http_status_for,
+)
+from ai_connection import checker as ai_connection_checker
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -61,6 +67,7 @@ from database import (
     get_recent_hevy_logs,
     get_session_volumes,
     get_unread_notification_count,
+    get_user_api_key,
     get_user_api_keys,
     get_user_by_id,
     get_user_preferences,
@@ -102,11 +109,11 @@ from program import (
     CYCLE_WEEKS,
     week_in_cycle,
 )
+from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from webapp import ai_widgets, charts
-
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
 logger = logging.getLogger(__name__)
@@ -1089,9 +1096,106 @@ def _gh_redirect_uri(request: Request) -> str:
     return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
 
 
-@app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, str]:
-    """Save or update an API key for the current user."""
+async def _json_object(request: Request) -> dict[str, Any]:
+    """Parse a JSON object body; malformed input is a 400, never a 500."""
+    try:
+        body = await request.json()
+    except ValueError:  # json.JSONDecodeError and UnicodeDecodeError
+        raise HTTPException(
+            status_code=400, detail="Request body must be valid JSON"
+        ) from None
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400, detail="Request body must be a JSON object"
+        )
+    return body
+
+
+def _optional_model(value: Any) -> str:
+    """Validate the optional ``model`` request field ("" when absent)."""
+    if value is not None and not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Model must be a string")
+    model = value.strip() if isinstance(value, str) else ""
+    if len(model) > 200:
+        raise HTTPException(status_code=400, detail="Model is too long")
+    return model
+
+
+async def _check_ai_connection(
+    user_id: str, provider: str, model: str, api_key: str
+) -> ConnectionCheck:
+    """Run a provider check off the event loop; our own throttle becomes a 429."""
+    try:
+        return await run_in_threadpool(
+            ai_connection_checker.check, user_id, provider, model, api_key
+        )
+    except ConnectionCheckRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Too many connection tests. "
+                f"Wait {exc.retry_after} seconds and try again."
+            ),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+def _ai_check_refusal(check: ConnectionCheck, outcome: str) -> JSONResponse:
+    """Refuse a flow after a failed check: ``detail`` stays a plain string.
+
+    The structured fields (``code``, ``retryable``, ...) ride alongside it so
+    existing clients that only render ``detail`` keep working.
+    """
+    payload = check.to_payload()
+    payload["detail"] = f"{check.message} {outcome}"
+    headers = {"Retry-After": str(check.retry_after)} if check.retry_after else None
+    return JSONResponse(payload, status_code=http_status_for(check), headers=headers)
+
+
+@app.post("/api/settings/ai/test", response_model=None)
+async def test_ai_connection(request: Request) -> JSONResponse:
+    """Check an AI provider key and model for the current user, saving nothing.
+
+    ``api_key`` is optional: omitted, the user's own stored key is tested. The
+    result is always HTTP 200 with ``status`` ``ok`` or ``error`` and a stable
+    ``code``; only malformed requests and our own throttle use 4xx.
+    """
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await _json_object(request)
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if provider not in defaults:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown AI provider. Use: {', '.join(sorted(defaults))}",
+        )
+    model = _optional_model(body.get("model")) or defaults[provider]
+
+    api_key_value = body.get("api_key")
+    if api_key_value is not None and not isinstance(api_key_value, str):
+        raise HTTPException(status_code=400, detail="api_key must be a string")
+    api_key = (api_key_value or "").strip()
+    if not api_key:
+        # Tenant-scoped: the authenticated user's own record, never a body id.
+        record = get_user_api_key(user_id, provider, db_path=DB_PATH)
+        api_key = str(record.get("api_key") or "").strip() if record else ""
+
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return JSONResponse(check.to_payload())
+
+
+@app.post("/api/settings/key", response_model=None)
+async def save_api_key(request: Request) -> dict[str, str] | JSONResponse:
+    """Save or update an API key for the current user.
+
+    AI provider keys are verified against the provider first; a key that fails
+    the check is never written.
+    """
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
     if not user_id:
@@ -1120,12 +1224,14 @@ async def save_api_key(request: Request) -> dict[str, str]:
             ),
         )
 
-    model_value = body.get("model")
-    if model_value is not None and not isinstance(model_value, str):
-        raise HTTPException(status_code=400, detail="Model must be a string")
-    model = model_value.strip() if isinstance(model_value, str) else ""
-    if len(model) > 200:
-        raise HTTPException(status_code=400, detail="Model is too long")
+    model = _optional_model(body.get("model"))
+
+    if provider in ai_provider_ids:
+        check = await _check_ai_connection(
+            user_id, provider, model or ai_provider_defaults[provider], api_key
+        )
+        if not check.ok:
+            return _ai_check_refusal(check, "Your key was not saved.")
 
     save_user_api_key(
         user_id,
@@ -1159,6 +1265,8 @@ async def remove_api_key(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="Provider is required")
 
     delete_user_api_key(user_id, provider, db_path=DB_PATH)
+    # A removed key must not keep vouching for itself from the check cache.
+    ai_connection_checker.invalidate(user_id, provider)
     return {"status": "ok", "provider": provider}
 
 
@@ -1186,8 +1294,44 @@ async def verify_hevy_key(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/api/settings/preferences")
-async def save_preferences(request: Request) -> dict[str, str]:
+async def _refuse_unverified_ai_selection(
+    user_id: str, preferred_ai: str | None, ai_model: str | None
+) -> JSONResponse | None:
+    """Gate *activating* a provider/model on the static policy and a live check.
+
+    Only a changed selection is gated, so saving unrelated profile fields never
+    spends a provider call or trips over a model the user already had. The live
+    check uses the user's own stored key; with no stored key there is nothing to
+    verify against yet (the key save verifies it), so only the static policy runs.
+    """
+    if preferred_ai is None and not ai_model:
+        return None
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    stored = get_user_preferences(user_id, DB_PATH)
+    stored_provider = str(stored.get("preferred_ai") or "gemini")
+    stored_model = str(stored.get("ai_model") or defaults.get(stored_provider, ""))
+
+    provider = preferred_ai or stored_provider
+    if provider not in defaults:
+        return None
+    model = ai_model or stored_model or defaults[provider]
+    if (provider, model) == (stored_provider, stored_model):
+        return None
+
+    outcome = "Your AI settings were not saved."
+    refused = ai_connection_checker.validate_model(provider, model)
+    if refused is not None:
+        return _ai_check_refusal(refused, outcome)
+    record = get_user_api_key(user_id, provider, db_path=DB_PATH)
+    api_key = str(record.get("api_key") or "").strip() if record else ""
+    if not api_key:
+        return None
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return None if check.ok else _ai_check_refusal(check, outcome)
+
+
+@app.post("/api/settings/preferences", response_model=None)
+async def save_preferences(request: Request) -> dict[str, str] | JSONResponse:
     """Save user training preferences."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -1221,6 +1365,10 @@ async def save_preferences(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=400, detail="AI model is too long")
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
+
+    refusal = await _refuse_unverified_ai_selection(user_id, preferred_ai, ai_model)
+    if refusal is not None:
+        return refusal
 
     save_user_preferences(
         user_id,

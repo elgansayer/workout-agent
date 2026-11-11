@@ -580,7 +580,7 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         "claude",
         {
             "class": _build_claude,
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-5-5",
         },
     )
 
