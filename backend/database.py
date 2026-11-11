@@ -567,6 +567,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON chat_messages (user_id, id DESC)",
         )
 
+        # Migration: persist deterministic evidence/provenance alongside replies.
+        cursor.execute("PRAGMA table_info(chat_messages)")
+        cm_evidence_columns = {row[1] for row in cursor.fetchall()}
+        if "evidence_json" not in cm_evidence_columns:
+            cursor.execute(
+                "ALTER TABLE chat_messages ADD COLUMN evidence_json TEXT",
+            )
+
         # Migration: Migrate reasoning_logs to user_id-scoped composite PK
         cursor.execute("PRAGMA table_info(reasoning_logs)")
         rl_columns = {row[1] for row in cursor.fetchall()}
@@ -1030,7 +1038,7 @@ def get_progress_history(
         if user_id is not None:
             rows = conn.execute(
                 """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                SELECT id, exercise_name, top_weight_kg, top_reps, sets, date
                 FROM (
                     SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
                            ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
@@ -1045,7 +1053,7 @@ def get_progress_history(
         else:
             rows = conn.execute(
                 """
-                SELECT exercise_name, top_weight_kg, top_reps, sets, date
+                SELECT id, exercise_name, top_weight_kg, top_reps, sets, date
                 FROM (
                     SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
                            ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
@@ -1058,9 +1066,10 @@ def get_progress_history(
             ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
-    for name, weight, reps, sets, when in rows:
+    for record_id, name, weight, reps, sets, when in rows:
         series.setdefault(name, []).append(
             {
+                "id": record_id,
                 "top_weight_kg": weight,
                 "top_reps": reps,
                 "sets": sets,
@@ -1176,7 +1185,8 @@ def get_personal_records(
         if user_id is not None:
             rows = conn.execute(
                 """
-                SELECT exercise_name,
+                SELECT id,
+                       exercise_name,
                        top_weight_kg,
                        top_reps,
                        date,
@@ -1192,7 +1202,8 @@ def get_personal_records(
         else:
             rows = conn.execute(
                 """
-                SELECT exercise_name,
+                SELECT id,
+                       exercise_name,
                        top_weight_kg,
                        top_reps,
                        date,
@@ -1206,13 +1217,14 @@ def get_personal_records(
 
     return [
         {
+            "id": record_id,
             "exercise": name,
             "e1rm": float(e1rm),
             "weight_kg": float(weight),
             "reps": int(reps),
             "date": when,
         }
-        for name, weight, reps, when, e1rm in rows
+        for record_id, name, weight, reps, when, e1rm in rows
     ]
 
 
@@ -1496,7 +1508,7 @@ def get_daily_logs(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT date, day, focus, carb_tier, plan, lifestyle
+            SELECT id, date, day, focus, carb_tier, plan, lifestyle
             FROM daily_log
             WHERE user_id = ?
             ORDER BY date DESC, id DESC
@@ -1506,6 +1518,7 @@ def get_daily_logs(
         ).fetchall()
     return [
         {
+            "id": record_id,
             "date": when,
             "day": day,
             "focus": focus,
@@ -1513,7 +1526,7 @@ def get_daily_logs(
             "plan": plan,
             "lifestyle": lifestyle,
         }
-        for when, day, focus, carb_tier, plan, lifestyle in rows
+        for record_id, when, day, focus, carb_tier, plan, lifestyle in rows
     ]
 
 
@@ -1575,7 +1588,7 @@ def get_body_metrics(
         if user_id is not None:
             rows = conn.execute(
                 """
-                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
                 FROM (
                     SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
                     FROM body_metrics
@@ -1590,7 +1603,7 @@ def get_body_metrics(
         else:
             rows = conn.execute(
                 """
-                SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+                SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
                 FROM (
                     SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
                     FROM body_metrics
@@ -1603,6 +1616,7 @@ def get_body_metrics(
             ).fetchall()
     return [
         {
+            "id": record_id,
             "date": when,
             "weight_kg": weight,
             "body_fat_pct": body_fat,
@@ -1610,7 +1624,7 @@ def get_body_metrics(
             "resting_hr": resting_hr,
             "hrv": hrv,
         }
-        for when, weight, body_fat, muscle, resting_hr, hrv in rows
+        for record_id, when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
 
 
@@ -1786,18 +1800,29 @@ def save_chat_message(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    evidence_json: str | None = None,
 ) -> None:
-    """Persist a chat message (role is 'user' or 'assistant')."""
+    """Persist a chat message (role is 'user' or 'assistant').
+
+    Assistant messages may carry a serialised evidence/provenance bundle so the
+    UI can show the same grounded sources after a reload.
+    """
     from datetime import datetime, timezone
 
     uid = user_id or get_legacy_user_id(db_path)
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO chat_messages (role, content, created_at, user_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO chat_messages (role, content, created_at, user_id, evidence_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (role, content, datetime.now(tz=timezone.utc).isoformat(), uid),
+            (
+                role,
+                content,
+                datetime.now(tz=timezone.utc).isoformat(),
+                uid,
+                evidence_json,
+            ),
         )
 
 
@@ -1815,8 +1840,8 @@ def get_chat_messages(
         if user_id is not None:
             rows = conn.execute(
                 """
-                SELECT role, content, created_at FROM (
-                    SELECT role, content, created_at, id
+                SELECT role, content, created_at, evidence_json FROM (
+                    SELECT role, content, created_at, evidence_json, id
                     FROM chat_messages
                     WHERE user_id = ?
                     ORDER BY id DESC
@@ -1828,8 +1853,8 @@ def get_chat_messages(
         else:
             rows = conn.execute(
                 """
-                SELECT role, content, created_at FROM (
-                    SELECT role, content, created_at, id
+                SELECT role, content, created_at, evidence_json FROM (
+                    SELECT role, content, created_at, evidence_json, id
                     FROM chat_messages
                     ORDER BY id DESC
                     LIMIT ?
@@ -1837,10 +1862,20 @@ def get_chat_messages(
                 """,
                 (limit,),
             ).fetchall()
-    return [
-        {"role": role, "content": content, "created_at": created_at}
-        for role, content, created_at in rows
-    ]
+    messages: list[dict[str, Any]] = []
+    for role, content, created_at, evidence_json in rows:
+        message: dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "created_at": created_at,
+        }
+        if evidence_json:
+            try:
+                message["evidence"] = json.loads(evidence_json)
+            except ValueError:
+                logger.warning("Ignoring malformed stored chat evidence.")
+        messages.append(message)
+    return messages
 
 
 def clear_chat_messages(

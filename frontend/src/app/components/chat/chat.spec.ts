@@ -5,6 +5,12 @@ import { vi } from 'vitest';
 import { environment } from '../../../environments/environment';
 import { Chat } from './chat';
 
+function sse(...events: Array<[string, unknown]>): string {
+  return events
+    .map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+    .join('');
+}
+
 describe('Coach connection', () => {
   let chat: Chat;
   const originalApiUrl = environment.apiUrl;
@@ -21,12 +27,36 @@ describe('Coach connection', () => {
     vi.unstubAllGlobals();
   });
 
-  it('streams from the configured API origin with the signed-in session', async () => {
+  it('streams evidence and the reply from the configured API origin', async () => {
     environment.apiUrl = 'https://api.example.test/';
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response('Good session.', {
-        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      }),
+      new Response(
+        sse(
+          [
+            'evidence',
+            {
+              window_start: '2026-03-01',
+              window_end: '2026-03-08',
+              transformation_version: 'coaching-context-v1',
+              items: [
+                {
+                  evidence_id: 'E1',
+                  source: 'exercise_progress',
+                  record_id: 'exercise_progress:1',
+                  date: '2026-03-02',
+                  freshness: 'fresh',
+                  transformation_version: 'exercise-progress-v1',
+                  summary: 'Deadlift top set 140kg x 5 reps x 4 sets',
+                },
+              ],
+            },
+          ],
+          ['delta', { text: 'Good session [E1].' }],
+          ['status', { grounding: 'observed', cited: ['E1'], evidence_count: 1 }],
+          ['done', {}],
+        ),
+        { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } },
+      ),
     );
     vi.stubGlobal('fetch', fetchMock);
     chat.userInput = 'How am I doing?';
@@ -37,24 +67,51 @@ describe('Coach connection', () => {
       'https://api.example.test/api/rag_search?q=How%20am%20I%20doing%3F',
       expect.objectContaining({ credentials: 'include', cache: 'no-store' }),
     );
-    expect(chat.messages().at(-1)?.content).toBe('Good session.');
+    const reply = chat.messages().at(-1);
+    expect(reply?.content).toBe('Good session [E1].');
+    expect(reply?.evidence?.grounding).toBe('observed');
+    expect(reply?.evidence?.items?.[0]?.record_id).toBe('exercise_progress:1');
     expect(chat.error()).toBeNull();
     expect(chat.isStreaming()).toBe(false);
   });
 
-  it('shows configuration errors and keeps the question available to retry', async () => {
+  it('labels replies without cited evidence as inferred', async () => {
     vi.stubGlobal(
       'fetch',
       vi
         .fn()
         .mockResolvedValue(
           new Response(
-            JSON.stringify({
-              detail: 'No AI provider key available. Add your own key in Settings.',
-            }),
-            { status: 400, headers: { 'Content-Type': 'application/json' } },
+            sse(
+              ['evidence', { items: [], window_start: '2026-03-01', window_end: '2026-03-08' }],
+              ['delta', { text: 'You should deload.' }],
+              ['status', { grounding: 'inferred', cited: [], evidence_count: 1 }],
+              ['done', {}],
+            ),
+            { headers: { 'Content-Type': 'text/event-stream' } },
           ),
         ),
+    );
+    chat.userInput = 'Should I deload?';
+
+    await chat.sendMessage();
+
+    expect(chat.messages().at(-1)?.evidence?.grounding).toBe('inferred');
+    expect(chat.groundingLabel('inferred')).toContain('Inferred');
+    expect(chat.groundingLabel('unknown')).toContain('Unknown');
+  });
+
+  it('shows configuration errors and keeps the question available to retry', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: 'No AI provider key available. Add your own key in Settings.',
+          }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
     );
     chat.userInput = 'Review my training';
 
