@@ -1,0 +1,151 @@
+# session_security.py (L150-L299 of 570)
+ 150 |         )
+ 151 |     return value
+ 152 | 
+ 153 | 
+ 154 | def load_session_security_config(
+ 155 |     environ: Mapping[str, str] | None = None,
+ 156 | ) -> SessionSecurityConfig:
+ 157 |     """Build the cookie and lifetime policy from the process environment.
+ 158 | 
+ 159 |     ``Secure`` is derived rather than configurable: it is always on in
+ 160 |     production, and elsewhere follows the scheme of ``WEB_PUBLIC_URL`` so local
+ 161 |     ``http://localhost`` development keeps working.  There is deliberately no
+ 162 |     knob for ``SameSite``, ``Path`` or ``Domain``; see the module docstring.
+ 163 |     """
+ 164 | 
+ 165 |     source = os.environ if environ is None else environ
+ 166 |     runtime = validate_web_runtime(source)
+ 167 |     public_url = source.get("WEB_PUBLIC_URL", "").strip().lower()
+ 168 |     secure = runtime.production or public_url.startswith("https://")
+ 169 | 
+ 170 |     idle = _read_seconds(
+ 171 |         source, "SESSION_IDLE_TIMEOUT_SECONDS", DEFAULT_IDLE_TIMEOUT_SECONDS
+ 172 |     )
+ 173 |     absolute = _read_seconds(
+ 174 |         source, "SESSION_ABSOLUTE_TIMEOUT_SECONDS", DEFAULT_ABSOLUTE_TIMEOUT_SECONDS
+ 175 |     )
+ 176 |     if idle > absolute:
+ 177 |         raise SessionSecurityConfigurationError(
+ 178 |             "SESSION_IDLE_TIMEOUT_SECONDS must not exceed "
+ 179 |             "SESSION_ABSOLUTE_TIMEOUT_SECONDS."
+ 180 |         )
+ 181 | 
+ 182 |     name = SESSION_COOKIE_BASENAME
+ 183 |     if secure:
+ 184 |         name = f"{HOST_COOKIE_PREFIX}{name}"
+ 185 |     return SessionSecurityConfig(
+ 186 |         cookie=SessionCookiePolicy(
+ 187 |             name=name,
+ 188 |             secure=secure,
+ 189 |             same_site="lax",
+ 190 |             path="/",
+ 191 |             domain=None,
+ 192 |             max_age=absolute,
+ 193 |         ),
+ 194 |         lifetime=SessionLifetimePolicy(idle_timeout=idle, absolute_timeout=absolute),
+ 195 |     )
+ 196 | 
+ 197 | 
+ 198 | class SessionState(StrEnum):
+ 199 |     """Why a presented session was, or was not, honoured."""
+ 200 | 
+ 201 |     ACTIVE = "active"
+ 202 |     UNKNOWN = "unknown"
+ 203 |     OWNER_MISMATCH = "owner_mismatch"
+ 204 |     REVOKED = "revoked"
+ 205 |     ABSOLUTE_EXPIRED = "absolute_expired"
+ 206 |     IDLE_EXPIRED = "idle_expired"
+ 207 | 
+ 208 | 
+ 209 | def _digest(session_id: str) -> str:
+ 210 |     return hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+ 211 | 
+ 212 | 
+ 213 | def _is_session_id(value: object) -> TypeGuard[str]:
+ 214 |     return isinstance(value, str) and _SESSION_ID_PATTERN.fullmatch(value) is not None
+ 215 | 
+ 216 | 
+ 217 | def _is_user_id(value: object) -> TypeGuard[str]:
+ 218 |     return isinstance(value, str) and 0 < len(value) <= _MAX_USER_ID_LENGTH
+ 219 | 
+ 220 | 
+ 221 | class SessionStore:
+ 222 |     """Tenant-scoped SQLite registry of browser sessions.
+ 223 | 
+ 224 |     Every statement is parameterised and every mutation is keyed by both the
+ 225 |     session digest and its owner, so knowing someone else's identifier is not
+ 226 |     enough to revoke (or read) their session.  ``clock`` is injectable so
+ 227 |     lifetime behaviour can be tested deterministically.
+ 228 |     """
+ 229 | 
+ 230 |     def __init__(
+ 231 |         self,
+ 232 |         db_path: str,
+ 233 |         lifetime: SessionLifetimePolicy,
+ 234 |         *,
+ 235 |         clock: Callable[[], float] = time.time,
+ 236 |         busy_timeout: float = 10.0,
+ 237 |     ) -> None:
+ 238 |         self.db_path = db_path
+ 239 |         self.lifetime = lifetime
+ 240 |         self.clock = clock
+ 241 |         self.busy_timeout = busy_timeout
+ 242 | 
+ 243 |     def _now(self) -> int:
+ 244 |         return int(self.clock())
+ 245 | 
+ 246 |     @contextmanager
+ 247 |     def _connection(self) -> Iterator[sqlite3.Connection]:
+ 248 |         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+ 249 |         conn = sqlite3.connect(
+ 250 |             self.db_path, timeout=self.busy_timeout, isolation_level=None
+ 251 |         )
+ 252 |         try:
+ 253 |             ensure_user_sessions_schema(conn)
+ 254 |             yield conn
+ 255 |         finally:
+ 256 |             conn.close()
+ 257 | 
+ 258 |     @contextmanager
+ 259 |     def _write_transaction(self, conn: sqlite3.Connection) -> Iterator[None]:
+ 260 |         conn.execute("BEGIN IMMEDIATE")
+ 261 |         try:
+ 262 |             yield
+ 263 |         except BaseException:
+ 264 |             # SQLite may already have rolled back (e.g. on a full disk); the
+ 265 |             # original error is the one worth surfacing.
+ 266 |             with suppress(sqlite3.Error):
+ 267 |                 conn.execute("ROLLBACK")
+ 268 |             raise
+ 269 |         conn.execute("COMMIT")
+ 270 | 
+ 271 |     def create(self, user_id: str) -> str:
+ 272 |         """Register a new session for ``user_id`` and return its raw identifier.
+ 273 | 
+ 274 |         The raw identifier is returned exactly once, to be placed in the signed
+ 275 |         cookie; only its digest is persisted.
+ 276 |         """
+ 277 | 
+ 278 |         if not _is_user_id(user_id):
+ 279 |             raise ValueError("A session must belong to a user.")
+ 280 |         now = self._now()
+ 281 |         session_id = secrets.token_urlsafe(32)
+ 282 |         with self._connection() as conn, self._write_transaction(conn):
+ 283 |             self._purge(conn, now)
+ 284 |             conn.execute(
+ 285 |                 "INSERT INTO user_sessions "
+ 286 |                 "(session_token_hash, user_id, created_at, last_seen_at) "
+ 287 |                 "VALUES (?, ?, ?, ?)",
+ 288 |                 (_digest(session_id), user_id, now, now),
+ 289 |             )
+ 290 |         return session_id
+ 291 | 
+ 292 |     def check(
+ 293 |         self,
+ 294 |         session_id: object,
+ 295 |         user_id: object,
+ 296 |         *,
+ 297 |         touch: bool = True,
+ 298 |     ) -> SessionState:
+ 299 |         """Return whether ``session_id`` is an active session owned by ``user_id``.

@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import scheduler
+from tenant_isolation import JobOutcome, JobStatus
 
 SCHEDULE = {
     "coaching": [(7, 0)],
@@ -281,9 +282,19 @@ def test_run_once_skips_the_weekly_report_when_nobody_is_on_sunday(
     assert weekly == []
 
 
+def _authorize_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the user-store lookup; ownership checks are covered elsewhere."""
+
+    def fake(job: Any, _db: str, work: Any, **_kw: Any) -> JobOutcome[Any]:
+        return JobOutcome(job, JobStatus.COMPLETED, result=work(job.owner))
+
+    monkeypatch.setattr(scheduler, "run_owned_job", fake)
+
+
 def test_per_user_filters_never_run_other_tenants_or_the_legacy_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    _authorize_all(monkeypatch)
     config = MagicMock(database_path="synthetic.db")
     users = [{"id": "a"}, {"id": "b"}, {"id": "c"}]
     monkeypatch.setattr(scheduler, "get_all_users", lambda _db: users)
@@ -302,6 +313,7 @@ def test_per_user_filters_never_run_other_tenants_or_the_legacy_fallback(
 
 
 def test_insight_jobs_accept_a_user_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+    _authorize_all(monkeypatch)
     config = MagicMock(database_path="synthetic.db")
     monkeypatch.setattr(scheduler, "get_all_users", lambda _db: [{"id": "a"}, {"id": "b"}])
     daily: list[str | None] = []

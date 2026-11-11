@@ -1,0 +1,47 @@
+# app.py (L1405-L1450 of 3061)
+1405 |             }
+1406 |         )
+1407 |     )
+1408 | 
+1409 | 
+1410 | def _load_hevy_training_for_user(
+1411 |     user_id: str,
+1412 |     *,
+1413 |     workout_limit: int = 56,
+1414 | ) -> HevyTrainingData:
+1415 |     """Fetch the current user's Hevy source data or raise a useful API error."""
+1416 | 
+1417 |     credential = _vault_credential(user_id, "hevy", purpose="programme_import")
+1418 |     hevy_key = (
+1419 |         credential.api_key.reveal()
+1420 |         if credential is not None and credential.api_key is not None
+1421 |         else ""
+1422 |     )
+1423 |     if not hevy_key:
+1424 |         raise HTTPException(
+1425 |             status_code=400,
+1426 |             detail="No Hevy API key configured. Add your key in Settings first.",
+1427 |         )
+1428 | 
+1429 |     from hevy_reader import fetch_user_training
+1430 | 
+1431 |     try:
+1432 |         return fetch_user_training(
+1433 |             hevy_key,
+1434 |             workout_limit=workout_limit,
+1435 |         )
+1436 |     except Exception as exc:
+1437 |         logger.exception(
+1438 |             "Could not fetch Hevy source data for user %s.",
+1439 |             user_id,
+1440 |         )
+1441 |         raise HTTPException(
+1442 |             status_code=502,
+1443 |             detail=("Hevy could not be reached. Check the connection and try again."),
+1444 |         ) from exc
+1445 | 
+1446 | 
+1447 | @app.get("/api/xai_reasoning/{context_id}")
+1448 | def xai_reasoning(context_id: str, request: Request) -> dict[str, Any]:
+1449 |     _check_rate_limit(request)
+1450 |     user_id = _check_api_auth(request)

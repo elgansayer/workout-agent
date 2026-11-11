@@ -80,9 +80,10 @@ for (const systemColour of requiredSystemColours) {
   assert.ok(css.includes(systemColour), `forced-colour contract is missing ${systemColour}`);
 }
 
-const discoveredRoutes = [...routesSource.matchAll(/\{\s*path:\s*'([^'*]+)'\s*,\s*component:/g)]
-  .map((match) => match[1])
-  .sort();
+// Lazy routes are concrete component routes too and must stay documented.
+const discoveredRoutes = [
+  ...routesSource.matchAll(/\{\s*path:\s*'([^'*]+)'\s*,\s*(?:component|loadComponent):/g),
+].map((match) => match[1]).sort();
 const documentedRoutes = [...matrix.routes].sort();
 assert.deepEqual(
   documentedRoutes,

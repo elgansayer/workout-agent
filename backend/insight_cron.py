@@ -6,12 +6,15 @@ import logging
 import sys
 from datetime import datetime, timedelta, timezone
 
+import account_deletion
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
 from database import (
+    get_all_users,
     get_body_metrics,
     get_daily_logs,
+    get_legacy_user_id,
     get_progress_history,
     init_db,
     save_dashboard_insight,
@@ -19,18 +22,35 @@ from database import (
     save_notification,
 )
 from localisation import local_today, prompt_context, spelling_for
+from provenance import RETRIEVAL_GUIDANCE, ai_provenance, annotate_for_retrieval
+from tenancy import implicit_single_user_allowed
+from tenant_isolation import (
+    OwnedContext,
+    OwnerIdentity,
+    OwnershipError,
+    authorize_owner,
+)
+
 from user_settings import UserSettings, get_user_settings_or_defaults
+
+DASHBOARD_INSIGHT_VERSION = "dashboard-insight/1"
+DEEP_CORRELATION_VERSION = "deep-correlation/1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger("insight_cron")
 
 
 def _resolve_insight_user(db_path: str) -> str | None:
-    from database import get_legacy_user_id
+    """Return the implicit local tenant, or None when there must be none.
 
+    Outside the explicit non-production local mode there is no shared fallback
+    user, so callers must name the account (or iterate real accounts).
+    """
+    if not implicit_single_user_allowed():
+        return None
     try:
         return get_legacy_user_id(db_path)
-    except Exception:  # noqa: BLE001
+    except RuntimeError:
         return None
 
 
@@ -47,10 +67,20 @@ def _local_cutoff(settings: UserSettings, days: int) -> str:
     return (today - timedelta(days=days)).isoformat()
 
 
-def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
-    uid = user_id or _resolve_insight_user(config.database_path)
+def _authorize(config: Config, user_id: str | None) -> OwnerIdentity:
+    """Re-authorize the owner a job runs for.
+
+    A missing id means the legacy single-tenant default; it is still verified,
+    and the job never proceeds without an owner (no unscoped reads or writes).
+    """
+    return authorize_owner(
+        config.database_path, user_id or _resolve_insight_user(config.database_path)
+    )
+
+
+def _resolve_provider(config: Config, owner: OwnerIdentity) -> AIProvider:
     return resolve_provider(
-        user_id=uid,
+        user_id=owner.user_id,
         db_path=config.database_path,
         server_gemini_key=config.gemini_api_key,
         server_gemini_model=config.gemini_model,
@@ -59,29 +89,51 @@ def _resolve_provider(config: Config, user_id: str | None = None) -> AIProvider:
 
 def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating daily insight header...")
-    uid = user_id or _resolve_insight_user(config.database_path)
-    provider = _resolve_provider(config, user_id=uid)
+    owner = _authorize(config, user_id)
+    if account_deletion.is_account_closing(config.database_path, owner.user_id):
+        logger.info("Skipping the daily insight: the account has a deletion request.")
+        return
+    provider = _resolve_provider(config, owner)
 
     # Fetch last 7 days of data, counted in the user's own calendar days.
-    settings = _settings_for(config, uid)
+    settings = _settings_for(config, owner.user_id)
     cutoff = _local_cutoff(settings, 7)
 
     metrics = [
         m
-        for m in get_body_metrics(limit=14, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(
+            limit=14,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=14, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(
+            limit=14,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
+        )
         if log["date"] >= cutoff
     ]
 
-    data = {"metrics": metrics, "logs": logs}
+    context = OwnedContext(
+        owner,
+        "daily-insight",
+        {
+            "metrics": annotate_for_retrieval(metrics),
+            "logs": annotate_for_retrieval(logs),
+        },
+    )
 
     prompt = f"""You are a high-performance strength coach. Analyze the following JSON representing the user's training and recovery data for the last 7 days.
 
-{json.dumps(data, indent=2)}
+{json.dumps(context.data, indent=2)}
+
+{RETRIEVAL_GUIDANCE}
 
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
@@ -103,19 +155,21 @@ Keep it brutally concise. Write the text values in {spelling_for(settings.locale
         parsed = json.loads(text)
         if "fatigue" in parsed and "wins_stalls" in parsed and "advice" in parsed:
             save_dashboard_insight(
-                json.dumps(parsed), db_path=config.database_path, user_id=uid
+                json.dumps(parsed),
+                db_path=config.database_path,
+                user_id=context.owner.user_id,
+                provenance=ai_provenance(provider, DASHBOARD_INSIGHT_VERSION),
             )
-            if uid:
-                fatigue = parsed.get("fatigue", "Normal")
-                advice = parsed.get("advice", "")
-                save_notification(
-                    uid,
-                    title="✨ Coach Status Update",
-                    message=f"Fatigue: {fatigue}. {advice}",
-                    type="coach",
-                    link="/dashboard",
-                    db_path=config.database_path,
-                )
+            fatigue = parsed.get("fatigue", "Normal")
+            advice = parsed.get("advice", "")
+            save_notification(
+                context.owner.user_id,
+                title="✨ Coach Status Update",
+                message=f"Fatigue: {fatigue}. {advice}",
+                type="coach",
+                link="/dashboard",
+                db_path=config.database_path,
+            )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
@@ -125,21 +179,34 @@ Keep it brutally concise. Write the text values in {spelling_for(settings.locale
 
 def generate_weekly_correlations(config: Config, user_id: str | None = None) -> None:
     logger.info("Generating weekly deep correlations...")
-    uid = user_id or _resolve_insight_user(config.database_path)
-    provider = _resolve_provider(config, user_id=uid)
+    owner = _authorize(config, user_id)
+    if account_deletion.is_account_closing(config.database_path, owner.user_id):
+        logger.info("Skipping weekly correlations: the account has a deletion request.")
+        return
+    provider = _resolve_provider(config, owner)
 
     # Fetch 60-day trailing window, counted in the user's own calendar days.
-    settings = _settings_for(config, uid)
+    settings = _settings_for(config, owner.user_id)
     cutoff = _local_cutoff(settings, 60)
 
     metrics = [
         m
-        for m in get_body_metrics(limit=120, db_path=config.database_path, user_id=uid)
+        for m in get_body_metrics(
+            limit=120,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
+        )
         if m["date"] >= cutoff
     ]
     logs = [
         log
-        for log in get_daily_logs(limit=120, db_path=config.database_path, user_id=uid)
+        for log in get_daily_logs(
+            limit=120,
+            db_path=config.database_path,
+            user_id=owner.user_id,
+            include_provenance=True,
+        )
         if log["date"] >= cutoff
     ]
 
@@ -147,7 +214,7 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     all_history = get_progress_history(
         limit_per_exercise=60,
         db_path=config.database_path,
-        user_id=uid,
+        user_id=owner.user_id,
     )
     filtered_history = {}
     for ex, sets in all_history.items():
@@ -155,19 +222,28 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
         if recent:
             filtered_history[ex] = recent
 
-    data = {
-        "body_metrics": metrics,
-        "daily_logs": logs,
-        "exercise_history": filtered_history,
-    }
+    context = OwnedContext(
+        owner,
+        "weekly-correlations",
+        {
+            "body_metrics": annotate_for_retrieval(metrics),
+            "daily_logs": annotate_for_retrieval(logs),
+            "exercise_history": filtered_history,
+            "exercise_history_provenance": (
+                "imported: Hevy workout logs (source data, not recommendations)"
+            ),
+        },
+    )
 
     prompt = f"""You are an elite data-driven strength coach and analyst. 
 You are analyzing a 60-day trailing window of the user's training data, sleep/recovery metrics, and daily lifestyle logs.
 
-Your goal is to hunt for invisible bottlenecks. For example, you might identify that weighted pull-up progression consistently stalls when the user has had poor recovery two nights prior, or that high-volume leg days negatively impact sleep.
+Your goal is to hunt for invisible bottlenecks. For example, you might identify that a priority exercise stalls when recovery is poor two nights prior, or that high-volume sessions negatively affect sleep.
 
 Here is the data:
-{json.dumps(data, indent=2)}
+{json.dumps(context.data, indent=2)}
+
+{RETRIEVAL_GUIDANCE}
 
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
@@ -179,16 +255,20 @@ Use Markdown format. Output the Markdown report directly.
     try:
         text = str(provider.generate(prompt)).strip()
         if text:
-            save_deep_correlation(text, db_path=config.database_path, user_id=uid)
-            if uid:
-                save_notification(
-                    uid,
-                    title="✨ Weekly Intelligence Report",
-                    message="New 60-day recovery and workout correlations analysis is ready.",
-                    type="coach",
-                    link="/stats",
-                    db_path=config.database_path,
-                )
+            save_deep_correlation(
+                text,
+                db_path=config.database_path,
+                user_id=context.owner.user_id,
+                provenance=ai_provenance(provider, DEEP_CORRELATION_VERSION),
+            )
+            save_notification(
+                context.owner.user_id,
+                title="✨ Weekly Intelligence Report",
+                message="New 60-day recovery and workout correlations analysis is ready.",
+                type="coach",
+                link="/stats",
+                db_path=config.database_path,
+            )
             logger.info(
                 "Weekly deep correlation generated successfully via %s.",
                 provider.name(),
@@ -222,11 +302,25 @@ def main() -> None:
         logger.error("%s", exc)
         sys.exit(1)
 
-    if args.daily:
-        generate_daily_header(config, user_id=args.user_id)
+    # An explicit --user-id always wins. With none, the explicit local mode uses
+    # its single tenant; otherwise every active account is processed in turn,
+    # each strictly scoped to itself. There is no shared fallback user.
+    if args.user_id:
+        user_ids: list[str | None] = [args.user_id]
+    elif implicit_single_user_allowed():
+        user_ids = [None]
+    else:
+        user_ids = [user["id"] for user in get_all_users(config.database_path)]
 
-    if args.weekly:
-        generate_weekly_correlations(config, user_id=args.user_id)
+    try:
+        for uid in user_ids:
+            if args.daily:
+                generate_daily_header(config, user_id=uid)
+            if args.weekly:
+                generate_weekly_correlations(config, user_id=uid)
+    except OwnershipError as exc:
+        logger.error("Refusing insight job: %s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

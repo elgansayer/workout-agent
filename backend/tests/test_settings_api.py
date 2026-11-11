@@ -18,7 +18,7 @@ pytest.importorskip("httpx")
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.middleware.sessions import SessionMiddleware
 
 from database import (
@@ -213,7 +213,8 @@ def test_settings_for_a_vanished_account_are_not_created(app_module: Any) -> Non
     response = _client_for(app_module, "ghost-account").post(
         "/api/settings/display", json={"unit_system": "imperial"}
     )
-    assert response.status_code == 404
+    # Fails closed: a session naming a missing account is simply unauthorised.
+    assert response.status_code == 401
 
 
 def test_changing_time_zone_reports_how_many_days_were_regrouped(app_module: Any) -> None:
@@ -429,8 +430,9 @@ def test_other_ai_endpoints_carry_the_same_regional_context(
     monkeypatch.setattr(app_module, "_resolve_provider_for_request", lambda _r, _c: provider)
     with TestClient(app_module.app) as client:
         client.get("/api/xai_reasoning/2026-03-02_Deadlift")
+        # project_peak only calls the model once deterministic projections exist.
         client.get("/api/project_peak")
-    assert len(provider.prompts) == 2
+    assert len(provider.prompts) == 1
     for prompt in provider.prompts:
         assert "Australian English" in prompt
         assert "Convert to pounds" in prompt
@@ -443,16 +445,18 @@ def test_other_ai_endpoints_carry_the_same_regional_context(
 REAL_APP_SECRET = "settings-real-app-secret-that-is-long-enough"
 
 
-def _signed_cookie(user_id: str) -> str:
-    payload = base64.b64encode(
-        json.dumps({"user": "athlete@example.test", "user_id": user_id}).encode()
-    )
-    return TimestampSigner(REAL_APP_SECRET).sign(payload).decode()
-
-
 def _real_client(module: Any, user_id: str) -> TestClient:
+    """A client holding a genuine registry-backed session, as login creates."""
     client = TestClient(module.app)
-    client.cookies.set("session", _signed_cookie(user_id))
+    client.cookies.set(
+        module.SESSION_SECURITY.cookie.name,
+        signed_session_cookie(
+            REAL_APP_SECRET,
+            user="athlete@example.test",
+            user_id=user_id,
+            session_id=module.SESSION_STORE.create(user_id),
+        ),
+    )
     return client
 
 

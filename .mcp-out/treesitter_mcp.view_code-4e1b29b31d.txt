@@ -1,0 +1,102 @@
+# connector_health.py (L490-L590 of 616)
+ 490 |     repo_info = _get_github_repo()
+ 491 |     if not repo_info:
+ 492 |         logger.warning("Could not determine GitHub repo — skipping issue creation.")
+ 493 |         return []
+ 494 | 
+ 495 |     owner, repo = repo_info
+ 496 |     api_url = f"https://api.github.com/repos/{owner}/{repo}/issues"
+ 497 | 
+ 498 |     issues: list[str] = []
+ 499 | 
+ 500 |     # Group findings by category
+ 501 |     categories: dict[str, list[HealthFinding]] = {}
+ 502 |     for f in report.findings:
+ 503 |         categories.setdefault(f.category, []).append(f)
+ 504 | 
+ 505 |     for category, findings in categories.items():
+ 506 |         title_map = {
+ 507 |             "failure-isolation": "Connector Health: Failure Isolation Issues",
+ 508 |             "env-docs": "Connector Health: .env.example Documentation Gaps",
+ 509 |             "env-var-regression": "Connector Health: Per-User Credential Migration",
+ 510 |         }
+ 511 |         title = title_map.get(category, f"Connector Health: {category}")
+ 512 | 
+ 513 |         body_lines = [
+ 514 |             f"## {title}",
+ 515 |             "",
+ 516 |             f"{len(findings)} finding(s) found during the daily connector health check.",
+ 517 |             "",
+ 518 |         ]
+ 519 |         for f in findings:
+ 520 |             body_lines.append(f"- **[{f.severity.upper()}] {f.module}**: {f.message}")
+ 521 |             if f.line:
+ 522 |                 body_lines.append(f"  (line {f.line})")
+ 523 |         body = "\n".join(body_lines)
+ 524 | 
+ 525 |         # Check if an open issue already exists with this title.
+ 526 |         try:
+ 527 |             existing_req = urllib.request.Request(
+ 528 |                 f"{api_url}?state=open&labels=ai-agent-task,daily",
+ 529 |                 headers={
+ 530 |                     "Authorization": f"Bearer {token}",
+ 531 |                     "Accept": "application/vnd.github+json",
+ 532 |                     "User-Agent": "connector-health",
+ 533 |                 },
+ 534 |             )
+ 535 |             with urllib.request.urlopen(existing_req, timeout=10) as resp:
+ 536 |                 existing_list = json.loads(resp.read().decode())
+ 537 |             existing = any(
+ 538 |                 issue.get("title") == f"[Daily] {title}" for issue in existing_list
+ 539 |             )
+ 540 |         except Exception:  # noqa: BLE001  # defensive: must not crash health check
+ 541 |             existing = False
+ 542 | 
+ 543 |         if existing:
+ 544 |             logger.info("Skipping duplicate issue: [Daily] %s", title)
+ 545 |             continue
+ 546 | 
+ 547 |         payload = json.dumps(
+ 548 |             {
+ 549 |                 "title": f"[Daily] {title}",
+ 550 |                 "body": body,
+ 551 |                 "labels": ["ai-agent-task", "daily"],
+ 552 |             }
+ 553 |         ).encode()
+ 554 | 
+ 555 |         try:
+ 556 |             req = urllib.request.Request(
+ 557 |                 api_url,
+ 558 |                 data=payload,
+ 559 |                 headers={
+ 560 |                     "Authorization": f"Bearer {token}",
+ 561 |                     "Accept": "application/vnd.github+json",
+ 562 |                     "Content-Type": "application/json",
+ 563 |                     "User-Agent": "connector-health",
+ 564 |                 },
+ 565 |             )
+ 566 |             with urllib.request.urlopen(req, timeout=10) as resp:
+ 567 |                 created = json.loads(resp.read().decode())
+ 568 |             issue_url = created.get("html_url", "")
+ 569 |             if issue_url:
+ 570 |                 issues.append(issue_url)
+ 571 |                 logger.info("Created issue: %s", issue_url)
+ 572 |         except urllib.error.HTTPError as exc:
+ 573 |             logger.warning("Failed to create issue '%s': %s", title, exc)
+ 574 |         except Exception as exc:  # noqa: BLE001  # defensive: must not crash health check
+ 575 |             logger.warning("Failed to create issue '%s': %s", title, exc)
+ 576 | 
+ 577 |     return issues
+ 578 | 
+ 579 | 
+ 580 | # ---------------------------------------------------------------------------
+ 581 | # CLI
+ 582 | # ---------------------------------------------------------------------------
+ 583 | 
+ 584 | 
+ 585 | def build_parser() -> argparse.ArgumentParser:
+ 586 |     parser = argparse.ArgumentParser(
+ 587 |         description="Daily connector health check — audits isolation, env docs,"
+ 588 |         " and per-user credential compliance across all connector modules.",
+ 589 |     )
+ 590 |     parser.add_argument(

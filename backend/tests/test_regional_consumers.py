@@ -25,8 +25,22 @@ from gemini_engine import (
 from health_export import HealthExport
 from hevy_parser import ExerciseSummary, WorkoutSummary
 from insights import LiftInsight, RecoveryInsight, build_insights
-from program import BLOCKS
+from programme_runtime import ACTIVE, ProgrammeRuntime
 from user_settings import UserSettings, export_preferences, update_user_settings
+
+DAY = {
+    "focus": "Pull",
+    "exercises": [{"name": "Deadlift", "sets": 3, "rep_range": "5", "scheme": "3 x 5"}],
+}
+RUNTIME = ProgrammeRuntime(
+    status=ACTIVE,
+    name="Synthetic programme",
+    week=1,
+    cycle_weeks=12,
+    block={"name": "Base", "start_week": 1, "end_week": 4},
+    days=[DAY],
+    next_day=DAY,
+)
 
 METRIC = UserSettings()
 IMPERIAL_US = UserSettings(
@@ -47,9 +61,8 @@ def _utc(
 
 def _plan_prompt(settings: UserSettings | None = None, **overrides: Any) -> str:
     arguments: dict[str, Any] = {
-        "day": 1,
-        "week": 1,
-        "block": BLOCKS[1],
+        "runtime": RUNTIME,
+        "day": DAY,
         "workout_summary": None,
         "recovery": None,
         "history": {"Deadlift": {"top_weight_kg": 100, "top_reps": 5}},
@@ -101,9 +114,8 @@ def test_generate_next_workout_passes_the_settings_to_the_prompt() -> None:
 
     generate_next_workout(
         provider,
-        day=1,
-        week=1,
-        block=BLOCKS[1],
+        runtime=RUNTIME,
+        day=DAY,
         history={"Deadlift": {"top_weight_kg": 100, "top_reps": 5}},
         settings=IMPERIAL_US,
     )
@@ -121,13 +133,15 @@ def test_format_history_is_unit_aware() -> None:
 
 
 def test_rest_day_and_checkin_prompts_carry_the_same_context() -> None:
-    rest = _build_rest_prompt({"sleep_hours": 7}, IMPERIAL_US)
-    check = _build_checkin_prompt(1, 4, BLOCKS[1], 24, 4, "- Deadlift: latest 220.5 lb x 5", IMPERIAL_US)
+    rest = _build_rest_prompt(RUNTIME, {"sleep_hours": 7}, settings=IMPERIAL_US)
+    check = _build_checkin_prompt(
+        RUNTIME, 1, 4, 24, "- Deadlift: latest 220.5 lb x 5", settings=IMPERIAL_US
+    )
     for prompt in (rest, check):
         assert "Time zone: America/Chicago" in prompt
         assert "Convert to pounds" in prompt
         assert prompt.endswith("Use American English. Never use the em dash.")
-    default = _build_rest_prompt(None)
+    default = _build_rest_prompt(RUNTIME, None)
     assert default.endswith("Use British English. Never use the em dash.")
     assert "Time zone: UTC" in default
 
@@ -212,8 +226,8 @@ def test_checkin_text_uses_the_users_units() -> None:
     assert "weight change +10 kg" in checkin._analysis_text([metric])
     assert "weight change +22 lb" in checkin._analysis_text([imperial], "imperial")
     due = checkin.CheckinDue(1, 24, 4, None)
-    assert "up +10 kg" in checkin._fallback_message(due, BLOCKS[1], [metric])
-    assert "up +22 lb" in checkin._fallback_message(due, BLOCKS[1], [imperial], "imperial")
+    assert "up +10 kg" in checkin._fallback_message(due, RUNTIME, [metric])
+    assert "up +22 lb" in checkin._fallback_message(due, RUNTIME, [imperial], "imperial")
 
 
 def test_checkin_dates_follow_the_acting_users_local_day(
@@ -269,6 +283,8 @@ def _daily_run(
     now: datetime,
     changes: dict[str, str],
 ) -> dict[str, Any]:
+    from localisation import local_today as real_local_today
+
     db = str(tmp_path / "run.db")
     init_db(db)
     uid = get_or_create_user("run@example.test", None, db)["id"]
@@ -278,32 +294,34 @@ def _daily_run(
     monkeypatch.setattr("main.Config.load", lambda: _job_config(db))
     monkeypatch.setattr("main.init_db", lambda *_a, **_k: None)
     monkeypatch.setattr("main._resolve_provider", lambda _c, **_k: MagicMock())
-    monkeypatch.setattr("main.datetime", MagicMock(now=lambda tz=None: now, spec=datetime))
+    monkeypatch.setattr("main.local_today", lambda zone, _now=None: real_local_today(zone, now))
+
+    def fake_runtime(_uid: str, _db: str, *, today: date, **_k: Any) -> ProgrammeRuntime:
+        seen["today"] = today
+        return RUNTIME
+
+    monkeypatch.setattr("main.load_programme_runtime", fake_runtime)
     monkeypatch.setattr(
         "main.generate_next_workout",
         lambda *_a, **kw: seen.update(kind="training", **kw) or "Planned session",
-    )
-    monkeypatch.setattr(
-        "main.generate_rest_day_message",
-        lambda *_a, **kw: seen.update(kind="rest", **kw) or "Rest well",
     )
     assert main.run(preview=True, user_id=uid) == 0
     return seen
 
 
-def test_the_daily_run_decides_rest_or_training_by_the_users_local_weekday(
+def test_the_daily_run_dates_the_programme_in_the_users_local_day(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Sunday 23:00 UTC is already Monday in Auckland, but still Sunday in UTC.
     sunday_night = _utc(2026, 8, 2, 23, 0)
 
     utc_user = _daily_run(tmp_path, monkeypatch, sunday_night, {})
-    assert utc_user["kind"] == "rest"
+    assert utc_user["today"] == date(2026, 8, 2)
 
     other = tmp_path / "auckland"
     other.mkdir()
     auckland = _daily_run(other, monkeypatch, sunday_night, {"timezone": "Pacific/Auckland"})
-    assert auckland["kind"] == "training"
+    assert auckland["today"] == date(2026, 8, 3)
 
 
 def test_the_daily_run_hands_the_users_settings_to_prompt_generation(
@@ -340,18 +358,17 @@ def test_self_review_runs_on_the_users_local_sunday_in_their_units(
 
     monkeypatch.setattr("main.insights_engine.build_insights", fake_build)
     config = _job_config(db, self_review_enabled=True)
-    block = BLOCKS[1]
 
     # Saturday evening in UTC, already Sunday morning in Tokyo.
     monkeypatch.setattr(
         "main.datetime", MagicMock(now=lambda tz=None: _utc(2026, 3, 7, 23, 0), spec=datetime)
     )
-    main._maybe_self_review(config, None, 1, block, True, user_id=uid)
+    main._maybe_self_review(config, None, RUNTIME, True, user_id=uid)
     assert calls == ["imperial"]
 
     # The same instant is not Sunday for a UTC user, so nothing is sent.
     utc_uid = get_or_create_user("utc-review@example.test", None, db)["id"]
-    main._maybe_self_review(config, None, 1, block, True, user_id=utc_uid)
+    main._maybe_self_review(config, None, RUNTIME, True, user_id=utc_uid)
     assert calls == ["imperial"]
 
 

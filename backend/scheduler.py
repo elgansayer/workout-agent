@@ -17,15 +17,24 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
+from account_deletion import process_due_deletions
 from config import Config, ConfigError
-from database import get_all_users, init_db
+from database import UserRow, get_all_users, init_db
 from localisation import resolve_timezone
 from programme_runtime import user_timezone
+from tenancy import implicit_single_user_allowed
+from tenant_isolation import (
+    JobStatus,
+    OwnedJob,
+    OwnerIdentity,
+    OwnershipError,
+    run_owned_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -213,6 +222,44 @@ def run_scheduler() -> None:
         time.sleep(30)
 
 
+def run_account_deletions(config: Config) -> int:
+    """Execute due account/health-data deletions; never lets a failure stop the loop."""
+    try:
+        return process_due_deletions(config.database_path)
+    except Exception:
+        logger.exception("Account deletion processing failed.")
+        return 0
+
+
+def _run_per_owner(
+    config: Config,
+    kind: str,
+    users: list[UserRow],
+    work: Callable[[OwnerIdentity], int | None],
+) -> int:
+    """Run *work* once per user as an owner-scoped, re-authorized job.
+
+    Ids come from the user store and are verified again immediately before each
+    job executes, so a user removed after listing is denied instead of being
+    resurrected. One owner's failure never stops the next. Returns the worst
+    exit code (0 when every job completed or was skipped as an overlap).
+    """
+    result = 0
+    for user in users:
+        try:
+            job = OwnedJob(kind, OwnerIdentity(str(user.get("id") or "")))
+        except OwnershipError:
+            logger.warning("Skipping %s: user row without a usable id.", kind)
+            result = max(result, 1)
+            continue
+        outcome = run_owned_job(job, config.database_path, work)
+        if outcome.status is JobStatus.COMPLETED:
+            result = max(result, outcome.result or 0)
+        elif outcome.status is not JobStatus.SKIPPED:
+            result = max(result, 1)
+    return result
+
+
 def run_coaching(config: Config, user_ids: Collection[str] | None = None) -> int:
     """Run one isolated daily coaching cycle per persisted user.
 
@@ -222,29 +269,27 @@ def run_coaching(config: Config, user_ids: Collection[str] | None = None) -> int
     from main import run as main_run
 
     logger.info("Running daily coaching cycles...")
-    result = 0
     users = get_all_users(config.database_path)
     if user_ids is not None:
         users = [u for u in users if u.get("id") in user_ids]
     elif not users:
+        if not implicit_single_user_allowed():
+            # No shared fallback user outside the explicit local mode: with no
+            # active account there is nobody to coach.
+            logger.warning("No active users; skipping the daily coaching cycle.")
+            return 0
         try:
             return main_run(preview=False)
         except Exception:
             logger.exception("Daily coaching run failed.")
             return 1
 
-    for user in users:
-        user_id = user.get("id")
-        if not user_id:
-            logger.warning("Skipping user row without an id.")
-            result = max(result, 1)
-            continue
-        try:
-            result = max(result, main_run(preview=False, user_id=user_id))
-        except Exception:
-            logger.exception("Daily coaching run failed for user %s.", user_id)
-            result = max(result, 1)
-    return result
+    return _run_per_owner(
+        config,
+        "coaching",
+        users,
+        lambda owner: main_run(preview=False, user_id=owner.user_id),
+    )
 
 
 def run_daily_insight(config: Config, user_ids: Collection[str] | None = None) -> None:
@@ -252,14 +297,16 @@ def run_daily_insight(config: Config, user_ids: Collection[str] | None = None) -
     from insight_cron import generate_daily_header
 
     logger.info("Generating daily insight headers...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        if user_ids is not None and user_id not in user_ids:
-            continue
-        try:
-            generate_daily_header(config, user_id=user_id)
-        except Exception:
-            logger.exception("Daily insight generation failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-daily",
+        [
+            u
+            for u in get_all_users(config.database_path)
+            if user_ids is None or u.get("id") in user_ids
+        ],
+        lambda owner: generate_daily_header(config, user_id=owner.user_id),
+    )
 
 
 def run_weekly_correlations(
@@ -269,14 +316,16 @@ def run_weekly_correlations(
     from insight_cron import generate_weekly_correlations
 
     logger.info("Generating weekly deep correlations...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        if user_ids is not None and user_id not in user_ids:
-            continue
-        try:
-            generate_weekly_correlations(config, user_id=user_id)
-        except Exception:
-            logger.exception("Weekly correlations failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-weekly",
+        [
+            u
+            for u in get_all_users(config.database_path)
+            if user_ids is None or u.get("id") in user_ids
+        ],
+        lambda owner: generate_weekly_correlations(config, user_id=owner.user_id),
+    )
 
 
 def run_once(config: Config) -> int:
@@ -286,6 +335,7 @@ def run_once(config: Config) -> int:
     happens to be on a server-local Sunday.
     """
     logger.info("Running scheduled cycle...")
+    run_account_deletions(config)
     rc = run_coaching(config)
     run_daily_insight(config)
 
@@ -351,6 +401,7 @@ def run_schedule(config: Config) -> None:
     logger.info("Entering main scheduler loop (wake interval: 30s).")
 
     while True:
+        run_account_deletions(config)
         now = datetime.now(tz=timezone.utc)
         by_job: dict[str, list[str]] = {}
         for item in due_jobs(get_all_users(config.database_path), now, schedule, done):

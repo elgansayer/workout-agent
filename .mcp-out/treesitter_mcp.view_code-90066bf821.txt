@@ -1,0 +1,151 @@
+# app.py (L1216-L1365 of 3061)
+1216 | @app.post("/api/programmes/preview")
+1217 | def preview_programme(
+1218 |     payload: ProgrammePreviewRequest,
+1219 |     request: Request,
+1220 | ) -> JSONResponse:
+1221 |     """Generate a deterministic preview from selected Hevy routines."""
+1222 | 
+1223 |     _check_rate_limit(request, limit=5)
+1224 |     user_id = _check_api_auth(request)
+1225 |     training_data = _load_hevy_training_for_user(user_id)
+1226 |     prefs = get_user_preferences(user_id, DB_PATH)
+1227 |     profile_rules = prefs.get("constraints")
+1228 |     payload.rules = get_training_rules(user_id, DB_PATH)
+1229 |     try:
+1230 |         preview = build_programme_preview(
+1231 |             training_data,
+1232 |             payload,
+1233 |             profile_rules=profile_rules,
+1234 |         )
+1235 |     except ValueError as exc:
+1236 |         raise HTTPException(status_code=422, detail=str(exc)) from exc
+1237 | 
+1238 |     return JSONResponse(jsonable_encoder({"preview": preview}))
+1239 | 
+1240 | 
+1241 | @app.post("/api/programmes/activate")
+1242 | def activate_programme(
+1243 |     payload: ProgrammeActivationRequest,
+1244 |     request: Request,
+1245 | ) -> JSONResponse:
+1246 |     """Reconfirm Hevy source data and activate the generated programme."""
+1247 | 
+1248 |     _check_rate_limit(request, limit=5)
+1249 |     user_id = _check_api_auth(request)
+1250 |     training_data = _load_hevy_training_for_user(user_id)
+1251 |     prefs = get_user_preferences(user_id, DB_PATH)
+1252 |     payload.rules = get_training_rules(user_id, DB_PATH)
+1253 |     preview_request = ProgrammePreviewRequest.model_validate(
+1254 |         payload.model_dump(exclude={"preview_token"})
+1255 |     )
+1256 |     profile_rules = prefs.get("constraints")
+1257 |     try:
+1258 |         preview = build_programme_preview(
+1259 |             training_data,
+1260 |             preview_request,
+1261 |             profile_rules=profile_rules,
+1262 |         )
+1263 |     except ValueError as exc:
+1264 |         raise HTTPException(status_code=422, detail=str(exc)) from exc
+1265 | 
+1266 |     if preview.get("blocking_violations"):
+1267 |         raise HTTPException(
+1268 |             status_code=422,
+1269 |             detail=_blocking_violation_detail(preview["blocking_violations"][0]),
+1270 |         )
+1271 | 
+1272 |     if preview["preview_token"] != payload.preview_token:
+1273 |         raise HTTPException(
+1274 |             status_code=409,
+1275 |             detail=(
+1276 |                 "The Hevy routines or programme settings changed after preview. "
+1277 |                 "Generate a fresh preview before activation."
+1278 |             ),
+1279 |         )
+1280 | 
+1281 |     set_active_programme(
+1282 |         user_id,
+1283 |         source="hevy",
+1284 |         template_key=f"hevy:{preview['preview_token'][:20]}",
+1285 |         definition=preview,
+1286 |         db_path=DB_PATH,
+1287 |     )
+1288 |     set_meta(
+1289 |         "programme_start_date",
+1290 |         str(preview["programme_spec"]["start_date"]),
+1291 |         DB_PATH,
+1292 |         user_id=user_id,
+1293 |     )
+1294 |     save_notification(
+1295 |         user_id,
+1296 |         title="Hevy programme activated",
+1297 |         message=(
+1298 |             f"{preview['name']} is active for "
+1299 |             f"{preview['cycle_weeks']} weeks using "
+1300 |             f"{preview['total_days']} selected routines."
+1301 |         ),
+1302 |         type="programme",
+1303 |         link="/plan",
+1304 |         db_path=DB_PATH,
+1305 |     )
+1306 | 
+1307 |     return JSONResponse(
+1308 |         jsonable_encoder(
+1309 |             {
+1310 |                 "status": "ok",
+1311 |                 "active_programme": get_active_programme(
+1312 |                     user_id,
+1313 |                     db_path=DB_PATH,
+1314 |                 ),
+1315 |             }
+1316 |         )
+1317 |     )
+1318 | 
+1319 | 
+1320 | @app.post("/api/programmes/select")
+1321 | async def select_programme(request: Request) -> JSONResponse:
+1322 |     """Compatibility adapter for clients using the retired template endpoint."""
+1323 | 
+1324 |     _check_rate_limit(request, limit=5)
+1325 |     user_id = _check_api_auth(request)
+1326 |     try:
+1327 |         body = await request.json()
+1328 |     except (json.JSONDecodeError, TypeError):
+1329 |         body = {}
+1330 | 
+1331 |     template_key = str(body.get("template_key") or "").strip()
+1332 |     if template_key == "hybrid_powerbuilding":
+1333 |         raise HTTPException(
+1334 |             status_code=410,
+1335 |             detail=(
+1336 |                 "Hybrid Powerbuilding has been removed. "
+1337 |                 "Select routines from Hevy and generate a programme preview."
+1338 |             ),
+1339 |         )
+1340 |     if template_key != "infer_from_hevy":
+1341 |         raise HTTPException(
+1342 |             status_code=410,
+1343 |             detail=(
+1344 |                 "Static programme selection has been removed. "
+1345 |                 "Use /api/programmes/preview and /api/programmes/activate."
+1346 |             ),
+1347 |         )
+1348 | 
+1349 |     training_data = _load_hevy_training_for_user(user_id)
+1350 |     if not training_data.routines:
+1351 |         raise HTTPException(
+1352 |             status_code=422,
+1353 |             detail="No Hevy routines are available for programme generation.",
+1354 |         )
+1355 | 
+1356 |     try:
+1357 |         preview_request = ProgrammePreviewRequest(
+1358 |             selected_routine_ids=[routine.id for routine in training_data.routines],
+1359 |             duration_weeks=int(body.get("duration_weeks") or 12),
+1360 |             goal=body.get("goal") or "general_fitness",
+1361 |             start_date=body.get("start_date") or datetime.now(tz=timezone.utc).date(),
+1362 |             sessions_per_week=body.get("sessions_per_week"),
+1363 |             experience=body.get("experience") or "intermediate",
+1364 |             max_session_minutes=body.get("max_session_minutes"),
+1365 |             adaptation_aggressiveness=(

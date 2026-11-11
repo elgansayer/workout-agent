@@ -157,3 +157,41 @@ def test_user_timezone_controls_rollover_and_workout_date() -> None:
     )
     assert result.next_day is not None
     assert result.next_day["routine_id"] == "routine-0"
+
+
+def _scheduled_active() -> dict[str, Any]:
+    active = _active()
+    active["definition"]["schedule"] = [
+        {
+            "week": 1,
+            "date": "2026-09-07",
+            "weekday": "Monday",
+            "routine_id": "routine-1",
+        },
+        {
+            "week": 1,
+            "date": "2026-09-09",
+            "weekday": "Wednesday",
+            "routine_id": "routine-2",
+        },
+    ]
+    return active
+
+
+def test_scheduled_session_replaces_the_daily_rotation() -> None:
+    result = resolve_programme_runtime(
+        _scheduled_active(), [], today=date(2026, 9, 9)
+    )
+    assert result.next_day is not None
+    assert result.next_day["routine_id"] == "routine-2"
+    assert result.next_session_date == "2026-09-09"
+
+
+def test_next_scheduled_session_is_reported_when_today_is_a_rest_day() -> None:
+    result = resolve_programme_runtime(
+        _scheduled_active(), [], today=date(2026, 9, 8)
+    )
+    assert result.next_day is not None
+    assert result.next_day["routine_id"] == "routine-2"
+    assert result.next_session_date == "2026-09-09"
+    assert "next scheduled workout" in result.message
