@@ -18,11 +18,11 @@
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'stale') {
+  @if (viewState() === 'attention') {
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+  @if (viewState() === 'ready' || viewState() === 'attention') {
     <section class="panel">
       <h2>Training calendar</h2>
       <div class="cal-scroll" [innerHTML]="safeHtml(data.calendar)"></div>

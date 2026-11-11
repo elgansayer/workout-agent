@@ -1,8 +1,10 @@
-import { Component, inject, signal, OnInit, OnDestroy } from '@angular/core';
+import { Component, computed, inject, signal, OnInit, OnDestroy } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DisplaySettings, DisplaySettingsService } from '../../services/display-settings';
+import { SetupAccount, SetupStateService } from '../../services/setup-state.service';
+import { aiProviderFact, hevyFact, keyVerification, lastSyncFact } from './settings.readiness';
 import {
   CredentialTestResult,
   EquipmentRule,
@@ -110,6 +112,39 @@ interface ConnectorSummary {
 export class Settings implements OnInit, OnDestroy {
   private http = inject(HttpClient);
   protected readonly display = inject(DisplaySettingsService);
+  private readonly setupState = inject(SetupStateService);
+
+  /** True while this tab is waiting for a Hevy sync it started. */
+  readonly syncing = signal(false);
+  /** True while this tab or any other is running a Hevy sync or connection check. */
+  readonly connectorBusy = computed(
+    () => this.syncing() || !!this.setupState.account()?.connector?.operation,
+  );
+  readonly readinessFailed = this.setupState.failed;
+  /**
+   * The server-derived readiness of this account, shared with the navigation.
+   * While this tab's own sync is in flight the panel says so itself, instead of
+   * showing the snapshot taken before the sync started as if it were current.
+   */
+  readonly readiness = computed<SetupAccount | null>(() => {
+    const account = this.setupState.account();
+    if (!account || !this.syncing()) return account;
+    return {
+      ...account,
+      state: 'syncing',
+      label: 'Syncing your Hevy history',
+      reason:
+        'A Hevy sync is running. This view updates when it finishes, and figures may be incomplete until then.',
+      reason_code: 'syncing',
+      connector: {
+        provider: account.connector?.provider ?? 'hevy',
+        operation_started_at: account.connector?.operation_started_at ?? null,
+        operation_stalled: false,
+        last_sync: account.connector?.last_sync ?? null,
+        operation: 'syncing',
+      },
+    };
+  });
 
   data = signal<SettingsResponse | null>(null);
   loading = signal<boolean>(true);
@@ -342,6 +377,21 @@ export class Settings implements OnInit, OnDestroy {
     }
   }
 
+  readonly hevyFact = hevyFact;
+  readonly lastSyncFact = lastSyncFact;
+  readonly aiProviderFact = aiProviderFact;
+
+  /** How a stored AI key is labelled from its last connection test. */
+  aiKeyState(provider: string) {
+    const key = this.data()?.user_keys?.[provider];
+    return keyVerification(key?.has_key, key?.last_test_status, key?.last_tested_at);
+  }
+
+  /** Re-read the account's readiness after something that can change it. */
+  private refreshReadiness(): void {
+    this.setupState.load();
+  }
+
   saveKey(provider: string) {
     const key =
       provider === 'hevy' ? this.hevyKeyInput.trim() : (this.aiKeyInputs[provider] || '').trim();
@@ -365,10 +415,11 @@ export class Settings implements OnInit, OnDestroy {
           );
           this.hevyKeyInput = '';
         } else {
-          this.aiStatus.set(`${provider} key saved!`);
+          this.aiStatus.set(`${provider} key saved. Use Test to confirm it works.`);
           this.aiKeyInputs[provider] = '';
         }
         this.loadSettings(false);
+        this.refreshReadiness();
       },
       error: (err: unknown) => {
         const msg = errorDetail(err) ?? 'Error saving key.';
@@ -399,13 +450,16 @@ export class Settings implements OnInit, OnDestroy {
           if (res.status === 'ok') {
             const count = typeof res.workout_count === 'number' ? ` ${res.workout_count} workouts found.` : '';
             this.setProviderStatus(provider, `✓ Connected.${count}`);
-            this.loadSettings(false);
           } else {
             this.setProviderStatus(provider, res.detail || 'Verification failed.');
           }
+          // The server records the outcome either way; show what it recorded.
+          this.loadSettings(false);
+          this.refreshReadiness();
         },
         error: (err: unknown) => {
           this.setProviderStatus(provider, errorDetail(err) ?? 'Verification failed.');
+          this.refreshReadiness();
         },
       });
   }
@@ -415,6 +469,7 @@ export class Settings implements OnInit, OnDestroy {
     this.http.post<{ status: string; provider: string }>('/api/settings/key/delete', { provider }).subscribe({
       next: () => {
         this.loadSettings(false);
+        this.refreshReadiness();
       },
       error: (err: unknown) => {
         alert(errorDetail(err) ?? 'Could not delete key.');
@@ -439,10 +494,16 @@ export class Settings implements OnInit, OnDestroy {
         if (!candidate) {
           // Only the stored credential can change the stored connection.
           this.loadSettings(false);
+          this.refreshReadiness();
         }
       },
       error: (err: unknown) => {
         this.hevyStatus.set(errorDetail(err) ?? 'Could not verify the Hevy API key.');
+        if (!candidate) {
+          // A stored key Hevy now rejects is recorded; show what was recorded.
+          this.loadSettings(false);
+        }
+        this.refreshReadiness();
       },
     });
   }
@@ -488,6 +549,7 @@ export class Settings implements OnInit, OnDestroy {
       next: () => {
         this.setProviderStatus(provider, 'Credential revoked.');
         this.loadSettings(false);
+        this.refreshReadiness();
       },
       error: (err: unknown) => {
         this.setProviderStatus(provider, errorDetail(err) ?? 'Could not revoke credential.');
@@ -496,16 +558,22 @@ export class Settings implements OnInit, OnDestroy {
   }
 
   syncHistory() {
+    if (this.connectorBusy()) return;
     if (!confirm('This will rebuild your workout history from Hevy. Continue?')) return;
+    this.syncing.set(true);
     this.hevyStatus.set('Syncing workout history from Hevy...');
     this.http.post<SyncHistoryResult>('/api/settings/sync-history', {}).subscribe({
       next: (res) => {
         this.hevyStatus.set(
           `✓ Synced! ${res.processed} of ${res.workouts_found} workouts processed.`,
         );
+        this.syncing.set(false);
+        this.refreshReadiness();
       },
       error: (err: unknown) => {
         this.hevyStatus.set(errorDetail(err) ?? 'Sync failed.');
+        this.syncing.set(false);
+        this.refreshReadiness();
       },
     });
   }
