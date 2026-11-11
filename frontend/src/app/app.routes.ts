@@ -54,6 +54,13 @@ export const routes: Routes = [
     canActivate: [authGuard],
   },
   {
+    path: 'onboarding',
+    loadComponent: () =>
+      import('./components/onboarding/onboarding').then((m) => m.Onboarding),
+    title: 'Setup · Workout Agent',
+    canActivate: [authGuard],
+  },
+  {
     path: 'settings',
     component: Settings,
     title: 'Settings · Workout Agent',

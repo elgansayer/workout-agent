@@ -9,7 +9,12 @@ import { DomSanitizer, SafeHtml } from '@angular/platform-browser';
 import { FormsModule } from '@angular/forms';
 import { LocalDatePipe, LocalNumberPipe } from '../../shared/local-format.pipes';
 import { SetupNotice } from '../../shared/setup-notice';
-import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
+import {
+  SetupState,
+  ViewState,
+  needsAttention,
+  resolveViewState,
+} from '../../shared/setup-state';
 
 @Component({
   selector: 'app-stats',
@@ -43,7 +48,7 @@ export class Stats implements OnInit {
       loading: this.loading(),
       error: this.error(),
       hasData: this.hasData(),
-      stale: this.setup()?.stale ?? false,
+      attention: needsAttention(this.setup()),
     }),
   );
 

@@ -54,14 +54,42 @@ _SAMPLE_WORKOUTS: list[dict[str, object]] = [
 
 def test_no_api_key_returns_error() -> None:
     result = sync_history.sync_all("")
-    assert result == {"error": "No Hevy API key configured."}
+    assert result == {
+        "error": "No Hevy API key configured.",
+        "error_code": "not_configured",
+    }
 
 
-def test_get_all_workouts_returns_none(tmp_path: pathlib.Path) -> None:
+def test_a_failed_fetch_is_an_error_not_an_empty_success(
+    tmp_path: pathlib.Path,
+) -> None:
+    from database import get_or_create_user, save_progress
+    from hevy_parser import ExerciseSummary, WorkoutSummary
+
     db_path = _new_temp_db(tmp_path)
+    user_id = get_or_create_user("synthetic-fail@example.com", "Fail", db_path)["id"]
+    save_progress(
+        WorkoutSummary(
+            title="Kept",
+            date="2026-02-01",
+            duration_seconds=3600,
+            total_volume_kg=1000.0,
+            exercises=[ExerciseSummary("Squat", 100.0, 5, 3)],
+        ),
+        db_path,
+        user_id=user_id,
+    )
     with patch("scripts.sync_history.get_all_workouts", return_value=None):
-        result = sync_history.sync_all("fake-key", db_path)
-    assert result == {"workouts_found": 0, "processed": 0}
+        result = sync_history.sync_all("fake-key", db_path, user_id=user_id)
+
+    assert result["error_code"] == "hevy_unavailable"
+    assert "workouts_found" not in result
+    assert "existing history was not changed" in str(result["error"])
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        kept = conn.execute(
+            "SELECT COUNT(*) FROM exercise_progress WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    assert kept == 1
 
 
 def test_get_all_workouts_returns_empty_list(tmp_path: pathlib.Path) -> None:

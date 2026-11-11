@@ -112,6 +112,7 @@ USER_OWNED_TABLES = (
     "dashboard_insights",
     "deep_correlations",
     "user_preferences",
+    "onboarding_skips",
     "user_api_keys",
     "push_subscriptions",
     "programmes",
@@ -664,6 +665,26 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 updated_at TEXT NOT NULL DEFAULT ''
             )
             """,
+        )
+
+        # Optional first-run onboarding steps this tenant chose to skip. The
+        # sequence itself is always derived from verified records; only the
+        # explicit skip decisions are persisted so the flow resumes where the
+        # user left it.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS onboarding_skips (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                step TEXT NOT NULL,
+                skipped_at TEXT NOT NULL,
+                UNIQUE(user_id, step)
+            )
+            """,
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_onboarding_skips_user "
+            "ON onboarding_skips (user_id)"
         )
 
         cursor.execute(
