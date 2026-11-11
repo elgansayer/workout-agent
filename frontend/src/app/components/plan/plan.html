@@ -24,11 +24,11 @@
       <app-setup-notice [setup]="setup()" />
     }
 
-    @if (viewState() === 'stale') {
+    @if (viewState() === 'attention') {
       <app-setup-notice [setup]="setup()" />
     }
 
-    @if (viewState() === 'ready' || viewState() === 'stale') {
+    @if (viewState() === 'ready' || viewState() === 'attention') {
     <header>
       <p class="muted">
         Active Hevy programme

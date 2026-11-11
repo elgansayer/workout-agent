@@ -1,9 +1,10 @@
-"""End-to-end coverage for the five account setup states.
+"""End-to-end coverage for the account readiness states a surface renders.
 
-Every fixture below creates one tenant per state inside a single database, so
-each surface is checked against tenant-scoped records only.  The states are the
-ones a real account passes through: new, partially configured, ready, stale and
-disconnected.
+Every fixture below creates one tenant per situation inside a single database,
+so each surface is checked against tenant-scoped records only.  The situations
+are the ones a real account passes through: brand new, part-way through setup,
+ready, stale, and one whose Hevy key was removed (degraded).  The connecting,
+syncing and failure states are covered in ``test_webapp_readiness``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Any
 import database
 import pytest
 from hevy_parser import ExerciseSummary, WorkoutSummary
+from secret_vault import SecretVault, VerificationResult
 from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
@@ -23,9 +25,6 @@ pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
 _SECRET = "setup-state-test-secret-that-is-long-enough"
-
-ACCOUNT_STATES = ("new", "partially_configured", "ready", "stale", "disconnected")
-
 
 def _programme_definition(start_date: str) -> dict[str, Any]:
     """A minimal but valid Hevy-derived programme definition."""
@@ -130,6 +129,12 @@ def tenants(db_path: str, monkeypatch: Any) -> dict[str, str]:
         database.save_user_api_key(
             user["id"], "gemini", "synthetic-ai-key", db_path=db_path
         )
+        # A stored key is configuration only; Coach needs it proven to work.
+        SecretVault(db_path).verify_stored(
+            user["id"],
+            "gemini",
+            verifier=lambda _credential: VerificationResult(True, "ok", "ok"),
+        )
         database.set_active_programme(
             user["id"],
             "hevy",
@@ -202,14 +207,15 @@ def test_new_account_is_asked_to_connect_hevy_first(
     _sign_in(client, tenants["new"])
 
     dashboard = _setup(client, "/api/dashboard")
-    assert dashboard["setup"]["state"] == "new"
+    assert dashboard["setup"]["state"] == "setup_required"
+    assert dashboard["setup"]["first_run"] is True
     assert dashboard["setup"]["action"]["id"] == "connect_hevy"
     assert dashboard["setup"]["action"]["href"] == "/settings"
     assert dashboard["setup"]["reason"]
 
     for path in ("/api/progress", "/api/stats", "/api/history", "/api/plan"):
         payload = _setup(client, path)
-        assert payload["setup"]["state"] == "new", path
+        assert payload["setup"]["state"] == "setup_required", path
         assert payload["setup"]["action"]["id"] == "connect_hevy", path
         assert payload["setup"]["missing"], path
 
@@ -221,13 +227,14 @@ def test_partially_configured_account_is_asked_to_build_a_programme(
     _sign_in(client, tenants["partially_configured"])
 
     dashboard = _setup(client, "/api/dashboard")
-    assert dashboard["setup"]["state"] == "partially_configured"
+    assert dashboard["setup"]["state"] == "setup_required"
+    assert dashboard["setup"]["first_run"] is False
     assert dashboard["setup"]["action"]["id"] == "build_programme"
     assert dashboard["setup"]["action"]["href"] == "/programmes"
     assert dashboard["setup_required"] is True
 
     progress = _setup(client, "/api/progress")
-    assert progress["setup"]["state"] == "partially_configured"
+    assert progress["setup"]["state"] == "setup_required"
     assert progress["setup"]["action"]["id"] == "sync_hevy"
 
 
@@ -261,7 +268,7 @@ def test_stale_account_is_told_to_sync_again(
     assert stats["setup"]["age_days"] >= 30
 
 
-def test_disconnected_account_is_told_to_reconnect_hevy(
+def test_account_that_lost_its_hevy_key_is_told_to_reconnect(
     client: TestClient,
     tenants: dict[str, str],
 ) -> None:
@@ -269,7 +276,8 @@ def test_disconnected_account_is_told_to_reconnect_hevy(
 
     for path in ("/api/dashboard", "/api/progress", "/api/stats", "/api/history"):
         payload = _setup(client, path)
-        assert payload["setup"]["state"] == "disconnected", path
+        assert payload["setup"]["state"] == "degraded", path
+        assert payload["setup"]["reason_code"] == "credential_removed", path
         assert payload["setup"]["action"]["id"] == "connect_hevy", path
         assert "removed" in payload["setup"]["reason"], path
 
@@ -282,7 +290,7 @@ def test_setup_state_endpoint_covers_every_surface(
 
     payload = _setup(client, "/api/setup/state")
 
-    assert payload["account"]["state"] == "partially_configured"
+    assert payload["account"]["state"] == "setup_required"
     assert payload["account"]["checks"]["hevy_connected"] is True
     assert payload["account"]["checks"]["programme_active"] is False
     for surface in ("dashboard", "plan", "progress", "stats", "history", "coach", "checkins"):
@@ -300,7 +308,7 @@ def test_setup_state_never_leaks_another_tenants_records(
     _sign_in(client, tenants["new"])
 
     new_state = _setup(client, "/api/setup/state")
-    assert new_state["account"]["state"] == "new"
+    assert new_state["account"]["state"] == "setup_required"
 
     _sign_in(client, tenants["ready"])
     ready_state = _setup(client, "/api/setup/state")
@@ -322,5 +330,5 @@ def test_coach_surface_reports_a_missing_provider(
     database.delete_user_api_key(tenants["ready"], "gemini", db_path=db_path)
 
     payload = _setup(client, "/api/setup/state")
-    assert payload["surfaces"]["coach"]["state"] == "partially_configured"
+    assert payload["surfaces"]["coach"]["state"] == "setup_required"
     assert payload["surfaces"]["coach"]["action"]["id"] == "configure_ai"

@@ -84,6 +84,9 @@ export interface StoredKeyInfo {
   readonly masked: string | null;
   readonly model: string | null;
   readonly status?: string;
+  /** Outcome of the last connection test: `ok`, a failure code, or null if never tested. */
+  readonly last_test_status?: string | null;
+  readonly last_tested_at?: string | null;
 }
 
 /**
