@@ -134,7 +134,27 @@ Each supported provider sync follows the same lifecycle:
 8. Canonical records are idempotently upserted with source provenance.
 9. Derived daily summaries and readiness inputs are recomputed only for affected dates.
 10. Disconnect revokes upstream access where supported and stops future sync jobs.
-11. Purge and account deletion follow the product data-retention policy.
+11. The user explicitly chooses the data outcome: retain, purge, or revoke-only.
+
+### Disconnect and retention choices
+
+Every connector exposes the same three retention choices before disconnecting:
+
+| Mode | Upstream access | Imported records | Derived insights/aggregates |
+| --- | --- | --- | --- |
+| `revoke_only` | Revoked | Kept | Kept |
+| `retain` | Revoked | Kept | Kept |
+| `purge` | Revoked | Deleted for this connector | Invalidated and rebuilt from remaining sources |
+
+Purging is scoped to the authenticated tenant and to the records whose
+provenance names the connector being removed. It deletes the connector's
+connection row, imported canonical records, sync-run metadata, and any legacy
+body-metric rows tagged with that source. Cached `dashboard_insights` and
+`deep_correlations` for the user are invalidated because they may contain
+values derived from the purged source. Workouts, check-ins, daily logs, notes,
+preferences, and other user-entered records are never deleted by a connector
+purge. Repeating a purge is safe and reports zero affected rows, and a later
+reconnection starts from a clean connection row.
 
 Legacy Fitbit differs only during migration: the old connection remains intact until the replacement Google Health connection has been verified and switched atomically.
 

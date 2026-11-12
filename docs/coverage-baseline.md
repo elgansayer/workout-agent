@@ -159,12 +159,10 @@ files; use the per-module rows below for future product-code comparisons.
 | `backend/hevy_client.py` | 198 | 25 | 87% |
 | `backend/hevy_parser.py` | 116 | 12 | 90% |
 | `backend/hevy_reader.py` | 165 | 2 | 99% |
-| `backend/hevy_sync.py` | 200 | 117 | 42% |
 | `backend/insight_cron.py` | 86 | 22 | 74% |
 | `backend/insights.py` | 226 | 24 | 89% |
 | `backend/lifestyle.py` | 65 | 2 | 97% |
 | `backend/main.py` | 180 | 38 | 79% |
-| `backend/program.py` | 90 | 6 | 93% |
 | `backend/programme_inference.py` | 143 | 8 | 94% |
 | `backend/push_notifier.py` | 28 | 11 | 61% |
 | `backend/recovery.py` | 40 | 1 | 98% |

@@ -1,8 +1,8 @@
 """Periodic programme check-ins.
 
-Every four to six weeks (driven by how quickly a block's worth of sessions is
-logged, with a calendar cap), the agent reviews the actual logged data against
-the planned targets and sends a "Check-in N" summary with concrete adjustments.
+Review points come from the active programme's own blocks and cadence.  The
+engine compares each materialised prescription with logged Hevy data and never
+assumes a fixed four-week block, named lifts, or a twelve-week cycle.
 """
 
 from __future__ import annotations
@@ -10,34 +10,46 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 from ai_resolver import resolve_provider
 from config import Config
 from database import (
     get_meta,
-    get_programme_start_date,
     save_checkin,
     save_notification,
     set_meta,
 )
 from gemini_engine import generate_checkin_message
 from hevy_client import get_exercise_history, get_workout_count
-from program import Block, day_exercises
+from localisation import (
+    DEFAULT_UNIT_SYSTEM,
+    convert_weight,
+    format_weight,
+    local_today,
+    weight_unit,
+)
+from programme_runtime import (
+    ACTIVE,
+    ProgrammeRuntime,
+    load_programme_runtime,
+)
+from provenance import Provenance, generated_text_provenance
+from user_settings import UserSettings, get_user_settings_or_defaults
 
 logger = logging.getLogger(__name__)
 
-# One training block is roughly four weeks at six sessions a week.
-CHECKIN_WORKOUT_TARGET = 24
-# Never let more than six weeks pass without a review.
-CHECKIN_MAX_WEEKS = 6
-# With no Hevy count available, fall back to a purely calendar cadence.
+CHECKIN_VERSION = "checkin/1"
+
+# Fallback cadence when a programme defines no explicit review points.
 CHECKIN_MIN_WEEKS = 4
+CHECKIN_MAX_WEEKS = 6
 
 _KEY_NUMBER = "checkin_number"
 _KEY_LAST_DATE = "last_checkin_date"
 _KEY_LAST_COUNT = "last_checkin_workout_count"
+_KEY_LAST_WEEK = "last_checkin_week"
 
 
 @dataclass(frozen=True)
@@ -57,6 +69,19 @@ class LiftReview:
     change_kg: float | None  # weight delta across the window
     hit_top: bool | None
     stalled: bool
+    role: str = ""
+
+
+def _user_settings(config: Config, user_id: str | None) -> UserSettings:
+    """Explicit defaults when no tenant is acting, otherwise their preferences."""
+    if user_id is None:
+        return UserSettings()
+    return get_user_settings_or_defaults(user_id, config.database_path)
+
+
+def _today(config: Config, user_id: str | None) -> date:
+    """The acting user's local calendar day, not the server's UTC day."""
+    return local_today(_user_settings(config, user_id).timezone)
 
 
 def _top_rep(rep_range: str) -> int | None:
@@ -68,14 +93,21 @@ def _weeks_between(start: date, today: date) -> int:
     return max((today - start).days // 7, 0)
 
 
-def _last_checkin_date(config: Config, *, user_id: str | None = None) -> date:
+def _last_checkin_date(
+    config: Config,
+    *,
+    user_id: str | None = None,
+    runtime: ProgrammeRuntime | None = None,
+) -> date:
     value = get_meta(_KEY_LAST_DATE, config.database_path, user_id=user_id)
     if value:
         try:
             return date.fromisoformat(value)
         except ValueError:
             pass
-    return get_programme_start_date(config.database_path, user_id=user_id)
+    if runtime is not None and runtime.start_date:
+        return runtime.start_date
+    return _today(config, user_id)
 
 
 def _seed_baseline_if_missing(
@@ -89,7 +121,7 @@ def _seed_baseline_if_missing(
         set_meta(_KEY_NUMBER, "0", config.database_path, user_id=user_id)
         set_meta(
             _KEY_LAST_DATE,
-            datetime.now(tz=timezone.utc).date().isoformat(),
+            _today(config, user_id).isoformat(),
             config.database_path,
             user_id=user_id,
         )
@@ -105,36 +137,72 @@ def _seed_baseline_if_missing(
         )
 
 
+def _next_review_week(runtime: ProgrammeRuntime, last_week: int) -> int | None:
+    for week in runtime.review_weeks:
+        if week > last_week:
+            return week
+    return None
+
+
+def _due_workout_target(runtime: ProgrammeRuntime) -> int:
+    sessions = max(1, len(runtime.days) or 1)
+    interval = CHECKIN_MIN_WEEKS
+    if runtime.review_weeks:
+        interval = max(1, runtime.review_weeks[0])
+    return sessions * interval
+
+
 def due(
     config: Config,
     today: date | None = None,
     *,
     user_id: str | None = None,
+    runtime: ProgrammeRuntime | None = None,
 ) -> CheckinDue | None:
-    """Return check-in details if one is due, otherwise None."""
+    """Return check-in details if a programme review point is due."""
     if today is None:
-        today = datetime.now(tz=timezone.utc).date()
+        today = _today(config, user_id)
+
+    if runtime is None:
+        if not user_id:
+            return None
+        runtime = load_programme_runtime(user_id, config.database_path, today=today)
+    if runtime.status != ACTIVE or runtime.start_date is None:
+        return None
 
     total_count = (
         get_workout_count(config.hevy_api_key) if config.hevy_api_key else None
     )
     _seed_baseline_if_missing(config, total_count, user_id=user_id)
 
-    last_date = _last_checkin_date(config, user_id=user_id)
+    last_date = _last_checkin_date(config, user_id=user_id, runtime=runtime)
     weeks = _weeks_between(last_date, today)
     number = (
         int(get_meta(_KEY_NUMBER, config.database_path, user_id=user_id) or "0") + 1
     )
 
+    last_week_raw = get_meta(_KEY_LAST_WEEK, config.database_path, user_id=user_id)
+    if last_week_raw is not None:
+        try:
+            last_week = int(last_week_raw)
+        except ValueError:
+            last_week = 0
+    else:
+        last_week = max(0, _weeks_between(runtime.start_date, last_date))
+
+    next_review = _next_review_week(runtime, last_week)
+    review_due = next_review is not None and runtime.week >= next_review
+
     last_count_raw = get_meta(_KEY_LAST_COUNT, config.database_path, user_id=user_id)
     if total_count is not None and last_count_raw is not None:
         workouts_done = max(total_count - int(last_count_raw), 0)
-        if workouts_done >= CHECKIN_WORKOUT_TARGET or weeks >= CHECKIN_MAX_WEEKS:
+        target = _due_workout_target(runtime)
+        if review_due or workouts_done >= target or weeks >= CHECKIN_MAX_WEEKS:
             return CheckinDue(number, workouts_done, weeks, total_count)
         return None
 
-    # No Hevy count: fall back to a calendar cadence so check-ins still happen.
-    if weeks >= CHECKIN_MIN_WEEKS:
+    # No provider count: keep a calendar cadence anchored to the programme.
+    if review_due or (next_review is None and weeks >= CHECKIN_MIN_WEEKS):
         return CheckinDue(number, 0, weeks, total_count)
     return None
 
@@ -167,7 +235,11 @@ def _session_top_sets(
 
 
 def _review_exercise(
-    name: str, planned: str, rep_range: str, history: list[dict]
+    name: str,
+    planned: str,
+    rep_range: str,
+    history: list[dict],
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> LiftReview:
     tops = _session_top_sets(history)
     sessions = len(tops)
@@ -193,7 +265,7 @@ def _review_exercise(
     )
 
     if latest_w is not None and latest_r is not None:
-        latest = f"{latest_w:g} kg x {latest_r}"
+        latest = f"{format_weight(latest_w, unit_system)} x {latest_r}"
     elif latest_r is not None:
         latest = f"{latest_r} reps"
     else:
@@ -204,31 +276,56 @@ def _review_exercise(
 
 def _analyse(
     config: Config,
-    block: Block,
+    runtime: ProgrammeRuntime,
     *,
     user_id: str | None = None,
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> list[LiftReview]:
-    """Compare planned targets to logged data for each lift in the block."""
+    """Compare the current materialised prescription to logged data."""
     if not config.hevy_api_key:
         return []
-    start_iso = _last_checkin_date(config, user_id=user_id).isoformat()
+    start_iso = _last_checkin_date(
+        config, user_id=user_id, runtime=runtime
+    ).isoformat()
     reviews: list[LiftReview] = []
     seen: set[str] = set()
-    for day in (1, 2, 3):
-        for ex in day_exercises(day, block):
-            if ex.name in seen or ex.template_id is None:
+    for day in runtime.days:
+        for exercise in day.get("exercises") or []:
+            template_id = exercise.get("template_id")
+            name = str(exercise.get("name") or "")
+            if not name or not template_id or name in seen:
                 continue
-            seen.add(ex.name)
+            seen.add(name)
             history = (
-                get_exercise_history(config.hevy_api_key, ex.template_id, start_iso)
+                get_exercise_history(config.hevy_api_key, str(template_id), start_iso)
                 or []
             )
-            planned = f"{ex.sets} x {ex.rep_range}"
-            reviews.append(_review_exercise(ex.name, planned, ex.rep_range, history))
+            planned = str(
+                exercise.get("scheme")
+                or f"{exercise.get('sets', '')} x {exercise.get('rep_range', '')}"
+            )
+            rep_range = str(exercise.get("rep_range") or "")
+            review = _review_exercise(
+                name, planned, rep_range, history, unit_system
+            )
+            reviews.append(
+                LiftReview(
+                    review.name,
+                    review.planned,
+                    review.sessions,
+                    review.latest,
+                    review.change_kg,
+                    review.hit_top,
+                    review.stalled,
+                    role=str(exercise.get("role") or ""),
+                )
+            )
     return reviews
 
 
-def _analysis_text(reviews: list[LiftReview]) -> str:
+def _analysis_text(
+    reviews: list[LiftReview], unit_system: str = DEFAULT_UNIT_SYSTEM
+) -> str:
     if not reviews:
         return "No logged Hevy data is available for this period."
     lines = []
@@ -236,8 +333,11 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
         line = (
             f"- {r.name}: planned {r.planned}; latest {r.latest}; {r.sessions} sessions"
         )
+        if r.role:
+            line += f"; role {r.role}"
         if r.change_kg is not None and r.change_kg != 0:
-            line += f"; weight change {r.change_kg:+g} kg"
+            change = convert_weight(r.change_kg, unit_system)
+            line += f"; weight change {change:+g} {weight_unit(unit_system)}"
         if r.stalled:
             line += "; STALLED (hitting top reps but load not moving)"
         elif r.hit_top:
@@ -247,10 +347,14 @@ def _analysis_text(reviews: list[LiftReview]) -> str:
 
 
 def _fallback_message(
-    due_info: CheckinDue, block: Block, reviews: list[LiftReview]
+    due_info: CheckinDue,
+    runtime: ProgrammeRuntime,
+    reviews: list[LiftReview],
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> str:
+    block_name = str((runtime.block or {}).get("name") or "Programme review")
     lines = [
-        f"Check-in {due_info.number}: Block {block.number} ({block.name})",
+        f"Check-in {due_info.number}: {block_name}",
         (
             f"{due_info.workouts_done} sessions logged over "
             f"{due_info.weeks_elapsed} weeks."
@@ -263,24 +367,27 @@ def _fallback_message(
             if r.stalled:
                 note = " - stalled, consider a small deload then rebuild"
             elif r.change_kg is not None and r.change_kg > 0:
-                note = f" - up {r.change_kg:+g} kg, keep pushing"
+                gain = convert_weight(r.change_kg, unit_system)
+                note = f" - up {gain:+g} {weight_unit(unit_system)}, keep pushing"
             lines.append(f"{r.name}: {r.planned}, now {r.latest}{note}")
     lines.append("")
-    lines.append("Keep logging every set and filming your top deadlift and pull-up.")
+    lines.append("Keep logging every set and following the prescribed programme.")
     return "\n".join(lines)
 
 
 def run_checkin(
     config: Config,
     due_info: CheckinDue,
-    week: int,
-    block: Block,
+    runtime: ProgrammeRuntime,
     *,
     user_id: str | None = None,
 ) -> str:
     """Build the acting user's check-in with their selected AI provider."""
-    reviews = _analyse(config, block, user_id=user_id)
-    fallback = _fallback_message(due_info, block, reviews)
+    settings = _user_settings(config, user_id)
+    reviews = _analyse(
+        config, runtime, user_id=user_id, unit_system=settings.unit_system
+    )
+    fallback = _fallback_message(due_info, runtime, reviews, settings.unit_system)
     provider = resolve_provider(
         user_id=user_id,
         server_gemini_key=config.gemini_api_key,
@@ -289,13 +396,13 @@ def run_checkin(
     )
     return generate_checkin_message(
         provider,
+        runtime=runtime,
         number=due_info.number,
-        week=week,
-        block=block,
         workouts_done=due_info.workouts_done,
         weeks=due_info.weeks_elapsed,
-        analysis_text=_analysis_text(reviews),
+        analysis_text=_analysis_text(reviews, settings.unit_system),
         fallback=fallback,
+        settings=settings,
     )
 
 
@@ -306,10 +413,16 @@ def record(
     today: date | None = None,
     *,
     user_id: str | None = None,
+    runtime: ProgrammeRuntime | None = None,
+    provenance: Provenance | None = None,
 ) -> None:
-    """Persist the completed check-in and reset this user's tracking baseline."""
+    """Persist the completed check-in and reset this user's tracking baseline.
+
+    The check-in is recorded as a derived coaching summary; unless *provenance*
+    is given it is attributed from how *message* was generated (AI or fallback).
+    """
     if today is None:
-        today = datetime.now(tz=timezone.utc).date()
+        today = _today(config, user_id)
     set_meta(
         _KEY_NUMBER,
         str(due_info.number),
@@ -322,6 +435,13 @@ def record(
         config.database_path,
         user_id=user_id,
     )
+    if runtime is not None:
+        set_meta(
+            _KEY_LAST_WEEK,
+            str(runtime.week),
+            config.database_path,
+            user_id=user_id,
+        )
     if due_info.total_count is not None:
         set_meta(
             _KEY_LAST_COUNT,
@@ -337,6 +457,7 @@ def record(
         message,
         config.database_path,
         user_id=user_id,
+        provenance=provenance or generated_text_provenance(message, CHECKIN_VERSION),
     )
     if user_id:
         save_notification(

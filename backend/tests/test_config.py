@@ -116,14 +116,10 @@ class TestConfigLoad:
     def test_boolean_env_truthy_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-        monkeypatch.setenv("HEVY_SYNC_ROUTINES", "1")
-        monkeypatch.setenv("HEVY_PREFILL_WEIGHTS", "true")
         monkeypatch.setenv("CHECKIN_ENABLED", "yes")
         monkeypatch.setenv("LIFESTYLE_ENABLED", "on")
         monkeypatch.setenv("SELF_REVIEW_ENABLED", "1")
         cfg = Config.load()
-        assert cfg.hevy_sync_routines is True
-        assert cfg.hevy_prefill_weights is True
         assert cfg.checkin_enabled is True
         assert cfg.lifestyle_enabled is True
         assert cfg.self_review_enabled is True
@@ -131,17 +127,22 @@ class TestConfigLoad:
     def test_boolean_env_falsey_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("GEMINI_API_KEY", "gk")
 
-        monkeypatch.setenv("HEVY_SYNC_ROUTINES", "0")
-        monkeypatch.setenv("HEVY_PREFILL_WEIGHTS", "false")
         monkeypatch.setenv("CHECKIN_ENABLED", "no")
         monkeypatch.setenv("LIFESTYLE_ENABLED", "FALSE")
         monkeypatch.setenv("SELF_REVIEW_ENABLED", "0")
         cfg = Config.load()
-        assert cfg.hevy_sync_routines is False
-        assert cfg.hevy_prefill_weights is False
         assert cfg.checkin_enabled is False
         assert cfg.lifestyle_enabled is False
         assert cfg.self_review_enabled is False
+
+    def test_hevy_routine_sync_is_opt_in(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("GEMINI_API_KEY", "gk")
+        monkeypatch.delenv("HEVY_SYNC_ROUTINES", raising=False)
+        cfg = Config.load()
+        assert cfg.hevy_sync_routines is False
 
     def test_gemini_model_default_and_override(
         self,

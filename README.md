@@ -14,6 +14,7 @@ Workout Agent is a multi-user fitness intelligence platform for importing workou
   The latest evidence is recorded in the [AI provider parity audit](docs/AI_PROVIDER_PARITY.md).
 - Use the web dashboard, Coach, programme builder, history, progress, settings, and check-in views.
 - Deliver notifications through supported user-configured channels.
+- Store each user's time zone, locale, unit system and accessibility preferences, and apply them to pages, scheduled jobs, notifications, exports and AI prompts. See [Per-user regional and accessibility settings](docs/USER_SETTINGS.md).
 
 ## Architecture
 
@@ -39,13 +40,19 @@ Workout Agent handles identifiers, health metrics, workouts, prompts, analytics,
 Core rules:
 
 - Every tenant-owned record must be scoped to the authenticated user.
+- Caches, locks, cursors and background jobs must be keyed by an immutable owner identity and re-authorize their owner when they run; see [Tenant isolation](docs/TENANT_ISOLATION.md).
+- Accounts have immutable identifiers and a lifecycle status, and production has no shared fallback user: an operation that cannot name its account fails closed. Data written before accounts existed is assigned to a verified owner through an explicit, audited plan. See [User model](docs/USER_MODEL.md).
 - Raw credentials must never be logged or committed.
 - Raw health, workout, or prompt payloads must not be written to logs.
 - Public source documentation and test fixtures must use synthetic data only.
 - Example email addresses must use reserved example domains.
 - Sensitive examples must be clearly marked as synthetic so they cannot be mistaken for production data.
 
+Every core record carries provenance (imported source data, a user entry or correction, or a derived recommendation) and corrections keep the original in the record's lineage; see [Record provenance and lineage](docs/PROVENANCE.md).
+
 The executable classification and redaction rules live in `backend/data_classification.py`. Repository-level policy checks live in `backend/scripts/check_data_policy.py` and run in CI.
+
+Sign-ins, failed sign-ins, session revocation, credential and connector changes, deletions and permission changes are recorded in an append-only, hash-chained audit trail, and anomaly alert rules watch it for repeated failures, disabled production authentication, unusual exports and connector abuse. See [Security audit logging](docs/SECURITY_AUDIT_LOGGING.md).
 
 ## Synthetic example programme
 
@@ -85,14 +92,26 @@ python main.py --preview
 
 ### Web application
 
-Install any web-specific dependencies required by the current branch, then start the FastAPI application using the repository's documented runtime entrypoint or Docker Compose configuration.
+The canonical web entrypoint is `webapp.secure_app:app`. It installs the
+fail-closed authentication, CSRF, cache, proxy-host, and security-header
+boundaries described in `docs/`. Direct `webapp.app:app` imports exist only for
+focused unit tests and must not be used for a deployed process.
 
-A typical local backend invocation is:
+Every backend process must set `APP_ENV` explicitly. For local read-only
+development, opt in to anonymous access deliberately:
 
 ```bash
 pip install -r requirements.txt -r requirements-web.txt
-uvicorn webapp.app:app --host 0.0.0.0 --port 8770
+APP_ENV=development ALLOW_ANONYMOUS_WEB=1 WEB_PUBLIC_URL=http://localhost:8770 \
+  uvicorn webapp.secure_app:app --host 127.0.0.1 --port 8770
 ```
+
+For production, use the Docker image (or `webapp.secure_app:app`) with a complete
+Google login configuration and a canonical HTTPS origin. Startup fails closed
+when `APP_ENV` is missing or unsupported, when authentication is partial, when
+`WEB_AUTH_SECRET` is shorter than 32 characters, or when production omits
+`WEB_PUBLIC_URL`. See `.env.example`, `docs/REVERSE_PROXY_SECURITY.md`, and
+`docs/CSRF_SECURITY.md`.
 
 ### Docker
 
@@ -109,12 +128,18 @@ Authentication and integration credentials are configured through environment va
 - `WEB_AUTH_SECRET`
 - `WEB_GOOGLE_CLIENT_ID`
 - `WEB_GOOGLE_CLIENT_SECRET`
+- `AUDIT_LOG_HMAC_KEY` (optional dedicated key for the security audit chain)
+- `ALLOWED_EMAILS` and `INVITE_ONLY` (who may sign in; see below)
 - `HEVY_API_KEY`
 - AI-provider credentials
 - health-provider OAuth credentials
 - notification-provider credentials
 
 Use `.env.example` for the current supported inventory. Never paste real values into documentation, issues, fixtures, tests, screenshots, or commits.
+
+Who may sign in to a deployment is decided by the server, not by the UI: `ALLOWED_EMAILS` restricts sign-in to a list of addresses, `INVITE_ONLY=1` requires an invitation before a new account is created, and a suspended or deleted account cannot sign in or keep using an existing session. See [Account access policy](docs/ACCOUNT_ACCESS_POLICY.md).
+
+Browser sessions use a `Secure`, `HttpOnly`, `SameSite=Lax`, host-only cookie backed by a server-side registry, so they expire after an idle and an absolute limit (`SESSION_IDLE_TIMEOUT_SECONDS`, `SESSION_ABSOLUTE_TIMEOUT_SECONDS`), rotate at every sign-in, and can be revoked per device or for all devices. See [Session security](docs/SESSION_SECURITY.md).
 
 ## Health and workout examples
 
@@ -166,7 +191,9 @@ Work is tracked in GitHub Issues. Before implementation:
 The OpenHands Agent Canvas on the VPS is the single autonomous scheduler for this
 repository. It selects eligible GitHub issues, claims them under a lease, and opens
 branches and pull requests. GitHub Actions remain deterministic verification and
-never select implementation work.
+never select implementation work. The VPS scheduler is the single owner of claim,
+branch, pull request, review response and repair; there is no GitHub-hosted
+planner, resolver, reviewer, hourly, daily or weekly agent fallback.
 
 The queue contract — eligible labels, claim lease and heartbeat, cancellation,
 branch naming, pull-request creation and review handling — is documented in

@@ -4,7 +4,10 @@ dispatches per-user daily coaching runs and insight generation at the
 configured times.
 
 Supports MODE env var (schedule | once | preview) exactly as the entrypoint
-did, and reads RUN_AT / TZ for backward compatibility.
+did. RUN_AT / INSIGHT_*_AT are *local wall-clock times*: each user's jobs fire at
+those times in that user's own saved time zone (``users.timezone``), never in
+the container's ``TZ``. ``TZ`` only seeds accounts that predate per-user
+settings (see ``user_settings.ensure_settings_schema``).
 """
 
 from __future__ import annotations
@@ -14,11 +17,24 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from collections.abc import Callable, Collection, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
+from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
+from account_deletion import process_due_deletions
 from config import Config, ConfigError
-from database import get_all_users, init_db
+from database import UserRow, get_all_users, init_db
+from localisation import resolve_timezone
+from programme_runtime import user_timezone
+from tenancy import implicit_single_user_allowed
+from tenant_isolation import (
+    JobStatus,
+    OwnedJob,
+    OwnerIdentity,
+    OwnershipError,
+    run_owned_job,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -70,16 +86,71 @@ def _now_in_tz(tz_name: str) -> datetime:
         return datetime.now(tz=timezone.utc)
 
 
-def _now_in_zone(tz_name: str) -> datetime:
-    """Return the current local time in the given timezone name."""
-    return _now_in_tz(tz_name)
-
-
 def _is_due(tz: str, run_times: list[str]) -> bool:
     """Check if the current time in the timezone is in run_times."""
     now = _now_in_tz(tz)
     curr = f"{now.hour:02d}:{now.minute:02d}"
     return curr in run_times
+
+
+# A slot stays open this long after its local wall-clock time. That covers a
+# busy scheduler and the skipped hour on a spring-forward day, while a user who
+# signs up mid-afternoon is not handed this morning's run.
+_CATCH_UP = timedelta(minutes=60)
+_SUNDAY = 6
+
+
+class DueJob(NamedTuple):
+    """A job whose slot is open in one user's local time and has not run today."""
+
+    user_id: str
+    job: str
+    local_day: str
+
+
+def _user_now(user: Mapping[str, Any], now: datetime) -> datetime:
+    """The instant *now* expressed in the user's own saved time zone."""
+    return now.astimezone(user_timezone(resolve_timezone(user.get("timezone"))))
+
+
+def _slot_due(local_now: datetime, slot: tuple[int, int]) -> bool:
+    """True from a slot's local wall-clock time until the catch-up window ends.
+
+    Both values share one tzinfo, so Python compares wall-clock fields. That is
+    the intended meaning of "07:00 local" across DST changes.
+    """
+    start = local_now.replace(hour=slot[0], minute=slot[1], second=0, microsecond=0)
+    return timedelta(0) <= local_now - start < _CATCH_UP
+
+
+def due_jobs(
+    users: Sequence[Mapping[str, Any]],
+    now: datetime,
+    schedule: Mapping[str, Sequence[tuple[int, int]]],
+    done: Collection[tuple[str, str, str]],
+) -> list[DueJob]:
+    """Return the jobs due for each user at the instant *now*.
+
+    ``schedule`` maps a job name to its local ``(hour, minute)`` slots.
+    ``insight_weekly`` only runs on the user's local Sunday. ``done`` holds
+    ``(user_id, job, local_day)`` keys, so a job runs once per user per local
+    day even though the loop wakes many times inside the slot.
+    """
+    due: list[DueJob] = []
+    for user in users:
+        user_id = user.get("id")
+        if not user_id:
+            continue
+        local_now = _user_now(user, now)
+        local_day = local_now.date().isoformat()
+        for job, slots in schedule.items():
+            if job == "insight_weekly" and local_now.weekday() != _SUNDAY:
+                continue
+            if (user_id, job, local_day) in done:
+                continue
+            if any(_slot_due(local_now, slot) for slot in slots):
+                due.append(DueJob(user_id, job, local_day))
+    return due
 
 
 def _run_coaching(user_id: str) -> bool:
@@ -151,154 +222,218 @@ def run_scheduler() -> None:
         time.sleep(30)
 
 
-def run_coaching(config: Config) -> int:
-    """Run one isolated daily coaching cycle per persisted user."""
+def run_account_deletions(config: Config) -> int:
+    """Execute due account/health-data deletions; never lets a failure stop the loop."""
+    try:
+        return process_due_deletions(config.database_path)
+    except Exception:
+        logger.exception("Account deletion processing failed.")
+        return 0
+
+
+def _run_per_owner(
+    config: Config,
+    kind: str,
+    users: list[UserRow],
+    work: Callable[[OwnerIdentity], int | None],
+) -> int:
+    """Run *work* once per user as an owner-scoped, re-authorized job.
+
+    Ids come from the user store and are verified again immediately before each
+    job executes, so a user removed after listing is denied instead of being
+    resurrected. One owner's failure never stops the next. Returns the worst
+    exit code (0 when every job completed or was skipped as an overlap).
+    """
+    result = 0
+    for user in users:
+        try:
+            job = OwnedJob(kind, OwnerIdentity(str(user.get("id") or "")))
+        except OwnershipError:
+            logger.warning("Skipping %s: user row without a usable id.", kind)
+            result = max(result, 1)
+            continue
+        outcome = run_owned_job(job, config.database_path, work)
+        if outcome.status is JobStatus.COMPLETED:
+            result = max(result, outcome.result or 0)
+        elif outcome.status is not JobStatus.SKIPPED:
+            result = max(result, 1)
+    return result
+
+
+def run_coaching(config: Config, user_ids: Collection[str] | None = None) -> int:
+    """Run one isolated daily coaching cycle per persisted user.
+
+    ``user_ids`` limits the run to those users (the per-user scheduler passes
+    exactly the users whose local slot is open).
+    """
     from main import run as main_run
 
     logger.info("Running daily coaching cycles...")
-    result = 0
     users = get_all_users(config.database_path)
-    if not users:
+    if user_ids is not None:
+        users = [u for u in users if u.get("id") in user_ids]
+    elif not users:
+        if not implicit_single_user_allowed():
+            # No shared fallback user outside the explicit local mode: with no
+            # active account there is nobody to coach.
+            logger.warning("No active users; skipping the daily coaching cycle.")
+            return 0
         try:
             return main_run(preview=False)
         except Exception:
             logger.exception("Daily coaching run failed.")
             return 1
 
-    for user in users:
-        user_id = user.get("id")
-        if not user_id:
-            logger.warning("Skipping user row without an id.")
-            result = max(result, 1)
-            continue
-        try:
-            result = max(result, main_run(preview=False, user_id=user_id))
-        except Exception:
-            logger.exception("Daily coaching run failed for user %s.", user_id)
-            result = max(result, 1)
-    return result
+    return _run_per_owner(
+        config,
+        "coaching",
+        users,
+        lambda owner: main_run(preview=False, user_id=owner.user_id),
+    )
 
 
-def run_daily_insight(config: Config) -> None:
-    """Generate a tenant-scoped daily dashboard insight for every user."""
+def run_daily_insight(config: Config, user_ids: Collection[str] | None = None) -> None:
+    """Generate a tenant-scoped daily dashboard insight (all users by default)."""
     from insight_cron import generate_daily_header
 
     logger.info("Generating daily insight headers...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        try:
-            generate_daily_header(config, user_id=user_id)
-        except Exception:
-            logger.exception("Daily insight generation failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-daily",
+        [
+            u
+            for u in get_all_users(config.database_path)
+            if user_ids is None or u.get("id") in user_ids
+        ],
+        lambda owner: generate_daily_header(config, user_id=owner.user_id),
+    )
 
 
-def run_weekly_correlations(config: Config) -> None:
-    """Generate tenant-scoped weekly correlations for every user."""
+def run_weekly_correlations(
+    config: Config, user_ids: Collection[str] | None = None
+) -> None:
+    """Generate tenant-scoped weekly correlations (all users by default)."""
     from insight_cron import generate_weekly_correlations
 
     logger.info("Generating weekly deep correlations...")
-    for user in get_all_users(config.database_path):
-        user_id = user["id"]
-        try:
-            generate_weekly_correlations(config, user_id=user_id)
-        except Exception:
-            logger.exception("Weekly correlations failed for user %s.", user_id)
+    _run_per_owner(
+        config,
+        "insight-weekly",
+        [
+            u
+            for u in get_all_users(config.database_path)
+            if user_ids is None or u.get("id") in user_ids
+        ],
+        lambda owner: generate_weekly_correlations(config, user_id=owner.user_id),
+    )
 
 
 def run_once(config: Config) -> int:
-    """Run a full scheduled cycle: coaching, daily insight, and weekly (if Sunday)."""
+    """Run a full cycle now: coaching, daily insight, and weekly (Sunday users).
+
+    The weekly report goes to users whose *local* day is Sunday, not whoever
+    happens to be on a server-local Sunday.
+    """
     logger.info("Running scheduled cycle...")
+    run_account_deletions(config)
     rc = run_coaching(config)
     run_daily_insight(config)
 
-    now = _now_in_zone(_TZ)
-    if now.weekday() == 6:  # Sunday
-        run_weekly_correlations(config)
+    now = datetime.now(tz=timezone.utc)
+    sunday_users = [
+        user["id"]
+        for user in get_all_users(config.database_path)
+        if user.get("id") and _user_now(user, now).weekday() == _SUNDAY
+    ]
+    if sunday_users:
+        run_weekly_correlations(config, sunday_users)
     return rc
 
 
+def _mark_boot_cycle(
+    users: Sequence[Mapping[str, Any]],
+    now: datetime,
+    done: set[tuple[str, str, str]],
+) -> None:
+    """Record what the boot cycle already covered so slots do not repeat it."""
+    for user in users:
+        user_id = user.get("id")
+        if not user_id:
+            continue
+        local_now = _user_now(user, now)
+        local_day = local_now.date().isoformat()
+        done.add((user_id, "coaching", local_day))
+        done.add((user_id, "insight_daily", local_day))
+        if local_now.weekday() == _SUNDAY:
+            done.add((user_id, "insight_weekly", local_day))
+
+
 def run_schedule(config: Config) -> None:
-    """Run forever, waking at the configured times to dispatch jobs.
+    """Run forever, dispatching each user's jobs at *their* local run times.
 
     This is the single loop that replaces both the bash sleep-loop in
     docker-entrypoint.sh and the Python sleep-loop in insight_scheduler.py.
+    Every wake-up re-reads the users so a time-zone change in Settings takes
+    effect on the next tick without a restart.
     """
-    coaching_times = _parse_times(_RUN_AT)
-    insight_daily_times = _parse_times(_INSIGHT_DAILY_AT)
-    insight_weekly_times = _parse_times(_INSIGHT_WEEKLY_AT)
-
+    schedule = {
+        "coaching": _parse_times(_RUN_AT),
+        "insight_daily": _parse_times(_INSIGHT_DAILY_AT),
+        "insight_weekly": _parse_times(_INSIGHT_WEEKLY_AT),
+    }
     logger.info(
         "Unified scheduler started: coaching at %s, daily insight at %s, "
-        "weekly insight at %s (TZ=%s).",
+        "weekly insight at %s, each in the user's own time zone.",
         _RUN_AT,
         _INSIGHT_DAILY_AT,
         _INSIGHT_WEEKLY_AT,
-        _TZ,
     )
 
-    today = _now_in_zone(_TZ).date()
-    jobs_run: set[str] = set()
-
-    def _reset_if_new_day() -> None:
-        nonlocal today, jobs_run
-        current = _now_in_zone(_TZ).date()
-        if current != today:
-            today = current
-            jobs_run.clear()
-            logger.info("New day: %s, rescheduling jobs.", today)
+    done: set[tuple[str, str, str]] = set()
 
     # Run once on startup
     logger.info("Running initial boot cycle...")
     run_once(config)
-    jobs_run.add("coaching")
-    jobs_run.add("insight_daily")
-    if _now_in_zone(_TZ).weekday() == 6:
-        jobs_run.add("insight_weekly")
-
-    logger.info(
-        "Entering main scheduler loop (wake interval: 30s). "
-        "Coaching: %s, Daily insight: %s, Weekly insight: %s.",
-        _RUN_AT,
-        _INSIGHT_DAILY_AT,
-        _INSIGHT_WEEKLY_AT,
+    _mark_boot_cycle(
+        get_all_users(config.database_path), datetime.now(tz=timezone.utc), done
     )
 
+    logger.info("Entering main scheduler loop (wake interval: 30s).")
+
     while True:
-        _reset_if_new_day()
+        run_account_deletions(config)
+        now = datetime.now(tz=timezone.utc)
+        by_job: dict[str, list[str]] = {}
+        for item in due_jobs(get_all_users(config.database_path), now, schedule, done):
+            # Mark first: a failing job must never be retried every 30 seconds.
+            done.add((item.user_id, item.job, item.local_day))
+            by_job.setdefault(item.job, []).append(item.user_id)
 
-        now_local = _now_in_zone(_TZ)
-        now_h, now_m = now_local.hour, now_local.minute
+        if "coaching" in by_job:
+            logger.info("Coaching due for %d user(s).", len(by_job["coaching"]))
+            run_coaching(config, by_job["coaching"])
+        if "insight_daily" in by_job:
+            logger.info("Daily insight due for %d user(s).", len(by_job["insight_daily"]))
+            run_daily_insight(config, by_job["insight_daily"])
+        if "insight_weekly" in by_job:
+            logger.info("Weekly insight due for %d user(s).", len(by_job["insight_weekly"]))
+            run_weekly_correlations(config, by_job["insight_weekly"])
 
-        if "coaching" not in jobs_run:
-            for h, m in coaching_times:
-                if now_h == h and now_m == m:
-                    logger.info("Coaching time %02d:%02d triggered.", h, m)
-                    run_coaching(config)
-                    jobs_run.add("coaching")
-                    break
-
-        if "insight_daily" not in jobs_run:
-            for h, m in insight_daily_times:
-                if now_h == h and now_m == m:
-                    logger.info("Daily insight time %02d:%02d triggered.", h, m)
-                    run_daily_insight(config)
-                    jobs_run.add("insight_daily")
-                    break
-
-        if "insight_weekly" not in jobs_run and now_local.weekday() == 6:
-            for h, m in insight_weekly_times:
-                if now_h == h and now_m == m:
-                    logger.info("Weekly insight time %02d:%02d triggered.", h, m)
-                    run_weekly_correlations(config)
-                    jobs_run.add("insight_weekly")
-                    break
-
+        # Local days differ from the UTC day by at most one, so older keys are dead.
+        cutoff = (now.date() - timedelta(days=3)).isoformat()
+        done.difference_update({key for key in done if key[2] < cutoff})
         time.sleep(30)
 
 
 def main(argv: list[str] | None = None) -> int:
     mode = os.environ.get("MODE", "schedule").strip().lower()
-    logger.info("Mode: %s, RUN_AT: %s, TZ: %s", mode, _RUN_AT, _TZ)
+    logger.info(
+        "Mode: %s, RUN_AT: %s (per-user local time; deployment TZ=%s only "
+        "seeds accounts created before per-user settings).",
+        mode,
+        _RUN_AT,
+        _TZ,
+    )
 
     try:
         config = Config.load()

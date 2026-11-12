@@ -6,8 +6,9 @@ records what happened, this module reasons about whether the coaching is
 trending, and what the coach should change next. The output is fed into the
 Gemini prompt so each day's plan is driven by trends, not just the last session.
 
-Everything here is pure and dependency-light (only ``analytics``), so it is
-fully unit-testable without a database, network, or model.
+Everything here is pure and dependency-light (``analytics`` and the pure
+``localisation`` rules), so it is fully unit-testable without a database,
+network, or model.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from analytics import epley_1rm, linear_fit
+from localisation import DEFAULT_UNIT_SYSTEM, convert_weight, weight_unit
 
 # A lift needs at least this many logged sessions before a trend is meaningful.
 MIN_SESSIONS_FOR_TREND = 3
@@ -46,12 +48,16 @@ class LiftInsight:
     trend: str  # progressing | stalling | regressing | new
     sessions_since_best: int | None
     intervention: str | None  # what to change when not progressing
+    unit_system: str = DEFAULT_UNIT_SYSTEM  # display only; values stay in kg
 
     def as_line(self) -> str:
-        unit = "kg e1RM" if self.metric == "kg" else "reps"
+        unit = f"{weight_unit(self.unit_system)} e1RM" if self.metric == "kg" else "reps"
         bits = [f"{self.name}: {self.trend}"]
         if self.latest is not None:
-            bits.append(f"latest {self.latest:g} {unit}")
+            latest = self.latest if self.metric != "kg" else convert_weight(
+                self.latest, self.unit_system
+            )
+            bits.append(f"latest {latest:g} {unit}")
         if self.change_pct is not None:
             bits.append(f"{self.change_pct * 100:+.0f}% over {self.sessions} sessions")
         if self.sessions_since_best:
@@ -77,6 +83,7 @@ class RecoveryInsight:
     is_catabolic: bool
     status: str  # good | fair | poor | unknown
     directive: str  # what the coach should do about volume today
+    unit_system: str = DEFAULT_UNIT_SYSTEM  # display only; values stay in kg
 
     def as_text(self) -> str:
         bits = [f"Recovery status: {self.status}."]
@@ -87,7 +94,8 @@ class RecoveryInsight:
             bits.append(f"Resting HR {self.resting_hr}{trend}.")
         if self.weight_kg is not None:
             trend = f" ({self.weight_trend})" if self.weight_trend else ""
-            bits.append(f"Bodyweight {self.weight_kg:g} kg{trend}.")
+            shown = convert_weight(self.weight_kg, self.unit_system)
+            bits.append(f"Bodyweight {shown:g} {weight_unit(self.unit_system)}{trend}.")
         if self.body_fat_pct is not None:
             trend = f" ({self.body_fat_trend})" if self.body_fat_trend else ""
             bits.append(f"Body fat {self.body_fat_pct:g}%{trend}.")
@@ -228,6 +236,7 @@ def analyse_lift(
     name: str,
     entries: Sequence[dict[str, Any]],
     recovery_status: str = "unknown",
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> LiftInsight:
     """Build a trend judgement for one exercise from its logged top sets."""
     scores, metric = _series_scores(entries)
@@ -248,6 +257,7 @@ def analyse_lift(
         trend=trend,
         sessions_since_best=since_best,
         intervention=intervention,
+        unit_system=unit_system,
     )
 
 
@@ -275,6 +285,7 @@ def _trend_of(
 def analyse_recovery(
     body_metrics: Sequence[dict[str, Any]] | None,
     recovery: dict[str, Any] | None,
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> RecoveryInsight:
     """Summarise recovery from the latest reading and recent body-metric trends."""
     readings = list(body_metrics or [])
@@ -362,6 +373,7 @@ def analyse_recovery(
         is_catabolic=is_catabolic,
         status=status,
         directive=directive,
+        unit_system=unit_system,
     )
 
 
@@ -382,15 +394,17 @@ def build_insights(
     progress_history: dict[str, list[dict[str, Any]]] | None,
     body_metrics: Sequence[dict[str, Any]] | None = None,
     recovery: dict[str, Any] | None = None,
+    unit_system: str = DEFAULT_UNIT_SYSTEM,
 ) -> TrainingInsights:
     """Assemble the full self-review from stored history and recovery data.
 
     ``progress_history`` is the shape returned by
     ``database.get_progress_history`` (name -> chronological list of top sets).
+    ``unit_system`` only changes how weights are written in the review text.
     """
-    recovery_insight = analyse_recovery(body_metrics, recovery)
+    recovery_insight = analyse_recovery(body_metrics, recovery, unit_system)
     lifts = [
-        analyse_lift(name, entries, recovery_insight.status)
+        analyse_lift(name, entries, recovery_insight.status, unit_system)
         for name, entries in sorted((progress_history or {}).items())
         if entries
     ]

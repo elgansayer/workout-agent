@@ -152,10 +152,23 @@ A real-backup drill is successful only when it verifies authentication, pre/post
    ```
 
 5. **Protect the damaged database.** Keep the old database read-only in protected incident storage if evidence retention is required. It must not be placed in source control or an unencrypted shared location.
-6. **Cut over while writers are stopped.** Atomically move the verified restored database into the configured `DATABASE_PATH` according to the deployment platform's maintenance procedure. Never merge rows manually during an emergency unless a separate reviewed recovery plan requires it.
+6. **Cut over while writers are stopped.** Atomically move the verified restored database into the configured `DATABASE_PATH` according to the deployment platform's maintenance procedure. Never merge rows manually during an emergency unless a separate reviewed recovery plan requires it. **Before starting any service, re-apply account erasures** (next section).
 7. **Start and verify.** Start the web/agent services, confirm `/livez` and `/readyz` when those endpoints are deployed, perform an authenticated smoke test, and verify recent tenant-scoped records. Continue monitoring database and job errors.
 8. **Record evidence.** Record the selected backup timestamp/key ID, incident ID, drill evidence ID, cutover time, observed data-loss window, and achieved RPO/RTO. Do not record keys or plaintext user data.
 9. **Close or escalate.** If the achieved RPO exceeds 6 hours, RTO exceeds 60 minutes, counts are inconsistent, or the restored application does not remain healthy, keep the incident open and escalate.
+
+### Re-apply account erasures after a restore
+
+A restored database predates any account closures made after the backup was taken, so those accounts and their data reappear. Backups are not rewritten, so the closed-account ids must be carried across the restore. They are opaque identifiers with no personal data; see [`ACCOUNT_DELETION.md`](ACCOUNT_DELETION.md#operator-runbook).
+
+```bash
+# Before restoring: from the damaged database (use a copy if it must stay read-only evidence).
+python backend/account_deletion.py --database /path/to/damaged-copy.db list-tombstones > tombstoned-ids.txt
+# After the restore and cut-over, before starting services:
+python backend/account_deletion.py --database /data/workout_agent.db reconcile tombstoned-ids.txt
+```
+
+Keep `tombstoned-ids.txt` with the incident evidence and re-use it for every later restore until the tombstones' retention (`ACCOUNT_TOMBSTONE_RETENTION_DAYS`, never below the 35-day backup baseline) has passed. Record the count that `reconcile` reports.
 
 ## Monitoring and failure alerting
 

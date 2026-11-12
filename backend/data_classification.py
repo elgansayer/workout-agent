@@ -7,6 +7,7 @@ fail closed to ``internal`` rather than being treated as public.
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -116,15 +117,32 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "p256dh": DataClass.CREDENTIAL,
     "vapid_private_key": DataClass.CREDENTIAL,
     "web_auth_secret": DataClass.CREDENTIAL,
+    "session_token_hash": DataClass.CREDENTIAL,
     "encryption_key": DataClass.CREDENTIAL,
+    # last characters of a stored credential, kept only to render a masked hint
+    "key_hint": DataClass.CREDENTIAL,
     # identifiers
     "user_id": DataClass.IDENTIFIER,
+    "actor_id": DataClass.IDENTIFIER,
+    "source_ref": DataClass.IDENTIFIER,
     "email": DataClass.IDENTIFIER,
     "display_name": DataClass.IDENTIFIER,
     "ip": DataClass.IDENTIFIER,
     "endpoint": DataClass.IDENTIFIER,
     "device_id": DataClass.IDENTIFIER,
     "external_user_id": DataClass.IDENTIFIER,
+    # per-user regional preferences: tenant scoped, exportable, redacted in logs
+    "timezone": DataClass.IDENTIFIER,
+    "locale": DataClass.IDENTIFIER,
+    "unit_system": DataClass.IDENTIFIER,
+    "units": DataClass.IDENTIFIER,
+    # provenance ledger: upstream record ids identify the user's provider data
+    "external_id": DataClass.IDENTIFIER,
+    # ``user_identities.subject`` is the identity provider's stable per-person id
+    # and ``legacy_ownership_migrations.applied_by`` names the operator who ran
+    # an assignment. Neither may reach logs or exports unredacted.
+    "subject": DataClass.IDENTIFIER,
+    "applied_by": DataClass.IDENTIFIER,
     # health
     "weight_kg": DataClass.HEALTH,
     "body_fat_pct": DataClass.HEALTH,
@@ -134,6 +152,10 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "sleep": DataClass.HEALTH,
     "recovery": DataClass.HEALTH,
     "health_payload": DataClass.HEALTH,
+    # accessibility choices can reveal a disability or condition: never log raw values
+    "motion": DataClass.HEALTH,
+    "contrast": DataClass.HEALTH,
+    "text_size": DataClass.HEALTH,
     # workout/training
     "hevy_payload": DataClass.WORKOUT,
     "workout": DataClass.WORKOUT,
@@ -145,12 +167,16 @@ FIELD_CLASSES: dict[str, DataClass] = {
     "routine_id": DataClass.WORKOUT,
     "routine_key": DataClass.WORKOUT,
     "plan": DataClass.WORKOUT,
+    # provenance ledger: retained prior values of user-owned health records
+    "retained_content": DataClass.HEALTH,
     # AI prompts / responses
     "prompt": DataClass.PROMPT,
     "user_prompt": DataClass.PROMPT,
     "system_prompt": DataClass.INTERNAL,
     "content": DataClass.PROMPT,
     "reasoning": DataClass.PROMPT,
+    # provenance ledger: user-authored correction reasons and system lineage notes
+    "lineage_note": DataClass.PROMPT,
     "insight_json": DataClass.ANALYTICS,
     "insight_markdown": DataClass.ANALYTICS,
     # analytics / derived metrics
@@ -240,6 +266,26 @@ def safe_log_value(field_name: str, value: Any) -> Any:
     if classification is DataClass.ANALYTICS:
         return "[REDACTED:ANALYTICS]"
     return value
+
+
+_PSEUDONYM_DOMAIN = b"workout-agent/log-pseudonym/v1\x00"
+_PSEUDONYM_HEX_LENGTH = 12
+
+
+def pseudonymise_identifier(value: str) -> str:
+    """Return a short, stable correlation tag for an Identifier-class value.
+
+    Identifier-class values (email addresses, IP addresses, ...) may be logged
+    only when redacted or pseudonymised. The tag lets an operator correlate
+    repeated events for the same identity, or confirm a known address by hashing
+    it with the same function, without placing the address in the log stream.
+
+    This is pseudonymisation, not anonymisation: the hash is unkeyed, so someone
+    who already holds a candidate address can confirm it. It cannot be reversed
+    to recover an unknown address.
+    """
+    digest = hashlib.sha256(_PSEUDONYM_DOMAIN + value.encode("utf-8")).hexdigest()
+    return digest[:_PSEUDONYM_HEX_LENGTH]
 
 
 def redact_for_log(value: Any, *, field_name: str | None = None) -> Any:
