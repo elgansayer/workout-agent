@@ -135,6 +135,32 @@ USER_OWNED_TABLES = (
     "health_sync_runs",
 )
 
+# Tables bound to a real account that never existed in the single-user
+# deployment, so the legacy ownership assignment never adopts them (see
+# ``legacy_ownership.NOT_TRANSFERRED_TABLES``). Their ``user_id`` is already
+# ``NOT NULL`` and user-first indexed; ``init_db`` still gives them the owner
+# existence and immutability guards. Deletion-ledger and audit tables are left
+# out on purpose: they must outlive, or describe attempts without, an account.
+ACCOUNT_BOUND_TABLES = (
+    "user_sessions",
+    "credential_audit_events",
+    "record_provenance",
+)
+
+# Account-bound tables whose rows are never updated (their own trigger aborts
+# every UPDATE), so they need only the insert-time existence guard.
+APPEND_ONLY_OWNED_TABLES = ("credential_audit_events", "record_provenance")
+
+# References between owner-scoped tables that the schema does not declare as
+# foreign keys, as ``(child, column, parent, parent_column)``. Declared foreign
+# keys between owned tables are discovered from the live schema, so a new
+# relationship is covered without editing this list.
+_UNDECLARED_OWNED_REFERENCES = (
+    ("programmes", "current_revision_id", "programme_revisions", "id"),
+    ("routine_workout_matches", "programme_id", "programmes", "id"),
+    ("routine_workout_matches", "revision_id", "programme_revisions", "id"),
+)
+
 
 def _user_from_row(row: Any) -> UserRow:
     """Build a :class:`UserRow` from a ``SELECT`` of ``_USER_COLUMNS``."""
@@ -1934,6 +1960,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
 
+        # Owner existence, immutability and same-tenant references. Installed
+        # after every table exists (including the ledger above) and after the
+        # last table rebuild, which would otherwise discard the triggers.
+        _install_owner_integrity_guards(cursor)
+
+
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
 
@@ -2090,7 +2122,14 @@ def _install_owner_guards(cursor: sqlite3.Cursor) -> None:
 
     Idempotent (``IF NOT EXISTS``), additive, and carries no data migration.
     """
-    for table in USER_OWNED_TABLES:
+    _install_owner_required_guards(cursor, USER_OWNED_TABLES)
+
+
+def _install_owner_required_guards(
+    cursor: sqlite3.Cursor, tables: Iterable[str]
+) -> None:
+    """Install the ``user_id is required`` insert/update guards on *tables*."""
+    for table in tables:
         cursor.execute(
             f"""
             CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_required_insert
@@ -2108,6 +2147,132 @@ def _install_owner_guards(cursor: sqlite3.Cursor) -> None:
             WHEN NEW.user_id IS NULL OR NEW.user_id = ''
             BEGIN
                 SELECT RAISE(ABORT, '{table}.user_id is required');
+            END
+            """
+        )
+
+
+def owned_references(cursor: sqlite3.Cursor) -> list[tuple[str, str, str, str]]:
+    """Return every reference from one owner-scoped table to another.
+
+    Each item is ``(child, column, parent, parent_column)``. Declared foreign
+    keys are read from the live schema; the few references the schema does not
+    declare are listed in ``_UNDECLARED_OWNED_REFERENCES``. Every name comes
+    from the schema this module creates, never from a request.
+    """
+    owned = set(USER_OWNED_TABLES)
+    found: dict[tuple[str, str, str, str], None] = {}
+    for table in USER_OWNED_TABLES:
+        for row in cursor.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+            parent, column, parent_column = row[2], row[3], row[4]
+            if parent in owned and column and parent_column:
+                found[(table, column, parent, parent_column)] = None
+    for edge in _UNDECLARED_OWNED_REFERENCES:
+        found[edge] = None
+    for edge in found:
+        if not all(name.isidentifier() for name in edge):
+            raise ValueError(f"unsafe SQL identifier in owner reference {edge!r}")
+    return list(found)
+
+
+def _install_owner_integrity_guards(cursor: sqlite3.Cursor) -> None:
+    """Enforce, inside the database, that an owner is real and cannot change.
+
+    ``REFERENCES users(id)`` is decorative while ``PRAGMA foreign_keys`` is off,
+    which is how every runtime connection opens. These triggers make the same
+    guarantees unconditional for every user-scoped table, whichever code path
+    (repository, migration, ad-hoc SQL) issues the statement:
+
+    * **Owner exists.** An INSERT, or an UPDATE of ``user_id``, must name a row
+      of ``users``. A row can never belong to an account that does not exist.
+    * **Owner is immutable.** Once a row has an owner it cannot be re-assigned,
+      so a bug or a crafted statement cannot hand one user's record to another.
+      Taking ownership of a previously unowned row (``NULL`` or empty) stays
+      possible for the pre-account backfill. The two audited legacy-adoption
+      flows lift this guard inside their own transaction, exactly as they lift
+      the programme-revision ``no_update`` guards, and recreate it before commit.
+    * **References stay inside the tenant.** A row that points at another
+      owner-scoped row (a revision's programme, a routine's revision, ...) must
+      point at one with the *same* ``user_id``. Without it an indirect object
+      reference can be written that resolves into another user's data.
+
+    The ``WHEN`` clauses are mutually exclusive with the ``owner_required``
+    guards, so an ownerless write always reports ``user_id is required``.
+    Append-only tables get the insert-time existence guard only: their own
+    trigger already aborts every UPDATE.
+    Idempotent (``IF NOT EXISTS``), additive, and carries no data migration.
+    """
+    for table in (*USER_OWNED_TABLES, *ACCOUNT_BOUND_TABLES):
+        # The registry tables turn away a NULL or empty owner with their
+        # ``owner_required`` guards; the account-bound tables rely on NOT NULL,
+        # so for them an empty owner must fail the existence check as well.
+        named = (
+            "NEW.user_id IS NOT NULL"
+            if table in ACCOUNT_BOUND_TABLES
+            else "NEW.user_id IS NOT NULL AND NEW.user_id <> ''"
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_exists_insert
+            BEFORE INSERT ON {table}
+            WHEN {named}
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id must reference an existing user');
+            END
+            """
+        )
+        if table in APPEND_ONLY_OWNED_TABLES:
+            continue
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_exists_update
+            BEFORE UPDATE OF user_id ON {table}
+            WHEN {named} AND NEW.user_id IS NOT OLD.user_id
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id must reference an existing user');
+            END
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_user_immutable
+            BEFORE UPDATE OF user_id ON {table}
+            WHEN OLD.user_id IS NOT NULL AND OLD.user_id <> ''
+                 AND NEW.user_id IS NOT NULL AND NEW.user_id <> ''
+                 AND NEW.user_id IS NOT OLD.user_id
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id is immutable');
+            END
+            """
+        )
+
+    for child, column, parent, parent_column in owned_references(cursor):
+        message = f"{child}.{column} must reference a row owned by the same user"
+        same_owner = (
+            f"NEW.{column} IS NOT NULL "
+            "AND NEW.user_id IS NOT NULL AND NEW.user_id <> '' "
+            f"AND NOT EXISTS (SELECT 1 FROM {parent} "
+            f"WHERE {parent_column} = NEW.{column} AND user_id = NEW.user_id)"
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{child}_{column}_same_owner_insert
+            BEFORE INSERT ON {child}
+            WHEN {same_owner}
+            BEGIN
+                SELECT RAISE(ABORT, '{message}');
+            END
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{child}_{column}_same_owner_update
+            BEFORE UPDATE OF {column} ON {child}
+            WHEN NEW.{column} IS NOT OLD.{column} AND {same_owner}
+            BEGIN
+                SELECT RAISE(ABORT, '{message}');
             END
             """
         )

@@ -382,6 +382,11 @@ def test_closed_account_sessions_fail_closed(
 
     # The user row is gone, the tombstone exists, and every old cookie is refused.
     assert ad.account_gate(env.db, env.a) is ad.AccountGate.CLOSED
+    # The registry cannot normally hold a session for a deleted account (the
+    # owner must exist). Lift that guard to prove the closed-account gate itself
+    # refuses a cookie the registry would otherwise honour.
+    with sqlite3.connect(env.db) as conn:
+        conn.execute("DROP TRIGGER trg_user_sessions_owner_exists_insert")
     stale = env.client_for(EMAIL_A, env.a)
     assert env.client_for(EMAIL_B, env.b).get("/api/me").status_code == 200
     for path in (

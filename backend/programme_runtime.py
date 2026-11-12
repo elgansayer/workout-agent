@@ -601,9 +601,12 @@ def load_programme_runtime(
     domain_revision = None
     try:
         from programme_domain import ProgrammeService
+        from tenant_isolation import authorize_owner
 
+        # The loader's callers already proved who is asking; the repository
+        # requires that proof as a value, so re-verify it against the user store.
         service = ProgrammeService(db_path)
-        domain_programme = service.get_active_programme(user_id)
+        domain_programme = service.get_active_programme(authorize_owner(db_path, user_id))
         if domain_programme is not None:
             domain_revision = domain_programme.current_revision
     except Exception:  # noqa: BLE001 - missing domain rows are a setup state

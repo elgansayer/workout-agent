@@ -488,14 +488,17 @@ def apply_legacy_ownership(
             if table.name == "user_api_keys":
                 moved[table.name] = _transfer_credentials(conn, table, entry, params)
                 continue
-            # Content-immutability guards (for example programme revisions) also
-            # forbid the ownership UPDATE. This audited, transactional assignment
-            # lifts them for its own move and recreates them before returning.
+            # Content-immutability guards (for example programme revisions) and
+            # the owner-immutability guard forbid the ownership UPDATE. This
+            # audited, transactional assignment lifts them for its own move and
+            # recreates them before returning.
             guards = [
                 (name, sql)
                 for name, sql in conn.execute(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' "
-                    "AND tbl_name = ? AND name LIKE '%\\_no\\_update' ESCAPE '\\'",
+                    "AND tbl_name = ? AND ("
+                    "name LIKE '%\\_no\\_update' ESCAPE '\\' OR "
+                    "name LIKE '%\\_user\\_immutable' ESCAPE '\\')",
                     (table.name,),
                 ).fetchall()
             ]

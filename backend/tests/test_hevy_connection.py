@@ -23,6 +23,7 @@ from hevy_connection import (
     HevyCredentialState,
     verify_hevy_credentials,
 )
+from owned_rows import ensure_users
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -340,6 +341,7 @@ def test_transport_error_does_not_leak_the_credential_into_the_log(
 def test_connection_metadata_round_trip(tmp_path: Any) -> None:
     db = str(tmp_path / "hevy.db")
     init_db(db)
+    ensure_users(db, "user-a")
 
     save_hevy_connection(
         "user-a",
@@ -365,6 +367,7 @@ def test_connection_metadata_round_trip(tmp_path: Any) -> None:
 def test_connection_metadata_is_tenant_scoped(tmp_path: Any) -> None:
     db = str(tmp_path / "hevy.db")
     init_db(db)
+    ensure_users(db, "user-a", "user-b")
 
     save_hevy_connection(
         "user-a",
@@ -383,6 +386,7 @@ def test_connection_metadata_is_tenant_scoped(tmp_path: Any) -> None:
 def test_connection_metadata_is_replaced_not_duplicated(tmp_path: Any) -> None:
     db = str(tmp_path / "hevy.db")
     init_db(db)
+    ensure_users(db, "user-a")
 
     save_hevy_connection(
         "user-a",
@@ -411,6 +415,7 @@ def test_connection_metadata_is_replaced_not_duplicated(tmp_path: Any) -> None:
 def test_delete_connection_metadata(tmp_path: Any) -> None:
     db = str(tmp_path / "hevy.db")
     init_db(db)
+    ensure_users(db, "user-a")
 
     save_hevy_connection(
         "user-a",
