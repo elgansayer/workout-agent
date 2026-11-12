@@ -747,6 +747,30 @@ def test_chat_messages_backward_compat(tmp_path: Any) -> None:
     assert get_chat_messages(db_path=db) == []
 
 
+def test_chat_messages_persist_evidence_payload(tmp_path: Any) -> None:
+    """Evidence/provenance survives a reload for the owning user only."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_chat_messages, save_chat_message
+
+    payload = '{"grounding":"observed","items":[{"evidence_id":"E1"}]}'
+    save_chat_message(
+        "assistant",
+        "Deadlift is up [E1].",
+        db,
+        user_id="user-a-123",
+        evidence_json=payload,
+    )
+
+    msgs = get_chat_messages(db_path=db, user_id="user-a-123")
+    assert msgs[0]["evidence"] == {
+        "grounding": "observed",
+        "items": [{"evidence_id": "E1"}],
+    }
+    assert get_chat_messages(db_path=db, user_id="user-b-456") == []
+
+
 # ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: dashboard_insights
 # ---------------------------------------------------------------------------

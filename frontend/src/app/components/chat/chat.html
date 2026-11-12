@@ -156,6 +156,36 @@
               }}</span>
             </div>
             <div class="bubble-content" [innerHTML]="renderMarkdown(msg.content)"></div>
+            @if (msg.role === 'assistant' && msg.evidence) {
+              <div class="evidence-panel">
+                <div class="evidence-head">
+                  <span [class]="groundingClass(msg.evidence.grounding)">{{
+                    groundingLabel(msg.evidence.grounding)
+                  }}</span>
+                  @if (msg.evidence.items?.length) {
+                    <span class="evidence-window">
+                      {{ msg.evidence.items.length }} source{{
+                        msg.evidence.items.length === 1 ? '' : 's'
+                      }}
+                      · {{ msg.evidence.window_start }} to {{ msg.evidence.window_end }}
+                    </span>
+                  }
+                </div>
+                @if (msg.evidence.items?.length) {
+                  <ul class="evidence-list">
+                    @for (item of msg.evidence.items; track item.evidence_id) {
+                      <li class="evidence-item">
+                        <span class="evidence-id">[{{ item.evidence_id }}]</span>
+                        <span class="evidence-summary">{{ item.summary }}</span>
+                        <span class="evidence-meta">
+                          {{ item.date }} · {{ item.freshness }} · {{ item.transformation_version }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+              </div>
+            }
           </div>
         </div>
       }
@@ -183,6 +213,36 @@
               <span [innerHTML]="renderMarkdown(currentStreamText())"></span>
               <span class="streaming-cursor"></span>
             </div>
+            @if (currentEvidence()) {
+              <div class="evidence-panel">
+                <div class="evidence-head">
+                  <span [class]="groundingClass(currentGrounding() || 'pending')">{{
+                    groundingLabel(currentGrounding() || 'pending')
+                  }}</span>
+                  @if (currentEvidence()?.items?.length) {
+                    <span class="evidence-window">
+                      {{ currentEvidence()!.items.length }} source{{
+                        currentEvidence()!.items.length === 1 ? '' : 's'
+                      }}
+                      · {{ currentEvidence()!.window_start }} to {{ currentEvidence()!.window_end }}
+                    </span>
+                  }
+                </div>
+                @if (currentEvidence()?.items?.length) {
+                  <ul class="evidence-list">
+                    @for (item of currentEvidence()!.items; track item.evidence_id) {
+                      <li class="evidence-item">
+                        <span class="evidence-id">[{{ item.evidence_id }}]</span>
+                        <span class="evidence-summary">{{ item.summary }}</span>
+                        <span class="evidence-meta">
+                          {{ item.date }} · {{ item.freshness }} · {{ item.transformation_version }}
+                        </span>
+                      </li>
+                    }
+                  </ul>
+                }
+              </div>
+            }
           </div>
         </div>
       }

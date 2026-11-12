@@ -54,6 +54,13 @@ from coaching_capabilities import (
     classify_coaching_query,
     get_coaching_capabilities,
 )
+from coaching_evidence import (
+    build_evidence_bundle,
+    evidence_prompt,
+    resolve_grounding,
+    serialise_bundle,
+    validate_citations,
+)
 from config import Config
 from connector_operations import (
     OperationBusyError,
@@ -2271,6 +2278,23 @@ def chat_clear(request: Request):
     return {"status": "ok"}
 
 
+def _sse(event: str, data: Any) -> str:
+    """Encode one server-sent event payload."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _parse_window_bound(raw: str | None, *, name: str, fallback: date) -> date:
+    if raw is None or not raw.strip():
+        return fallback
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} must be an ISO date (YYYY-MM-DD)",
+        ) from exc
+
+
 def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
     """Section-level provenance for AI context where records are not annotated."""
     summary = get_provenance_summary(user_id, RecordType.EXERCISE_PROGRESS, DB_PATH)
@@ -2293,14 +2317,46 @@ def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/rag_search", response_model=None)
-def rag_search(request: Request, q: str = Query(...)) -> Any:
+def rag_search(
+    request: Request,
+    q: str = Query(...),
+    start_date: str | None = Query(None, alias="start"),
+    end_date: str | None = Query(None, alias="end"),
+    start_date_long: str | None = Query(None, alias="start_date"),
+    end_date_long: str | None = Query(None, alias="end_date"),
+) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
+    now = datetime.now(tz=timezone.utc)
+    today = now.date()
+    start_raw = start_date if start_date is not None else start_date_long
+    end_raw = end_date if end_date is not None else end_date_long
+    window_end = _parse_window_bound(end_raw, name="end", fallback=today)
+    try:
+        default_start = window_end - timedelta(days=90)
+    except OverflowError:
+        default_start = date.min
+    window_start = _parse_window_bound(
+        start_raw,
+        name="start",
+        fallback=default_start,
+    )
+    if window_start > window_end:
+        raise HTTPException(
+            status_code=400,
+            detail="start must not be after end",
+        )
+    # Future data is unavailable. Never let a window request cite it.
+    window_end = min(window_end, today)
+    window_start = min(window_start, window_end)
+
     settings = get_user_settings(user_id, DB_PATH)
-    cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
+    cap_state = get_coaching_capabilities(
+        user_id, db_path=DB_PATH, config=config, provider=provider
+    )
     mode, required_cap = classify_coaching_query(q)
 
     # Gather training context. Every record carries its provenance so the model
@@ -2313,7 +2369,21 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
         db_path=DB_PATH, user_id=user_id, include_provenance=True
     )
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
-    active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
+    active_prog = (
+        get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
+    )
+
+    evidence = build_evidence_bundle(
+        user_id=user_id,
+        logs=logs,
+        history=history,
+        biometrics=biometrics[-10:],
+        personal_records=prs[:10],
+        as_of=now,
+        window_start=window_start,
+        window_end=window_end,
+    )
+
     capability = _coach_capability_for_user(
         user_id,
         logs=logs,
@@ -2344,9 +2414,23 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
             save_chat_message("assistant", explanation_msg, db_path=DB_PATH, user_id=user_id)
 
             def generate_disabled_explanation() -> Iterator[str]:
-                yield explanation_msg
+                yield _sse("evidence", evidence.to_dict())
+                yield _sse("delta", {"text": explanation_msg})
+                yield _sse(
+                    "status",
+                    {
+                        "grounding": "incomplete",
+                        "cited": [],
+                        "evidence_count": len(evidence.items),
+                    },
+                )
+                yield _sse("done", {})
 
-            return StreamingResponse(generate_disabled_explanation(), media_type="text/plain")
+            return StreamingResponse(
+                generate_disabled_explanation(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
 
     # Build multi-turn conversation from chat history
     chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
@@ -2371,12 +2455,16 @@ Important constraints:
 - Start your response exactly with this header line:
 **Educational Guidance** (General advice — not personalised to your training history)
 
+{evidence_prompt(evidence)}
+
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 Conversation so far:
 {conversation_text}
 
-User's question: {q}"""
+User's question: {q}
+
+Respond naturally as Coach. If the question is about their training data, cite the supporting evidence. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
     else:
         active_def = (active_prog.get("definition") if active_prog else None) or {}
         prog_name = active_def.get("name") or "active programme"
@@ -2409,6 +2497,8 @@ Important constraints:
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use {spelling_for(settings.locale)}.
 
+{evidence_prompt(evidence)}
+
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 {rules_text}
@@ -2424,6 +2514,7 @@ Verified training data context (recent logs, progress history, biometrics, PRs, 
 User's question: {q}"""
 
     def generate() -> Iterator[str]:
+        yield _sse("evidence", evidence.to_dict())
         collected: list[str] = []
         try:
             response = provider.generate(prompt, stream=True)
@@ -2431,24 +2522,44 @@ User's question: {q}"""
             for chunk in chunks:
                 if chunk:
                     collected.append(chunk)
-                    yield chunk
         except Exception:
             logger.exception("AI chat streaming failed.")
-            error_msg = (
+            collected.append(
                 "Sorry, Coach is currently unavailable or encountered an error. "
                 "Please try again."
             )
-            collected.append(error_msg)
-            yield error_msg
-        finally:
-            # Save the full assistant response
-            full_response = "".join(collected)
-            if full_response:
-                save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
-                )
 
-    return StreamingResponse(generate(), media_type="text/plain")
+        answer, cited = validate_citations("".join(collected), evidence)
+        grounding = resolve_grounding(answer, evidence, cited)
+        if answer:
+            save_chat_message(
+                "assistant",
+                answer,
+                db_path=DB_PATH,
+                user_id=user_id,
+                evidence_json=serialise_bundle(
+                    evidence,
+                    grounding=grounding,
+                    cited=cited,
+                ),
+            )
+        for offset in range(0, len(answer), 140):
+            yield _sse("delta", {"text": answer[offset : offset + 140]})
+        yield _sse(
+            "status",
+            {
+                "grounding": grounding.value,
+                "cited": cited,
+                "evidence_count": len(evidence.items),
+            },
+        )
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 def _gh_redirect_uri(request: Request) -> str:
