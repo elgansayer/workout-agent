@@ -603,6 +603,29 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user "
             "ON push_subscriptions (user_id)"
         )
+        # A push endpoint is one browser profile, so it belongs to one account
+        # at a time: otherwise a notification for the account that left a shared
+        # device would still be delivered to whoever signs in there next. Rows
+        # written before this rule can repeat an endpoint; keep the newest
+        # registration (the account that most recently took the device).
+        if cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_push_subscriptions_endpoint'"
+        ).fetchone() is None:
+            repeated = cursor.execute(
+                "DELETE FROM push_subscriptions WHERE id NOT IN "
+                "(SELECT MAX(id) FROM push_subscriptions GROUP BY endpoint)"
+            ).rowcount
+            if repeated > 0:
+                # A count only: an endpoint is a delivery credential.
+                logger.info(
+                    "Removed %d push registrations that repeated an endpoint.",
+                    repeated,
+                )
+            cursor.execute(
+                "CREATE UNIQUE INDEX idx_push_subscriptions_endpoint "
+                "ON push_subscriptions (endpoint)"
+            )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS notifications (
@@ -4193,7 +4216,13 @@ def save_user_api_key(
     extra: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Store (or update) a per-user encrypted API key for a provider pair."""
+    """Store (or update) a per-user encrypted API key for a provider pair.
+
+    Persistence-layer helper for tests and ownership migrations. It writes no
+    audit row and does not validate the secret, so production code must use
+    ``secret_vault.SecretVault.store`` / ``rotate`` instead (enforced by
+    ``test_credential_boundary_policy``).
+    """
     provider_key = provider.lower()
     master = encryption.load_master_key()
     now = _now_iso()
@@ -4268,7 +4297,13 @@ def get_user_api_key(
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Return the decrypted API key record for a user + provider, or None."""
+    """Return the decrypted API key record for a user + provider, or None.
+
+    Hands the plaintext secret to the caller, so production code must not use
+    it: ask ``SecretVault.has_usable_credential`` for a yes/no or
+    ``SecretVault.resolve`` for an opaque value (enforced by
+    ``test_credential_boundary_policy``).
+    """
     provider_key = provider.lower()
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -4327,7 +4362,11 @@ def get_user_api_keys(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
-    """Return all decrypted API key records for a user, keyed by provider."""
+    """Return all decrypted API key records for a user, keyed by provider.
+
+    Test and migration helper; production code must not read credentials this
+    way (see :func:`get_user_api_key`).
+    """
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -4389,7 +4428,11 @@ def delete_user_api_key(
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Remove a stored API key for a user + provider."""
+    """Remove a stored API key for a user + provider.
+
+    Writes no audit row; production code must use ``SecretVault.revoke`` or
+    ``SecretVault.delete`` (see :func:`save_user_api_key`).
+    """
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
@@ -5119,16 +5162,18 @@ def get_user_preferences(
 def save_push_subscription(
     user_id: str, endpoint: str, p256dh: str, auth: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
-    """Save a push subscription for a user."""
+    """Save a push subscription for a user.
+
+    An endpoint identifies one browser profile and belongs to one account at a
+    time. Registering it hands the device to *user_id*: every registration of the
+    same endpoint under another account is removed in the same transaction, so
+    that account's notifications are no longer delivered to a browser it left.
+    """
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
-        # Avoid duplicate endpoints for the same user
         conn.execute(
-            """
-            DELETE FROM push_subscriptions
-            WHERE user_id = ? AND endpoint = ?
-            """,
-            (user_id, endpoint),
+            "DELETE FROM push_subscriptions WHERE endpoint = ?",
+            (endpoint,),
         )
         conn.execute(
             """

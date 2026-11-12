@@ -125,8 +125,8 @@ def _seed(db: str, user_id: str) -> None:
             )
         run(
             "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
-            "VALUES (?, 'https://push.example.invalid/x', 'p', 'a', ?)",
-            (user_id, stamp),
+            "VALUES (?, ?, 'p', 'a', ?)",
+            (user_id, f"https://push.example.invalid/{user_id}", stamp),
         )
         run(
             "INSERT INTO notifications (user_id, type, title, message, created_at) "
