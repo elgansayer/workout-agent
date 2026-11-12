@@ -63,6 +63,22 @@ describe('apiInterceptor session handling', () => {
     expect(navigate).toHaveBeenCalledWith(['/login']);
   });
 
+  it('returns to the page whose request found the session ended', async () => {
+    vi.spyOn(router, 'url', 'get').mockReturnValue('/plan?week=2');
+    const outcome = failure(
+      new Promise((resolve, reject) =>
+        http.get('/api/settings').subscribe({ next: resolve, error: reject }),
+      ),
+    );
+
+    controller.expectOne('/api/settings').flush({ detail: 'Not authenticated' }, unauthorised);
+
+    expect((await outcome).status).toBe(401);
+    expect(navigate).toHaveBeenCalledWith(['/login'], {
+      queryParams: { next: '/plan?week=2' },
+    });
+  });
+
   it('sends credentials with every backend request', () => {
     http.get('/api/settings').subscribe();
 

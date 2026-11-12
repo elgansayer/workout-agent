@@ -244,6 +244,7 @@ from user_settings import (
 from webapp import ai_widgets, charts
 from webapp.audit_events import audit_request_event, audit_runtime_posture
 from webapp.auth_boundary import has_verified_identity
+from webapp.login_destination import LOGIN_NEXT_SESSION_KEY, safe_destination
 from webapp.request_correlation import RequestCorrelationMiddleware
 from webapp.runtime_security import validate_web_runtime
 from webapp.session_security import (
@@ -817,6 +818,14 @@ app.add_middleware(RequestCorrelationMiddleware)
 async def login_google(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
+    # Carry the page that prompted sign-in through the OAuth round trip. The
+    # value is validated here and again on callback, so a crafted link cannot
+    # turn the post-login redirect into an off-site one.
+    destination = safe_destination(request.query_params.get("next"))
+    if destination is not None and destination != "/":
+        request.session[LOGIN_NEXT_SESSION_KEY] = destination
+    else:
+        request.session.pop(LOGIN_NEXT_SESSION_KEY, None)
     redirect_uri = str(request.url_for("auth"))
     if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
         redirect_uri = redirect_uri.replace("http://", "https://")
@@ -958,6 +967,8 @@ def _claim_is_true(value: Any) -> bool:
 async def auth(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return RedirectResponse("/")
+    # Capture before session establishment clears every pre-login value.
+    destination = safe_destination(request.session.get(LOGIN_NEXT_SESSION_KEY))
     try:
         token = await oauth.google.authorize_access_token(request)
     except Exception as e:  # noqa: BLE001
@@ -1106,7 +1117,7 @@ async def auth(request: Request) -> Any:
         user_id=user_record["id"],
         metadata={"method": "google_oauth"},
     )
-    return RedirectResponse("/")
+    return RedirectResponse(destination or "/")
 
 
 # Automated hype lines. One is shown per day, chosen deterministically from the

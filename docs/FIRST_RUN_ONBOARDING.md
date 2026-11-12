@@ -40,6 +40,11 @@ from the request body, and every read or write is filtered by that session's
 The dashboard payload carries the same onboarding state so the home page can
 show the next action before the account is ready. The setup page is `/onboarding`.
 
+Setup resumes after authentication. A visit to `/onboarding` (or any deep link,
+including a query string) while signed out is sent to
+`/login?next=<encoded path>`; the verified sign-in returns there instead of
+discarding the destination. The same applies when a session ends mid-flow.
+
 ## Data lifecycle
 
 `onboarding_skips` is a user-owned table. It is included in account erasure,

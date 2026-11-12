@@ -31,6 +31,14 @@ In order:
 Only an admitted login receives a session. A refused login receives no session
 and creates or consumes nothing.
 
+After an admitted login the browser returns to the page that prompted sign-in
+(for example `/onboarding` or `/plan?week=2`), not always the dashboard. The
+destination is carried through the OAuth round trip in the signed pre-login
+session. Only a same-origin absolute path is accepted: a scheme, authority,
+protocol-relative path, backslash, control character or loop endpoint (`/login`,
+`/auth`, `/logout`) is replaced with `/`. The value is validated when the OAuth
+flow starts and again on callback (`webapp/login_destination.py`).
+
 **Every authenticated request** (`AuthenticationBoundaryMiddleware`, which wraps
 every non-public HTTP route, including future ones). The account is re-read from
 the database and must still exist, be `active`, still pass the allowlist, and
@@ -180,8 +188,9 @@ These are separate pieces of work and are intentionally not changed here:
 
 ```bash
 .venv/bin/python -m pytest -q backend/tests/test_account_policy.py \
-  backend/tests/test_auth_policy_routes.py backend/tests/test_manage_accounts.py \
-  backend/tests/test_database.py backend/tests/test_data_classification.py
+  backend/tests/test_auth_policy_routes.py backend/tests/test_login_destination.py \
+  backend/tests/test_manage_accounts.py backend/tests/test_database.py \
+  backend/tests/test_data_classification.py
 cd frontend && npm exec -- ng test --watch=false --include='src/app/components/login/login.spec.ts'
 ```
 

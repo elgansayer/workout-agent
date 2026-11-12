@@ -34,10 +34,17 @@ export class Login {
   data = signal<any>({});
 
   protected auth = inject(Auth);
+  protected readonly googleLoginHref: string;
   private route = inject(ActivatedRoute);
 
   constructor() {
     const code = this.route.snapshot.queryParamMap.get('error');
     this.error.set(code === null ? null : (LOGIN_ERROR_MESSAGES.get(code) ?? null));
+    // The server validates the destination again before storing it, so this is
+    // only transport: carrying it here lets a deep link survive the OAuth trip.
+    const next = this.route.snapshot.queryParamMap.get('next');
+    this.googleLoginHref = next
+      ? `/login/google?next=${encodeURIComponent(next)}`
+      : '/login/google';
   }
 }
