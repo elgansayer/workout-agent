@@ -13,6 +13,7 @@ Workout Agent is a multi-user fitness intelligence platform for importing workou
 - Configure AI providers and models per user.
   The latest evidence is recorded in the [AI provider parity audit](docs/AI_PROVIDER_PARITY.md).
 - Use the web dashboard, Coach, programme builder, history, progress, settings, and check-in views.
+  Every view says why data is missing or incomplete (setup required, connecting, syncing, stale or degraded), and Coach claims a working AI provider and access to training data only once both are verified for your account. See [Account readiness and Coach capability](docs/READINESS.md).
 - Deliver notifications through supported user-configured channels.
 - Store each user's time zone, locale, unit system and accessibility preferences, and apply them to pages, scheduled jobs, notifications, exports and AI prompts. See [Per-user regional and accessibility settings](docs/USER_SETTINGS.md).
 

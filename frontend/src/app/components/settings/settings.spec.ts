@@ -3,6 +3,7 @@ import { HttpTestingController, provideHttpClientTesting } from '@angular/common
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { DEFAULT_DISPLAY_SETTINGS, DisplayOptions } from '../../services/display-settings';
 import { vi } from 'vitest';
+import { SetupAccount, SetupStateService } from '../../services/setup-state.service';
 import { Settings } from './settings';
 import { SettingsResponse } from './settings.types';
 
@@ -137,6 +138,14 @@ const connectedHevyResponse: SettingsResponse = {
   },
 };
 
+/**
+ * Actions that can change readiness refresh the account status afterwards. That
+ * refresh is a side effect these suites do not assert on, so settle it.
+ */
+function settleReadiness(http: HttpTestingController): void {
+  http.match('/api/setup/state').forEach((req) => req.flush({ account: null, surfaces: {} }));
+}
+
 describe('Settings AI provider parity', () => {
   let http: HttpTestingController;
 
@@ -151,6 +160,7 @@ describe('Settings AI provider parity', () => {
   afterEach(() => {
     // These suites do not exercise the display section; settle its load.
     http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
+    settleReadiness(http);
     http.verify();
   });
 
@@ -444,6 +454,19 @@ describe('Settings AI provider parity', () => {
 
     expect(component.hevyStatus()).toContain('rejected');
     expect(component.hevyStatus()).not.toContain('Connected');
+
+    // The server recorded the rejection against the stored key, so the page
+    // re-reads it instead of leaving a stale "Connected" badge on screen.
+    http.expectOne('/api/settings').flush({
+      ...connectedHevyResponse,
+      hevy_connection: { ...connectedHevyResponse.hevy_connection, state: 'invalid' },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    expect(component.hevyConnectionLabel()).toBe('Needs attention');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('#settings-hevy .status.on'),
+    ).toBeNull();
   });
 
   it('keeps an unverified Hevy key out of storage and reports the rejection', async () => {
@@ -602,6 +625,7 @@ describe('Settings account and data deletion', () => {
     vi.restoreAllMocks();
     window.history.pushState({}, '', '/');
     http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
+    settleReadiness(http);
     http.verify();
   });
 
@@ -908,6 +932,7 @@ describe('Settings region and accessibility', () => {
   });
 
   afterEach(() => {
+    settleReadiness(http);
     http.verify();
     root.removeAttribute('lang');
     delete root.dataset['motion'];
@@ -1081,5 +1106,246 @@ describe('Settings region and accessibility', () => {
     expect(component.displayStatus()).toContain('does not support');
     expect(component.displayStatusIsError()).toBe(true);
     resolved.mockRestore();
+  });
+});
+
+
+describe('Settings readiness', () => {
+  let http: HttpTestingController;
+  let setupState: SetupStateService;
+
+  const readyAccount: SetupAccount = {
+    state: 'ready',
+    label: 'Your training data is up to date',
+    reason: '',
+    reason_code: null,
+    first_run: false,
+    checks: { hevy_connected: true },
+    missing: [],
+    last_activity_at: null,
+    age_days: null,
+    stale: false,
+    connection_state: 'connected',
+    connector: {
+      provider: 'hevy',
+      operation: null,
+      operation_started_at: null,
+      operation_stalled: false,
+      last_sync: {
+        outcome: 'succeeded',
+        at: '2026-09-02T10:00:00+00:00',
+        code: null,
+        records: 40,
+      },
+    },
+    ai_provider_state: 'verified',
+  };
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Settings],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
+    setupState = TestBed.inject(SetupStateService);
+  });
+
+  afterEach(() => {
+    http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
+    settleReadiness(http);
+    http.verify();
+  });
+
+  async function open(
+    response: SettingsResponse = connectedHevyResponse,
+  ): Promise<ComponentFixture<Settings>> {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(response);
+    http.expectOne('/api/settings/display').flush(displayResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  function text(fixture: ComponentFixture<Settings>, selector: string): string {
+    return (
+      (fixture.nativeElement as HTMLElement).querySelector(selector)?.textContent?.trim() ?? ''
+    );
+  }
+
+  it('shows nothing about readiness until the server has said what it is', async () => {
+    const fixture = await open();
+
+    expect((fixture.nativeElement as HTMLElement).querySelector('#settings-readiness')).toBeNull();
+  });
+
+  it('says it could not check, rather than implying all is well, when readiness fails to load', async () => {
+    setupState.failed.set(true);
+    const fixture = await open();
+
+    expect(text(fixture, '#settings-readiness-failed')).toContain('nothing here is confirmed');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('#settings-readiness-failed')?.getAttribute('role'),
+    ).toBe('alert');
+  });
+
+  it('shows the server-derived account status with Hevy, last sync and AI facts', async () => {
+    setupState.account.set(readyAccount);
+    const fixture = await open();
+
+    expect(text(fixture, '#settings-readiness .status')).toContain('up to date');
+    expect(text(fixture, '#readiness-hevy')).toContain('Connected');
+    expect(text(fixture, '#readiness-sync')).toContain('Completed on 2026-09-02');
+    expect(text(fixture, '#readiness-sync')).toContain('40 workouts found');
+    expect(text(fixture, '#readiness-ai')).toContain('Verified');
+    expect((fixture.nativeElement as HTMLElement).querySelector('#readiness-reason')).toBeNull();
+  });
+
+  it('raises an alert for a degraded account and names what failed', async () => {
+    setupState.account.set({
+      ...readyAccount,
+      state: 'degraded',
+      label: 'Your Hevy connection needs attention',
+      reason: 'Hevy rejected your stored API key, so nothing new can be imported.',
+      reason_code: 'credential_rejected',
+      connection_state: 'invalid',
+      ai_provider_state: 'failed',
+    });
+    const fixture = await open();
+    const panel = (fixture.nativeElement as HTMLElement).querySelector('#settings-readiness');
+
+    expect(panel?.getAttribute('data-state')).toBe('degraded');
+    expect(text(fixture, '#readiness-reason')).toContain('rejected');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('#readiness-reason')?.getAttribute('role'),
+    ).toBe('alert');
+    expect(text(fixture, '#readiness-hevy')).toContain('rejected');
+    expect(text(fixture, '#readiness-ai')).toContain('failed');
+    expect(text(fixture, '#settings-readiness .status')).not.toContain('up to date');
+  });
+
+  it('disables the sync button while any session is syncing and refuses to start another', async () => {
+    setupState.account.set({
+      ...readyAccount,
+      state: 'syncing',
+      connector: { ...readyAccount.connector!, operation: 'syncing' },
+    });
+    const fixture = await open();
+    const button = (fixture.nativeElement as HTMLElement).querySelector<HTMLButtonElement>(
+      '#hevy-sync-btn',
+    );
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fixture.componentInstance.syncHistory();
+
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toContain('Sync running');
+    http.expectNone('/api/settings/sync-history');
+  });
+
+  it('says syncing in the status panel while its own sync runs, then refreshes readiness', async () => {
+    setupState.account.set(readyAccount);
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    expect(text(fixture, '#settings-readiness .status')).toContain('up to date');
+
+    component.syncHistory();
+    fixture.detectChanges();
+
+    expect(component.syncing()).toBe(true);
+    expect(component.connectorBusy()).toBe(true);
+    // The panel never shows the pre-sync snapshot as if it were current.
+    expect(text(fixture, '#settings-readiness .status')).toContain('Syncing your Hevy history');
+    expect(text(fixture, '#readiness-reason')).toContain('sync is running');
+    expect(text(fixture, '#readiness-hevy')).toContain('Syncing');
+    expect(
+      (fixture.nativeElement as HTMLElement).querySelector('#settings-readiness')?.getAttribute(
+        'data-state',
+      ),
+    ).toBe('syncing');
+    http.expectNone('/api/setup/state');
+
+    http.expectOne('/api/settings/sync-history').flush({ processed: 5, workouts_found: 5 });
+    fixture.detectChanges();
+
+    expect(component.syncing()).toBe(false);
+    expect(component.hevyStatus()).toContain('Synced! 5 of 5');
+    http.expectOne('/api/setup/state').flush({ account: readyAccount, surfaces: {} });
+    fixture.detectChanges();
+    expect(text(fixture, '#settings-readiness .status')).toContain('up to date');
+  });
+
+  it('shows the server reason when a sync is refused or fails, and frees the button', async () => {
+    const fixture = await open();
+    const component = fixture.componentInstance;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    component.syncHistory();
+    http
+      .expectOne('/api/settings/sync-history')
+      .flush(
+        { detail: 'A Hevy sync is already running for this account. Try again when it finishes.' },
+        { status: 409, statusText: 'Conflict' },
+      );
+
+    expect(component.hevyStatus()).toContain('already running');
+    expect(component.syncing()).toBe(false);
+    expect(component.hevyStatus()).not.toContain('Synced');
+  });
+
+  it('labels a stored AI key by its last connection test, not by its presence', async () => {
+    const withTest = (status: string | null, at: string | null): SettingsResponse => ({
+      ...settingsResponse,
+      user_keys: {
+        ...settingsResponse.user_keys,
+        claude: {
+          has_key: true,
+          masked: '••••••••key1',
+          model: 'claude-stored',
+          last_test_status: status,
+          last_tested_at: at,
+        },
+      },
+    });
+
+    const untested = await open(withTest(null, null));
+    expect(text(untested, '#ai-key-state')).toContain('Not tested');
+    expect(untested.nativeElement.querySelector('#ai-key-state').classList).not.toContain('on');
+    expect(text(untested, '#claude-key-detail')).toContain('never tested');
+    untested.destroy();
+
+    const verified = TestBed.createComponent(Settings);
+    verified.detectChanges();
+    http.expectOne('/api/settings').flush(withTest('ok', '2026-09-03T00:00:00+00:00'));
+    http.expectOne('/api/settings/display').flush(displayResponse);
+    await verified.whenStable();
+    verified.detectChanges();
+    expect(text(verified, '#ai-key-state')).toContain('Verified');
+    expect(verified.nativeElement.querySelector('#ai-key-state').classList).toContain('on');
+    expect(text(verified, '#claude-key-detail')).toContain('on 2026-09-03');
+    verified.destroy();
+
+    const failed = TestBed.createComponent(Settings);
+    failed.detectChanges();
+    http.expectOne('/api/settings').flush(withTest('rejected', '2026-09-03T00:00:00+00:00'));
+    http.expectOne('/api/settings/display').flush(displayResponse);
+    await failed.whenStable();
+    failed.detectChanges();
+    expect(text(failed, '#ai-key-state')).toContain('Test failed');
+    expect(failed.nativeElement.querySelector('#ai-key-state').classList).not.toContain('on');
+  });
+
+  it('reloads what the server recorded and refreshes readiness after a key test', async () => {
+    const fixture = await open();
+    fixture.componentInstance.testKey('claude');
+
+    http.expectOne('/api/settings/key/test').flush({ status: 'ok', provider: 'claude' });
+    http.expectOne('/api/settings').flush(settingsResponse);
+    http.expectOne('/api/setup/state').flush({ account: readyAccount, surfaces: {} });
+    await fixture.whenStable();
+
+    expect(setupState.account()?.ai_provider_state).toBe('verified');
   });
 });

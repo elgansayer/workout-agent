@@ -3,6 +3,7 @@ import { NavigationEnd, Router, RouterOutlet, RouterLink, RouterLinkActive } fro
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { Auth } from './services/auth';
 import { DisplaySettingsService } from './services/display-settings';
+import { OnboardingService } from './services/onboarding.service';
 import { SetupStateService } from './services/setup-state.service';
 
 @Component({
@@ -15,6 +16,7 @@ export class App {
   protected auth = inject(Auth);
   private readonly displaySettings = inject(DisplaySettingsService);
   protected setup = inject(SetupStateService);
+  protected onboarding = inject(OnboardingService);
   protected menuOpen = signal(false);
   @ViewChild('menuButton') private menuButton?: ElementRef<HTMLButtonElement>;
   @ViewChild('mainContent') private mainContent?: ElementRef<HTMLElement>;
@@ -23,6 +25,7 @@ export class App {
     this.auth.checkAuth();
     void this.displaySettings.load();
     this.setup.load();
+    this.onboarding.load();
     inject(Router)
       .events.pipe(takeUntilDestroyed())
       .subscribe((event) => {
@@ -30,6 +33,7 @@ export class App {
           this.menuOpen.set(false);
           this.mainContent?.nativeElement.focus({ preventScroll: true });
           this.setup.load();
+          this.onboarding.load(true);
         }
       });
   }

@@ -135,12 +135,24 @@ const payloads: Record<string, unknown> = {
   '/api/setup/state': {
     account: {
       state: 'ready',
-      label: 'Ready',
-      checks: {},
+      label: 'Your training data is up to date',
+      reason: '',
+      reason_code: null,
+      first_run: false,
+      checks: { hevy_connected: true },
       missing: [],
       last_activity_at: '2026-11-01T10:00:00Z',
       age_days: 7,
       stale: false,
+      connection_state: 'connected',
+      connector: {
+        provider: 'hevy',
+        operation: null,
+        operation_started_at: null,
+        operation_stalled: false,
+        last_sync: { outcome: 'succeeded', at: '2026-11-01T10:00:00Z', code: null, records: 40 },
+      },
+      ai_provider_state: 'verified',
     },
     surfaces: Object.fromEntries(
       ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'].map((surface) => [
@@ -157,6 +169,15 @@ const payloads: Record<string, unknown> = {
         },
       ]),
     ),
+  },
+  '/api/onboarding': {
+    steps: [],
+    next_step: null,
+    account_ready: true,
+    completed_count: 6,
+    skipped_count: 0,
+    total_steps: 6,
+    progress_percent: 100,
   },
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
@@ -323,11 +344,15 @@ const payloads: Record<string, unknown> = {
   '/api/coach/capability': {
     provider_name: 'gemini',
     provider_configured: true,
-    provider_state: 'ready',
+    provider_state: 'verified',
+    provider_verified: true,
+    provider_source: 'user',
     can_chat: true,
     status: 'ready',
     sync_configured: true,
     sync_state: 'synced',
+    readiness: 'ready',
+    verified_data: true,
     programme_available: true,
     has_training_data: true,
     has_fresh_training_data: true,
@@ -494,6 +519,11 @@ async function mockApi(page: Page) {
     await route.fulfill({ json: payloads[path] });
   });
 }
+async function openMenuIfCollapsed(page: Page) {
+  const menuButton = page.getByRole('button', { name: 'Menu' });
+  if (await menuButton.isVisible()) await menuButton.click();
+}
+
 async function noPageOverflow(page: Page) {
   const overflow = await page.evaluate(() => ({
     width: innerWidth,
@@ -743,5 +773,107 @@ test('display preferences preserve focus and readable selected states', async ({
   await page.emulateMedia({ forcedColors: 'active' });
   await page.locator('.exercise summary').first().focus();
   await expect(page.locator('.exercise summary').first()).toBeFocused();
+  await noPageOverflow(page);
+});
+
+const SURFACES = ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'];
+
+function surfaceSetup(state: string, extra: Record<string, unknown>) {
+  return {
+    state,
+    label: state,
+    reason: '',
+    reason_code: null,
+    first_run: false,
+    action: null,
+    missing: [],
+    last_activity_at: null,
+    age_days: null,
+    stale: false,
+    ...extra,
+  };
+}
+
+test('a degraded account is told what failed and how to repair it', async ({ page }) => {
+  const degraded = surfaceSetup('degraded', {
+    label: 'Your Hevy connection needs attention',
+    reason: 'Hevy rejected your stored API key, so nothing new can be imported.',
+    reason_code: 'credential_rejected',
+    action: {
+      id: 'reconnect_hevy',
+      label: 'Reconnect Hevy',
+      href: '/settings',
+      description: 'Verify or replace your Hevy API key in Settings so imports can resume.',
+    },
+  });
+  const ready = payloads['/api/setup/state'] as { account: Record<string, unknown> };
+  await page.route('**/api/setup/state', (route) =>
+    route.fulfill({
+      json: {
+        account: { ...ready.account, state: 'degraded', reason_code: 'credential_rejected' },
+        surfaces: Object.fromEntries(SURFACES.map((surface) => [surface, degraded])),
+      },
+    }),
+  );
+  await page.route('**/api/stats', (route) =>
+    route.fulfill({ json: { ...(payloads['/api/stats'] as object), setup: degraded } }),
+  );
+
+  await page.goto('/stats');
+
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Hevy rejected your stored API key' }),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Reconnect Hevy' })).toBeVisible();
+  await openMenuIfCollapsed(page);
+  await expect(page.getByRole('link', { name: 'Stats (needs attention)' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Settings (needs attention)' })).toBeVisible();
+  await noPageOverflow(page);
+});
+
+test('a first-run account is welcomed with the first step on an empty surface', async ({ page }) => {
+  const firstRun = surfaceSetup('setup_required', {
+    label: 'Finish setting up your training data',
+    reason: 'Hevy is not connected, so no routines or workouts can be imported yet.',
+    reason_code: 'hevy_connected',
+    first_run: true,
+    missing: ['hevy_connected'],
+    action: {
+      id: 'connect_hevy',
+      label: 'Connect Hevy',
+      href: '/settings',
+      description: 'Add your Hevy API key in Settings so your routines can be imported.',
+    },
+  });
+  await page.route('**/api/history', (route) =>
+    route.fulfill({ json: { calendar: '', logs: [], setup: firstRun } }),
+  );
+
+  await page.goto('/history');
+
+  await expect(page.getByText('Welcome — setup required')).toBeVisible();
+  await expect(page.getByText('Hevy is not connected')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect Hevy' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Training calendar' })).toHaveCount(0);
+  await noPageOverflow(page);
+});
+
+test('Coach says a provider is untested instead of claiming it works', async ({ page }) => {
+  await page.route('**/api/coach/capability', (route) =>
+    route.fulfill({
+      json: {
+        ...(payloads['/api/coach/capability'] as object),
+        provider_state: 'unverified',
+        provider_verified: false,
+        status: 'provider_unverified',
+      },
+    }),
+  );
+
+  await page.goto('/chat');
+
+  await expect(page.getByRole('status').filter({ hasText: 'AI provider not tested yet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Test your AI provider' })).toBeVisible();
+  await expect(page.getByText('Ready to use your training data')).toHaveCount(0);
   await noPageOverflow(page);
 });
