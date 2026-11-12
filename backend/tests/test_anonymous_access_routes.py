@@ -22,7 +22,6 @@ pytest.importorskip("httpx")
 
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-
 from webapp.auth_boundary import (
     PUBLIC_EXACT_PATHS,
     PUBLIC_STATIC_PREFIXES,

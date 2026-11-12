@@ -2,7 +2,9 @@
 
 Enforces that data-grounded coaching queries are only answered when required
 data sources are connected, populated, and fresh, preventing fabricated user
-history or hallucinated training data.
+history or hallucinated training data.  A provider whose last connection test
+failed, or a history that is being rebuilt by a running sync, disables the
+capabilities that depend on them rather than letting Coach answer anyway.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from typing import Any
 
 from ai_resolver import resolve_provider
 from config import Config
+from connector_operations import read_connector_status
 from database import (
     DEFAULT_DB_PATH,
     _connect,
@@ -26,6 +29,7 @@ from database import (
     get_progress_history,
     get_recent_hevy_logs,
 )
+from setup_state import ProviderState, ai_provider_status
 
 _GH_TOKEN_KEY = "google_health_token"
 
@@ -66,7 +70,9 @@ SUGGESTED_PROMPT_CONFIGS: list[dict[str, str]] = [
 @dataclass(frozen=True, slots=True)
 class CapabilityItem:
     enabled: bool
-    status: str  # "ready", "missing_provider", "missing_data", "missing_source", "missing_programme", "stale_data"
+    # "ready", "missing_provider", "provider_failed", "syncing", "missing_data",
+    # "missing_source", "missing_programme", "stale_data"
+    status: str
     explanation: str
 
 
@@ -175,12 +181,72 @@ def get_coaching_capabilities(
         except Exception:  # noqa: BLE001
             provider_ready = False
 
-    # Educational capability
-    if not provider_ready:
-        educational = CapabilityItem(
+    # A provider whose last connection test failed is known not to work, so
+    # Coach fails closed instead of claiming it can answer.  Unreadable evidence
+    # is never turned into a claimed failure.
+    provider_failed = False
+    if user_id is not None:
+        try:
+            provider_failed = (
+                ai_provider_status(
+                    user_id=user_id,
+                    db_path=db_path,
+                    server_api_key=cfg.gemini_api_key,
+                ).state
+                is ProviderState.FAILED
+            )
+        except Exception:  # noqa: BLE001 - evidence is advisory, never a crash
+            provider_failed = False
+    if provider_failed:
+        provider_ready = False
+
+    # While a connect or sync is running the history is being rebuilt, so any
+    # answer grounded in it could be built from partial data.
+    rebuilding = False
+    if user_id is not None:
+        try:
+            rebuilding = (
+                read_connector_status(user_id, db_path=db_path).operation is not None
+            )
+        except Exception:  # noqa: BLE001 - evidence is advisory, never a crash
+            rebuilding = False
+
+    def _provider_blocked(feature: str) -> CapabilityItem:
+        if provider_failed:
+            return CapabilityItem(
+                enabled=False,
+                status="provider_failed",
+                explanation=(
+                    "Your AI provider's last connection test failed. Test it again "
+                    f"or replace the key in Settings to enable {feature}."
+                ),
+            )
+        return CapabilityItem(
             enabled=False,
             status="missing_provider",
-            explanation="No AI provider configured. Add an API key in Settings -> AI Providers to enable Coach.",
+            explanation=f"Configure an AI provider in Settings to enable {feature}.",
+        )
+
+    def _syncing_blocked(feature: str) -> CapabilityItem:
+        return CapabilityItem(
+            enabled=False,
+            status="syncing",
+            explanation=(
+                f"A Hevy sync is running, so {feature} would use incomplete history. "
+                "Try again when it finishes."
+            ),
+        )
+
+    # Educational capability
+    if not provider_ready:
+        educational = (
+            _provider_blocked("Coach")
+            if provider_failed
+            else CapabilityItem(
+                enabled=False,
+                status="missing_provider",
+                explanation="No AI provider configured. Add an API key in Settings -> AI Providers to enable Coach.",
+            )
         )
     else:
         educational = CapabilityItem(
@@ -230,11 +296,9 @@ def get_coaching_capabilities(
                     workout_dates.append(d)
 
     if not provider_ready:
-        workout_analysis = CapabilityItem(
-            enabled=False,
-            status="missing_provider",
-            explanation="Configure an AI provider in Settings to enable workout analysis.",
-        )
+        workout_analysis = _provider_blocked("workout analysis")
+    elif rebuilding:
+        workout_analysis = _syncing_blocked("workout analysis")
     elif not workout_dates:
         workout_analysis = CapabilityItem(
             enabled=False,
@@ -307,11 +371,7 @@ def get_coaching_capabilities(
         pass
 
     if not provider_ready:
-        recovery_analysis = CapabilityItem(
-            enabled=False,
-            status="missing_provider",
-            explanation="Configure an AI provider in Settings to enable recovery analysis.",
-        )
+        recovery_analysis = _provider_blocked("recovery analysis")
     elif not has_connected_source and not recovery_dates:
         recovery_analysis = CapabilityItem(
             enabled=False,
@@ -349,11 +409,7 @@ def get_coaching_capabilities(
                 body_dates.append(d)
 
     if not provider_ready:
-        body_composition = CapabilityItem(
-            enabled=False,
-            status="missing_provider",
-            explanation="Configure an AI provider in Settings to enable body composition analysis.",
-        )
+        body_composition = _provider_blocked("body composition analysis")
     elif not body_dates:
         body_composition = CapabilityItem(
             enabled=False,
@@ -383,11 +439,9 @@ def get_coaching_capabilities(
         has_active_prog = False
 
     if not provider_ready:
-        programme_guidance = CapabilityItem(
-            enabled=False,
-            status="missing_provider",
-            explanation="Configure an AI provider in Settings to enable programme guidance.",
-        )
+        programme_guidance = _provider_blocked("programme guidance")
+    elif rebuilding:
+        programme_guidance = _syncing_blocked("programme guidance")
     elif not has_active_prog:
         programme_guidance = CapabilityItem(
             enabled=False,
@@ -431,7 +485,14 @@ def get_coaching_capabilities(
     data_capabilities = [workout_analysis, recovery_analysis, body_composition, programme_guidance]
     data_enabled_count = sum(1 for c in data_capabilities if c.enabled)
 
-    if not provider_ready:
+    if provider_failed:
+        overall_status = "setup_required"
+        welcome_message = (
+            "Coach is paused because your AI provider's last connection test failed. "
+            "Test it again or replace the key in Settings."
+        )
+        disclaimer = "Coach is offline until your AI provider passes a connection test."
+    elif not provider_ready:
         overall_status = "setup_required"
         welcome_message = "Coach requires an AI provider key to get started. Add your API key in Settings -> AI Providers."
         disclaimer = "Coach is offline until an AI provider is configured in Settings."

@@ -1,5 +1,4 @@
 import pytest
-
 from health_provider_identity import ProviderIdentity
 
 

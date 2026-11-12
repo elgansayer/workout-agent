@@ -3,7 +3,6 @@ from datetime import datetime, timezone
 from health_conflicts import detect_conflict
 from health_models import HealthMetric, MetricType, SourceProvenance
 
-
 NOW = datetime(2026, 8, 19, tzinfo=timezone.utc)
 
 

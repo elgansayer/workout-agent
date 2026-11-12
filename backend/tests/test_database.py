@@ -1605,6 +1605,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "exercise_prescriptions",
         "programme_week_states",
         "adaptation_decisions",
+        "programme_overrides",
         "training_rules",
         "credential_audit_events",
         "hevy_connections",

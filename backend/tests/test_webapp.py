@@ -697,18 +697,25 @@ def test_coach_capability_is_derived_from_tenant_records(
     assert "full access" not in resp.text.lower()
 
 
-def test_coach_capability_becomes_ready_for_a_configured_provider(
+def test_coach_never_claims_a_working_provider_for_a_configured_one(
     client: Any, monkeypatch: Any
 ) -> None:
+    """A server fallback key is configuration, not proof that a provider works."""
     monkeypatch.setenv("GEMINI_API_KEY", "synthetic-server-fallback")
 
     payload = client.get("/api/coach/capability").json()
 
     assert payload["provider_configured"] is True
-    assert payload["provider_state"] == "ready"
+    assert payload["provider_state"] == "unverified"
+    assert payload["provider_verified"] is False
+    assert payload["provider_source"] == "server"
     assert payload["can_chat"] is True
     assert payload["has_training_data"] is True
-    assert payload["status"] in {"ready", "stale_data"}
+    # Whichever other fact applies to this fixture, "ready" needs a verified
+    # provider and current data, and an untested key is never "ready".
+    assert payload["status"] in {"provider_unverified", "stale_data", "degraded"}
+    assert payload["status"] != "ready"
+    assert payload["readiness"] in {"stale", "degraded", "ready", "setup_required"}
 
 
 def test_coach_capability_is_isolated_between_users(client: Any) -> None:
