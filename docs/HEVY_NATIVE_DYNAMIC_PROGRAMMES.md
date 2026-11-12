@@ -22,13 +22,13 @@ The only programme-creation path is Hevy-native:
 
 The selected Hevy routines are the **exercise and session skeleton**. Workout Agent owns the **programme intent, blocks, weekly dose, progression and bounded adaptations**.
 
-By default, Workout Agent must not mutate the user's original Hevy routines. The first production implementation is read-first and stores its prescriptions locally. A later, explicit opt-in may create managed copies in a dedicated Hevy folder, but it must never silently overwrite source routines.
+By default, Workout Agent must not mutate the user's original Hevy routines. The default scheduler path is read-first and stores its prescriptions locally. The explicit `HEVY_SYNC_ROUTINES` opt-in may create managed copies in a dedicated Hevy folder, but it must never silently overwrite source routines.
 
 This decision supersedes guidance that treats `program.py` as a selectable template or assumes `hevy_sync.py` should push every generated programme back into Hevy.
 
 ## 2. Why the current design must be replaced
 
-The current architecture starts with one fixed 12-week, six-day plan in `program.py`. It then calculates targets and uses `hevy_sync.py` to create or update routines in Hevy. The existing inference path can read routines and recent workouts, but it imports all routines, relies heavily on titles and produces a descriptive split rather than a durable, selectable, adaptive programme.
+The architecture this decision replaced started with one fixed 12-week, six-day plan in `program.py`. It then calculated targets and used `hevy_sync.py` to create or update routines in Hevy. The previous inference path could read routines and recent workouts, but it imported all routines, relied heavily on titles and produced a descriptive split rather than a durable, selectable, adaptive programme. Both modules have since been removed.
 
 That architecture has five structural problems:
 
@@ -176,6 +176,8 @@ Resistance training helps preserve fat-free mass during calorie restriction. Evi
 Show connector status, last successful sync, source freshness and errors. Fetch routine folders, routines, exercise templates and enough workout history to establish a baseline.
 
 If the account is not Hevy Pro or the API fails, explain the limitation and do not offer a fake inferred programme.
+
+A Hevy credential is verified before it is stored or activated: the check proves the account identity and the minimum read access with bounded requests, and records the connected identity, test time, API version and capability metadata. See [Hevy credential verification](HEVY_CREDENTIALS.md).
 
 ### Step 2: Select routines
 
@@ -725,6 +727,7 @@ Connector requirements:
 
 - typed provider adapter and capabilities;
 - per-user credential ownership;
+- credential verification before activation (identity plus minimum required access, bounded requests);
 - pagination and rate/error handling;
 - incremental cursor for workout events;
 - idempotent upsert/delete processing;
@@ -766,6 +769,10 @@ Conflict states:
 - parse/schema error.
 
 A compatible edit may preserve exercise prescriptions by exercise-template ID and occurrence. Structural edits require a preview and explicit reconciliation.
+
+Implemented (#975): `GET /api/programmes/{id}/drift` returns the exact provider-versus-programme diff (renamed, reordered, added, removed, changed and unsupported exercises, and deleted routines) and `POST /api/programmes/{id}/drift/resolve` applies an explicit keep, merge, rebase or replace. Resolution validates the result, appends a new revision, preserves the old one and never writes to Hevy. See `docs/PROGRAMME_ADAPTATION.md`.
+
+Implemented (#819): an activated programme stores its selected routine snapshots with a normalised content hash. `GET /api/programmes` compares those snapshots with the live Hevy library and returns `source_drift` with per-routine states (`unchanged`, `renamed`, `content_changed`, `removed`) or `source_unavailable` when the source cannot be read. The active overlay is never rewritten; adopting a change requires a fresh preview and activation, while the builder offers an explicit keep-current action. Provider revision timestamps alone do not create a conflict.
 
 ## 19. Proposed data model
 
@@ -1014,6 +1021,52 @@ An AI provider may not:
 - silently substitute exercises;
 - write raw free-form output directly into active prescriptions.
 
+### 23.1 Implemented deterministic engine contract
+
+`backend/dynamic_programme.py` implements engine `hevy-programme-v3`. It is a
+pure function of the selected immutable Hevy source, the validated request and
+the engine version, so identical inputs produce an identical preview token.
+
+The preview exposes:
+
+- `goal_profile.target_envelopes` for every supported goal;
+- `blocks` with volume multiplier, rep/RIR intent, specificity, variation policy,
+  progression aggressiveness, fatigue-management mode, review gates and exit
+  criteria;
+- `days[].exercises[]` with a role, classification confidence, classification
+  evidence and user override state;
+- `workload` with warm-up/normal/failure/drop-set counts, direct and secondary
+  muscle exposure, observed baselines, week-one bounds, duplicate work,
+  implausible source volume and uncertainty;
+- `engine_config` with every numeric planning bound used by the run;
+- `blocking_violations` from the shared validator, including routine, exercise,
+  week, rule and remediation where applicable.
+
+Allocator policy in this version:
+
+- durations 4–6 weeks collapse to at most two meaningful phases;
+- a taper/test block is generated only for `strength_test` with an event date;
+- low-confidence history prepends a one-week calibration block;
+- fatigue-management weeks remain reactive candidates unless the user selected
+  planned management;
+- long plans repeat development waves with explicit review gates rather than a
+  single linear ramp;
+- every valid 4–52 week input conserves the requested duration exactly.
+
+Role classification uses exercise type, routine position, muscle contribution,
+source targets, rest, history and priorities. No exercise ID or named lift is
+globally special. User `exercise_overrides` change only the prescription overlay
+and never mutate the imported Hevy source snapshot.
+
+Week-one set changes are bounded to one fewer or two more than the imported
+source. When recent matching history exists, the opening exposure is also bounded
+by recent tolerated sets. Bodyweight, assisted bodyweight, duration and distance
+exercises use modality-specific fields and never receive e1RM/load progression.
+
+### 23.2 Implemented adaptation engine
+
+`backend/programme_domain/adaptation.py` (rule version `programme-adaptation/v1`) implements the exposure-level and programme-level decisions of sections 13–15: the decision order, confidence-aware bounds, hysteresis, fatigue management and the audit record. Activation, week materialisation, user overrides and drift reconciliation are specified in `docs/PROGRAMME_ADAPTATION.md`.
+
 ## 24. Initial safety and change bounds
 
 These are conservative product guardrails and must remain configurable/versioned:
@@ -1030,6 +1083,16 @@ These are conservative product guardrails and must remain configurable/versioned
 - constraint violations block activation or require an explicitly defined warning acknowledgement.
 
 Safety-sensitive symptoms, pain or medical constraints should pause or narrow automation and direct the user to appropriate professional advice rather than diagnose.
+
+### 24.1 Structured constraint enforcement
+
+The versioned `StructuredTrainingRules` document is the single source of truth for profile constraints. The shared validator (`backend/programme_validator.py`) consumes it for preview, import, inference, selection, activation, and profile/rule edits.
+
+- Blocking rules: prohibited exercises, mandatory substitutions that have not been applied, rep/RIR/RPE/intensity bounds, per-exercise and per-workout set limits, sessions-per-week limits, and prohibited equipment.
+- Warning rules: contextual notes. Warnings identify the relevant review context but do not block activation by themselves.
+- Stored rules always apply. Request-supplied constraints and rules can only tighten the stored profile; an empty client payload cannot clear them.
+- Editing profile constraints or structured rules revalidates and atomically deactivates a contradictory active programme. The response returns the exact blocking violations with `reconciliation.status = "deactivated_requires_remediation"` so the programme can be remediated and explicitly reactivated.
+- Seeded canonical defaults pass the same validator. If a user's rules contradict the seeded default, activation fails closed instead of persisting a contradicting programme.
 
 ## 25. Testing strategy
 

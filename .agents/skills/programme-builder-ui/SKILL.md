@@ -16,7 +16,7 @@ Per `docs/HEVY_NATIVE_DYNAMIC_PROGRAMMES.md` and #967, Workout Agent has one pro
 5. generate goal-specific blocks and week/exercise prescription overlays;
 6. activate a versioned programme and adapt only current/future prescriptions.
 
-Do **not** add or preserve static programme templates. `program.py`'s Hybrid Powerbuilding split is legacy code to be removed after all runtime consumers are generalised. It is not a selectable template, seed, default or fallback.
+Do **not** add or preserve static programme templates. The retired Hybrid Powerbuilding split and `backend/program.py` have been removed; no static template, seed, default or fallback is allowed.
 
 The selected Hevy routines are the exercise/session skeleton. Workout Agent owns blocks, weekly dose, progression and bounded adaptations. Original Hevy routines are read-only by default.
 
@@ -128,6 +128,8 @@ Run the shared structured validator for import, edit, generation and activation.
 - record engine/rule versions and inputs.
 
 Do not silently migrate a static active programme into a Hevy-derived definition. Archive it as legacy and require a new activation.
+
+> Implementation: activation, week states, the adaptation engine, overrides and drift reconciliation live in `backend/programme_domain/` and are documented in `docs/PROGRAMME_ADAPTATION.md`. Extend those modules; do not add a parallel adaptation path.
 
 ### 9. Adapt future scope only
 

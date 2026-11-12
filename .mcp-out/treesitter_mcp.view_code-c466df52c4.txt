@@ -1,0 +1,151 @@
+# session_security.py (L1-L150 of 570)
+   1 | """Hardened, revocable browser sessions for the Workout Agent web application.
+   2 | 
+   3 | The Google login produces a signed Starlette session cookie.  A signed cookie on
+   4 | its own is only a bearer token: it cannot be revoked, it never goes idle, and a
+   5 | copy lifts as much access as the original until its signature ages out.  This
+   6 | module adds the missing server-side half without changing what route code sees
+   7 | (``request.session`` is still the same mapping):
+   8 | 
+   9 | * **Registry.**  Every authenticated cookie carries a random ``sid``.  The
+  10 |   ``user_sessions`` table (see :func:`database.ensure_user_sessions_schema`)
+  11 |   stores only the SHA-256 digest of that identifier, the owning ``user_id`` and
+  12 |   the lifetime/revocation timestamps.  A cookie is honoured only while the
+  13 |   registry says its session is active *and* owned by the user the cookie claims.
+  14 | * **Bounded lifetime.**  An absolute limit (from login, never extended) and an
+  15 |   idle limit (from last use) are enforced on the server against the registry, so
+  16 |   they hold even when a client keeps a cookie past its ``Max-Age``.
+  17 | * **Rotation.**  Every login mints a brand-new identifier, revokes the one the
+  18 |   browser held and discards all pre-login session data (OAuth state included), so
+  19 |   an identifier planted before login is useless afterwards.
+  20 | * **Revocation.**  Logout revokes the current session, logout-all revokes every
+  21 |   session of the authenticated user, and removing an e-mail from the allow-list
+  22 |   revokes its sessions on their next request.
+  23 | * **Cookie attributes.**  ``HttpOnly``; ``Secure`` (always in production);
+  24 |   ``SameSite=Lax`` (the Google callback is a cross-site top-level navigation that
+  25 |   must carry the OAuth state, so ``Strict`` would break sign-in); ``Path=/`` (the
+  26 |   application owns its whole origin and every SPA route is authenticated
+  27 |   server-side); no ``Domain`` attribute, i.e. host-only, so the cookie is never
+  28 |   shared with sibling subdomains.  When ``Secure`` the cookie uses the
+  29 |   ``__Host-`` prefix, which makes browsers enforce all of the above.
+  30 | 
+  31 | Everything fails closed: unknown, revoked, expired, mismatched or legacy
+  32 | (``sid``-less) sessions are emptied before any authentication boundary can see
+  33 | them, and an unavailable registry yields HTTP 503 rather than access.
+  34 | """
+  35 | 
+  36 | from __future__ import annotations
+  37 | 
+  38 | import hashlib
+  39 | import logging
+  40 | import os
+  41 | import re
+  42 | import secrets
+  43 | import sqlite3
+  44 | import time
+  45 | from collections.abc import Callable, Iterator, Mapping, MutableMapping
+  46 | from contextlib import contextmanager, suppress
+  47 | from dataclasses import dataclass
+  48 | from enum import StrEnum
+  49 | from pathlib import Path
+  50 | from typing import Any, Literal, TypeGuard
+  51 | 
+  52 | from database import ensure_user_sessions_schema
+  53 | from starlette.concurrency import run_in_threadpool
+  54 | from starlette.datastructures import Secret
+  55 | from starlette.middleware.sessions import SessionMiddleware
+  56 | from starlette.responses import JSONResponse
+  57 | from starlette.types import ASGIApp, Receive, Scope, Send
+  58 | 
+  59 | from webapp.runtime_security import validate_web_runtime
+  60 | 
+  61 | logger = logging.getLogger(__name__)
+  62 | 
+  63 | SESSION_ID_KEY = "sid"
+  64 | SESSION_COOKIE_BASENAME = "session"
+  65 | HOST_COOKIE_PREFIX = "__Host-"
+  66 | 
+  67 | # Defaults keep the previous 14-day ceiling (the old cookie's Max-Age) and add an
+  68 | # idle limit; neither environment variable can raise the ceiling above 90 days.
+  69 | DEFAULT_IDLE_TIMEOUT_SECONDS = 3 * 24 * 60 * 60
+  70 | DEFAULT_ABSOLUTE_TIMEOUT_SECONDS = 14 * 24 * 60 * 60
+  71 | MINIMUM_TIMEOUT_SECONDS = 60
+  72 | MAXIMUM_TIMEOUT_SECONDS = 90 * 24 * 60 * 60
+  73 | # "Last seen" is written at most this often, so idle expiry is accurate to about
+  74 | # a minute without a database write on every request.  (A short idle limit
+  75 | # shortens this, see ``SessionLifetimePolicy.touch_interval``.)
+  76 | LAST_SEEN_RESOLUTION_SECONDS = 60
+  77 | # Dead rows are kept briefly for incident review, then purged.
+  78 | DEAD_SESSION_RETENTION_SECONDS = 7 * 24 * 60 * 60
+  79 | 
+  80 | REVOKE_LOGOUT = "logout"
+  81 | REVOKE_LOGOUT_ALL = "logout_all"
+  82 | REVOKE_REAUTHENTICATED = "reauthenticated"
+  83 | REVOKE_ACCESS_REMOVED = "access_removed"
+  84 | 
+  85 | _SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+  86 | _MAX_USER_ID_LENGTH = 256
+  87 | _IDENTITY_KEYS = ("user", "user_id", SESSION_ID_KEY)
+  88 | 
+  89 | 
+  90 | class SessionSecurityConfigurationError(RuntimeError):
+  91 |     """Raised at startup when session limits are malformed or unsafe."""
+  92 | 
+  93 | 
+  94 | @dataclass(frozen=True, slots=True)
+  95 | class SessionCookiePolicy:
+  96 |     """Attributes of the ``Set-Cookie`` header for the session cookie."""
+  97 | 
+  98 |     name: str
+  99 |     secure: bool
+ 100 |     same_site: Literal["lax", "strict", "none"]
+ 101 |     path: str
+ 102 |     domain: str | None
+ 103 |     max_age: int
+ 104 | 
+ 105 | 
+ 106 | @dataclass(frozen=True, slots=True)
+ 107 | class SessionLifetimePolicy:
+ 108 |     """Server-enforced lifetime limits, all in seconds."""
+ 109 | 
+ 110 |     idle_timeout: int
+ 111 |     absolute_timeout: int
+ 112 |     last_seen_resolution: int = LAST_SEEN_RESOLUTION_SECONDS
+ 113 |     dead_session_retention: int = DEAD_SESSION_RETENTION_SECONDS
+ 114 | 
+ 115 |     @property
+ 116 |     def touch_interval(self) -> int:
+ 117 |         """How stale ``last_seen_at`` may get before a request refreshes it.
+ 118 | 
+ 119 |         Normally ``last_seen_resolution``, but never more than a quarter of the
+ 120 |         idle limit.  The stored timestamp lags real activity by up to one
+ 121 |         interval, so with a short idle limit a coarse interval would sign out a
+ 122 |         user who is genuinely active (a 60 second limit and a request every 40
+ 123 |         seconds, for example).
+ 124 |         """
+ 125 | 
+ 126 |         return max(1, min(self.last_seen_resolution, self.idle_timeout // 4))
+ 127 | 
+ 128 | 
+ 129 | @dataclass(frozen=True, slots=True)
+ 130 | class SessionSecurityConfig:
+ 131 |     """Validated cookie and lifetime policy for the web application."""
+ 132 | 
+ 133 |     cookie: SessionCookiePolicy
+ 134 |     lifetime: SessionLifetimePolicy
+ 135 | 
+ 136 | 
+ 137 | def _read_seconds(source: Mapping[str, str], name: str, default: int) -> int:
+ 138 |     raw = source.get(name, "").strip()
+ 139 |     if not raw:
+ 140 |         return default
+ 141 |     if not (raw.isascii() and raw.isdigit()):
+ 142 |         raise SessionSecurityConfigurationError(
+ 143 |             f"{name} must be a whole number of seconds."
+ 144 |         )
+ 145 |     value = int(raw)
+ 146 |     if not MINIMUM_TIMEOUT_SECONDS <= value <= MAXIMUM_TIMEOUT_SECONDS:
+ 147 |         raise SessionSecurityConfigurationError(
+ 148 |             f"{name} must be between {MINIMUM_TIMEOUT_SECONDS} and "
+ 149 |             f"{MAXIMUM_TIMEOUT_SECONDS} seconds."
+ 150 |         )

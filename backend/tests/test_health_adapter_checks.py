@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from connectors import ConnectorContext
 from health_adapter_checks import validate_normalized_records
 from health_models import HealthMetric, MetricType, SourceProvenance

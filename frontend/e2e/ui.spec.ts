@@ -16,6 +16,25 @@ const names = [
   'Chin up',
   'Hammer curl',
 ];
+const provenance = (kind: string, label: string, extra: Record<string, unknown> = {}) => ({
+  contract_version: 1,
+  kind,
+  source: kind === 'derived' ? 'ai:gemini/synthetic' : 'google_health',
+  source_label: kind === 'derived' ? 'AI coach (Gemini synthetic)' : 'Google Health',
+  label,
+  authoritative: kind !== 'derived',
+  corrected: false,
+  applied: true,
+  revision: 1,
+  supersedes_revision: null,
+  external_id: null,
+  source_timestamp: null,
+  ingested_at: '2026-11-01T07:00:00+00:00',
+  transformation_version: kind === 'derived' ? 'daily-plan/1' : 'google-health-body/1',
+  confidence: null,
+  note: null,
+  ...extra,
+});
 const dashboard = {
   week: 2,
   cycle_weeks: 12,
@@ -113,8 +132,75 @@ const settings = {
   vapid_public_key: null,
 };
 const payloads: Record<string, unknown> = {
+  '/api/setup/state': {
+    account: {
+      state: 'ready',
+      label: 'Your training data is up to date',
+      reason: '',
+      reason_code: null,
+      first_run: false,
+      checks: { hevy_connected: true },
+      missing: [],
+      last_activity_at: '2026-11-01T10:00:00Z',
+      age_days: 7,
+      stale: false,
+      connection_state: 'connected',
+      connector: {
+        provider: 'hevy',
+        operation: null,
+        operation_started_at: null,
+        operation_stalled: false,
+        last_sync: { outcome: 'succeeded', at: '2026-11-01T10:00:00Z', code: null, records: 40 },
+      },
+      ai_provider_state: 'verified',
+    },
+    surfaces: Object.fromEntries(
+      ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'].map((surface) => [
+        surface,
+        {
+          state: 'ready',
+          label: 'Ready',
+          reason: 'Synthetic account setup is complete.',
+          action: null,
+          missing: [],
+          last_activity_at: '2026-11-01T10:00:00Z',
+          age_days: 7,
+          stale: false,
+        },
+      ]),
+    ),
+  },
+  '/api/onboarding': {
+    steps: [],
+    next_step: null,
+    account_ready: true,
+    completed_count: 6,
+    skipped_count: 0,
+    total_steps: 6,
+    progress_percent: 100,
+  },
   '/api/me': {
     user: { id: 'synthetic-user', name: 'Demo athlete', email: 'athlete@example.test' },
+  },
+  '/api/sessions': {
+    sessions: [
+      {
+        id: 1,
+        device: 'Chrome on Linux',
+        location: 'Approx. network 198.51.100.0/24',
+        created_at: '2026-11-10T09:00:00+00:00',
+        last_used_at: '2026-11-10T10:00:00+00:00',
+        current: true,
+      },
+      {
+        id: 2,
+        device: 'Safari on iOS',
+        location: 'Local network',
+        created_at: '2026-11-09T09:00:00+00:00',
+        last_used_at: '2026-11-09T10:00:00+00:00',
+        current: false,
+      },
+    ],
   },
   '/api/dashboard': dashboard,
   '/api/history': {
@@ -124,6 +210,7 @@ const payloads: Record<string, unknown> = {
       focus: `Session ${i + 1}`,
       day: 1,
       plan: 'Training notes\n'.repeat(20),
+      provenance: provenance('derived', 'AI recommendation', { authoritative: false }),
     })),
   },
   '/api/checkins': {
@@ -142,6 +229,32 @@ const payloads: Record<string, unknown> = {
       sessions: 4,
       svg: '<svg class="svg-chart" viewBox="0 0 300 100" aria-label="Progress"><path d="M0 90L100 60L200 40L300 20" stroke="currentColor" fill="none"/></svg>',
     })),
+    body_readings: [
+      {
+        date: '2026-11-02',
+        weight_kg: 81.2,
+        body_fat_pct: 15.1,
+        muscle_pct: null,
+        resting_hr: 58,
+        hrv: null,
+        provenance: provenance('user_entered', 'Corrected by you', {
+          source: 'manual',
+          source_label: 'You',
+          corrected: true,
+          revision: 2,
+          supersedes_revision: 1,
+        }),
+      },
+      {
+        date: '2026-11-01',
+        weight_kg: 81.6,
+        body_fat_pct: null,
+        muscle_pct: null,
+        resting_hr: null,
+        hrv: null,
+        provenance: provenance('imported', 'Imported from Google Health'),
+      },
+    ],
   },
   '/api/stats': {
     total_sessions: 40,
@@ -164,18 +277,238 @@ const payloads: Record<string, unknown> = {
     rules: ['Follow your routine rotation'],
   },
   '/api/programmes': {
-    connection: { state: 'connected' },
+    connection: {
+      state: 'connected',
+      detail: null,
+      username: 'synthetic-lifter',
+      owner: 'athlete@example.test',
+      last_successful_sync: '2026-11-01T09:00:00+00:00',
+      stale: false,
+      warnings: [],
+      counts: { routines: 20, folders: 1, recent_workouts: 40 },
+    },
     source: {
       routines,
-      folders: [{ id: 'folder', title: 'Training' }],
+      folders: [{ id: 'folder', title: 'Training', routine_count: 20 }],
       routine_count: 20,
       recent_workout_count: 40,
     },
     goals: [{ key: 'general_fitness', label: 'General fitness' }],
-    duration: { minimum_weeks: 4, maximum_weeks: 24 },
+    duration: { minimum_weeks: 4, maximum_weeks: 52 },
+    cadence: { modes: [], weekdays: [], roles: [] },
   },
   '/api/settings': settings,
+  '/api/settings/display': {
+    settings: {
+      timezone: 'Europe/London',
+      locale: 'en-GB',
+      unit_system: 'metric',
+      motion: 'system',
+      contrast: 'system',
+      text_size: 'default',
+    },
+    options: {
+      defaults: {
+        timezone: 'UTC',
+        locale: 'en-GB',
+        unit_system: 'metric',
+        motion: 'system',
+        contrast: 'system',
+        text_size: 'default',
+      },
+      timezones: ['UTC', 'Europe/London', 'America/New_York'],
+      locales: [
+        { value: 'en-GB', label: 'English (United Kingdom)' },
+        { value: 'en-US', label: 'English (United States)' },
+      ],
+      unit_systems: [
+        { value: 'metric', label: 'Metric (kg)' },
+        { value: 'imperial', label: 'Imperial (lb)' },
+      ],
+      motion: [
+        { value: 'system', label: 'Follow my device setting' },
+        { value: 'reduce', label: 'Always reduce motion' },
+      ],
+      contrast: [
+        { value: 'system', label: 'Follow my device setting' },
+        { value: 'more', label: 'Always increase contrast' },
+      ],
+      text_size: [
+        { value: 'default', label: 'Default' },
+        { value: 'large', label: 'Large' },
+        { value: 'x-large', label: 'Extra large' },
+      ],
+    },
+  },
   '/api/chat/history': { messages: [] },
+  '/api/coach/capability': {
+    provider_name: 'gemini',
+    provider_configured: true,
+    provider_state: 'verified',
+    provider_verified: true,
+    provider_source: 'user',
+    can_chat: true,
+    status: 'ready',
+    sync_configured: true,
+    sync_state: 'synced',
+    readiness: 'ready',
+    verified_data: true,
+    programme_available: true,
+    has_training_data: true,
+    has_fresh_training_data: true,
+    sources: {
+      training_logs: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+      body_metrics: { available: true, freshness: 'fresh', last_observed_at: '2026-11-01' },
+    },
+  },
+  '/api/coach/capabilities': {
+    provider_ready: true,
+    provider_name: 'gemini',
+    overall_status: 'fully_grounded',
+    disclaimer: 'Coach answers using verified data sources.',
+    welcome_message: 'Coach is ready with your training data.',
+    capabilities: {
+      workout_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Training logs are synced and current.',
+      },
+      recovery_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Recovery data is synced.',
+      },
+      body_composition: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Body composition data is available.',
+      },
+      programme_guidance: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Active programme is connected.',
+      },
+    },
+    suggested_prompts: [
+      {
+        text: 'How is my deadlift progressing?',
+        capability: 'workout_analysis',
+        icon: '📊',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Am I recovering well enough?',
+        capability: 'recovery_analysis',
+        icon: '💤',
+        enabled: true,
+        explanation: 'Recovery data is synced.',
+      },
+      {
+        text: 'Which lifts are stalling?',
+        capability: 'workout_analysis',
+        icon: '📉',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Should I deload this week?',
+        capability: 'workout_analysis',
+        icon: '🔄',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'How is my body composition trending?',
+        capability: 'body_composition',
+        icon: '⚖️',
+        enabled: true,
+        explanation: 'Body composition data is available.',
+      },
+      {
+        text: 'What should I focus on this block?',
+        capability: 'programme_guidance',
+        icon: '🎯',
+        enabled: true,
+        explanation: 'Active programme is connected.',
+      },
+    ],
+  },
+  '/api/chat/capabilities': {
+    provider_ready: true,
+    provider_name: 'gemini',
+    overall_status: 'fully_grounded',
+    disclaimer: 'Coach answers using verified data sources.',
+    welcome_message: 'Coach is ready with your training data.',
+    capabilities: {
+      workout_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Training logs are synced and current.',
+      },
+      recovery_analysis: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Recovery data is synced.',
+      },
+      body_composition: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Body composition data is available.',
+      },
+      programme_guidance: {
+        enabled: true,
+        status: 'ready',
+        explanation: 'Active programme is connected.',
+      },
+    },
+    suggested_prompts: [
+      {
+        text: 'How is my deadlift progressing?',
+        capability: 'workout_analysis',
+        icon: '📊',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Am I recovering well enough?',
+        capability: 'recovery_analysis',
+        icon: '💤',
+        enabled: true,
+        explanation: 'Recovery data is synced.',
+      },
+      {
+        text: 'Which lifts are stalling?',
+        capability: 'workout_analysis',
+        icon: '📉',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'Should I deload this week?',
+        capability: 'workout_analysis',
+        icon: '🔄',
+        enabled: true,
+        explanation: 'Training logs are synced and current.',
+      },
+      {
+        text: 'How is my body composition trending?',
+        capability: 'body_composition',
+        icon: '⚖️',
+        enabled: true,
+        explanation: 'Body composition data is available.',
+      },
+      {
+        text: 'What should I focus on this block?',
+        capability: 'programme_guidance',
+        icon: '🎯',
+        enabled: true,
+        explanation: 'Active programme is connected.',
+      },
+    ],
+  },
   '/api/csrf-token': { token: 'synthetic-csrf', expires_in: 60 },
 };
 
@@ -186,6 +519,11 @@ async function mockApi(page: Page) {
     await route.fulfill({ json: payloads[path] });
   });
 }
+async function openMenuIfCollapsed(page: Page) {
+  const menuButton = page.getByRole('button', { name: 'Menu' });
+  if (await menuButton.isVisible()) await menuButton.click();
+}
+
 async function noPageOverflow(page: Page) {
   const overflow = await page.evaluate(() => ({
     width: innerWidth,
@@ -299,43 +637,133 @@ test('navigation, list paging and settings sections work with keyboard focus', a
   await page.getByRole('button', { name: 'AI coach', exact: true }).click();
   await expect(page.locator('#settings-ai')).toBeVisible();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await page.getByLabel('Constraints (optional)').fill('Synthetic preference');
+  await page.getByLabel('Constraints Notes (optional free-text)').fill('Synthetic preference');
   await page.getByRole('button', { name: 'Connections', exact: true }).click();
   await page.getByRole('button', { name: 'Profile', exact: true }).click();
-  await expect(page.getByLabel('Constraints (optional)')).toHaveValue('Synthetic preference');
+  await expect(page.getByLabel('Constraints Notes (optional free-text)')).toHaveValue('Synthetic preference');
+  await page.getByRole('button', { name: 'Region & accessibility', exact: true }).click();
+  await expect(page.locator('#settings-display')).toBeVisible();
+  await expect(page.getByLabel('Time zone', { exact: true })).toHaveValue('Europe/London');
+  await expect(page.getByLabel('Text size', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Notifications', exact: true }).click();
   await expect(
     page.getByText('Push notifications are not available on this server.'),
   ).toBeVisible();
 });
 
+const previewPayload = {
+  name: 'Synthetic programme',
+  cycle_weeks: 12,
+  analysis: { confidence: 'medium' },
+  cadence: {
+    mode: 'rolling',
+    sessions_per_week: 7,
+    training_day_names: ['Monday'],
+    rotation: [],
+    unscheduled_routines: [],
+  },
+  schedule: [
+    { date: '2026-11-02', weekday: 'Monday', routine_title: 'Routine 1' },
+  ],
+  muscle_sets: {
+    method: 'Direct sets count as 1.0.',
+    weekly_sets: { chest: 3 },
+    estimates: [{ muscle: 'chest', weekly_sets: 3, status: 'below_reference_range' }],
+    warnings: [],
+  },
+  drift: { state: 'in_sync', changed_routines: [] },
+  warnings: [],
+  blocking_violations: [],
+  blocks,
+  days,
+  assumptions: [],
+  source_snapshots: [{ id: 'r0', title: 'Routine 1', source_hash: 'synthetic-source-revision' }],
+  preview_token: 'synthetic-token',
+  engine_version: 'hevy-programme-v2',
+};
+
 test('routine selection survives pages and edited settings remove the activation preview', async ({
   page,
 }) => {
   await page.route('**/api/programmes/preview', (route) =>
-    route.fulfill({
-      json: {
-        preview: {
-          name: 'Synthetic programme',
-          cycle_weeks: 12,
-          analysis: { confidence: 'Moderate' },
-          warnings: [],
-          blocks,
-          days,
-          assumptions: [],
-          preview_token: 'synthetic-token',
-        },
-      },
-    }),
+    route.fulfill({ json: { preview: previewPayload } }),
   );
   await page.goto('/programmes');
   await page.getByRole('checkbox').first().check();
-  await page.getByRole('button', { name: 'Next routines page' }).click();
   await expect(page.locator('.selected-routines')).toContainText('Routine 1');
   await page.getByRole('button', { name: 'Generate programme preview' }).click();
   await expect(page.getByRole('button', { name: 'Activate this programme' })).toBeVisible();
   await page.getByLabel('Programme duration').fill('8');
   await expect(page.getByRole('button', { name: 'Activate this programme' })).toHaveCount(0);
+});
+
+test('the Hevy-first builder previews and activates a selected routine', async ({ page }) => {
+  await page.route('**/api/programmes/preview', (route) =>
+    route.fulfill({ json: { preview: previewPayload } }),
+  );
+  await page.route('**/api/programmes/activate', (route) =>
+    route.fulfill({ json: { status: 'ok', active_programme: {} } }),
+  );
+  await page.goto('/programmes');
+
+  await expect(page.getByRole('heading', { name: 'Hevy state' })).toBeVisible();
+  await expect(page.getByText('Signed in as')).toBeVisible();
+  await expect(page.getByText('Hybrid Powerbuilding')).toHaveCount(0);
+  await expect(page.getByText('Active Split Preview')).toHaveCount(0);
+
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
+  await expect(page.locator('.selected-routines')).toContainText('Routine 1');
+
+  await page.getByLabel('Primary goal').selectOption('general_fitness');
+  await page.getByLabel('Programme duration').fill('12');
+  await page.getByRole('button', { name: 'Generate programme preview' }).click();
+
+  await expect(page.getByRole('heading', { name: 'Generated programme preview' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Block timeline' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Selected Hevy routine preview' }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Activate this programme' }).click();
+  await expect(page.getByText('Your Hevy-derived programme is now active.')).toBeVisible();
+});
+
+test('a changed Hevy source blocks activation and offers remediation', async ({ page }) => {
+  await page.route('**/api/programmes/preview', (route) =>
+    route.fulfill({ json: { preview: previewPayload } }),
+  );
+  await page.route('**/api/programmes/activate', (route) =>
+    route.fulfill({
+      status: 409,
+      json: {
+        detail: {
+          message: 'The Hevy routines or programme settings changed after the preview.',
+          conflict: {
+            changed_routines: [{ routine_id: 'r0', title: 'Routine 1' }],
+            added_routines: [],
+            removed_routines: [],
+            has_conflicts: true,
+          },
+          remediation: ['Refresh from Hevy to load the current routine revisions.'],
+        },
+      },
+    }),
+  );
+  await page.goto('/programmes');
+  await page
+    .getByRole('checkbox', { name: 'Select routine Routine 1', exact: true })
+    .check();
+  await page.getByRole('button', { name: 'Generate programme preview' }).click();
+  await page.getByRole('button', { name: 'Activate this programme' }).click();
+
+  await expect(
+    page.getByRole('heading', { name: 'Source changed since the preview' }),
+  ).toBeVisible();
+  await expect(
+    page.getByText('Refresh from Hevy to load the current routine revisions.'),
+  ).toBeVisible();
 });
 
 test('display preferences preserve focus and readable selected states', async ({ page }) => {
@@ -345,5 +773,107 @@ test('display preferences preserve focus and readable selected states', async ({
   await page.emulateMedia({ forcedColors: 'active' });
   await page.locator('.exercise summary').first().focus();
   await expect(page.locator('.exercise summary').first()).toBeFocused();
+  await noPageOverflow(page);
+});
+
+const SURFACES = ['dashboard', 'plan', 'progress', 'stats', 'history', 'coach', 'checkins'];
+
+function surfaceSetup(state: string, extra: Record<string, unknown>) {
+  return {
+    state,
+    label: state,
+    reason: '',
+    reason_code: null,
+    first_run: false,
+    action: null,
+    missing: [],
+    last_activity_at: null,
+    age_days: null,
+    stale: false,
+    ...extra,
+  };
+}
+
+test('a degraded account is told what failed and how to repair it', async ({ page }) => {
+  const degraded = surfaceSetup('degraded', {
+    label: 'Your Hevy connection needs attention',
+    reason: 'Hevy rejected your stored API key, so nothing new can be imported.',
+    reason_code: 'credential_rejected',
+    action: {
+      id: 'reconnect_hevy',
+      label: 'Reconnect Hevy',
+      href: '/settings',
+      description: 'Verify or replace your Hevy API key in Settings so imports can resume.',
+    },
+  });
+  const ready = payloads['/api/setup/state'] as { account: Record<string, unknown> };
+  await page.route('**/api/setup/state', (route) =>
+    route.fulfill({
+      json: {
+        account: { ...ready.account, state: 'degraded', reason_code: 'credential_rejected' },
+        surfaces: Object.fromEntries(SURFACES.map((surface) => [surface, degraded])),
+      },
+    }),
+  );
+  await page.route('**/api/stats', (route) =>
+    route.fulfill({ json: { ...(payloads['/api/stats'] as object), setup: degraded } }),
+  );
+
+  await page.goto('/stats');
+
+  await expect(
+    page.getByRole('alert').filter({ hasText: 'Hevy rejected your stored API key' }),
+  ).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Reconnect Hevy' })).toBeVisible();
+  await openMenuIfCollapsed(page);
+  await expect(page.getByRole('link', { name: 'Stats (needs attention)' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Settings (needs attention)' })).toBeVisible();
+  await noPageOverflow(page);
+});
+
+test('a first-run account is welcomed with the first step on an empty surface', async ({ page }) => {
+  const firstRun = surfaceSetup('setup_required', {
+    label: 'Finish setting up your training data',
+    reason: 'Hevy is not connected, so no routines or workouts can be imported yet.',
+    reason_code: 'hevy_connected',
+    first_run: true,
+    missing: ['hevy_connected'],
+    action: {
+      id: 'connect_hevy',
+      label: 'Connect Hevy',
+      href: '/settings',
+      description: 'Add your Hevy API key in Settings so your routines can be imported.',
+    },
+  });
+  await page.route('**/api/history', (route) =>
+    route.fulfill({ json: { calendar: '', logs: [], setup: firstRun } }),
+  );
+
+  await page.goto('/history');
+
+  await expect(page.getByText('Welcome — setup required')).toBeVisible();
+  await expect(page.getByText('Hevy is not connected')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Connect Hevy' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Training calendar' })).toHaveCount(0);
+  await noPageOverflow(page);
+});
+
+test('Coach says a provider is untested instead of claiming it works', async ({ page }) => {
+  await page.route('**/api/coach/capability', (route) =>
+    route.fulfill({
+      json: {
+        ...(payloads['/api/coach/capability'] as object),
+        provider_state: 'unverified',
+        provider_verified: false,
+        status: 'provider_unverified',
+      },
+    }),
+  );
+
+  await page.goto('/chat');
+
+  await expect(page.getByRole('status').filter({ hasText: 'AI provider not tested yet' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Test your AI provider' })).toBeVisible();
+  await expect(page.getByText('Ready to use your training data')).toHaveCount(0);
   await noPageOverflow(page);
 });

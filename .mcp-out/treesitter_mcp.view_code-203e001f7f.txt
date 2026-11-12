@@ -1,0 +1,149 @@
+# secret_vault.py (L1497-L1644 of 1644)
+1497 |     def _count_legacy_fields(self) -> int:
+1498 |         with self._db() as conn:
+1499 |             found = conn.execute(
+1500 |                 """
+1501 |                 SELECT
+1502 |                     COALESCE(SUM(api_key <> '' AND api_key NOT LIKE 'wv2.%'), 0)
+1503 |                   + COALESCE(SUM(COALESCE(client_secret, '') <> ''
+1504 |                                  AND client_secret NOT LIKE 'wv2.%'), 0)
+1505 |                   + COALESCE(SUM(COALESCE(refresh_token, '') <> ''
+1506 |                                  AND refresh_token NOT LIKE 'wv2.%'), 0)
+1507 |                 FROM user_api_keys
+1508 |                 """
+1509 |             ).fetchone()
+1510 |         return int(found[0]) if found else 0
+1511 | 
+1512 |     def migrate_legacy(self) -> MigrationReport:
+1513 |         """Upgrade pre-vault credentials to per-user encryption (idempotent).
+1514 | 
+1515 |         Re-seals ``user_api_keys`` rows that hold Fernet tokens or plaintext, and
+1516 |         moves each user's Google Health refresh token out of the generic
+1517 |         ``hevy_meta`` table. When the server cannot encrypt, nothing is touched
+1518 |         and the report says so. Values that cannot be decrypted are left as they
+1519 |         are and counted as failed; they are never treated as usable plaintext.
+1520 |         """
+1521 |         try:
+1522 |             master = self._master()
+1523 |         except VaultUnavailableError as exc:
+1524 |             try:
+1525 |                 pending = self._count_legacy_fields()
+1526 |             except VaultError:
+1527 |                 pending = 0
+1528 |             if pending:
+1529 |                 logger.warning(
+1530 |                     "Credential encryption is unavailable (%s); %d stored credential "
+1531 |                     "value(s) remain in the legacy format.",
+1532 |                     exc.reason,
+1533 |                     pending,
+1534 |                 )
+1535 |             return MigrationReport(pending=pending, unavailable=True)
+1536 | 
+1537 |         upgraded = 0
+1538 |         failed = 0
+1539 |         with self._db() as conn:
+1540 |             rows = [
+1541 |                 _row_from(found)
+1542 |                 for found in conn.execute(_SELECT_ROW).fetchall()
+1543 |             ]
+1544 |         for row in rows:
+1545 |             legacy = {
+1546 |                 name: value
+1547 |                 for name, value in row.secret_columns().items()
+1548 |                 if not encryption.is_sealed(value)
+1549 |             }
+1550 |             if not legacy:
+1551 |                 continue
+1552 |             try:
+1553 |                 plaintext = {
+1554 |                     name: (
+1555 |                         encryption.read_legacy_value(master, value)
+1556 |                         if name in legacy
+1557 |                         else encryption.open_sealed(
+1558 |                             master,
+1559 |                             user_id=row.user_id,
+1560 |                             provider=row.provider,
+1561 |                             field_name=name,
+1562 |                             token=value,
+1563 |                         )
+1564 |                     )
+1565 |                     for name, value in row.secret_columns().items()
+1566 |                 }
+1567 |             except encryption.DecryptionError as exc:
+1568 |                 failed += 1
+1569 |                 logger.warning(
+1570 |                     "A legacy %s credential could not be upgraded (%s).",
+1571 |                     row.provider,
+1572 |                     exc.reason,
+1573 |                 )
+1574 |                 continue
+1575 |             if self._upgrade_in_place(master, row, plaintext):
+1576 |                 upgraded += 1
+1577 | 
+1578 |         moved, move_failed = self._migrate_google_health_tokens()
+1579 |         upgraded += moved
+1580 |         failed += move_failed
+1581 |         try:
+1582 |             pending = self._count_legacy_fields()
+1583 |         except VaultError:
+1584 |             pending = 0
+1585 |         return MigrationReport(upgraded=upgraded, failed=failed, pending=pending)
+1586 | 
+1587 |     def _migrate_google_health_tokens(self) -> tuple[int, int]:
+1588 |         with self._db() as conn:
+1589 |             found = conn.execute(
+1590 |                 "SELECT user_id, value FROM hevy_meta WHERE key = ? AND value <> ''",
+1591 |                 (LEGACY_GOOGLE_HEALTH_META_KEY,),
+1592 |             ).fetchall()
+1593 |         moved = 0
+1594 |         failed = 0
+1595 |         for user_id, value in found:
+1596 |             try:
+1597 |                 existing = self.describe(user_id, "google_health")
+1598 |                 if not existing.configured:
+1599 |                     self._write_checked(
+1600 |                         CredentialAction.MIGRATE,
+1601 |                         user_id,
+1602 |                         provider_spec("google_health"),
+1603 |                         {"refresh_token": _clean_secret(value)},
+1604 |                         None,
+1605 |                         None,
+1606 |                         "system",
+1607 |                         "migration",
+1608 |                         None,
+1609 |                     )
+1610 |                     moved += 1
+1611 |                 with self._db() as conn:
+1612 |                     conn.execute(
+1613 |                         "UPDATE hevy_meta SET value = '' "
+1614 |                         "WHERE user_id = ? AND key = ? AND value = ?",
+1615 |                         (user_id, LEGACY_GOOGLE_HEALTH_META_KEY, value),
+1616 |                     )
+1617 |             except (VaultError, ValueError):
+1618 |                 failed += 1
+1619 |                 logger.warning("A legacy Google Health token could not be moved.")
+1620 |         return moved, failed
+1621 | 
+1622 | 
+1623 | def migrate_legacy_credentials(db_path: str = DEFAULT_DB_PATH) -> MigrationReport:
+1624 |     """Upgrade legacy credentials in *db_path*; safe to call at every startup."""
+1625 |     return SecretVault(db_path).migrate_legacy()
+1626 | 
+1627 | 
+1628 | def configured_provider_ids(conn: sqlite3.Connection, user_id: str) -> frozenset[str]:
+1629 |     """Return providers where *user_id* has an active credential (metadata only).
+1630 | 
+1631 |     Takes the caller's connection so read-only diagnostics can use their own
+1632 |     ``mode=ro`` handle. Secret columns are only tested for presence, never read.
+1633 |     """
+1634 |     found = conn.execute(
+1635 |         """
+1636 |         SELECT provider FROM user_api_keys
+1637 |         WHERE user_id = ? AND status = 'active'
+1638 |           AND (api_key <> ''
+1639 |                OR COALESCE(client_secret, '') <> ''
+1640 |                OR COALESCE(refresh_token, '') <> '')
+1641 |         """,
+1642 |         (user_id,),
+1643 |     ).fetchall()
+1644 |     return frozenset(str(row[0]).strip().lower() for row in found if row[0])

@@ -1,0 +1,151 @@
+# tenant_isolation.py (L36-L185 of 194)
+  36 | class OwnershipError(PermissionError):
+  37 |     """Raised when an owner cannot be proven or does not match a resource."""
+  38 | 
+  39 | 
+  40 | @dataclass(frozen=True, slots=True)
+  41 | class OwnerIdentity:
+  42 |     """Tenant identity carried by every key, lock, job and AI context."""
+  43 | 
+  44 |     user_id: str
+  45 | 
+  46 |     def __post_init__(self) -> None:
+  47 |         value = self.user_id
+  48 |         if not isinstance(value, str) or not value or value != value.strip():
+  49 |             raise OwnershipError("owner identity requires a non-empty user id")
+  50 |         if len(value) > _MAX_USER_ID_LENGTH or not value.isprintable():
+  51 |             raise OwnershipError("owner identity is malformed")
+  52 | 
+  53 | 
+  54 | def authorize_owner(db_path: str, claimed_user_id: str | None) -> OwnerIdentity:
+  55 |     """Re-authorize a claimed user id against the user store, failing closed.
+  56 | 
+  57 |     The returned identity is built from the stored row, not from the claim, so
+  58 |     callers continue with the canonical id. A missing id, an unknown user or an
+  59 |     unreachable store all raise :class:`OwnershipError`; there is deliberately
+  60 |     no fallback to shared or unscoped data.
+  61 |     """
+  62 |     if not claimed_user_id:
+  63 |         raise OwnershipError("a worker requires an explicit owner")
+  64 |     claimed = OwnerIdentity(claimed_user_id)
+  65 |     try:
+  66 |         row = get_user_by_id(claimed.user_id, db_path)
+  67 |     except (sqlite3.Error, OSError) as exc:  # OSError: database directory unusable
+  68 |         raise OwnershipError("owner could not be verified") from exc
+  69 |     if row is None:
+  70 |         raise OwnershipError("owner does not exist")
+  71 |     return OwnerIdentity(row["id"])
+  72 | 
+  73 | 
+  74 | def owner_scoped_key(owner: OwnerIdentity, namespace: str, *parts: str) -> str:
+  75 |     """Build a cache, lock, cursor or notification-batch key bound to *owner*.
+  76 | 
+  77 |     The owner is always the second segment and every segment after the
+  78 |     namespace is percent-encoded, so no caller-supplied part can impersonate
+  79 |     another owner or namespace and distinct inputs never collide.
+  80 |     """
+  81 |     if not isinstance(owner, OwnerIdentity):
+  82 |         raise OwnershipError("a scoped key requires an OwnerIdentity")
+  83 |     if not _KEY_SEGMENT.fullmatch(namespace):
+  84 |         raise ValueError(
+  85 |             "key namespace must be lowercase letters, digits, '-', '_' or '.'"
+  86 |         )
+  87 |     if any(not isinstance(part, str) or not part for part in parts):
+  88 |         raise ValueError("key parts must be non-empty strings")
+  89 |     return ":".join([namespace, *(quote(s, safe="") for s in (owner.user_id, *parts))])
+  90 | 
+  91 | 
+  92 | @dataclass(frozen=True, slots=True)
+  93 | class OwnedContext:
+  94 |     """Prompt or notification input bound to the owner whose data produced it.
+  95 | 
+  96 |     Persistence and delivery take the owner from the context, never from an
+  97 |     ambient loop variable, so output cannot be written to a different tenant
+  98 |     than the one whose data was read.
+  99 |     """
+ 100 | 
+ 101 |     owner: OwnerIdentity
+ 102 |     purpose: str
+ 103 |     data: Mapping[str, Any]
+ 104 | 
+ 105 | 
+ 106 | class OwnerLocks:
+ 107 |     """Non-blocking in-process locks keyed by owner and job.
+ 108 | 
+ 109 |     A lock never spans owners: one user's slow job cannot delay or suppress
+ 110 |     another user's, and an overlapping duplicate for the same owner is skipped
+ 111 |     instead of racing.
+ 112 |     """
+ 113 | 
+ 114 |     def __init__(self) -> None:
+ 115 |         self._guard = threading.Lock()
+ 116 |         self._held: set[str] = set()
+ 117 | 
+ 118 |     @contextmanager
+ 119 |     def try_acquire(self, key: str) -> Iterator[bool]:
+ 120 |         with self._guard:
+ 121 |             acquired = key not in self._held
+ 122 |             if acquired:
+ 123 |                 self._held.add(key)
+ 124 |         try:
+ 125 |             yield acquired
+ 126 |         finally:
+ 127 |             if acquired:
+ 128 |                 with self._guard:
+ 129 |                     self._held.discard(key)
+ 130 | 
+ 131 | 
+ 132 | class JobStatus(StrEnum):
+ 133 |     COMPLETED = "completed"
+ 134 |     FAILED = "failed"
+ 135 |     DENIED = "denied"
+ 136 |     SKIPPED = "skipped"
+ 137 | 
+ 138 | 
+ 139 | @dataclass(frozen=True, slots=True)
+ 140 | class OwnedJob:
+ 141 |     """A unit of background work that can only ever act for one owner."""
+ 142 | 
+ 143 |     kind: str
+ 144 |     owner: OwnerIdentity
+ 145 | 
+ 146 |     @property
+ 147 |     def key(self) -> str:
+ 148 |         return owner_scoped_key(self.owner, "job", self.kind)
+ 149 | 
+ 150 | 
+ 151 | @dataclass(frozen=True, slots=True)
+ 152 | class JobOutcome(Generic[T]):
+ 153 |     job: OwnedJob
+ 154 |     status: JobStatus
+ 155 |     result: T | None = None
+ 156 |     error: str | None = None
+ 157 | 
+ 158 | 
+ 159 | _DEFAULT_LOCKS = OwnerLocks()
+ 160 | 
+ 161 | 
+ 162 | def run_owned_job(
+ 163 |     job: OwnedJob,
+ 164 |     db_path: str,
+ 165 |     work: Callable[[OwnerIdentity], T],
+ 166 |     *,
+ 167 |     locks: OwnerLocks | None = None,
+ 168 | ) -> JobOutcome[T]:
+ 169 |     """Re-authorize the job's owner, lock per owner, then run *work* isolated.
+ 170 | 
+ 171 |     *work* receives the identity freshly verified against the user store, so a
+ 172 |     user removed after the job was queued is denied rather than resurrected.
+ 173 |     Failures are contained and reported in the outcome; they never propagate to
+ 174 |     the next owner's job.
+ 175 |     """
+ 176 |     try:
+ 177 |         owner = authorize_owner(db_path, job.owner.user_id)
+ 178 |     except OwnershipError as exc:
+ 179 |         logger.warning(
+ 180 |             "Denied %s job for owner %s: %s", job.kind, job.owner.user_id, exc
+ 181 |         )
+ 182 |         return JobOutcome(job, JobStatus.DENIED, error=str(exc))
+ 183 | 
+ 184 |     with (locks or _DEFAULT_LOCKS).try_acquire(job.key) as acquired:
+ 185 |         if not acquired:

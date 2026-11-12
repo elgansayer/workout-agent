@@ -1,0 +1,71 @@
+# health_connect.py (L1-L70 of 73)
+   1 | """Reads recovery metrics exported from Google Health Connect.
+   2 | 
+   3 | Health Connect data is locked to the Android device for privacy. The intended
+   4 | flow is to use an app such as Health Sync or Tasker to drop a small daily JSON
+   5 | file into a folder synced to this machine. This module reads that file if it
+   6 | exists. If it is missing or malformed, the agent simply runs without recovery
+   7 | data.
+   8 | 
+   9 | Expected JSON shape:
+  10 |     {"date": "2026-06-17", "sleep_hours": 7.5, "weight_kg": 82.0, "resting_hr": 58}
+  11 | 
+  12 | Smart scales such as the Eufy Life P3 also report body composition. If your
+  13 | export includes them, add `body_fat_pct` and `muscle_pct` and the agent will log
+  14 | them too:
+  15 |     {"date": "2026-06-17", "sleep_hours": 7.5, "weight_kg": 82.0,
+  16 |      "body_fat_pct": 14.2, "muscle_pct": 47.5, "resting_hr": 58}
+  17 | """
+  18 | 
+  19 | from __future__ import annotations
+  20 | 
+  21 | import json
+  22 | import logging
+  23 | from pathlib import Path
+  24 | from typing import Any
+  25 | 
+  26 | logger = logging.getLogger(__name__)
+  27 | 
+  28 | 
+  29 | def read_recovery_metrics(file_path: str | None) -> dict[str, Any] | None:
+  30 |     """Return recovery metrics from the exported file, or None if unavailable."""
+  31 |     if not file_path:
+  32 |         return None
+  33 | 
+  34 |     path = Path(file_path)
+  35 |     if not path.is_file():
+  36 |         logger.info("Health Connect file not found at %s; skipping.", file_path)
+  37 |         return None
+  38 | 
+  39 |     try:
+  40 |         data = json.loads(path.read_text(encoding="utf-8"))
+  41 |     except (OSError, ValueError) as exc:
+  42 |         logger.warning("Could not read Health Connect file: %s", exc)
+  43 |         return None
+  44 | 
+  45 |     if not isinstance(data, dict):
+  46 |         logger.warning("Health Connect file did not contain a JSON object.")
+  47 |         return None
+  48 | 
+  49 |     return data
+  50 | 
+  51 | 
+  52 | def body_metrics_from_recovery(
+  53 |     recovery: dict[str, Any] | None,
+  54 | ) -> dict[str, Any] | None:
+  55 |     """Pull body-composition fields from a recovery payload.
+  56 | 
+  57 |     Returns weight, body fat, muscle, resting heart rate, and HRV as a dict,
+  58 |     or None if no body-composition fields are present (so nothing is logged).
+  59 |     """
+  60 |     if not recovery:
+  61 |         return None
+  62 |     metrics: dict[str, Any] = {
+  63 |         "weight_kg": recovery.get("weight_kg"),
+  64 |         "body_fat_pct": recovery.get("body_fat_pct"),
+  65 |         "muscle_pct": recovery.get("muscle_pct"),
+  66 |         "resting_hr": recovery.get("resting_hr"),
+  67 |     }
+  68 |     if all(
+  69 |         metrics[key] is None
+  70 |         for key in ("weight_kg", "body_fat_pct", "muscle_pct")

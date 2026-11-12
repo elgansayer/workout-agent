@@ -1,0 +1,151 @@
+# secret_vault.py (L777-L926 of 1644)
+ 777 |     def store(
+ 778 |         self,
+ 779 |         user_id: str,
+ 780 |         provider: str,
+ 781 |         *,
+ 782 |         api_key: str | None = None,
+ 783 |         client_secret: str | None = None,
+ 784 |         refresh_token: str | None = None,
+ 785 |         client_id: str | None = None,
+ 786 |         model: str | None = None,
+ 787 |         actor: str = "owner",
+ 788 |         source: str = "web",
+ 789 |         verifier: Verifier | None = None,
+ 790 |     ) -> CredentialSummary:
+ 791 |         """Save a new credential for the owner.
+ 792 | 
+ 793 |         Raises :class:`CredentialExistsError` when an active credential already
+ 794 |         exists (use :meth:`rotate`). A previously revoked credential can be
+ 795 |         replaced. When *verifier* is given the candidate is tested first and
+ 796 |         rejected without being stored if the test fails.
+ 797 |         """
+ 798 |         return self._write(
+ 799 |             CredentialAction.SAVE,
+ 800 |             user_id,
+ 801 |             provider,
+ 802 |             secrets={
+ 803 |                 "api_key": api_key,
+ 804 |                 "client_secret": client_secret,
+ 805 |                 "refresh_token": refresh_token,
+ 806 |             },
+ 807 |             client_id=client_id,
+ 808 |             model=model,
+ 809 |             actor=actor,
+ 810 |             source=source,
+ 811 |             verifier=verifier,
+ 812 |         )
+ 813 | 
+ 814 |     def rotate(
+ 815 |         self,
+ 816 |         user_id: str,
+ 817 |         provider: str,
+ 818 |         *,
+ 819 |         api_key: str | None = None,
+ 820 |         client_secret: str | None = None,
+ 821 |         refresh_token: str | None = None,
+ 822 |         model: str | None = None,
+ 823 |         actor: str = "owner",
+ 824 |         source: str = "web",
+ 825 |         verifier: Verifier | None = None,
+ 826 |     ) -> CredentialSummary:
+ 827 |         """Replace the secret material of an existing active credential.
+ 828 | 
+ 829 |         The previous secret is overwritten, never retained. With *verifier* the
+ 830 |         new secret must pass its test first, otherwise the existing credential is
+ 831 |         left untouched.
+ 832 |         """
+ 833 |         return self._write(
+ 834 |             CredentialAction.ROTATE,
+ 835 |             user_id,
+ 836 |             provider,
+ 837 |             secrets={
+ 838 |                 "api_key": api_key,
+ 839 |                 "client_secret": client_secret,
+ 840 |                 "refresh_token": refresh_token,
+ 841 |             },
+ 842 |             client_id=None,
+ 843 |             model=model,
+ 844 |             actor=actor,
+ 845 |             source=source,
+ 846 |             verifier=verifier,
+ 847 |         )
+ 848 | 
+ 849 |     def _write(
+ 850 |         self,
+ 851 |         action: CredentialAction,
+ 852 |         user_id: str,
+ 853 |         provider: str,
+ 854 |         *,
+ 855 |         secrets: Mapping[str, object],
+ 856 |         client_id: str | None,
+ 857 |         model: object,
+ 858 |         actor: str,
+ 859 |         source: str,
+ 860 |         verifier: Verifier | None,
+ 861 |     ) -> CredentialSummary:
+ 862 |         uid = _clean_identity(user_id)
+ 863 |         spec = provider_spec(provider)
+ 864 |         actor, source = _clean_origin(actor, source)
+ 865 |         supplied = self._validated_secrets(spec, secrets)
+ 866 |         clean_model = _clean_model(model)
+ 867 |         if client_id is not None and not isinstance(client_id, str):
+ 868 |             raise InvalidSecretError("The client id must be text.")
+ 869 |         clean_client_id = client_id.strip() or None if client_id else None
+ 870 |         try:
+ 871 |             return self._write_checked(
+ 872 |                 action,
+ 873 |                 uid,
+ 874 |                 spec,
+ 875 |                 supplied,
+ 876 |                 clean_client_id,
+ 877 |                 clean_model,
+ 878 |                 actor,
+ 879 |                 source,
+ 880 |                 verifier,
+ 881 |             )
+ 882 |         except VaultError as exc:
+ 883 |             self._audit_failure(uid, spec.provider, action, exc, actor, source)
+ 884 |             raise
+ 885 | 
+ 886 |     @staticmethod
+ 887 |     def _validated_secrets(
+ 888 |         spec: ProviderSpec,
+ 889 |         secrets: Mapping[str, object],
+ 890 |     ) -> dict[str, str]:
+ 891 |         supplied: dict[str, str] = {}
+ 892 |         for name in SECRET_FIELDS:
+ 893 |             value = secrets.get(name)
+ 894 |             if value is None:
+ 895 |                 continue
+ 896 |             if name not in spec.fields:
+ 897 |                 raise InvalidSecretError("This credential type does not use that field.")
+ 898 |             supplied[name] = _clean_secret(value)
+ 899 |         if not supplied:
+ 900 |             raise InvalidSecretError("A credential value is required.")
+ 901 |         return supplied
+ 902 | 
+ 903 |     def _write_checked(
+ 904 |         self,
+ 905 |         action: CredentialAction,
+ 906 |         uid: str,
+ 907 |         spec: ProviderSpec,
+ 908 |         supplied: Mapping[str, str],
+ 909 |         client_id: str | None,
+ 910 |         model: str | None,
+ 911 |         actor: str,
+ 912 |         source: str,
+ 913 |         verifier: Verifier | None,
+ 914 |     ) -> CredentialSummary:
+ 915 |         # Fail before doing any work when the server cannot encrypt.
+ 916 |         master = self._master()
+ 917 | 
+ 918 |         with self._db() as conn:
+ 919 |             self._require_user(conn, uid)
+ 920 |             current = self._fetch(conn, uid, spec.provider)
+ 921 |         if action is CredentialAction.ROTATE and (current is None or not current.configured):
+ 922 |             raise CredentialNotFoundError("No active credential exists to rotate.")
+ 923 |         if (
+ 924 |             action in (CredentialAction.SAVE, CredentialAction.MIGRATE)
+ 925 |             and current is not None
+ 926 |             and current.configured

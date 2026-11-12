@@ -41,6 +41,24 @@ for (const token of requiredReducedMotionTokens) {
   assert.ok(css.includes(token), `reduced-motion contract is missing ${token}`);
 }
 
+const userPreferenceSelectors = [
+  'html[data-motion="reduce"]',
+  'html[data-contrast="more"]',
+  'html[data-text-size="large"]',
+  'html[data-text-size="x-large"]',
+];
+for (const selector of userPreferenceSelectors) {
+  assert.ok(css.includes(selector), `per-user preference contract is missing ${selector}`);
+}
+assert.ok(
+  css.indexOf(':where(html)[data-contrast="more"]') < css.indexOf('@media (forced-colors: active)'),
+  'per-user contrast must precede the forced-colours block so system colours still win',
+);
+const displaySettings = read('src/app/services/display-settings.ts');
+for (const attribute of ["dataset['motion']", "dataset['contrast']", "dataset['textSize']"]) {
+  assert.ok(displaySettings.includes(attribute), `settings service must set ${attribute}`);
+}
+
 const requiredForcedColourSelectors = [
   ':focus-visible',
   '[aria-current="page"]',
@@ -62,9 +80,10 @@ for (const systemColour of requiredSystemColours) {
   assert.ok(css.includes(systemColour), `forced-colour contract is missing ${systemColour}`);
 }
 
-const discoveredRoutes = [...routesSource.matchAll(/\{\s*path:\s*'([^'*]+)'\s*,\s*component:/g)]
-  .map((match) => match[1])
-  .sort();
+// Lazy routes are concrete component routes too and must stay documented.
+const discoveredRoutes = [
+  ...routesSource.matchAll(/\{\s*path:\s*'([^'*]+)'\s*,\s*(?:component|loadComponent):/g),
+].map((match) => match[1]).sort();
 const documentedRoutes = [...matrix.routes].sort();
 assert.deepEqual(
   documentedRoutes,

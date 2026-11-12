@@ -59,6 +59,33 @@ describe('Compact dashboard', () => {
     http.verify();
   });
 
+  it('shows an explicit state instead of a fabricated workout when paused', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: false,
+      programme_status: 'paused',
+      rotation_message: 'This programme is paused. Resume it when you are ready.',
+      week: 3,
+      cycle_weeks: 8,
+      block: {},
+      rows: [],
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+    expect(el.textContent).toContain('Programme Paused');
+    expect(el.textContent).toContain('This programme is paused.');
+    expect(el.querySelector('a[href="/programmes"]')).toBeTruthy();
+    expect(el.querySelectorAll('.exercise')).toHaveLength(0);
+    http.verify();
+  });
+
   it('retains the last workout and provides retry when refreshing fails', () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
@@ -73,6 +100,151 @@ describe('Compact dashboard', () => {
     expect(dashboard.data().focus).toBe('Upper body');
     expect(dashboard.loading()).toBe(false);
     expect(dashboard.error()).toBeTruthy();
+    http.verify();
+  });
+});
+
+describe('Programme provenance', () => {
+  it('shows that the active programme is a generated recommendation', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      week: 2,
+      cycle_weeks: 12,
+      block: { number: 1, name: 'Foundation' },
+      focus: 'Upper body',
+      rows: [{ name: 'Bench Press', planned: '4 × 5-8' }],
+      review_lifts: [],
+      programme_provenance: {
+        kind: 'derived',
+        label: 'Calculated by rules',
+        authoritative: false,
+        confidence: null,
+        source_timestamp: null,
+        ingested_at: '2026-09-01T10:00:00+00:00',
+        transformation_version: 'hevy-programme-v1',
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const badge = (fixture.nativeElement as HTMLElement).querySelector(
+      '.programme-overview .prov-badge',
+    );
+    expect(badge?.textContent?.trim()).toBe('Calculated by rules');
+    http.verify();
+  });
+});
+
+describe('Coach status provenance', () => {
+  it('labels the coaching insight as a derived recommendation', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      week: 2,
+      cycle_weeks: 12,
+      block: {},
+      focus: 'Upper body',
+      rows: [{ name: 'Bench Press', planned: '4 × 5-8' }],
+      review_lifts: [],
+      dashboard_insight: { fatigue: 'Green', wins_stalls: 'Steady', advice: 'Go' },
+      dashboard_insight_provenance: {
+        kind: 'derived',
+        label: 'AI recommendation',
+        authoritative: false,
+        confidence: null,
+        source_timestamp: null,
+        ingested_at: '2026-01-02T03:04:05+00:00',
+        transformation_version: 'dashboard-insight/1',
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const badge = (fixture.nativeElement as HTMLElement).querySelector(
+      '.today-sidebar .prov-badge',
+    );
+    expect(badge?.textContent?.trim()).toBe('AI recommendation');
+    expect(badge?.classList).toContain('prov-derived');
+    http.verify();
+  });
+});
+
+describe('First-run onboarding', () => {
+  it('shows the next highest-value setup action until the account is ready', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: true,
+      focus: 'Select routines from Hevy',
+      rows: [],
+      onboarding: {
+        steps: [],
+        next_step: {
+          id: 'hevy',
+          title: 'Connect Hevy',
+          description: 'Import routines and logged workouts.',
+          href: '/settings?section=connections',
+          optional: false,
+          status: 'pending',
+          skip_consequence: null,
+        },
+        account_ready: false,
+        completed_count: 0,
+        skipped_count: 0,
+        total_steps: 6,
+        progress_percent: 0,
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.textContent).toContain('Connect Hevy');
+    expect(el.querySelector('.onboarding-next a[href="/onboarding"]')).toBeTruthy();
+    http.verify();
+  });
+
+  it('does not show a setup prompt once onboarding is ready', async () => {
+    await TestBed.configureTestingModule({
+      imports: [Dashboard],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Dashboard);
+    fixture.detectChanges();
+    http.expectOne('/api/dashboard').flush({
+      setup_required: false,
+      focus: 'Upper body',
+      rows: [{ name: 'Bench Press', planned: '3 × 8' }],
+      onboarding: {
+        steps: [],
+        next_step: null,
+        account_ready: true,
+        completed_count: 2,
+        skipped_count: 0,
+        total_steps: 6,
+        progress_percent: 33,
+      },
+    });
+    await fixture.whenStable();
+    fixture.detectChanges();
+    const el = fixture.nativeElement as HTMLElement;
+
+    expect(el.querySelector('.onboarding-next')).toBeNull();
     http.verify();
   });
 });

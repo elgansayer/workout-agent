@@ -1,0 +1,151 @@
+# database.py (L680-L829 of 4381)
+ 680 |         )
+ 681 | 
+ 682 |         # Migration: Add user_id column to body_metrics for multi-tenancy
+ 683 |         cursor.execute("PRAGMA table_info(body_metrics)")
+ 684 |         bm_columns = {row[1] for row in cursor.fetchall()}
+ 685 |         if "user_id" not in bm_columns:
+ 686 |             cursor.execute(
+ 687 |                 "ALTER TABLE body_metrics ADD COLUMN user_id TEXT REFERENCES users(id)",
+ 688 |             )
+ 689 |         _assign_unowned(cursor, "body_metrics", legacy)
+ 690 |         cursor.execute("DROP INDEX IF EXISTS idx_body_metrics_user")
+ 691 |         cursor.execute(
+ 692 |             "CREATE INDEX IF NOT EXISTS idx_body_metrics_user_date_id "
+ 693 |             "ON body_metrics (user_id, date DESC, id DESC)",
+ 694 |         )
+ 695 | 
+ 696 |         # ---- Programme templates table (multi-user) ----
+ 697 |         cursor.execute(
+ 698 |             """
+ 699 |             CREATE TABLE IF NOT EXISTS programmes (
+ 700 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 701 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 702 |                 source TEXT NOT NULL,  -- 'template' | 'inferred' | 'custom'
+ 703 |                 template_key TEXT,
+ 704 |                 definition TEXT NOT NULL,  -- JSON blob for day/exercise definitions
+ 705 |                 active INTEGER DEFAULT 0,
+ 706 |                 created_at TEXT NOT NULL,
+ 707 |                 updated_at TEXT NOT NULL,
+ 708 |                 UNIQUE(user_id, template_key)
+ 709 |             )
+ 710 |             """,
+ 711 |         )
+ 712 |         cursor.execute(
+ 713 |             "CREATE INDEX IF NOT EXISTS idx_programmes_user_active "
+ 714 |             "ON programmes (user_id, active)",
+ 715 |         )
+ 716 | 
+ 717 |         # ---- Hevy-first programme domain: additive, idempotent migration ----
+ 718 |         # The old programmes table remains the programme identity row so that
+ 719 |         # existing history is preserved.  New normalized revisions and their
+ 720 |         # child rows are the canonical domain; template_key/definition are only
+ 721 |         # a temporary compatibility read path for unmigrated runtime callers.
+ 722 |         # Remember which accounts arrived with several active programmes: the
+ 723 |         # domain migration below collapses them, but the authoritative-programme
+ 724 |         # decision must still record that a reconciliation took place.
+ 725 |         cursor.execute(
+ 726 |             "SELECT user_id FROM programmes WHERE active = 1 "
+ 727 |             "GROUP BY user_id HAVING COUNT(*) > 1"
+ 728 |         )
+ 729 |         reconciled_users = {row[0] for row in cursor.fetchall()}
+ 730 |         cursor.execute("PRAGMA table_info(programmes)")
+ 731 |         programme_columns = {row[1] for row in cursor.fetchall()}
+ 732 |         domain_columns = {
+ 733 |             "name": "TEXT",
+ 734 |             "status": "TEXT NOT NULL DEFAULT 'draft'",
+ 735 |             "goal": "TEXT",
+ 736 |             "duration_weeks": "INTEGER",
+ 737 |             "start_date": "TEXT",
+ 738 |             "end_date": "TEXT",
+ 739 |             "current_revision_id": "INTEGER",
+ 740 |             "activated_at": "TEXT",
+ 741 |             "archived_at": "TEXT",
+ 742 |             "predecessor_programme_id": "INTEGER REFERENCES programmes(id)",
+ 743 |         }
+ 744 |         had_status = "status" in programme_columns
+ 745 |         had_name = "name" in programme_columns
+ 746 |         for column, declaration in domain_columns.items():
+ 747 |             if column not in programme_columns:
+ 748 |                 cursor.execute(
+ 749 |                     f"ALTER TABLE programmes ADD COLUMN {column} {declaration}"
+ 750 |                 )
+ 751 | 
+ 752 |         cursor.execute(
+ 753 |             """
+ 754 |             CREATE TABLE IF NOT EXISTS programme_revisions (
+ 755 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 756 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 757 |                 programme_id INTEGER NOT NULL REFERENCES programmes(id),
+ 758 |                 revision_number INTEGER NOT NULL,
+ 759 |                 reason TEXT NOT NULL,
+ 760 |                 engine_version TEXT NOT NULL,
+ 761 |                 settings_json TEXT NOT NULL DEFAULT '{}',
+ 762 |                 source_summary_json TEXT NOT NULL DEFAULT '{}',
+ 763 |                 created_at TEXT NOT NULL,
+ 764 |                 UNIQUE(programme_id, revision_number)
+ 765 |             )
+ 766 |             """
+ 767 |         )
+ 768 |         cursor.execute(
+ 769 |             """
+ 770 |             CREATE TABLE IF NOT EXISTS programme_routines (
+ 771 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 772 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 773 |                 programme_id INTEGER NOT NULL REFERENCES programmes(id),
+ 774 |                 revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+ 775 |                 position INTEGER NOT NULL,
+ 776 |                 provider TEXT NOT NULL DEFAULT 'hevy',
+ 777 |                 source_routine_id TEXT NOT NULL,
+ 778 |                 title TEXT NOT NULL,
+ 779 |                 folder_id TEXT,
+ 780 |                 provider_updated_at TEXT,
+ 781 |                 snapshot_hash TEXT NOT NULL,
+ 782 |                 snapshot_json TEXT NOT NULL DEFAULT '{}',
+ 783 |                 enabled INTEGER NOT NULL DEFAULT 1,
+ 784 |                 participation TEXT NOT NULL DEFAULT 'full',
+ 785 |                 cadence TEXT NOT NULL DEFAULT 'rotation',
+ 786 |                 source_conflict_state TEXT NOT NULL DEFAULT 'unchanged',
+ 787 |                 created_at TEXT NOT NULL,
+ 788 |                 UNIQUE(revision_id, position),
+ 789 |                 UNIQUE(revision_id, source_routine_id)
+ 790 |             )
+ 791 |             """
+ 792 |         )
+ 793 |         cursor.execute(
+ 794 |             """
+ 795 |             CREATE TABLE IF NOT EXISTS programme_blocks (
+ 796 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 797 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 798 |                 programme_id INTEGER NOT NULL REFERENCES programmes(id),
+ 799 |                 revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+ 800 |                 position INTEGER NOT NULL,
+ 801 |                 key TEXT NOT NULL,
+ 802 |                 name TEXT NOT NULL,
+ 803 |                 start_week INTEGER NOT NULL,
+ 804 |                 end_week INTEGER NOT NULL,
+ 805 |                 objective TEXT NOT NULL DEFAULT '',
+ 806 |                 targets_json TEXT NOT NULL DEFAULT '{}',
+ 807 |                 adaptation_policy_json TEXT NOT NULL DEFAULT '{}',
+ 808 |                 exit_criteria_json TEXT NOT NULL DEFAULT '{}',
+ 809 |                 created_at TEXT NOT NULL,
+ 810 |                 UNIQUE(revision_id, position),
+ 811 |                 CHECK(start_week >= 1 AND end_week >= start_week)
+ 812 |             )
+ 813 |             """
+ 814 |         )
+ 815 |         cursor.execute(
+ 816 |             """
+ 817 |             CREATE TABLE IF NOT EXISTS exercise_prescriptions (
+ 818 |                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+ 819 |                 user_id TEXT NOT NULL REFERENCES users(id),
+ 820 |                 programme_id INTEGER NOT NULL REFERENCES programmes(id),
+ 821 |                 revision_id INTEGER NOT NULL REFERENCES programme_revisions(id),
+ 822 |                 routine_position INTEGER,
+ 823 |                 block_position INTEGER,
+ 824 |                 week_number INTEGER,
+ 825 |                 exercise_template_id TEXT NOT NULL,
+ 826 |                 exercise_title TEXT NOT NULL,
+ 827 |                 role TEXT NOT NULL,
+ 828 |                 set_target_json TEXT NOT NULL DEFAULT '{}',
+ 829 |                 rep_target_json TEXT NOT NULL DEFAULT '{}',

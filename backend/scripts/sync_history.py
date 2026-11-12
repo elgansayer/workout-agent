@@ -11,6 +11,7 @@ Run from the repo root:
     python scripts/sync_history.py
 """
 
+import argparse
 import logging
 import sys
 from pathlib import Path
@@ -21,24 +22,27 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from config import Config
-from database import init_db, save_progress, save_workout
+from database import init_db, require_tenant, save_progress, save_workout
 from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
+from legacy_ownership import is_deployment_owner
+from tenancy import TenantRequiredError
+from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 def _rebuild_tables(db_path: str, user_id: str | None = None) -> None:
-    """Clear workout_history and exercise_progress so we can repopulate them."""
+    """Clear one user's workout_history and exercise_progress for repopulation.
+
+    The delete is always tenant scoped: it never clears other users' history.
+    """
+    uid = require_tenant(user_id, db_path)
     with sqlite3.connect(db_path, timeout=10) as conn:
         conn.execute("PRAGMA journal_mode=WAL")
-        if user_id is not None:
-            conn.execute("DELETE FROM workout_history WHERE user_id = ?", (user_id,))
-            conn.execute("DELETE FROM exercise_progress WHERE user_id = ?", (user_id,))
-        else:
-            conn.execute("DELETE FROM workout_history")
-            conn.execute("DELETE FROM exercise_progress")
+        conn.execute("DELETE FROM workout_history WHERE user_id = ?", (uid,))
+        conn.execute("DELETE FROM exercise_progress WHERE user_id = ?", (uid,))
         conn.commit()
 
 
@@ -53,25 +57,45 @@ def sync_all(
     Args:
         api_key: Hevy API key.
         db_path: Optional database path (falls back to Config default).
-        user_id: Scopes the rebuilt rows to a specific user when provided.
+        user_id: The user whose history is rebuilt. Required outside the explicit
+            non-production local mode; history is never rebuilt for everyone.
 
     Returns:
         A summary dict with keys ``workouts_found`` (int) and
-        ``processed`` (int), or ``error`` (str) on failure.
+        ``processed`` (int), or ``error`` (str) plus a fixed ``error_code`` on
+        failure.  A failed fetch is an error, never an empty success: an
+        unreachable Hevy must not be reported as "synced 0 of 0 workouts".
     """
     if not api_key:
-        return {"error": "No Hevy API key configured."}
+        return {
+            "error": "No Hevy API key configured.",
+            "error_code": "not_configured",
+        }
 
     if db_path is None:
         config = Config.load()
         db_path = config.database_path
 
     init_db(db_path)
+    try:
+        user_id = require_tenant(user_id, db_path)
+        user_id = authorize_owner(db_path, user_id).user_id
+    except (TenantRequiredError, OwnershipError) as exc:
+        return {"error": str(exc), "error_code": "ownership_error"}
     logger.info("Fetching all workouts from Hevy (DB %s)...", db_path)
 
     workouts = get_all_workouts(api_key)
+    if workouts is None:
+        logger.warning("Could not fetch workouts from Hevy; history left unchanged.")
+        return {
+            "error": (
+                "Could not fetch your workouts from Hevy. Your existing history "
+                "was not changed."
+            ),
+            "error_code": "hevy_unavailable",
+        }
     if not workouts:
-        logger.info("No workouts found or failed to fetch.")
+        logger.info("Hevy returned no workouts.")
         return {"workouts_found": 0, "processed": 0}
 
     logger.info("Found %d workouts. Rebuilding history...", len(workouts))
@@ -102,13 +126,43 @@ def sync_all(
     return {"workouts_found": len(workouts), "processed": saved_count}
 
 
-if __name__ == "__main__":
+def main(argv: list[str] | None = None) -> int:
+    """Rebuild history with the deployment-wide ``HEVY_API_KEY``.
+
+    That key belongs to the deployment owner only, so it is refused for any other
+    account; use ``main.py --sync-history --user-id ...`` for those, which uses
+    the account's own stored key.
+    """
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--user-id",
+        help="Account whose history is rebuilt (required in production).",
+    )
+    args = parser.parse_args(argv)
+
     config = Config.load()
     if not config.hevy_api_key:
         logger.error("HEVY_API_KEY is not set in .env")
-    else:
-        result = sync_all(config.hevy_api_key, config.database_path)
-        if "error" in result:
-            logger.error("%s", result["error"])
-        else:
-            logger.info("%s", result)
+        return 1
+    init_db(config.database_path)
+    try:
+        user_id = require_tenant(args.user_id, config.database_path)
+    except TenantRequiredError as exc:
+        logger.error("%s", exc)
+        return 1
+    if not is_deployment_owner(user_id, config.database_path):
+        logger.error(
+            "HEVY_API_KEY belongs to the deployment owner; run "
+            "'main.py --sync-history --user-id ...' to use this account's own key."
+        )
+        return 1
+    result = sync_all(config.hevy_api_key, config.database_path, user_id=user_id)
+    if "error" in result:
+        logger.error("%s", result["error"])
+        return 1
+    logger.info("%s", result)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

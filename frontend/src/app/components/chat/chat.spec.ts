@@ -1,5 +1,5 @@
 import { provideHttpClient } from '@angular/common/http';
-import { provideHttpClientTesting } from '@angular/common/http/testing';
+import { HttpTestingController, provideHttpClientTesting } from '@angular/common/http/testing';
 import { TestBed } from '@angular/core/testing';
 import { vi } from 'vitest';
 import { environment } from '../../../environments/environment';
@@ -89,5 +89,579 @@ describe('Coach connection', () => {
     expect(send).not.toHaveBeenCalled();
     chat.onKeyDown(new KeyboardEvent('keydown', { key: 'Enter' }));
     expect(send).toHaveBeenCalledOnce();
+  });
+
+  it('disables data-grounded prompts and displays setup explanation when prerequisites fail', () => {
+    chat.capabilities.set({
+      provider_ready: true,
+      provider_name: 'gemini',
+      capabilities: {
+        workout_analysis: {
+          enabled: false,
+          status: 'missing_data',
+          explanation: 'No workout logs found. Connect Hevy in Settings and sync your workout history.',
+        },
+        recovery_analysis: {
+          enabled: false,
+          status: 'missing_source',
+          explanation: 'Connect a health source in Settings to enable recovery-aware coaching.',
+        },
+      },
+      suggested_prompts: [
+        {
+          text: 'How is my deadlift progressing?',
+          capability: 'workout_analysis',
+          icon: '📊',
+          enabled: false,
+          explanation: 'No workout logs found. Connect Hevy in Settings and sync your workout history.',
+        },
+      ],
+      overall_status: 'educational_only',
+      disclaimer: 'Coach provides general educational guidance until training and recovery sources are connected.',
+      welcome_message: 'Coach is in educational mode.',
+    });
+
+    const sendSpy = vi.spyOn(chat, 'sendMessage');
+    chat.askSuggested('How is my deadlift progressing?');
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(chat.error()).toBe('No workout logs found. Connect Hevy in Settings and sync your workout history.');
+  });
+
+  it('enables data-grounded prompts when prerequisites pass', () => {
+    chat.capabilities.set({
+      provider_ready: true,
+      provider_name: 'gemini',
+      capabilities: {
+        workout_analysis: {
+          enabled: true,
+          status: 'ready',
+          explanation: 'Workout logs and personal records are connected and current.',
+        },
+      },
+      suggested_prompts: [
+        {
+          text: 'How is my deadlift progressing?',
+          capability: 'workout_analysis',
+          icon: '📊',
+          enabled: true,
+          explanation: 'Workout logs and personal records are connected and current.',
+        },
+      ],
+      overall_status: 'partially_grounded',
+      disclaimer: 'Coach answers based on your connected training logs.',
+      welcome_message: 'Coach has access to your training logs.',
+    });
+
+    const sendSpy = vi.spyOn(chat, 'sendMessage').mockResolvedValue();
+    chat.askSuggested('How is my deadlift progressing?');
+
+    expect(sendSpy).toHaveBeenCalledOnce();
+    expect(chat.userInput).toBe('How is my deadlift progressing?');
+    expect(chat.error()).toBeNull();
+  });
+
+  it('loads coaching capabilities from /api/coach/capabilities', () => {
+    const http = TestBed.inject(HttpTestingController);
+    chat.loadCapabilities();
+    const req = http.expectOne('/api/coach/capabilities');
+    expect(req.request.method).toBe('GET');
+    req.flush({
+      provider_ready: true,
+      provider_name: 'gemini',
+      overall_status: 'educational_only',
+      capabilities: {},
+      suggested_prompts: [],
+      disclaimer: 'Educational disclaimer',
+      welcome_message: 'Welcome message',
+    });
+    expect(chat.capabilities()?.overall_status).toBe('educational_only');
+  });
+});
+
+describe('Coach capability copy', () => {
+  const emptySource = { available: false, freshness: 'never', last_observed_at: null };
+
+  function capability(overrides: Record<string, unknown> = {}): any {
+    return {
+      provider_name: 'gemini',
+      provider_configured: false,
+      provider_state: 'missing_key',
+      can_chat: false,
+      status: 'unconfigured',
+      sync_configured: false,
+      sync_state: 'not_configured',
+      programme_available: false,
+      has_training_data: false,
+      has_fresh_training_data: false,
+      sources: {
+        training_logs: { ...emptySource },
+        progress_history: { ...emptySource },
+        personal_records: { ...emptySource },
+        body_metrics: { ...emptySource },
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Chat],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+  });
+
+  async function render(capabilityPayload: ReturnType<typeof capability>) {
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Chat);
+    fixture.detectChanges();
+    http.expectOne('/api/chat/history').flush({ messages: [] });
+    http.expectOne('/api/coach/capability').flush(capabilityPayload);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, element: fixture.nativeElement as HTMLElement, http };
+  }
+
+  function suggestButton(element: HTMLElement, text: string): HTMLButtonElement {
+    const button = Array.from(
+      element.querySelectorAll<HTMLButtonElement>('.suggest-card'),
+    ).find((item) => item.textContent?.includes(text));
+    if (!button) throw new Error(`Missing suggestion: ${text}`);
+    return button;
+  }
+
+  it('claims no data or provider access when neither exists', async () => {
+    const { element } = await render(capability());
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'No data source or AI provider configured',
+    );
+    expect(welcome).not.toMatch(/training logs|body composition|personal records|history/i);
+    expect(element.querySelector('.chat-disclaimer')?.textContent).not.toMatch(
+      /training logs|recovery data|programme/i,
+    );
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+    expect(
+      element.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled,
+    ).toBe(true);
+  });
+
+  it('does not claim training data when a provider exists but nothing is synced', async () => {
+    const { fixture, element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'ready',
+        can_chat: true,
+        status: 'no_data',
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'No training data synced',
+    );
+    expect(welcome).toContain('No training data has been synced yet');
+    expect(welcome).not.toContain('full access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+
+    const input = element.querySelector<HTMLTextAreaElement>('.chat-textarea');
+    if (!input) throw new Error('Missing chat input');
+    input.value = 'Hello';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+    expect(element.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(false);
+  });
+
+  it('lists available data but blocks questions when no provider is configured', async () => {
+    const { element } = await render(
+      capability({
+        has_training_data: true,
+        has_fresh_training_data: true,
+        status: 'provider_missing',
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          body_metrics: { available: true, freshness: 'fresh', last_observed_at: '2026-08-19' },
+        },
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'AI provider not configured',
+    );
+    expect(welcome).toContain('exercise progress');
+    expect(welcome).toContain('body composition');
+    expect(welcome).toContain('needs an AI provider');
+    expect(welcome).not.toContain('full access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+  });
+
+  it('enables only the questions backed by available data', async () => {
+    const { element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'verified',
+        provider_verified: true,
+        provider_source: 'user',
+        verified_data: true,
+        readiness: 'ready',
+        can_chat: true,
+        status: 'ready',
+        sync_configured: true,
+        sync_state: 'synced',
+        has_training_data: true,
+        has_fresh_training_data: true,
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          personal_records: { available: true, freshness: 'fresh', last_observed_at: '2026-08-18' },
+          body_metrics: emptySource,
+        },
+      }),
+    );
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Ready to use your training data',
+    );
+    expect(suggestButton(element, 'deadlift progressing').disabled).toBe(false);
+    expect(suggestButton(element, 'lifts are stalling').disabled).toBe(false);
+    expect(suggestButton(element, 'recovering well enough').disabled).toBe(true);
+    expect(suggestButton(element, 'body composition trending').disabled).toBe(true);
+    expect(element.querySelector('.welcome-sub')?.textContent).not.toContain('full access');
+  });
+
+  it('reports stale training data without hiding the available sources', async () => {
+    const { element } = await render(
+      capability({
+        provider_configured: true,
+        provider_state: 'ready',
+        can_chat: true,
+        status: 'stale_data',
+        sync_configured: true,
+        sync_state: 'synced',
+        has_training_data: true,
+        has_fresh_training_data: false,
+        sources: {
+          training_logs: emptySource,
+          progress_history: { available: true, freshness: 'stale', last_observed_at: '2026-06-01' },
+          personal_records: { available: true, freshness: 'stale', last_observed_at: '2026-06-01' },
+          body_metrics: emptySource,
+        },
+      }),
+    );
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Training data is stale',
+    );
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain(
+      'Some data may be out of date',
+    );
+  });
+
+  it('fails closed when capability cannot be verified', async () => {
+    const { element } = await render(
+      capability({
+        status: 'unavailable',
+        provider_name: null,
+        provider_state: 'unknown',
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(element.querySelector('.status-text')?.textContent).toContain(
+      'Could not verify data access',
+    );
+    expect(welcome).toContain('will not claim access');
+    expect(
+      Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true);
+  });
+});
+
+
+describe('Coach verified state', () => {
+  const emptySource = { available: false, freshness: 'never', last_observed_at: null };
+  const freshSource = { available: true, freshness: 'fresh', last_observed_at: '2026-09-01' };
+
+  function capability(overrides: Record<string, unknown> = {}): any {
+    return {
+      provider_name: 'gemini',
+      provider_configured: true,
+      provider_state: 'verified',
+      provider_verified: true,
+      provider_source: 'user',
+      can_chat: true,
+      status: 'ready',
+      sync_configured: true,
+      sync_state: 'synced',
+      readiness: 'ready',
+      verified_data: true,
+      programme_available: true,
+      has_training_data: true,
+      has_fresh_training_data: true,
+      sources: {
+        training_logs: { ...emptySource },
+        progress_history: { ...freshSource },
+        personal_records: { ...freshSource },
+        body_metrics: { ...emptySource },
+      },
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [Chat],
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    }).compileComponents();
+  });
+
+  async function render(
+    payload: ReturnType<typeof capability>,
+    setup: Record<string, unknown> | null = null,
+  ) {
+    const http = TestBed.inject(HttpTestingController);
+    const fixture = TestBed.createComponent(Chat);
+    fixture.detectChanges();
+    http.expectOne('/api/chat/history').flush({ messages: [], setup });
+    http.expectOne('/api/coach/capability').flush(payload);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return { fixture, element: fixture.nativeElement as HTMLElement, http };
+  }
+
+  function status(element: HTMLElement): string {
+    return element.querySelector('.status-text')?.textContent ?? '';
+  }
+
+  function enabledSuggestions(element: HTMLElement): number {
+    return Array.from(element.querySelectorAll<HTMLButtonElement>('.suggest-card')).filter(
+      (button) => !button.disabled,
+    ).length;
+  }
+
+  it('claims a working provider and data only when both are verified', async () => {
+    const { element } = await render(capability());
+
+    expect(status(element)).toContain('Ready to use your training data');
+    expect(element.querySelector('.status-dot')?.classList).toContain('online');
+    expect(element.querySelector('#coach-test-provider')).toBeNull();
+    expect(enabledSuggestions(element)).toBeGreaterThan(0);
+  });
+
+  it('never claims readiness for a key that was never tested, and offers to test it', async () => {
+    const { element } = await render(
+      capability({
+        provider_state: 'unverified',
+        provider_verified: false,
+        status: 'provider_unverified',
+      }),
+    );
+    const welcome = element.querySelector('.welcome-sub')?.textContent ?? '';
+
+    expect(status(element)).toContain('not tested yet');
+    expect(status(element)).not.toContain('Ready');
+    expect(element.querySelector('.status-dot')?.classList).not.toContain('online');
+    expect(element.querySelector('.status-dot')?.classList).toContain('warning');
+    expect(welcome).toContain('cannot confirm it works');
+    expect(element.querySelector('#coach-test-provider')).toBeTruthy();
+    // Coach may try, it just never claims the provider works.
+    expect(element.querySelector<HTMLButtonElement>('.chat-send-btn')).toBeTruthy();
+  });
+
+  it('describes the shared server key honestly and offers no test it cannot run', async () => {
+    const { element } = await render(
+      capability({
+        provider_state: 'unverified',
+        provider_verified: false,
+        provider_source: 'server',
+        status: 'provider_unverified',
+      }),
+    );
+
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain('shared server key');
+    expect(element.querySelector('#coach-test-provider')).toBeNull();
+  });
+
+  it('pauses Coach, disables every question and says why when the provider test failed', async () => {
+    const { fixture, element } = await render(
+      capability({
+        provider_state: 'failed',
+        provider_verified: false,
+        can_chat: false,
+        status: 'provider_failed',
+      }),
+    );
+    const input = element.querySelector<HTMLTextAreaElement>('.chat-textarea');
+    if (!input) throw new Error('Missing chat input');
+    input.value = 'Hello';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    expect(status(element)).toContain('AI provider test failed');
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain('Coach is paused');
+    expect(element.querySelector('.chat-disclaimer')?.textContent).toContain('paused');
+    expect(enabledSuggestions(element)).toBe(0);
+    expect(element.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(true);
+    expect(element.querySelector('#coach-test-provider')).toBeTruthy();
+  });
+
+  it('withholds data-grounded questions while a sync rebuilds the history', async () => {
+    const { element } = await render(
+      capability({ status: 'syncing', readiness: 'syncing', verified_data: false }),
+    );
+
+    expect(status(element)).toContain('Hevy sync in progress');
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain(
+      'will not answer questions about your history',
+    );
+    expect(element.querySelector('.chat-disclaimer')?.textContent).toContain('running');
+    expect(enabledSuggestions(element)).toBe(0);
+  });
+
+  it('keeps the data but admits when the Hevy connection needs attention', async () => {
+    const { element } = await render(capability({ status: 'degraded', readiness: 'degraded' }));
+
+    expect(status(element)).toContain('Hevy connection needs attention');
+    expect(element.querySelector('.welcome-sub')?.textContent).toContain('last successful sync');
+    expect(enabledSuggestions(element)).toBeGreaterThan(0);
+    expect(element.querySelector('.status-dot')?.classList).not.toContain('online');
+  });
+
+  it('never tells an account that can answer that it cannot', async () => {
+    const setup = {
+      state: 'setup_required',
+      label: 'Setup is not finished yet',
+      reason: 'Your AI provider key has not been tested.',
+      action: { id: 'verify_ai', label: 'Test your AI provider', href: '/settings', description: '' },
+      missing: ['ai_verified'],
+      last_activity_at: null,
+      age_days: null,
+      stale: false,
+    };
+
+    const answerable = await render(
+      capability({ provider_state: 'unverified', provider_verified: false, status: 'provider_unverified' }),
+      setup,
+    );
+    expect(answerable.element.querySelector('app-setup-notice h2')?.textContent).toContain(
+      'Coach can answer, but setup is not finished',
+    );
+    answerable.fixture.destroy();
+
+    const blocked = await render(
+      capability({ provider_state: 'missing_key', provider_configured: false, can_chat: false, status: 'unconfigured' }),
+      setup,
+    );
+    expect(blocked.element.querySelector('app-setup-notice h2')?.textContent).toContain(
+      'Coach needs setup before it can answer',
+    );
+  });
+
+  it('tests the stored key in place and shows what the server then verified', async () => {
+    const { fixture, element, http } = await render(
+      capability({
+        provider_state: 'unverified',
+        provider_verified: false,
+        status: 'provider_unverified',
+      }),
+    );
+
+    element.querySelector<HTMLButtonElement>('#coach-test-provider')?.click();
+    fixture.detectChanges();
+    const request = http.expectOne('/api/settings/key/test');
+    expect(request.request.body).toEqual({ provider: 'gemini', api_key: '__stored__' });
+    expect(fixture.componentInstance.testingProvider()).toBe(true);
+    request.flush({ status: 'ok', provider: 'gemini' });
+    http.expectOne('/api/coach/capability').flush(capability());
+    http.expectOne('/api/chat/history').flush({ messages: [], setup: null });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.componentInstance.testingProvider()).toBe(false);
+    expect(element.querySelector('#coach-provider-test-result')?.textContent).toContain('passed');
+    expect(status(element)).toContain('Ready to use your training data');
+    expect(element.querySelector('#coach-test-provider')).toBeNull();
+  });
+
+  it('shows the failure and re-reads the state when the key test is rejected', async () => {
+    const { fixture, element, http } = await render(
+      capability({
+        provider_state: 'unverified',
+        provider_verified: false,
+        status: 'provider_unverified',
+      }),
+    );
+
+    fixture.componentInstance.testProvider();
+    http
+      .expectOne('/api/settings/key/test')
+      .flush(
+        { status: 'error', detail: 'The provider rejected the key or could not be reached.' },
+        { status: 200, statusText: 'OK' },
+      );
+    http.expectOne('/api/coach/capability').flush(
+      capability({
+        provider_state: 'failed',
+        provider_verified: false,
+        can_chat: false,
+        status: 'provider_failed',
+      }),
+    );
+    http.expectOne('/api/chat/history').flush({ messages: [], setup: null });
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(element.querySelector('#coach-provider-test-result')?.textContent).toContain('rejected');
+    expect(status(element)).toContain('AI provider test failed');
+  });
+
+  it('shows the refusal the server gave and re-reads the state it was based on', async () => {
+    const { fixture, http } = await render(capability());
+    const component = fixture.componentInstance;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              code: 'provider_failed',
+              message: "Your AI provider's last connection test failed, so Coach is paused.",
+            },
+          }),
+          { status: 409, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    component.userInput = 'How is my deadlift progressing?';
+
+    await component.sendMessage();
+
+    expect(component.error()).toContain('Coach is paused');
+    expect(component.userInput).toBe('How is my deadlift progressing?');
+    expect(component.messages().some((message) => message.role === 'assistant')).toBe(false);
+    http.expectOne('/api/coach/capability').flush(
+      capability({ provider_state: 'failed', can_chat: false, status: 'provider_failed' }),
+    );
+    http.expectOne('/api/chat/history').flush({ messages: [], setup: null });
+    expect(component.capability()?.status).toBe('provider_failed');
+    vi.unstubAllGlobals();
   });
 });

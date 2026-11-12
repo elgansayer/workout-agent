@@ -12,17 +12,102 @@
     {{ menuOpen() ? 'Close menu' : 'Menu' }}
   </button>
   <nav id="primary-navigation" aria-label="Primary navigation" [class.is-open]="menuOpen()">
-    <a routerLink="/dashboard" routerLinkActive="on" ariaCurrentWhenActive="page">Today</a>
-    <a routerLink="/progress" routerLinkActive="on" ariaCurrentWhenActive="page">Progress</a>
-    <a routerLink="/stats" routerLinkActive="on" ariaCurrentWhenActive="page">Stats</a>
-    <a routerLink="/plan" routerLinkActive="on" ariaCurrentWhenActive="page">Plan</a>
+    <a
+      routerLink="/dashboard"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('dashboard', 'Today')"
+      >Today</a
+    >
+    @if (setup.badge('dashboard'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/progress"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('progress', 'Progress')"
+      >Progress</a
+    >
+    @if (setup.badge('progress'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/stats"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('stats', 'Stats')"
+      >Stats</a
+    >
+    @if (setup.badge('stats'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/plan"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('plan', 'Plan')"
+      >Plan</a
+    >
+    @if (setup.badge('plan'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
     <a routerLink="/programmes" routerLinkActive="on" ariaCurrentWhenActive="page">Programmes</a>
-    <a routerLink="/history" routerLinkActive="on" ariaCurrentWhenActive="page">History</a>
-    <a routerLink="/checkins" routerLinkActive="on" ariaCurrentWhenActive="page">Check-ins</a>
-    <a routerLink="/chat" class="nav-coach" routerLinkActive="on" ariaCurrentWhenActive="page"
+    <a
+      routerLink="/history"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('history', 'History')"
+      >History</a
+    >
+    @if (setup.badge('history'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/checkins"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('checkins', 'Check-ins')"
+      >Check-ins</a
+    >
+    @if (setup.badge('checkins'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/chat"
+      class="nav-coach"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="setup.navLabel('coach', 'Coach')"
       >Coach</a
     >
-    <a routerLink="/settings" routerLinkActive="on" ariaCurrentWhenActive="page">Settings</a>
+    @if (setup.badge('coach'); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    <a
+      routerLink="/settings"
+      routerLinkActive="on"
+      ariaCurrentWhenActive="page"
+      [attr.aria-label]="
+        setup.settingsBadge() ? 'Settings (' + setup.settingsBadge()!.spoken + ')' : null
+      "
+      >Settings</a
+    >
+    @if (setup.settingsBadge(); as badge) {
+      <span class="nav-badge" [attr.data-kind]="badge.kind">{{ badge.label }}</span>
+    }
+    @if (onboarding.state(); as onboardingState) {
+      @if (!onboardingState.account_ready) {
+        <a
+          routerLink="/onboarding"
+          routerLinkActive="on"
+          ariaCurrentWhenActive="page"
+          aria-label="Setup (steps remaining)"
+          >Setup</a
+        >
+        <span class="nav-badge">To do</span>
+      }
+    }
     @if (auth.currentUser() !== undefined && auth.currentUser() !== null) {
       <a routerLink="/profile" routerLinkActive="on" ariaCurrentWhenActive="page">Account</a>
       <button class="nav-logout" type="button" (click)="auth.logout()">Log out</button>
@@ -32,4 +117,10 @@
 <main #mainContent id="main-content" tabindex="-1">
   <router-outlet></router-outlet>
 </main>
-<footer class="foot">Adaptive training built from your connected workout data.</footer>
+<footer class="foot">
+  @if (setup.account()?.state === 'ready') {
+    Adaptive training built from your connected workout data.
+  } @else {
+    Training guidance is built from your workout data once Hevy is connected and synced.
+  }
+</footer>

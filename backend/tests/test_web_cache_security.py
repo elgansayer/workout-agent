@@ -169,15 +169,15 @@ def test_settings_api_returns_masks_not_plaintext_keys() -> None:
     segment = ast.get_source_segment(source, function)
     assert segment is not None
 
-    assert 'f"••••••••{key_value[-4:]}"' in segment
-    assert '"has_key": bool(key_value)' in segment
-    assert '"masked": masked' in segment
-    assert '"model": configured_model' in segment
-    # The plaintext key is read only to derive the mask; it must not be placed
-    # in the response mapping under an api_key/key/value field.
-    assert '"api_key": key_value' not in segment
-    assert '"key": key_value' not in segment
-    assert '"value": key_value' not in segment
+    # The vault returns metadata only. The route must never decrypt a stored
+    # credential or read a plaintext key to build the response.
+    assert "summaries = vault.list_credentials(user_id)" in segment
+    assert "public = summary.to_public_dict()" in segment
+    assert '"has_key": public["has_key"]' in segment
+    assert '"masked": public["masked"]' in segment
+    assert '"model": public["model"]' in segment
+    assert "key_value" not in segment
+    assert "reveal()" not in segment
 
 
 def test_settings_form_never_hydrates_password_inputs_from_server_masks() -> None:

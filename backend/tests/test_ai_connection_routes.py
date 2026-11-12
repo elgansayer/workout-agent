@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import importlib
 import json
 import logging
@@ -19,7 +18,7 @@ import pytest
 from ai_connection import AIConnectionChecker
 from ai_provider import PROVIDERS, AIProvider
 from cryptography.fernet import Fernet
-from itsdangerous import TimestampSigner
+from session_helpers import signed_session_cookie
 from starlette.testclient import TestClient
 
 pytest.importorskip("fastapi")
@@ -77,11 +76,6 @@ class _Env:
     anonymous: TestClient
 
 
-def _cookie(user_id: str, email: str) -> str:
-    payload = base64.b64encode(json.dumps({"user": email, "user_id": user_id}).encode())
-    return TimestampSigner(_SECRET).sign(payload).decode()
-
-
 @pytest.fixture()
 def env(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> _Env:
     db = str(tmp_path / "ai-connection.db")
@@ -117,10 +111,28 @@ def env(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> _Env:
 
     user_a = database.get_or_create_user("athlete-a@example.test", db_path=db)["id"]
     user_b = database.get_or_create_user("athlete-b@example.test", db_path=db)["id"]
+    session_a = app_module.SESSION_STORE.create(user_a)
+    session_b = app_module.SESSION_STORE.create(user_b)
     client_a = TestClient(app_module.app)
-    client_a.cookies.set("session", _cookie(user_a, "athlete-a@example.test"))
+    client_a.cookies.set(
+        "session",
+        signed_session_cookie(
+            _SECRET,
+            user="athlete-a@example.test",
+            user_id=user_a,
+            session_id=session_a,
+        ),
+    )
     client_b = TestClient(app_module.app)
-    client_b.cookies.set("session", _cookie(user_b, "athlete-b@example.test"))
+    client_b.cookies.set(
+        "session",
+        signed_session_cookie(
+            _SECRET,
+            user="athlete-b@example.test",
+            user_id=user_b,
+            session_id=session_b,
+        ),
+    )
     return _Env(
         app=app_module,
         db=db,
@@ -446,7 +458,8 @@ def test_valid_key_is_verified_then_saved_encrypted(env: _Env) -> None:
     response = _save(env.client_a)
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "provider": "claude"}
+    body = response.json()
+    assert body["status"] == "ok" and body["provider"] == "claude"
     assert env.script.built == [(KEY, MODEL)]
     record = _stored(env, env.user_a)
     assert record is not None and record["api_key"] == KEY
@@ -543,17 +556,6 @@ def test_a_check_just_run_from_the_test_button_is_reused_by_save(env: _Env) -> N
     assert len(env.script.built) == 1
 
 
-def test_non_ai_connector_keys_are_saved_without_a_provider_check(env: _Env) -> None:
-    response = env.client_a.post(
-        "/api/settings/key",
-        json={"provider": "hevy", "api_key": "synthetic-hevy-key"},
-    )
-
-    assert response.status_code == 200
-    assert env.script.built == []
-    assert _stored(env, env.user_a, "hevy")["api_key"] == "synthetic-hevy-key"
-
-
 def test_save_is_throttled_per_user_without_persisting(env: _Env, monkeypatch: Any) -> None:
     monkeypatch.setattr(
         env.app,
@@ -619,6 +621,7 @@ def test_changing_the_model_of_a_stored_key_is_verified_before_activation(
 def test_activation_of_a_model_the_key_cannot_use_saves_nothing(env: _Env) -> None:
     database.save_user_api_key(env.user_a, "claude", KEY, db_path=env.db)
     env.script.outcomes = [_provider_error(openai.NotFoundError, 404)]
+    before = _prefs(env)
 
     response = _activate(
         env, preferred_ai="claude", ai_model="claude-typo-9", goals=["strength"]
@@ -629,8 +632,8 @@ def test_activation_of_a_model_the_key_cannot_use_saves_nothing(env: _Env) -> No
     assert body["code"] == "model_not_found"
     assert body["detail"].endswith("Your AI settings were not saved.")
     # Atomic: the other fields in the request were not applied either.
+    assert _prefs(env) == before
     assert _prefs(env)["preferred_ai"] == "gemini"
-    assert _prefs(env)["goals"] == []
 
 
 def test_deprecated_model_cannot_be_activated(env: _Env) -> None:

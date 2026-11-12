@@ -54,14 +54,42 @@ _SAMPLE_WORKOUTS: list[dict[str, object]] = [
 
 def test_no_api_key_returns_error() -> None:
     result = sync_history.sync_all("")
-    assert result == {"error": "No Hevy API key configured."}
+    assert result == {
+        "error": "No Hevy API key configured.",
+        "error_code": "not_configured",
+    }
 
 
-def test_get_all_workouts_returns_none(tmp_path: pathlib.Path) -> None:
+def test_a_failed_fetch_is_an_error_not_an_empty_success(
+    tmp_path: pathlib.Path,
+) -> None:
+    from database import get_or_create_user, save_progress
+    from hevy_parser import ExerciseSummary, WorkoutSummary
+
     db_path = _new_temp_db(tmp_path)
+    user_id = get_or_create_user("synthetic-fail@example.com", "Fail", db_path)["id"]
+    save_progress(
+        WorkoutSummary(
+            title="Kept",
+            date="2026-02-01",
+            duration_seconds=3600,
+            total_volume_kg=1000.0,
+            exercises=[ExerciseSummary("Squat", 100.0, 5, 3)],
+        ),
+        db_path,
+        user_id=user_id,
+    )
     with patch("scripts.sync_history.get_all_workouts", return_value=None):
-        result = sync_history.sync_all("fake-key", db_path)
-    assert result == {"workouts_found": 0, "processed": 0}
+        result = sync_history.sync_all("fake-key", db_path, user_id=user_id)
+
+    assert result["error_code"] == "hevy_unavailable"
+    assert "workouts_found" not in result
+    assert "existing history was not changed" in str(result["error"])
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        kept = conn.execute(
+            "SELECT COUNT(*) FROM exercise_progress WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+    assert kept == 1
 
 
 def test_get_all_workouts_returns_empty_list(tmp_path: pathlib.Path) -> None:
@@ -83,14 +111,65 @@ def test_sync_all_rebuilds_and_saves_workouts(tmp_path: pathlib.Path) -> None:
 
 
 def test_sync_all_respects_user_id(tmp_path: pathlib.Path) -> None:
+    from database import get_or_create_user
+
     db_path = _new_temp_db(tmp_path)
+    user = get_or_create_user("synthetic-sync@example.com", "Synthetic Sync", db_path)
     with patch("scripts.sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
-        result = sync_history.sync_all("fake-key", db_path, user_id="user-1")
+        result = sync_history.sync_all("fake-key", db_path, user_id=user["id"])
     assert result == {"workouts_found": 2, "processed": 2}
     conn = sqlite3.connect(db_path, timeout=10)
     user_ids = conn.execute("SELECT DISTINCT user_id FROM workout_history").fetchall()
     conn.close()
-    assert user_ids == [("user-1",)]
+    assert user_ids == [(user["id"],)]
+
+
+def test_sync_all_refuses_an_unknown_owner_before_calling_hevy(
+    tmp_path: pathlib.Path,
+) -> None:
+    db_path = _new_temp_db(tmp_path)
+    with patch("scripts.sync_history.get_all_workouts") as fetch:
+        result = sync_history.sync_all("fake-key", db_path, user_id="no-such-user")
+    assert "error" in result
+    fetch.assert_not_called()
+
+
+def test_sync_all_rebuild_never_touches_another_tenants_history(
+    tmp_path: pathlib.Path,
+) -> None:
+    from database import get_or_create_user, save_progress, save_workout
+    from hevy_parser import WorkoutSummary
+
+    db_path = _new_temp_db(tmp_path)
+    mine = get_or_create_user("synthetic-mine@example.com", "Mine", db_path)["id"]
+    theirs = get_or_create_user("synthetic-theirs@example.com", "Theirs", db_path)["id"]
+    payload = {"workouts": [{"id": "T1", "title": "Their Day"}]}
+    save_workout(payload, db_path, when="2026-02-01", user_id=theirs)
+    save_progress(
+        WorkoutSummary(
+            title="Their Day",
+            date="2026-02-01",
+            duration_seconds=3600,
+            total_volume_kg=1000,
+            exercises=[],
+        ),
+        db_path,
+        user_id=theirs,
+    )
+
+    with patch("scripts.sync_history.get_all_workouts", return_value=_SAMPLE_WORKOUTS):
+        sync_history.sync_all("fake-key", db_path, user_id=mine)
+
+    conn = sqlite3.connect(db_path, timeout=10)
+    their_rows = conn.execute(
+        "SELECT COUNT(*) FROM workout_history WHERE user_id = ?", (theirs,)
+    ).fetchone()[0]
+    my_rows = conn.execute(
+        "SELECT COUNT(*) FROM workout_history WHERE user_id = ?", (mine,)
+    ).fetchone()[0]
+    conn.close()
+    assert their_rows == 1
+    assert my_rows == 2
 
 
 def test_sync_all_workout_missing_start_time(tmp_path: pathlib.Path) -> None:
@@ -143,19 +222,29 @@ def test_sync_all_no_date_uses_none(tmp_path: pathlib.Path) -> None:
 
 
 def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
-    from database import save_workout
+    from database import get_legacy_user_id, save_workout
 
     db_path = _new_temp_db(tmp_path)
-    payload = {"workouts": [{"id": "W1", "title": "Test"}]}
-    save_workout(payload, db_path, when="2026-03-01")
-    save_workout(payload, db_path, when="2026-03-02")
+    legacy_id = get_legacy_user_id(db_path)
+    save_workout(
+        {"workouts": [{"id": "W1", "title": "Test"}]},
+        db_path,
+        when="2026-03-01",
+    )
+    save_workout(
+        {"workouts": [{"id": "W2", "title": "Test"}]},
+        db_path,
+        when="2026-03-02",
+    )
 
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
+    # Every row has an owner (an ownerless insert is rejected by the database).
     conn.execute(
-        "INSERT INTO exercise_progress (date, exercise_name, top_weight_kg, top_reps, sets) "
-        "VALUES (?, ?, ?, ?, ?)",
-        ("2026-03-01", "Squat", 100.0, 5, 3),
+        "INSERT INTO exercise_progress "
+        "(date, exercise_name, top_weight_kg, top_reps, sets, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        ("2026-03-01", "Squat", 100.0, 5, 3, legacy_id),
     )
     conn.commit()
     conn.close()
@@ -165,9 +254,42 @@ def test_rebuild_clears_tables(tmp_path: pathlib.Path) -> None:
     assert conn.execute("SELECT COUNT(*) FROM exercise_progress").fetchone()[0] == 1
     conn.close()
 
-    sync_history._rebuild_tables(db_path)
+    sync_history._rebuild_tables(db_path, legacy_id)
 
     conn = sqlite3.connect(db_path, timeout=10)
     assert conn.execute("SELECT COUNT(*) FROM workout_history").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM exercise_progress").fetchone()[0] == 0
     conn.close()
+
+
+def test_rebuild_only_clears_the_named_tenants_history(
+    tmp_path: pathlib.Path,
+) -> None:
+    from database import get_or_create_user, save_progress, save_workout
+    from hevy_parser import ExerciseSummary, WorkoutSummary
+
+    db_path = _new_temp_db(tmp_path)
+    alice = get_or_create_user("alice@example.com", db_path=db_path)["id"]
+    bob = get_or_create_user("bob@example.com", db_path=db_path)["id"]
+    payload = {"workouts": [{"id": "W1", "title": "Synthetic"}]}
+    summary = WorkoutSummary(
+        title="Synthetic",
+        date="2026-03-01",
+        duration_seconds=3600,
+        total_volume_kg=1500.0,
+        exercises=[ExerciseSummary("Squat (Barbell)", 100.0, 5, 3)],
+    )
+    for owner in (alice, bob):
+        save_workout(payload, db_path, when="2026-03-01", user_id=owner)
+        save_progress(summary, db_path, user_id=owner)
+
+    sync_history._rebuild_tables(db_path, user_id=alice)
+
+    with sqlite3.connect(db_path, timeout=10) as conn:
+        for table in ("workout_history", "exercise_progress"):
+            remaining = dict(
+                conn.execute(
+                    f"SELECT user_id, COUNT(*) FROM {table} GROUP BY user_id"
+                ).fetchall()
+            )
+            assert remaining == {bob: 1}, table

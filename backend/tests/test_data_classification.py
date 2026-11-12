@@ -30,6 +30,7 @@ def test_sensitive_field_registry_covers_database_security_boundaries() -> None:
         "refresh_token": DataClass.CREDENTIAL,
         "endpoint": DataClass.IDENTIFIER,
         "p256dh": DataClass.CREDENTIAL,
+        "session_token_hash": DataClass.CREDENTIAL,
         "auth": DataClass.CREDENTIAL,
         "hevy_payload": DataClass.WORKOUT,
         "weight_kg": DataClass.HEALTH,
@@ -123,3 +124,50 @@ def test_credentials_are_never_exportable() -> None:
     assert POLICIES[DataClass.CREDENTIAL].exportable is False
     assert POLICIES[DataClass.INTERNAL].exportable is False
     assert POLICIES[DataClass.ANALYTICS].exportable is False
+
+
+def test_provenance_ledger_fields_are_classified_and_handled_safely() -> None:
+    assert classify_field("external_id") is DataClass.IDENTIFIER
+    assert classify_field("retained_content") is DataClass.HEALTH
+    assert classify_field("lineage_note") is DataClass.PROMPT
+    assert classify_field("confidence") is DataClass.ANALYTICS
+
+    ledger_row = {
+        "user_id": "owner-1",
+        "source": "google_health",
+        "external_id": "provider-record-1",
+        "retained_content": {"values": {"weight_kg": 81.0}},
+        "lineage_note": "user supplied reason",
+        "confidence": 0.8,
+    }
+    logged = redact_for_log(ledger_row)
+    assert logged["external_id"] == "[REDACTED:IDENTIFIER]"
+    assert logged["retained_content"] == "[REDACTED:HEALTH]"
+    assert logged["lineage_note"] == "[REDACTED:PROMPT]"
+
+    exported = sanitize_for_export(ledger_row)
+    # The owner's own history is exportable; derived confidence scores are not.
+    # Unclassified nested keys inside retained content still fail closed, so a
+    # real export must map lineage to a reviewed DTO rather than dump raw rows.
+    assert "retained_content" in exported
+    assert exported["lineage_note"] == "user supplied reason"
+    assert exported["external_id"] == "provider-record-1"
+    assert "confidence" not in exported
+def test_pseudonymise_identifier_is_stable_short_and_non_revealing() -> None:
+    from data_classification import pseudonymise_identifier
+
+    tag = pseudonymise_identifier("person@example.com")
+    assert tag == pseudonymise_identifier("person@example.com")
+    assert len(tag) == 12 and all(c in "0123456789abcdef" for c in tag)
+    assert tag != pseudonymise_identifier("other@example.com")
+    assert "person" not in tag and "example" not in tag
+
+
+def test_pseudonymise_identifier_is_domain_separated_from_plain_hashes() -> None:
+    """A plain SHA-256 of an address (e.g. from another system) must not match."""
+    import hashlib
+
+    from data_classification import pseudonymise_identifier
+
+    plain = hashlib.sha256(b"person@example.com").hexdigest()[:12]
+    assert pseudonymise_identifier("person@example.com") != plain

@@ -1,9 +1,7 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from health_sync import HealthSyncRun, SyncState
-
 
 NOW = datetime(2026, 8, 19, tzinfo=timezone.utc)
 

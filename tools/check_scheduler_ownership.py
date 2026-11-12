@@ -57,6 +57,49 @@ REQUIRED_CONTRACT_SECTIONS: tuple[str, ...] = (
 # scheduler owns selection, so no workflow may listen for them.
 FORBIDDEN_TRIGGERS: tuple[str, ...] = ("issues", "issue_comment")
 
+# These GitHub-hosted autonomous workflows were retired when scheduling moved to
+# the VPS. A deterministic replacement must use a new, purpose-specific name so a
+# stale workflow cannot be accidentally re-enabled by restoring an old file.
+RETIRED_WORKFLOW_NAMES: frozenset[str] = frozenset(
+    {
+        "agent-daily.yml",
+        "agent-hourly.yml",
+        "agent-weekly.yml",
+        "architect.yml",
+        "auto-dispatcher.yml",
+        "daily.yml",
+        "failure-monitor.yml",
+        "hourly.yml",
+        "on-failure.yml",
+        "openhands.yml",
+        "planner.yml",
+        "pr-reviewer.yml",
+        "resolver.yml",
+        "reviewer.yml",
+        "swarm.yml",
+        "weekly.yml",
+    }
+)
+
+# Repository instructions must not point at the retired GitHub-hosted swarm as a
+# fallback owner for claim, branch, pull request, review or repair work.
+RETIRED_INSTRUCTION_REFERENCES: tuple[tuple[str, str], ...] = (
+    ("swarmd", "the retired swarm daemon"),
+    ("SWARM.md", "the retired swarm documentation"),
+    (".tasks/stuck", "the retired swarm task directory"),
+)
+
+INSTRUCTION_FILES: tuple[str, ...] = (
+    "README.md",
+    "AGENTS.md",
+    CONTRACT_DOC,
+)
+
+INSTRUCTION_GLOBS: tuple[str, ...] = (
+    ".agents/skills/*/SKILL.md",
+    ".agents/automations/*.md",
+)
+
 # The queue CLI entry point, in file form (tools/agent_queue.py) or module form
 # (python -m tools.agent_queue). The lookbehind keeps unrelated names such as
 # tools/test_agent_queue.py out of the match.
@@ -72,6 +115,7 @@ _LIST_KEY_RE = re.compile(
 )
 _TRIGGER_KEY_RE = re.compile(r"^(?:\"on\"|'on'|on)\s*:\s*(.*)$")
 _INLINE_LIST_RE = re.compile(r"^\[(.*)\]$")
+_TOP_LEVEL_KEY_RE = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:\s|$)")
 
 
 @dataclass(frozen=True)
@@ -207,11 +251,60 @@ def queue_commands(line: str) -> list[str]:
     return commands
 
 
+def workflow_top_level_keys(text: str) -> set[str]:
+    """Return unquoted top-level mapping keys from a workflow document."""
+
+    keys: set[str] = set()
+    for line in text.splitlines():
+        if not line or line[0].isspace() or line.lstrip().startswith("#"):
+            continue
+        match = _TOP_LEVEL_KEY_RE.match(line)
+        if match:
+            keys.add(match.group("key"))
+    return keys
+
+
+def workflow_hardening_violations(path: Path) -> list[Violation]:
+    """Require explicit least privilege and duplicate-run loop prevention."""
+
+    keys = workflow_top_level_keys(path.read_text(encoding="utf-8"))
+    violations: list[Violation] = []
+    if "permissions" not in keys:
+        violations.append(
+            Violation(
+                path=path,
+                line_number=1,
+                reason="workflow must declare explicit top-level permissions",
+            )
+        )
+    if "concurrency" not in keys:
+        violations.append(
+            Violation(
+                path=path,
+                line_number=1,
+                reason="workflow must declare top-level concurrency for loop prevention",
+            )
+        )
+    return violations
+
+
 def scan_workflow(path: Path) -> list[Violation]:
     """Return the scheduler-ownership violations of a single workflow file."""
 
     text = path.read_text(encoding="utf-8")
     violations: list[Violation] = []
+
+    if path.name in RETIRED_WORKFLOW_NAMES:
+        violations.append(
+            Violation(
+                path=path,
+                line_number=1,
+                reason=(
+                    f"retired GitHub-hosted agent workflow '{path.name}' must not be "
+                    "restored"
+                ),
+            )
+        )
 
     for trigger in workflow_triggers(text):
         if trigger in FORBIDDEN_TRIGGERS:
@@ -281,12 +374,48 @@ def iter_workflows(root: Path) -> Iterable[Path]:
     )
 
 
+def iter_instruction_files(root: Path) -> Iterable[Path]:
+    """Return the repository instruction documents that name an owner."""
+
+    paths = [root / name for name in INSTRUCTION_FILES]
+    for pattern in INSTRUCTION_GLOBS:
+        paths.extend(root.glob(pattern))
+    return sorted({path for path in paths if path.is_file()})
+
+
+def instruction_fallback_violations(root: Path) -> list[Violation]:
+    """Reject instructions that fall back to the retired GitHub-hosted swarm."""
+
+    violations: list[Violation] = []
+    for path in iter_instruction_files(root):
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            for token, reason in RETIRED_INSTRUCTION_REFERENCES:
+                if token not in line:
+                    continue
+                violations.append(
+                    Violation(
+                        path=path,
+                        line_number=line_number,
+                        reason=(
+                            f"instruction references {reason} '{token}'; the retired "
+                            "GitHub-hosted swarm is not an owner for claim, branch, "
+                            "pull request, review or repair work"
+                        ),
+                    )
+                )
+                break
+    return violations
+
+
 def scan_repository(root: Path) -> list[Violation]:
     """Return every scheduler-ownership violation of the repository."""
 
     violations: list[Violation] = []
     for path in iter_workflows(root):
         violations.extend(scan_workflow(path))
+        violations.extend(workflow_hardening_violations(path))
+    violations.extend(instruction_fallback_violations(root))
     return violations
 
 

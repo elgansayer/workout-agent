@@ -1,0 +1,108 @@
+# csrf_security.py (L134-L240 of 333)
+ 134 |     def issue(
+ 135 |         self,
+ 136 |         user_id: str,
+ 137 |         session_cookie: str,
+ 138 |         *,
+ 139 |         now: int | None = None,
+ 140 |     ) -> str:
+ 141 |         issued_at = int(time.time()) if now is None else now
+ 142 |         token = secrets.token_urlsafe(_TOKEN_BYTES)
+ 143 |         with self._connect() as conn:
+ 144 |             conn.execute("DELETE FROM csrf_tokens WHERE expires_at <= ?", (issued_at,))
+ 145 |             conn.execute(
+ 146 |                 "INSERT INTO csrf_tokens "
+ 147 |                 "(token_hash, session_hash, user_id, expires_at) VALUES (?, ?, ?, ?)",
+ 148 |                 (
+ 149 |                     _sha256(token),
+ 150 |                     _sha256(session_cookie),
+ 151 |                     user_id,
+ 152 |                     issued_at + self.ttl_seconds,
+ 153 |                 ),
+ 154 |             )
+ 155 |         return token
+ 156 | 
+ 157 |     def consume(
+ 158 |         self,
+ 159 |         user_id: str,
+ 160 |         session_cookie: str,
+ 161 |         token: str,
+ 162 |         *,
+ 163 |         now: int | None = None,
+ 164 |     ) -> bool:
+ 165 |         if not token or len(token) > 512:
+ 166 |             return False
+ 167 |         checked_at = int(time.time()) if now is None else now
+ 168 |         conn = self._connect()
+ 169 |         try:
+ 170 |             conn.execute("BEGIN IMMEDIATE")
+ 171 |             conn.execute("DELETE FROM csrf_tokens WHERE expires_at <= ?", (checked_at,))
+ 172 |             cursor = conn.execute(
+ 173 |                 "DELETE FROM csrf_tokens "
+ 174 |                 "WHERE token_hash = ? AND session_hash = ? AND user_id = ? "
+ 175 |                 "AND expires_at > ?",
+ 176 |                 (
+ 177 |                     _sha256(token),
+ 178 |                     _sha256(session_cookie),
+ 179 |                     user_id,
+ 180 |                     checked_at,
+ 181 |                 ),
+ 182 |             )
+ 183 |             conn.commit()
+ 184 |             return cursor.rowcount == 1
+ 185 |         except Exception:
+ 186 |             conn.rollback()
+ 187 |             raise
+ 188 |         finally:
+ 189 |             conn.close()
+ 190 | 
+ 191 | 
+ 192 | class SignedSessionIdentity:
+ 193 |     """Validate the Starlette session cookie without exposing its contents."""
+ 194 | 
+ 195 |     def __init__(
+ 196 |         self,
+ 197 |         secret_key: str,
+ 198 |         *,
+ 199 |         max_age_seconds: int = SESSION_MAX_AGE_SECONDS,
+ 200 |         session_validator: SessionValidator | None = None,
+ 201 |     ) -> None:
+ 202 |         if not secret_key:
+ 203 |             raise ValueError("A session signing secret is required for CSRF protection")
+ 204 |         self.signer = TimestampSigner(secret_key)
+ 205 |         self.max_age_seconds = max_age_seconds
+ 206 |         self.session_validator = session_validator
+ 207 | 
+ 208 |     def payload(self, session_cookie: str) -> dict[str, Any] | None:
+ 209 |         """Return the decoded payload of a correctly signed, unexpired cookie."""
+ 210 | 
+ 211 |         try:
+ 212 |             signed_payload = self.signer.unsign(
+ 213 |                 session_cookie.encode("utf-8"),
+ 214 |                 max_age=self.max_age_seconds,
+ 215 |             )
+ 216 |             payload = json.loads(base64.b64decode(signed_payload))
+ 217 |         except (
+ 218 |             BadSignature,
+ 219 |             SignatureExpired,
+ 220 |             ValueError,
+ 221 |             TypeError,
+ 222 |             json.JSONDecodeError,
+ 223 |         ):
+ 224 |             return None
+ 225 |         return payload if isinstance(payload, dict) else None
+ 226 | 
+ 227 |     def user_id(self, session_cookie: str) -> str | None:
+ 228 |         payload = self.payload(session_cookie)
+ 229 |         if payload is None:
+ 230 |             return None
+ 231 |         user_id = payload.get("user_id")
+ 232 |         user = payload.get("user")
+ 233 |         if not isinstance(user_id, str) or not user_id or not user:
+ 234 |             return None
+ 235 |         if self.session_validator is not None and not self.session_validator(payload):
+ 236 |             return None
+ 237 |         return user_id
+ 238 | 
+ 239 | 
+ 240 | class CSRFMiddleware(BaseHTTPMiddleware):

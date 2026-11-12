@@ -1,5 +1,4 @@
 import pytest
-
 from health_connection import HealthConnection, HealthConnectionState
 
 

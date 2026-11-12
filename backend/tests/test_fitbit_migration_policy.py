@@ -1,5 +1,4 @@
 import pytest
-
 from connectors.base import ConnectorContext, ConnectorError, ConnectorState
 from connectors.fitbit import (
     FITBIT_WEB_API_SHUTDOWN_MONTH,
