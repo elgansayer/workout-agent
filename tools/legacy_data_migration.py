@@ -90,6 +90,7 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "exercise_prescriptions",
     "programme_week_states",
     "adaptation_decisions",
+    "programme_overrides",
     "routine_workout_matches",
     "hevy_routine_snapshots",
     "routine_match_overrides",
