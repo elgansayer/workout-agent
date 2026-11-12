@@ -124,6 +124,7 @@ EPHEMERAL_TABLES: tuple[str, ...] = (
     "account_deletion_requests",
     "account_tombstones",
     "record_provenance",
+    "consent_decisions",
 )
 
 # ``database.init_db()`` re-creates these two defaults for the legacy tenant on

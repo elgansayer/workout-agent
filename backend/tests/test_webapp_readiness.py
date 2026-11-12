@@ -170,6 +170,11 @@ def client(app_module: Any) -> Any:
 
 
 def _sign_in(client: TestClient, app_module: Any, user_id: str) -> None:
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(
+        app_module.DB_PATH, user_id, ConsentPurpose.AI_PROCESSING, actor_id=user_id
+    )
     client.cookies.set(
         "session",
         signed_session_cookie(

@@ -63,6 +63,7 @@
         ['profile', 'Profile'],
         ['display', 'Region & accessibility'],
         ['notifications', 'Notifications'],
+        ['privacy', 'Privacy and consent'],
         ['account', 'Account and data'],
       ];
       track option[0]
@@ -960,6 +961,85 @@
       </div>
       <div id="pref-status" class="key-status" role="status">{{ prefStatus() }}</div>
     </div>
+  </section>
+
+  <!-- ──────────── Privacy and consent ──────────── -->
+  <section class="card" id="settings-privacy" [hidden]="section() !== 'privacy'">
+    <div class="card-head">
+      <h2>Privacy and consent</h2>
+      @if (consent()?.policy_version; as version) {
+        <span class="muted">Policy {{ version }}</span>
+      }
+    </div>
+    <p class="muted">
+      These are your current, purpose-specific choices. Withdrawing a choice stops
+      future processing for that purpose. Health-data withdrawal can also erase the
+      data your connected providers already sent.
+    </p>
+
+    @if (consent(); as state) {
+      @for (purpose of state.purposes; track purpose.purpose) {
+        <div class="panel" [attr.id]="'consent-' + purpose.purpose">
+          <div class="card-head">
+            <h3>{{ purpose.label }}</h3>
+            @if (purpose.granted) {
+              <span class="status on">Granted</span>
+            } @else {
+              <span class="status off">Not granted</span>
+            }
+          </div>
+          <p class="muted">{{ purpose.explanation }}</p>
+          <p class="muted">
+            Scopes: {{ purpose.scopes.join(', ') }}. Policy version:
+            {{ purpose.policy_version }}.
+            @if (purpose.current?.decided_at) {
+              Last decision: {{ purpose.current?.decided_at }} ({{
+                purpose.current?.actor_type
+              }}).
+            }
+          </p>
+          @if (purpose.needs_reconsent) {
+            <p class="key-status error" role="alert">
+              The consent policy changed. Please review and grant this purpose again.
+            </p>
+          }
+          <div class="btn-row">
+            @if (!purpose.granted) {
+              <button
+                type="button"
+                class="btn btn-sm"
+                [disabled]="consentBusy()"
+                (click)="grantConsent(purpose.purpose)"
+              >
+                Allow {{ purpose.label.toLowerCase() }}
+              </button>
+            } @else {
+              <button
+                type="button"
+                class="btn btn-ghost btn-sm"
+                [disabled]="consentBusy()"
+                (click)="withdrawConsent(purpose.purpose, 'retain')"
+              >
+                Withdraw
+              </button>
+              @if (purpose.purpose === 'health_data') {
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-sm btn-danger"
+                  [disabled]="consentBusy()"
+                  (click)="withdrawConsent(purpose.purpose, 'purge')"
+                >
+                  Withdraw and erase imported health data
+                </button>
+              }
+            }
+          </div>
+        </div>
+      }
+    } @else {
+      <p class="muted" role="status">Loading consent choices…</p>
+    }
+    <p id="consent-status" class="key-status" role="status">{{ consentStatus() }}</p>
   </section>
 
   <!-- ──────────── Account & data deletion ──────────── -->

@@ -7,9 +7,11 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import account_deletion
+import consent_ledger
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
+from consent_ledger import ConsentPurpose
 from database import (
     get_all_users,
     get_body_metrics,
@@ -30,7 +32,6 @@ from tenant_isolation import (
     OwnershipError,
     authorize_owner,
 )
-
 from user_settings import UserSettings, get_user_settings_or_defaults
 
 DASHBOARD_INSIGHT_VERSION = "dashboard-insight/1"
@@ -92,6 +93,14 @@ def generate_daily_header(config: Config, user_id: str | None = None) -> None:
     owner = _authorize(config, user_id)
     if account_deletion.is_account_closing(config.database_path, owner.user_id):
         logger.info("Skipping the daily insight: the account has a deletion request.")
+        return
+    if not consent_ledger.has_consent_at(
+        config.database_path,
+        owner.user_id,
+        ConsentPurpose.AI_PROCESSING,
+        required_scopes=("generate_coaching",),
+    ):
+        logger.info("Skipping the daily insight: AI-processing consent is absent or withdrawn.")
         return
     provider = _resolve_provider(config, owner)
 
@@ -162,14 +171,20 @@ Keep it brutally concise. Write the text values in {spelling_for(settings.locale
             )
             fatigue = parsed.get("fatigue", "Normal")
             advice = parsed.get("advice", "")
-            save_notification(
+            if consent_ledger.has_consent_at(
+                config.database_path,
                 context.owner.user_id,
-                title="✨ Coach Status Update",
-                message=f"Fatigue: {fatigue}. {advice}",
-                type="coach",
-                link="/dashboard",
-                db_path=config.database_path,
-            )
+                ConsentPurpose.NOTIFICATIONS,
+                required_scopes=("in_app",),
+            ):
+                save_notification(
+                    context.owner.user_id,
+                    title="✨ Coach Status Update",
+                    message=f"Fatigue: {fatigue}. {advice}",
+                    type="coach",
+                    link="/dashboard",
+                    db_path=config.database_path,
+                )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
             logger.error("Invalid JSON structure returned: %s", text)
@@ -182,6 +197,14 @@ def generate_weekly_correlations(config: Config, user_id: str | None = None) -> 
     owner = _authorize(config, user_id)
     if account_deletion.is_account_closing(config.database_path, owner.user_id):
         logger.info("Skipping weekly correlations: the account has a deletion request.")
+        return
+    if not consent_ledger.has_consent_at(
+        config.database_path,
+        owner.user_id,
+        ConsentPurpose.AI_PROCESSING,
+        required_scopes=("generate_coaching",),
+    ):
+        logger.info("Skipping weekly correlations: AI-processing consent is absent or withdrawn.")
         return
     provider = _resolve_provider(config, owner)
 
@@ -261,14 +284,20 @@ Use Markdown format. Output the Markdown report directly.
                 user_id=context.owner.user_id,
                 provenance=ai_provenance(provider, DEEP_CORRELATION_VERSION),
             )
-            save_notification(
+            if consent_ledger.has_consent_at(
+                config.database_path,
                 context.owner.user_id,
-                title="✨ Weekly Intelligence Report",
-                message="New 60-day recovery and workout correlations analysis is ready.",
-                type="coach",
-                link="/stats",
-                db_path=config.database_path,
-            )
+                ConsentPurpose.NOTIFICATIONS,
+                required_scopes=("in_app",),
+            ):
+                save_notification(
+                    context.owner.user_id,
+                    title="✨ Weekly Intelligence Report",
+                    message="New 60-day recovery and workout correlations analysis is ready.",
+                    type="coach",
+                    link="/stats",
+                    db_path=config.database_path,
+                )
             logger.info(
                 "Weekly deep correlation generated successfully via %s.",
                 provider.name(),

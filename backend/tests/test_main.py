@@ -119,6 +119,11 @@ def test_scope_config_to_user_uses_only_that_users_connector_key(
     db_path = str(tmp_path / "tenant-config.db")
     init_db(db_path)
     legacy_user_id = get_legacy_user_id(db_path)
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(
+        db_path, legacy_user_id, ConsentPurpose.HEALTH_DATA, actor_id=legacy_user_id
+    )
     user = get_or_create_user(
         "synthetic-user@example.com",
         "Synthetic User",
@@ -178,6 +183,11 @@ def _seed_run_user(monkeypatch: pytest.MonkeyPatch, db_path: str) -> str:
     init_db(db_path)
     user = get_or_create_user("synthetic-run@example.com", "Synthetic Runner", db_path)
     monkeypatch.setattr("main._resolve_run_user", lambda path: user["id"])
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(
+        db_path, user["id"], ConsentPurpose.AI_PROCESSING, actor_id=user["id"]
+    )
     return user["id"]
 
 

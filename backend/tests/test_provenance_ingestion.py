@@ -294,6 +294,9 @@ def _run_daily_cycle(
     db = str(tmp_path / "daily.db")
     init_db(db)
     user_id = get_or_create_user("runner@example.com", "Runner", db_path=db)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(db, user_id, ConsentPurpose.AI_PROCESSING, actor_id=user_id)
     config = Config(
         hevy_api_key="hevy-key",
         gemini_api_key="g",
@@ -463,6 +466,9 @@ def test_insight_generation_records_the_model_and_labels_its_inputs(
     config = _checkin_config(tmp_path)
     db = config.database_path
     user_id = get_or_create_user("i@example.com", "I", db_path=db)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(db, user_id, ConsentPurpose.AI_PROCESSING, actor_id=user_id)
     today = datetime.now(tz=timezone.utc).date().isoformat()
     save_body_metrics(
         {"weight_kg": 91.0}, today, db, user_id=user_id,

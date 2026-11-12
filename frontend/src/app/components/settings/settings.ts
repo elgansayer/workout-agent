@@ -6,6 +6,7 @@ import { DisplaySettings, DisplaySettingsService } from '../../services/display-
 import { SetupAccount, SetupStateService } from '../../services/setup-state.service';
 import { aiProviderFact, hevyFact, keyVerification, lastSyncFact } from './settings.readiness';
 import {
+  ConsentState,
   CredentialTestResult,
   EquipmentRule,
   FrequencyRule,
@@ -150,6 +151,10 @@ export class Settings implements OnInit, OnDestroy {
   loading = signal<boolean>(true);
   error = signal<string | null>(null);
 
+  readonly consent = signal<ConsentState | null>(null);
+  readonly consentBusy = signal(false);
+  readonly consentStatus = signal('');
+
   section = signal('connections');
   pushStatus = signal('');
   healthStatus = signal('');
@@ -223,7 +228,15 @@ export class Settings implements OnInit, OnDestroy {
     const requested = new URLSearchParams(window.location.search).get('section');
     if (
       requested &&
-      ['connections', 'ai', 'profile', 'display', 'notifications', 'account'].includes(
+      [
+        'connections',
+        'ai',
+        'profile',
+        'display',
+        'notifications',
+        'privacy',
+        'account',
+      ].includes(
         requested,
       )
     ) {
@@ -300,8 +313,61 @@ export class Settings implements OnInit, OnDestroy {
 
   selectSection(name: string) {
     this.section.set(name);
-    // Deletion status is only read when the section is opened.
+    // Deletion and consent state are only read when the section is opened.
     if (name === 'account') this.loadDeletion();
+    if (name === 'privacy') void this.loadConsent();
+  }
+
+  loadConsent(): void {
+    this.http.get<ConsentState>('/api/consent').subscribe({
+      next: (state) => this.consent.set(state),
+      error: () => this.consentStatus.set('Could not load your consent choices. Try again.'),
+    });
+  }
+
+  grantConsent(purpose: ConsentState['purposes'][number]['purpose']): void {
+    if (this.consentBusy()) return;
+    this.consentBusy.set(true);
+    this.consentStatus.set('');
+    this.http.post<ConsentState>('/api/consent/grant', { purpose }).subscribe({
+      next: (state) => {
+        this.consent.set(state);
+        this.consentBusy.set(false);
+        this.consentStatus.set('Consent saved.');
+      },
+      error: (err) => {
+        this.consentBusy.set(false);
+        this.consentStatus.set(errorDetail(err) ?? 'Could not save that consent choice.');
+      },
+    });
+  }
+
+  withdrawConsent(
+    purpose: ConsentState['purposes'][number]['purpose'],
+    retention: 'retain' | 'purge' = 'retain',
+  ): void {
+    if (this.consentBusy()) return;
+    this.consentBusy.set(true);
+    this.consentStatus.set('');
+    this.http
+      .post<ConsentState>('/api/consent/withdraw', { purpose, retention })
+      .subscribe({
+        next: (state) => {
+          this.consent.set(state);
+          this.consentBusy.set(false);
+          this.consentStatus.set(
+            retention === 'purge'
+              ? 'Consent withdrawn and imported health data erased.'
+              : 'Consent withdrawn. Future processing is stopped.',
+          );
+        },
+        error: (err) => {
+          this.consentBusy.set(false);
+          this.consentStatus.set(
+            errorDetail(err) ?? 'Could not withdraw that consent choice.',
+          );
+        },
+      });
   }
 
   loadSettings(populateForm = true) {
@@ -866,7 +932,13 @@ export class Settings implements OnInit, OnDestroy {
       }
       this.pushSubscribed.set(false);
       this.pushBusy.set(false);
-      this.pushStatus.set('Push notifications disabled.');
+      this.http.post('/api/settings/push-unsubscribe', {}).subscribe({
+        next: () => this.pushStatus.set('Push notifications disabled.'),
+        error: () =>
+          this.pushStatus.set(
+            'Browser notifications are off, but the server could not update your choice. Try again.',
+          ),
+      });
     } catch {
       this.pushBusy.set(false);
       this.pushStatus.set(

@@ -13,8 +13,10 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
+import consent_ledger
 from ai_resolver import resolve_provider
 from config import Config
+from consent_ledger import ConsentPurpose
 from database import (
     get_meta,
     save_checkin,
@@ -388,6 +390,13 @@ def run_checkin(
         config, runtime, user_id=user_id, unit_system=settings.unit_system
     )
     fallback = _fallback_message(due_info, runtime, reviews, settings.unit_system)
+    if user_id is not None and not consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.AI_PROCESSING,
+        required_scopes=("generate_coaching",),
+    ):
+        return fallback
     provider = resolve_provider(
         user_id=user_id,
         server_gemini_key=config.gemini_api_key,
@@ -459,7 +468,12 @@ def record(
         user_id=user_id,
         provenance=provenance or generated_text_provenance(message, CHECKIN_VERSION),
     )
-    if user_id:
+    if user_id and consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.NOTIFICATIONS,
+        required_scopes=("in_app",),
+    ):
         save_notification(
             user_id,
             title=f"✨ Coach Check-in #{due_info.number} Ready",

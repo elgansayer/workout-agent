@@ -120,6 +120,41 @@ export interface RetentionOption {
   readonly deletes_derived_data: boolean;
 }
 
+/** One recorded consent decision. Metadata only; never a credential. */
+export interface ConsentDecision {
+  readonly record_id: string;
+  readonly purpose: string;
+  readonly scope: string;
+  readonly policy_version: string;
+  readonly scopes: readonly string[];
+  readonly decision: 'granted' | 'withdrawn';
+  readonly active: boolean;
+  readonly actor_type: string;
+  readonly actor_id: string | null;
+  readonly decided_at: string;
+  readonly revoked_at: string | null;
+  readonly source: string;
+}
+
+/** Current consent state for one purpose. */
+export interface ConsentPurposeState {
+  readonly purpose: 'health_data' | 'ai_processing' | 'notifications' | 'analytics';
+  readonly label: string;
+  readonly explanation: string;
+  readonly scopes: readonly string[];
+  readonly policy_version: string;
+  readonly granted: boolean;
+  readonly needs_reconsent: boolean;
+  readonly current: ConsentDecision | null;
+}
+
+/** The `/api/consent` response. */
+export interface ConsentState {
+  readonly policy_version: string;
+  readonly purposes: readonly ConsentPurposeState[];
+  readonly health_retention_options: readonly RetentionOption[];
+}
+
 /** Status of one platform connector. */
 export interface ConnectorInfo {
   readonly provider: string;

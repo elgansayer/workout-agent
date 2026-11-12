@@ -27,6 +27,7 @@ REVIEWED_DDL_SOURCES = {
     "database.py",
     "health_schema.py",
     "provenance_ledger.py",
+    "consent_ledger.py",
     "webapp/csrf_security.py",
 }
 _CREATE_TABLE = re.compile(

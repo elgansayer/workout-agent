@@ -34,6 +34,13 @@ from hevy_parser import ExerciseSummary, WorkoutSummary
 def client(tmp_path: Any, monkeypatch: Any) -> Generator[Any, None, None]:
     db_path = str(tmp_path / "web.db")
     init_db(db_path)
+    from consent_ledger import ConsentPurpose, grant_consent_at
+    from database import get_legacy_user_id
+
+    legacy_user = get_legacy_user_id(db_path)
+    grant_consent_at(
+        db_path, legacy_user, ConsentPurpose.AI_PROCESSING, actor_id=legacy_user
+    )
     save_checkin(1, "2026-03-01", 24, 4, "Check-in 1: solid block.", db_path)
     save_body_metrics({"weight_kg": 82.0, "body_fat_pct": 16.0}, "2026-03-01", db_path)
     save_body_metrics({"weight_kg": 81.4, "body_fat_pct": 15.6}, "2026-03-08", db_path)

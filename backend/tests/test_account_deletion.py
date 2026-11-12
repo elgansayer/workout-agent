@@ -1313,6 +1313,9 @@ def test_insight_jobs_skip_accounts_with_a_deletion_request(
             seen.append(owner.user_id) or (_ for _ in ()).throw(RuntimeError("stop"))
         ),
     )
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(db, b, ConsentPurpose.AI_PROCESSING, actor_id=b)
     with pytest.raises(RuntimeError, match="stop"):
         insight_cron.generate_daily_header(config, user_id=b)
     assert seen == [b]

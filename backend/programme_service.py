@@ -14,7 +14,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import consent_ledger
 import database
+from consent_ledger import ConsentPurpose
 from dynamic_programme import validate_programme_preview
 
 
@@ -161,16 +163,25 @@ def activate_programme(
         start_date=start_date or None,
         db_path=db_path,
     )
-    database.save_notification(
+    if consent_ledger.has_consent_at(
+        db_path,
         user_id,
-        title="Hevy programme activated",
-        message=(
-            f"{preview.get('name', 'Your programme')} is active for "
-            f"{preview.get('cycle_weeks', 0)} weeks using "
-            f"{preview.get('total_days', 0)} selected routines."
-        ),
-        type="programme",
-        link="/plan",
-        db_path=db_path,
-    )
-    return database.get_active_programme(user_id, db_path=db_path)
+        ConsentPurpose.NOTIFICATIONS,
+        required_scopes=("in_app",),
+    ):
+        database.save_notification(
+            user_id,
+            title="Hevy programme activated",
+            message=(
+                f"{preview.get('name', 'Your programme')} is active for "
+                f"{preview.get('cycle_weeks', 0)} weeks using "
+                f"{preview.get('total_days', 0)} selected routines."
+            ),
+            type="programme",
+            link="/plan",
+            db_path=db_path,
+        )
+    programme = database.get_active_programme(user_id, db_path=db_path)
+    if programme is None:
+        raise ProgrammeActivationError("The programme could not be activated.")
+    return programme

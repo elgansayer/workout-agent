@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
-
 from database import get_or_create_user, init_db
 from insight_cron import generate_daily_header, generate_weekly_correlations
 
@@ -26,6 +25,14 @@ class _FakeConfig:
         self.user_id = get_or_create_user(
             "synthetic-cron@example.com", "Synthetic Cron", self.database_path
         )["id"]
+        from consent_ledger import ConsentPurpose, grant_consent_at
+
+        grant_consent_at(
+            self.database_path,
+            self.user_id,
+            ConsentPurpose.AI_PROCESSING,
+            actor_id=self.user_id,
+        )
 
 
 # ---------------------------------------------------------------------------

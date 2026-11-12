@@ -37,7 +37,7 @@ id**, an **outcome**, a **severity** and flat **safe metadata**.
 | Key changes | `credential.saved`, `credential.deleted` | `POST /api/settings/key`, `POST /api/settings/key/delete` |
 | Connector changes | `connector.connected`, `connector.disconnected`, `connector.sync`, `connector.test` | Hevy key save/delete, `POST /api/settings/verify-hevy`, `POST /api/settings/sync-history`, Google Health `callback` and `disconnect` |
 | Deletion | `data.deleted` | `POST /api/chat/clear`, the only user-data deletion the product exposes today (there is no account or health-data deletion flow yet) |
-| Permission changes | `permission.changed` | `POST /api/settings/push-subscribe` (notification-delivery permission granted) and `POST /api/settings/preferences` when the selected AI provider, which decides who receives coaching context, actually changes |
+| Permission changes | `permission.changed` | `POST /api/consent/grant` and `/api/consent/withdraw` (purpose-specific consent), `POST /api/settings/push-subscribe` (notification-delivery permission granted) and `POST /api/settings/preferences` when the selected AI provider, which decides who receives coaching context, actually changes |
 | Export | `data.exported` | **No production surface exists yet.** |
 | Admin access | `admin.access` | **No production surface exists yet.** |
 

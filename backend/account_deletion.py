@@ -237,6 +237,7 @@ RETAINED_LEDGER_TABLES: tuple[str, ...] = (
     "account_tombstones",
     "credential_audit_events",
     "security_audit_events",
+    "consent_decisions",
 )
 
 # Search indexes that hold user content. There are none today: the check in

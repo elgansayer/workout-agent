@@ -17,6 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+import consent_ledger
 import encryption
 import provenance_ledger as ledger
 from canonical_programme import (
@@ -1767,6 +1768,10 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         cursor.executescript(HEALTH_SCHEMA_SQL)
 
+        # Purpose-specific consent decisions. Created before the owner guards so
+        # the ledger is covered by the ownerless-write backstop too.
+        consent_ledger.ensure_schema(cursor)
+
         # Last, after every table rebuild above: a drop-and-rename discards the
         # table's triggers, so the guards are installed once the schema is final.
         _install_owner_guards(cursor)
@@ -1860,6 +1865,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
+
+        # Preserve explicit opt-ins that predate the consent ledger. New rows are
+        # system-sourced so operators can tell a migration from a fresh decision.
+        consent_ledger.backfill_enabled_features(cursor)
+
 
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.

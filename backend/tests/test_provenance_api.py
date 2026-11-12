@@ -85,6 +85,12 @@ def harness(tmp_path: Any, monkeypatch: Any) -> _Harness:
     importlib.reload(webapp_app)
     alice = get_or_create_user("alice@example.com", "Alice", db_path=db)["id"]
     bob = get_or_create_user("bob@example.com", "Bob", db_path=db)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    for user_id in (alice, bob):
+        grant_consent_at(
+            db, user_id, ConsentPurpose.AI_PROCESSING, actor_id=user_id
+        )
     state = {"user": alice}
     monkeypatch.setattr(webapp_app, "_check_api_auth", lambda request: state["user"])
     client = TestClient(webapp_app.app)

@@ -130,8 +130,24 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
         )
         save_push_subscription(uid, tenant.endpoint, f"p256dh-{uid}", f"auth-{uid}", db)
 
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    for tenant in tenants:
+        for purpose in (ConsentPurpose.AI_PROCESSING, ConsentPurpose.NOTIFICATIONS):
+            grant_consent_at(
+                db,
+                tenant.user_id,
+                purpose,
+                actor_id=tenant.user_id,
+            )
     keyless = _make_user(db, TENANTS)
     save_user_preferences(keyless.user_id, preferred_ai="openai", db_path=db)
+    grant_consent_at(
+        db,
+        keyless.user_id,
+        ConsentPurpose.AI_PROCESSING,
+        actor_id=keyless.user_id,
+    )
 
     config = Config(
         hevy_api_key="synthetic-server-hevy-key",

@@ -21,6 +21,7 @@ from typing import Any
 
 import account_deletion
 import checkin
+import consent_ledger
 import google_health_client
 import insights as insights_engine
 import lifestyle
@@ -28,6 +29,7 @@ from accounts import AccountError, require_active_user
 from ai_provider import AIProvider
 from ai_resolver import resolve_provider
 from config import Config, ConfigError
+from consent_ledger import ConsentPurpose
 from database import (
     get_body_metrics,
     get_daily_logs,
@@ -132,7 +134,19 @@ def _deliver(
     link: str = "/plan",
 ) -> int:
     """Print the message in preview mode, otherwise send it via Web Push."""
-    if user_id:
+    notifications_allowed = bool(user_id) and consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.NOTIFICATIONS,
+        required_scopes=("in_app",),
+    )
+    push_allowed = bool(user_id) and consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.NOTIFICATIONS,
+        required_scopes=("push",),
+    )
+    if user_id and notifications_allowed:
         try:
             first_line = (
                 message.strip().split("\n")[0]
@@ -153,6 +167,10 @@ def _deliver(
     if preview:
         print(message)
         logger.info("Preview only: nothing sent.")
+        return 0
+
+    if user_id and not push_allowed:
+        logger.info("Push-notification consent is absent or withdrawn; nothing was sent.")
         return 0
 
     vapid_private = os.environ.get("VAPID_PRIVATE_KEY")
@@ -356,15 +374,30 @@ def _scope_config_to_user(config: Config, user_id: str) -> Config:
     owns_server_config = is_deployment_owner(user_id, config.database_path)
     allow_legacy_hevy = owns_server_config and not hevy_record_exists
     allow_legacy_google = owns_server_config and not google_record_exists
+    health_body_consent = consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.HEALTH_DATA,
+        required_scopes=("body",),
+    )
+    health_file_consent = consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.HEALTH_DATA,
+        required_scopes=("body", "sleep", "heart_rate", "activity"),
+    )
     hevy_key = user_hevy_key or (config.hevy_api_key if allow_legacy_hevy else None)
-    google_token = user_google_token or (
-        config.google_health_refresh_token if allow_legacy_google else None
+    google_token = (
+        user_google_token
+        or (config.google_health_refresh_token if allow_legacy_google else None)
+        if health_body_consent
+        else None
     )
     return replace(
         config,
         hevy_api_key=hevy_key,
         health_connect_file=(
-            config.health_connect_file if owns_server_config else None
+            config.health_connect_file if owns_server_config and health_file_consent else None
         ),
         # The OAuth *client* belongs to the deployment and is safe to share;
         # only the per-user refresh token is tenant scoped.
@@ -469,14 +502,23 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     if day is None:  # defensive: has_training_today already guarantees this
         return _deliver_programme_state(config, runtime, preview, user_id, when)
 
-    try:
-        provider = _resolve_provider(config, user_id=user_id)
-    except (ImportError, ValueError) as exc:
-        logger.warning(
-            "AI provider configuration failed (%s); using the deterministic plan.",
-            exc,
-        )
+    if not consent_ledger.has_consent_at(
+        config.database_path,
+        user_id,
+        ConsentPurpose.AI_PROCESSING,
+        required_scopes=("generate_coaching",),
+    ):
+        logger.info("AI-processing consent is absent or withdrawn; using the deterministic plan.")
         provider = None
+    else:
+        try:
+            provider = _resolve_provider(config, user_id=user_id)
+        except (ImportError, ValueError) as exc:
+            logger.warning(
+                "AI provider configuration failed (%s); using the deterministic plan.",
+                exc,
+            )
+            provider = None
 
     recent_workout = (
         fetch_latest_workout(config.hevy_api_key) if config.hevy_api_key else None

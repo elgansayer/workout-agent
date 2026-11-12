@@ -134,6 +134,10 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
     "security_audit_events": (
         "append-only, hash-chained security audit trail; attribution is immutable"
     ),
+    "consent_decisions": (
+        "append-only consent decisions are attributable to the account that made "
+        "them and must never be reassigned"
+    ),
     "account_deletion_requests": (
         "deletion evidence for a specific account id; never adopted"
     ),

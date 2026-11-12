@@ -47,6 +47,14 @@ part-way through schema initialization.
   first time they are replaced or corrected. Its unique index leads with
   `user_id`. See `docs/PROVENANCE.md`.
 
+`consent_decisions` (the append-only consent and permission ledger, see
+[Consent and permission ledger](CONSENT_LEDGER.md)) is created by `init_db()`
+with `CREATE ... IF NOT EXISTS` plus tenant-first index and append-only triggers.
+It has a `user_id` foreign key to `users(id)` and is covered by the ownerless-write
+guards. Existing connected health providers, saved AI provider keys and push
+subscriptions are migrated once as `system`-sourced grants; the migration is
+idempotent and never overwrites a later user decision.
+
 `user_sessions` (the browser-session registry, see [Session security](SESSION_SECURITY.md)) follows the same rules: it is created by `ensure_user_sessions_schema`, which `init_db()` calls and `SessionStore` calls again on connect so a request that arrives before initialisation still finds the table. It has a `user_id` foreign key, the user-first index `idx_user_sessions_user`, and stores only a SHA-256 digest of each session identifier. It is additive, so rolling the code back simply leaves an unused table.
 
 Per-user settings add columns without a new table: `user_settings.ensure_settings_schema`

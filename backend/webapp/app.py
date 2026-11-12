@@ -34,6 +34,7 @@ from typing import Any, Literal
 
 import account_deletion
 import analytics
+import consent_ledger
 import insights
 import lifestyle
 from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
@@ -63,6 +64,9 @@ from connector_operations import (
 )
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
+from consent_ledger import ConsentPurpose
+from consent_service import ConsentWorkflowError
+from consent_service import withdraw as withdraw_consent
 from database import (
     clear_all_notifications,
     clear_chat_messages,
@@ -397,6 +401,16 @@ def _regional_prompt_context(user_id: str) -> str:
 def _resolve_provider_for_request(request: Request, config: Config) -> AIProvider:
     """Resolve the authenticated user's provider without caching credentials."""
     user_id = _check_api_auth(request)
+    if not consent_ledger.has_consent_at(
+        DB_PATH,
+        user_id,
+        ConsentPurpose.AI_PROCESSING,
+        required_scopes=("generate_coaching",),
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="AI processing consent is required. Grant it in Settings, Privacy and consent.",
+        )
     try:
         return resolve_provider(
             user_id=user_id,
@@ -2653,6 +2667,15 @@ async def save_api_key(request: Request) -> dict[str, Any]:
                 ai_model=model or ai_provider_defaults[provider],
                 db_path=DB_PATH,
             )
+        try:
+            consent_ledger.grant_consent_at(
+                DB_PATH,
+                user_id,
+                ConsentPurpose.AI_PROCESSING,
+                actor_id=user_id,
+            )
+        except (sqlite3.Error, ValueError):
+            logger.error("Could not record AI-processing consent for a saved key.")
     _audit_key_change(
         request,
         user_id,
@@ -2690,6 +2713,16 @@ async def rotate_api_key(request: Request) -> dict[str, Any]:
         summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    if provider in {item["id"] for item in available_providers()}:
+        try:
+            consent_ledger.grant_consent_at(
+                DB_PATH,
+                user_id,
+                ConsentPurpose.AI_PROCESSING,
+                actor_id=user_id,
+            )
+        except (sqlite3.Error, ValueError):
+            logger.error("Could not record AI-processing consent for a rotated key.")
     _audit_key_change(
         request,
         user_id,
@@ -3135,6 +3168,13 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
     if not endpoint or not p256dh or not auth:
         raise HTTPException(status_code=400, detail="Invalid push subscription data")
 
+    consent_ledger.grant_consent_at(
+        DB_PATH,
+        user_id,
+        ConsentPurpose.NOTIFICATIONS,
+        actor_id=user_id,
+        source="web",
+    )
     save_push_subscription(
         user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, db_path=DB_PATH
     )
@@ -3149,6 +3189,129 @@ async def save_push_subscription_route(request: Request) -> dict[str, str]:
         metadata={"change": "granted"},
     )
     return {"status": "ok"}
+
+
+@app.post("/api/settings/push-unsubscribe")
+def remove_push_subscription_route(request: Request) -> dict[str, str]:
+    """Withdraw notification consent and remove every stored push subscription."""
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    outcome = withdraw_consent(DB_PATH, user_id, ConsentPurpose.NOTIFICATIONS, actor_id=user_id)
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        "push_notifications",
+        user_id=user_id,
+        metadata={"change": "withdrawn", "subscriptions_removed": outcome.push_subscriptions_removed},
+    )
+    return {"status": "ok"}
+
+
+class ConsentDecisionBody(BaseModel):
+    """A purpose-specific consent decision. The owner is the signed-in session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    purpose: Literal["health_data", "ai_processing", "notifications", "analytics"]
+    retention: Literal["retain", "purge"] = "retain"
+    scopes: list[str] | None = None
+
+
+@app.get("/api/consent")
+def api_consent(request: Request) -> JSONResponse:
+    """Return every purpose's current consent state for the signed-in user."""
+    user_id = _check_api_auth(request)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                **consent_ledger.snapshot_at(DB_PATH, user_id),
+                "health_retention_options": retention_options_payload(),
+            }
+        ),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/consent/grant")
+def api_grant_consent(body: ConsentDecisionBody, request: Request) -> JSONResponse:
+    """Record an explicit grant for one purpose."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        record = consent_ledger.grant_consent_at(
+            DB_PATH,
+            user_id,
+            body.purpose,
+            scopes=body.scopes,
+            actor_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        body.purpose,
+        user_id=user_id,
+        metadata={
+            "change": "granted",
+            "policy_version": record.policy_version,
+            "scopes": list(record.scopes),
+        },
+    )
+    return JSONResponse(
+        jsonable_encoder(
+            {**consent_ledger.snapshot_at(DB_PATH, user_id), "decision": record.as_dict()}
+        )
+    )
+
+
+@app.post("/api/consent/withdraw")
+def api_withdraw_consent(body: ConsentDecisionBody, request: Request) -> JSONResponse:
+    """Withdraw consent and apply its documented retention/deletion workflow."""
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    try:
+        outcome = withdraw_consent(
+            DB_PATH,
+            user_id,
+            body.purpose,
+            retention=body.retention,
+            actor_id=user_id,
+        )
+    except ConsentWorkflowError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        body.purpose,
+        user_id=user_id,
+        metadata={
+            "change": "withdrawn",
+            "policy_version": outcome.consent.policy_version,
+            "retention": outcome.retention,
+            "providers": list(outcome.providers),
+            "subscriptions_removed": outcome.push_subscriptions_removed,
+        },
+    )
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                **consent_ledger.snapshot_at(DB_PATH, user_id),
+                "withdrawal": outcome.as_dict(),
+            }
+        )
+    )
 
 
 @app.get("/google-health/connect")
@@ -3238,6 +3401,25 @@ def google_health_callback(request: Request) -> RedirectResponse:
     except VaultError:
         logger.warning("Could not store a Google Health credential.")
         audit_connect(AuditOutcome.FAILURE, "credential_store_failed")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+
+    # Approving Google's OAuth screen is an explicit health-data consent. Record
+    # it before reporting success so the sync boundary can enforce it.
+    try:
+        consent_ledger.grant_consent_at(
+            DB_PATH,
+            user_id,
+            ConsentPurpose.HEALTH_DATA,
+            actor_id=user_id,
+            source="oauth_callback",
+        )
+    except (sqlite3.Error, ValueError):
+        logger.warning("Could not record the Google Health consent decision.")
+        try:
+            _vault().revoke(user_id, "google_health")
+        except (CredentialNotFoundError, VaultError):
+            pass
+        audit_connect(AuditOutcome.FAILURE, "consent_record_failed")
         return RedirectResponse("/settings?gh=error", status_code=303)
     audit_connect(AuditOutcome.SUCCESS)
     return RedirectResponse("/settings?gh=connected", status_code=303)

@@ -122,6 +122,66 @@ const settingsResponse: SettingsResponse = {
   vapid_public_key: null,
 };
 
+const consentResponse = {
+  policy_version: '2026.1',
+  purposes: [
+    {
+      purpose: 'health_data',
+      label: 'Health data',
+      explanation: 'Import and process health data.',
+      scopes: ['sleep', 'body'],
+      policy_version: '2026.1',
+      granted: false,
+      needs_reconsent: false,
+      current: null,
+    },
+    {
+      purpose: 'ai_processing',
+      label: 'AI coaching',
+      explanation: 'Send coaching context to your AI provider.',
+      scopes: ['generate_coaching'],
+      policy_version: '2026.1',
+      granted: true,
+      needs_reconsent: false,
+      current: {
+        record_id: 'r1',
+        purpose: 'ai_processing',
+        scope: '*',
+        policy_version: '2026.1',
+        scopes: ['generate_coaching'],
+        decision: 'granted',
+        active: true,
+        actor_type: 'user',
+        actor_id: 'u1',
+        decided_at: '2026-11-01T00:00:00+00:00',
+        revoked_at: null,
+        source: 'web',
+      },
+    },
+    {
+      purpose: 'notifications',
+      label: 'Notifications',
+      explanation: 'Deliver notifications.',
+      scopes: ['push'],
+      policy_version: '2026.1',
+      granted: false,
+      needs_reconsent: false,
+      current: null,
+    },
+    {
+      purpose: 'analytics',
+      label: 'Product analytics',
+      explanation: 'Aggregated product usage.',
+      scopes: ['product_usage'],
+      policy_version: '2026.1',
+      granted: false,
+      needs_reconsent: false,
+      current: null,
+    },
+  ],
+  health_retention_options: retentionOptions,
+} as const;
+
 const connectedHevyResponse: SettingsResponse = {
   ...settingsResponse,
   user_keys: {
@@ -650,6 +710,34 @@ describe('Settings account and data deletion', () => {
     input.dispatchEvent(new Event('input'));
     fixture.detectChanges();
   }
+
+  it('loads consent only when opened and records grant and withdrawal choices', async () => {
+    const fixture = TestBed.createComponent(Settings);
+    fixture.detectChanges();
+    http.expectOne('/api/settings').flush(settingsResponse);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    http.expectNone('/api/consent');
+
+    fixture.componentInstance.selectSection('privacy');
+    http.expectOne('/api/consent').flush(consentResponse);
+    fixture.detectChanges();
+    const element = fixture.nativeElement as HTMLElement;
+    expect(element.querySelector('#settings-privacy')?.hasAttribute('hidden')).toBe(false);
+    expect(element.textContent).toContain('Health data');
+
+    fixture.componentInstance.grantConsent('health_data');
+    const grant = http.expectOne('/api/consent/grant');
+    expect(grant.request.method).toBe('POST');
+    expect(grant.request.body).toEqual({ purpose: 'health_data' });
+    grant.flush({ ...consentResponse, purposes: consentResponse.purposes });
+
+    fixture.componentInstance.withdrawConsent('health_data', 'purge');
+    const withdraw = http.expectOne('/api/consent/withdraw');
+    expect(withdraw.request.method).toBe('POST');
+    expect(withdraw.request.body).toEqual({ purpose: 'health_data', retention: 'purge' });
+    withdraw.flush({ ...consentResponse, purposes: consentResponse.purposes });
+  });
 
   it('does not read deletion status until the Account section is opened', async () => {
     const fixture = TestBed.createComponent(Settings);

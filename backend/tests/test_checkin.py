@@ -188,6 +188,12 @@ def test_run_checkin_resolves_the_acting_users_provider(
     )
     captured: dict[str, Any] = {}
     provider = object()
+    uid = get_or_create_user("runner@example.test", None, config.database_path)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(
+        config.database_path, uid, ConsentPurpose.AI_PROCESSING, actor_id=uid
+    )
 
     def fake_resolve_provider(**kwargs: Any) -> object:
         captured.update(kwargs)
@@ -205,11 +211,11 @@ def test_run_checkin_resolves_the_acting_users_provider(
         config,
         due_info,
         _runtime(),
-        user_id="user-a",
+        user_id=uid,
     )
 
     assert message == "Selected provider check-in."
-    assert captured["user_id"] == "user-a"
+    assert captured["user_id"] == uid
     assert captured["db_path"] == config.database_path
     assert captured["provider"] is provider
 

@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 import checkin
 import insight_cron
 import main
+import pytest
 from config import Config
 from data_classification import DataClass, classify_field, sanitize_for_export
 from database import get_or_create_user, init_db
@@ -288,6 +287,9 @@ def _daily_run(
     db = str(tmp_path / "run.db")
     init_db(db)
     uid = get_or_create_user("run@example.test", None, db)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(db, uid, ConsentPurpose.AI_PROCESSING, actor_id=uid)
     if changes:
         update_user_settings(uid, changes, db)
     seen: dict[str, Any] = {}
@@ -389,6 +391,9 @@ def test_insight_prompts_include_regional_context(
     db = str(tmp_path / "insight.db")
     init_db(db)
     uid = get_or_create_user("insight@example.test", None, db)["id"]
+    from consent_ledger import ConsentPurpose, grant_consent_at
+
+    grant_consent_at(db, uid, ConsentPurpose.AI_PROCESSING, actor_id=uid)
     update_user_settings(uid, {"locale": "en-AU", "unit_system": "imperial"}, db)
     provider = MagicMock()
     provider.generate.return_value = "not json"
