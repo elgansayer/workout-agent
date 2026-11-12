@@ -1,7 +1,6 @@
 from dataclasses import FrozenInstanceError
 
 import pytest
-
 from connectors import (
     Connector,
     ConnectorCapabilities,

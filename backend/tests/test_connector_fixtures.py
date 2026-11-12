@@ -1,5 +1,4 @@
 import pytest
-
 from connectors.fixtures import assert_safe_fixture
 
 

@@ -10,11 +10,10 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
+from database import init_db
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
-
-from database import init_db
 from webapp.health import (
     OperationalHealthMiddleware,
     database_readiness,

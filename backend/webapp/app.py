@@ -165,9 +165,8 @@ from onboarding import (
     skip_step,
 )
 from programme_service import (
+    ProgrammeConflictError,
     ProgrammeValidationError,
-    conflict_remediation,
-    detect_source_conflicts,
 )
 from programme_service import (
     activate_programme as activate_generated_programme,
@@ -1807,37 +1806,25 @@ def activate_programme(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    current_hashes = [
-        {
-            "routine_id": snapshot_item["id"],
-            "source_hash": snapshot_item["source_hash"],
-        }
-        for snapshot_item in preview["source_snapshots"]
-    ]
-    titles = {
-        str(item["id"]): str(item["title"])
-        for item in preview["source_snapshots"]
-    }
-    conflict = detect_source_conflicts(
-        [
-            {
-                "routine_id": item.routine_id,
-                "source_hash": item.source_hash,
-            }
-            for item in payload.source_hashes
-        ],
-        current_hashes,
-        titles=titles,
-    ) if payload.source_hashes else {
-        "changed_routines": [],
-        "added_routines": [],
-        "removed_routines": [],
-        "has_conflicts": False,
-    }
-
-    blocking_violations = preview.get("blocking_violations") or []
-    if blocking_violations:
-        first_violation = blocking_violations[0]
+    try:
+        active = activate_generated_programme(
+            user_id,
+            preview,
+            db_path=DB_PATH,
+            presented_token=payload.preview_token,
+            presented_source_hashes=[
+                {"routine_id": item.routine_id, "source_hash": item.source_hash}
+                for item in payload.source_hashes
+            ],
+        )
+    except ProgrammeConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": exc.message, **exc.details},
+        ) from exc
+    except ProgrammeValidationError as exc:
+        violations = exc.details.get("violations", [])
+        first_violation = violations[0] if violations else None
         if isinstance(first_violation, dict) and {
             "exercise",
             "prescription",
@@ -1847,37 +1834,10 @@ def activate_programme(
             raise HTTPException(
                 status_code=422,
                 detail=_blocking_violation_detail(first_violation),
-            )
+            ) from exc
         raise HTTPException(
             status_code=422,
-            detail={
-                "message": "The programme preview violates blocking constraints.",
-                "violations": blocking_violations,
-            },
-        )
-
-    if preview["preview_token"] != payload.preview_token or conflict["has_conflicts"]:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": (
-                    "The Hevy routines or programme settings changed after the "
-                    "preview. Generate a fresh preview before activation."
-                ),
-                "conflict": conflict,
-                "remediation": conflict_remediation(conflict),
-            },
-        )
-
-    try:
-        active = activate_generated_programme(user_id, preview, db_path=DB_PATH)
-    except ProgrammeValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": exc.message,
-                "violations": exc.details.get("violations", []),
-            },
+            detail={"message": exc.message, "violations": violations},
         ) from exc
 
     return JSONResponse(
@@ -4182,6 +4142,530 @@ async def api_programme_history_override(request: Request) -> JSONResponse:
             }
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Programme lifecycle, adaptation, overrides and source drift (#975)
+#
+# Every route derives the owner from the authenticated session; request bodies
+# forbid unknown fields so a client-supplied owner identifier is rejected, and
+# every domain call is scoped by that tenant.  Adaptation is deterministic: no
+# route calls a language model.
+# ---------------------------------------------------------------------------
+
+
+class _StrictBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProgrammeResumeBody(_StrictBody):
+    extend: bool = True
+
+
+class ProgrammeExtendBody(_StrictBody):
+    weeks: int = Field(ge=1, le=8)
+
+
+class ProgrammeReviewBody(_StrictBody):
+    deleted_workout_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class DecisionAdjustmentBody(_StrictBody):
+    adjustment: dict[str, Any] | None = None
+
+
+class ProgrammeOverrideBody(_StrictBody):
+    kind: str = Field(min_length=1, max_length=40)
+    exercise_template_id: str = Field(default="", max_length=120)
+    value: dict[str, Any] = Field(default_factory=dict)
+    weeks: int | None = Field(default=None, ge=1, le=52)
+    ends_on: date | None = None
+    note: str = Field(default="", max_length=500)
+
+
+class DriftResolutionBody(_StrictBody):
+    routine_id: str = Field(min_length=1, max_length=120)
+    action: Literal["keep", "merge", "rebase", "replace"]
+    accept: list[str] = Field(default_factory=list, max_length=200)
+    replacement_routine_id: str | None = Field(default=None, max_length=120)
+    expected_hash: str | None = Field(default=None, max_length=128)
+    acknowledge_unsupported: bool = False
+
+
+class DriftResolveBody(_StrictBody):
+    resolutions: list[DriftResolutionBody] = Field(min_length=1, max_length=20)
+
+
+class WorkoutMatchConfirmBody(_StrictBody):
+    workout_id: str = Field(min_length=1, max_length=120)
+    routine_position: int = Field(ge=1, le=50)
+
+
+def _programme_summary(programme: Any) -> dict[str, Any]:
+    revision = programme.current_revision
+    return {
+        "id": programme.id,
+        "name": programme.name,
+        "status": programme.status,
+        "goal": programme.goal,
+        "duration_weeks": programme.duration_weeks,
+        "start_date": programme.start_date.isoformat() if programme.start_date else None,
+        "end_date": programme.end_date.isoformat() if programme.end_date else None,
+        "revision_id": revision.id if revision else None,
+        "revision_number": revision.revision_number if revision else None,
+        "revision_reason": revision.reason if revision else None,
+        "predecessor_programme_id": programme.predecessor_programme_id,
+        "activated_at": programme.activated_at,
+    }
+
+
+def _override_view(override: Any) -> dict[str, Any]:
+    return {
+        "id": override.id,
+        "programme_id": override.programme_id,
+        "kind": override.kind,
+        "exercise_template_id": override.exercise_template_id,
+        "value": override.value,
+        "starts_on": override.starts_on,
+        "ends_on": override.ends_on,
+        "status": override.status,
+        "note": override.note,
+        "created_at": override.created_at,
+        "revoked_at": override.revoked_at,
+    }
+
+
+def _domain_call(action: Any) -> Any:
+    """Run a domain operation and map its errors onto HTTP responses."""
+
+    from programme_domain import (
+        DriftConflictError,
+        ProgrammeNotFoundError,
+    )
+    from programme_domain import (
+        ProgrammeValidationError as DomainValidationError,
+    )
+
+    try:
+        return action()
+    except DriftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProgrammeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _local_now(user_id: str) -> tuple[datetime, str]:
+    timezone_name = get_user_settings(user_id, DB_PATH).timezone
+    return datetime.now(tz=UTC), timezone_name
+
+
+@app.get("/api/programmes/active/state")
+def api_active_programme_state(request: Request) -> JSONResponse:
+    """The active programme, its current week, pending decisions and overrides."""
+
+    from programme_domain import (
+        AdaptationService,
+        LifecycleService,
+        ProgrammeService,
+        decision_view,
+    )
+    from programme_domain.weeks import local_date_of, week_for_date
+
+    user_id = _check_api_auth(request)
+    service = ProgrammeService(DB_PATH)
+    programme = service.get_active_programme(user_id)
+    if programme is None:
+        return JSONResponse({"programme": None, "setup_required": True})
+    now, _tz = _local_now(user_id)
+    today = local_date_of(now, get_user_settings(user_id, DB_PATH).timezone) or now.date()
+    week_number = (
+        week_for_date(programme.start_date, int(programme.duration_weeks or 0), today)
+        if programme.start_date
+        else None
+    )
+    week = (
+        _domain_call(
+            lambda: LifecycleService(DB_PATH).materialise_week(
+                user_id, programme.id, week_number, now=now
+            )
+        )
+        if week_number
+        else None
+    )
+    decisions = service.list_adaptation_decisions(user_id, programme.id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "programme": _programme_summary(programme),
+                "week": week,
+                "pending_decisions": [
+                    decision_view(item)
+                    for item in decisions
+                    if item.application_state == "pending_confirmation"
+                ],
+                "overrides": [
+                    _override_view(item)
+                    for item in AdaptationService(DB_PATH).list_overrides(user_id, programme.id)
+                    if item.status == "active"
+                ],
+                "revisions": [
+                    {
+                        "revision_number": item.revision_number,
+                        "reason": item.reason,
+                        "created_at": item.created_at,
+                    }
+                    for item in service.list_revision_history(user_id, programme.id)
+                ],
+            }
+        )
+    )
+
+
+@app.get("/api/programmes/{programme_id}/weeks/{week_number}")
+def api_programme_week(programme_id: int, week_number: int, request: Request) -> JSONResponse:
+    """A dated week with effective prescriptions; reading never writes."""
+
+    from programme_domain import LifecycleService
+
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    week = _domain_call(
+        lambda: LifecycleService(DB_PATH).materialise_week(
+            user_id, programme_id, week_number, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"week": week}))
+
+
+@app.get("/api/programmes/{programme_id}/next-session")
+def api_programme_next_session(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import LifecycleService, ProgrammeService
+    from programme_domain.weeks import local_date_of, week_for_date
+
+    user_id = _check_api_auth(request)
+    programme = ProgrammeService(DB_PATH).get_programme(user_id, programme_id)
+    if programme is None or programme.start_date is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    now, tz_name = _local_now(user_id)
+    today = local_date_of(now, tz_name) or now.date()
+    week_number = week_for_date(programme.start_date, int(programme.duration_weeks or 0), today)
+    if week_number is None:
+        return JSONResponse({"programme_id": programme_id, "week": None, "next_exposure": None})
+    week = _domain_call(
+        lambda: LifecycleService(DB_PATH).materialise_week(
+            user_id, programme_id, week_number, now=now
+        )
+    )
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "programme_id": programme_id,
+                "week": week_number,
+                "cadence": week["cadence"],
+                "next_exposure": week["next_exposure"],
+            }
+        )
+    )
+
+
+@app.post("/api/programmes/{programme_id}/pause")
+def api_programme_pause(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).pause(user_id, programme_id, now=now)
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/resume")
+def api_programme_resume(
+    programme_id: int, payload: ProgrammeResumeBody, request: Request
+) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).resume(
+            user_id, programme_id, now=now, extend=payload.extend
+        )
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/extend")
+def api_programme_extend(
+    programme_id: int, payload: ProgrammeExtendBody, request: Request
+) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).extend(
+            user_id, programme_id, payload.weeks, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/review")
+def api_programme_review(
+    programme_id: int, payload: ProgrammeReviewBody, request: Request
+) -> JSONResponse:
+    """Run the deterministic adaptation review now (an early review request)."""
+
+    from programme_domain import AdaptationService, ProgrammeService
+    from programme_review_runner import run_review
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    active = ProgrammeService(DB_PATH).get_active_programme(user_id)
+    if active is None or active.id != programme_id:
+        raise HTTPException(status_code=404, detail="Active programme not found for this user.")
+    now, _tz = _local_now(user_id)
+    _domain_call(lambda: AdaptationService(DB_PATH).request_review(user_id, programme_id, now=now))
+    result = _domain_call(
+        lambda: run_review(
+            user_id,
+            DB_PATH,
+            now=now,
+            deleted_workout_ids=payload.deleted_workout_ids,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"review": result.to_dict() if result else None}))
+
+
+@app.get("/api/programmes/{programme_id}/decisions")
+def api_programme_decisions(
+    programme_id: int,
+    request: Request,
+    state: str | None = None,
+    decision_type: str | None = None,
+    exercise: str | None = None,
+) -> JSONResponse:
+    from programme_domain import ProgrammeService, decision_view
+
+    user_id = _check_api_auth(request)
+    service = ProgrammeService(DB_PATH)
+    if service.get_programme(user_id, programme_id) is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    decisions = service.repository.list_adaptation_decisions(
+        user_id,
+        programme_id,
+        states=(state,) if state else None,
+        decision_types=(decision_type,) if decision_type else None,
+        exercise_template_id=exercise,
+    )
+    return JSONResponse(
+        jsonable_encoder({"decisions": [decision_view(item) for item in decisions]})
+    )
+
+
+@app.get("/api/programmes/{programme_id}/decisions/{decision_id}")
+def api_programme_decision(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    """Why a decision happened, rebuilt from its stored inputs."""
+
+    from programme_domain import ProgrammeService, decision_view
+
+    user_id = _check_api_auth(request)
+    decision = ProgrammeService(DB_PATH).get_adaptation_decision(
+        user_id, programme_id, decision_id
+    )
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision not found for this user.")
+    return JSONResponse(jsonable_encoder({"decision": decision_view(decision)}))
+
+
+def _decision_action(
+    programme_id: int, decision_id: int, request: Request, action: str, adjustment: Any = None
+) -> JSONResponse:
+    from programme_domain import AdaptationService, decision_view
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    service = AdaptationService(DB_PATH)
+    now, _tz = _local_now(user_id)
+    if action == "confirm":
+        decision = _domain_call(
+            lambda: service.confirm(
+                user_id, programme_id, decision_id, adjustment=adjustment, now=now
+            )
+        )
+    elif action == "reject":
+        decision = _domain_call(lambda: service.reject(user_id, programme_id, decision_id))
+    elif action == "revert":
+        decision = _domain_call(lambda: service.revert(user_id, programme_id, decision_id))
+    else:
+        decision = _domain_call(
+            lambda: service.override(user_id, programme_id, decision_id, adjustment or {})
+        )
+    return JSONResponse(jsonable_encoder({"decision": decision_view(decision)}))
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/confirm")
+def api_programme_decision_confirm(
+    programme_id: int, decision_id: int, payload: DecisionAdjustmentBody, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "confirm", payload.adjustment)
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/reject")
+def api_programme_decision_reject(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "reject")
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/revert")
+def api_programme_decision_revert(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "revert")
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/override")
+def api_programme_decision_override(
+    programme_id: int, decision_id: int, payload: DecisionAdjustmentBody, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "override", payload.adjustment)
+
+
+@app.get("/api/programmes/{programme_id}/overrides")
+def api_programme_overrides(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import AdaptationService, ProgrammeService
+
+    user_id = _check_api_auth(request)
+    if ProgrammeService(DB_PATH).get_programme(user_id, programme_id) is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    items = AdaptationService(DB_PATH).list_overrides(user_id, programme_id)
+    return JSONResponse(jsonable_encoder({"overrides": [_override_view(item) for item in items]}))
+
+
+@app.post("/api/programmes/{programme_id}/overrides")
+def api_programme_override_create(
+    programme_id: int, payload: ProgrammeOverrideBody, request: Request
+) -> JSONResponse:
+    """Record a durable pin, report, time limit or substitution for this tenant."""
+
+    from programme_domain import AdaptationService
+    from programme_domain.weeks import local_date_of
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    now, tz_name = _local_now(user_id)
+    override = _domain_call(
+        lambda: AdaptationService(DB_PATH).add_override(
+            user_id,
+            programme_id,
+            kind=payload.kind,
+            exercise_template_id=payload.exercise_template_id,
+            value=payload.value,
+            today=local_date_of(now, tz_name) or now.date(),
+            weeks=payload.weeks,
+            ends_on=payload.ends_on,
+            note=payload.note,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"override": _override_view(override)}))
+
+
+@app.post("/api/programmes/{programme_id}/overrides/{override_id}/revoke")
+def api_programme_override_revoke(
+    programme_id: int, override_id: int, request: Request
+) -> JSONResponse:
+    from programme_domain import AdaptationService
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    override = _domain_call(
+        lambda: AdaptationService(DB_PATH).revoke_override(user_id, programme_id, override_id)
+    )
+    return JSONResponse(jsonable_encoder({"override": _override_view(override)}))
+
+
+@app.post("/api/programmes/{programme_id}/workout-matches/confirm")
+def api_programme_confirm_match(
+    programme_id: int, payload: WorkoutMatchConfirmBody, request: Request
+) -> JSONResponse:
+    """Confirm or correct which routine a completed workout belonged to."""
+
+    from hevy_history import parse_cached_workouts
+    from programme_domain import AdaptationService
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    workouts = parse_cached_workouts(get_cached_workout_payloads(user_id, db_path=DB_PATH))
+    workout = next((item for item in workouts if item.id == payload.workout_id), None)
+    if workout is None:
+        raise HTTPException(
+            status_code=422, detail="The workout is not available in the cached history."
+        )
+    now, _tz = _local_now(user_id)
+    result = _domain_call(
+        lambda: AdaptationService(DB_PATH).confirm_match(
+            user_id, programme_id, workout, payload.routine_position, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"review": result.to_dict()}))
+
+
+@app.get("/api/programmes/{programme_id}/drift")
+def api_programme_drift(programme_id: int, request: Request) -> JSONResponse:
+    """Exact provider-versus-programme diff; nothing is changed or written to Hevy."""
+
+    from programme_domain import DriftService
+
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    live = serialise_hevy_source(training_data)
+    report = _domain_call(lambda: DriftService(DB_PATH).diff(user_id, programme_id, live))
+    return JSONResponse(jsonable_encoder({"drift": report}))
+
+
+@app.post("/api/programmes/{programme_id}/drift/resolve")
+def api_programme_drift_resolve(
+    programme_id: int, payload: DriftResolveBody, request: Request
+) -> JSONResponse:
+    """Keep, merge, rebase or replace; a change appends a validated revision."""
+
+    from programme_domain import DriftService, Resolution
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    live = serialise_hevy_source(training_data)
+    now, _tz = _local_now(user_id)
+    result = _domain_call(
+        lambda: DriftService(DB_PATH).resolve(
+            user_id,
+            programme_id,
+            live,
+            [
+                Resolution(
+                    routine_id=item.routine_id,
+                    action=item.action,
+                    accept=tuple(item.accept),
+                    replacement_routine_id=item.replacement_routine_id,
+                    expected_hash=item.expected_hash,
+                    acknowledge_unsupported=item.acknowledge_unsupported,
+                )
+                for item in payload.resolutions
+            ],
+            now=now,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"result": result}))
 
 
 @app.get("/api/settings")

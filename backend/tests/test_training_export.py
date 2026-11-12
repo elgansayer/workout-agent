@@ -1,5 +1,4 @@
 import pytest
-
 from training_export import ExportedWorkout
 
 
