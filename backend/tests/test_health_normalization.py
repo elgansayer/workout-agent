@@ -1,10 +1,8 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from health_models import HealthMetric, MetricType, SourceProvenance
 from health_normalization import validate_normalized_metric
-
 
 SOURCE = SourceProvenance("withings", "c1")
 NOW = datetime(2026, 8, 19, tzinfo=timezone.utc)

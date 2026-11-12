@@ -62,10 +62,15 @@ def sync_all(
 
     Returns:
         A summary dict with keys ``workouts_found`` (int) and
-        ``processed`` (int), or ``error`` (str) on failure.
+        ``processed`` (int), or ``error`` (str) plus a fixed ``error_code`` on
+        failure.  A failed fetch is an error, never an empty success: an
+        unreachable Hevy must not be reported as "synced 0 of 0 workouts".
     """
     if not api_key:
-        return {"error": "No Hevy API key configured."}
+        return {
+            "error": "No Hevy API key configured.",
+            "error_code": "not_configured",
+        }
 
     if db_path is None:
         config = Config.load()
@@ -76,12 +81,21 @@ def sync_all(
         user_id = require_tenant(user_id, db_path)
         user_id = authorize_owner(db_path, user_id).user_id
     except (TenantRequiredError, OwnershipError) as exc:
-        return {"error": str(exc)}
+        return {"error": str(exc), "error_code": "ownership_error"}
     logger.info("Fetching all workouts from Hevy (DB %s)...", db_path)
 
     workouts = get_all_workouts(api_key)
+    if workouts is None:
+        logger.warning("Could not fetch workouts from Hevy; history left unchanged.")
+        return {
+            "error": (
+                "Could not fetch your workouts from Hevy. Your existing history "
+                "was not changed."
+            ),
+            "error_code": "hevy_unavailable",
+        }
     if not workouts:
-        logger.info("No workouts found or failed to fetch.")
+        logger.info("Hevy returned no workouts.")
         return {"workouts_found": 0, "processed": 0}
 
     logger.info("Found %d workouts. Rebuilding history...", len(workouts))

@@ -11,6 +11,50 @@
 
 @if (data(); as data) {
   <h1>Settings</h1>
+  @if (readiness(); as account) {
+    <section
+      class="card readiness-panel"
+      id="settings-readiness"
+      [attr.data-state]="account.state"
+      aria-labelledby="readiness-heading"
+    >
+      <div class="card-head">
+        <h2 id="readiness-heading">Account status</h2>
+        <span
+          class="status"
+          [class.on]="account.state === 'ready'"
+          [class.off]="account.state !== 'ready'"
+          >{{ account.label }}</span
+        >
+      </div>
+      @if (account.reason) {
+        <p
+          id="readiness-reason"
+          [attr.role]="account.state === 'degraded' ? 'alert' : 'status'"
+        >
+          {{ account.reason }}
+        </p>
+      }
+      <dl class="readiness-facts">
+        <div>
+          <dt>Hevy</dt>
+          <dd id="readiness-hevy">{{ hevyFact(account) }}</dd>
+        </div>
+        <div>
+          <dt>Last sync</dt>
+          <dd id="readiness-sync">{{ lastSyncFact(account) }}</dd>
+        </div>
+        <div>
+          <dt>AI provider</dt>
+          <dd id="readiness-ai">{{ aiProviderFact(account) }}</dd>
+        </div>
+      </dl>
+    </section>
+  } @else if (readinessFailed()) {
+    <div class="panel error-panel" role="alert" id="settings-readiness-failed">
+      Could not check your account status, so nothing here is confirmed as working.
+    </div>
+  }
   <div class="settings-sections" role="group" aria-label="Settings sections">
     @for (
       option of [
@@ -93,7 +137,15 @@
           >
             Verify
           </button>
-          <button class="btn btn-ghost btn-sm" (click)="syncHistory()">Sync History</button>
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            id="hevy-sync-btn"
+            [disabled]="connectorBusy()"
+            (click)="syncHistory()"
+          >
+            {{ connectorBusy() ? 'Sync running…' : 'Sync History' }}
+          </button>
           <button class="btn btn-ghost btn-sm" (click)="revokeKey('hevy')">Revoke</button>
           <button class="btn btn-ghost btn-sm btn-danger" (click)="deleteKey('hevy')">
             Remove
@@ -120,7 +172,14 @@
     <div class="card-head">
       <h2>AI Provider</h2>
       @if (data.user_keys?.[selectedAiProvider()]?.has_key) {
-        <span class="status on">{{ selectedAiProvider() | titlecase }}</span>
+        <span
+          class="status"
+          id="ai-key-state"
+          [class.on]="aiKeyState(selectedAiProvider()).verified"
+          [class.off]="!aiKeyState(selectedAiProvider()).verified"
+          >{{ selectedAiProvider() | titlecase }} ·
+          {{ aiKeyState(selectedAiProvider()).label }}</span
+        >
       } @else if (data.user_keys?.[selectedAiProvider()]?.status === 'revoked') {
         <span class="status off">Revoked</span>
       } @else {
@@ -171,6 +230,9 @@
               </button>
             }
           </div>
+          @if (data.user_keys?.[p.id]?.has_key) {
+            <p class="muted" id="{{ p.id }}-key-detail">{{ aiKeyState(p.id).detail }}</p>
+          }
           <div class="model-row">
             <label class="muted" for="{{ p.id }}-model">Model:</label>
             <input

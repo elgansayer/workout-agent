@@ -1,7 +1,5 @@
 import pytest
-
 from connectors.oauth import OAuthState, sign_state, verify_state
-
 
 SECRET = b"synthetic-test-secret"
 

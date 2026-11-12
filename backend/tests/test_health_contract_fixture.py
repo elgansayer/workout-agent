@@ -1,5 +1,4 @@
 import pytest
-
 from health_contract_fixture import ContractFixture
 
 

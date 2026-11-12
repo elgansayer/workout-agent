@@ -1,4 +1,10 @@
-from connectors.base import Connector, ConnectorCapabilities, ConnectorState, ConnectorStatus, SyncResult
+from connectors.base import (
+    Connector,
+    ConnectorCapabilities,
+    ConnectorState,
+    ConnectorStatus,
+    SyncResult,
+)
 from connectors.conformance import run_conformance
 
 

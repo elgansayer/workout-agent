@@ -18,6 +18,33 @@ PROGRAMME_STATUSES = frozenset(
 )
 ONE_ACTIVE_STATUS = "active"
 
+# Adaptation audit vocabulary (#975).  ``application_state`` records how a
+# decision reached (or did not reach) the effective prescription.
+STATE_AUTO_APPLIED = "auto_applied"
+STATE_PENDING = "pending_confirmation"
+STATE_CONFIRMED = "user_confirmed"
+STATE_OVERRIDDEN = "overridden"
+STATE_REJECTED = "rejected"
+STATE_REVERTED = "reverted"
+STATE_SUPERSEDED = "superseded"
+STATE_INFORMATIONAL = "informational"
+STATE_ACKNOWLEDGED = "acknowledged"
+DECISION_STATES = frozenset(
+    {
+        STATE_AUTO_APPLIED,
+        STATE_PENDING,
+        STATE_CONFIRMED,
+        STATE_OVERRIDDEN,
+        STATE_REJECTED,
+        STATE_REVERTED,
+        STATE_SUPERSEDED,
+        STATE_INFORMATIONAL,
+        STATE_ACKNOWLEDGED,
+    }
+)
+# States whose proposed prescription is part of the effective prescription.
+APPLIED_STATES = frozenset({STATE_AUTO_APPLIED, STATE_CONFIRMED, STATE_OVERRIDDEN})
+
 
 class ProgrammeValidationError(ValueError):
     """Raised when a draft or repository operation violates a domain invariant."""
@@ -96,6 +123,9 @@ class ProgrammeDraft:
     settings: dict[str, Any] = field(default_factory=dict)
     engine_version: str = ENGINE_VERSION
     reason: str = "draft"
+    #: Activation/adaptation provenance stored in the immutable revision's
+    #: ``source_summary`` (preview token, validator result, source hashes...).
+    audit: dict[str, Any] = field(default_factory=dict)
 
     @property
     def end_date(self) -> date:
@@ -129,6 +159,13 @@ class AdaptationDecisionInput:
     rule_version: str = ENGINE_VERSION
     explanation: str = ""
     confirmed: bool = False
+    decision_type: str = "revision"
+    application_state: str = STATE_AUTO_APPLIED
+    idempotency_key: str = ""
+    week_number: int = 0
+    exercise_template_id: str = ""
+    source_workout_id: str = ""
+    source_workout_hash: str = ""
 
 
 @dataclass(frozen=True)
@@ -147,6 +184,49 @@ class AdaptationDecision:
     explanation: str
     confirmed: bool
     created_at: str
+    decision_type: str = "revision"
+    application_state: str = STATE_AUTO_APPLIED
+    idempotency_key: str = ""
+    week_number: int = 0
+    exercise_template_id: str = ""
+    source_workout_id: str = ""
+    source_workout_hash: str = ""
+    resolved_at: str = ""
+
+    @property
+    def created_revision(self) -> bool:
+        """True when applying this decision appended a new immutable revision."""
+
+        return self.from_revision_id != self.to_revision_id
+
+
+@dataclass(frozen=True)
+class ProgrammeOverride:
+    """A durable, scoped user instruction that the engine must respect.
+
+    Overrides never mutate raw provider history.  ``status`` is ``active`` until
+    revoked; revoked rows are retained for audit.
+    """
+
+    id: int
+    programme_id: int
+    kind: str
+    exercise_template_id: str
+    scope: dict[str, Any]
+    value: dict[str, Any]
+    starts_on: str
+    ends_on: str
+    status: str
+    note: str
+    created_at: str
+    revoked_at: str = ""
+
+    def is_active_on(self, day: date) -> bool:
+        if self.status != "active":
+            return False
+        if self.starts_on and day < date.fromisoformat(self.starts_on):
+            return False
+        return not (self.ends_on and day > date.fromisoformat(self.ends_on))
 
 
 @dataclass(frozen=True)

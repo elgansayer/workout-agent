@@ -405,6 +405,24 @@ def _seed_domain_tables(db: str, user_id: str, mark: str, weight: str) -> None:
             (user_id, programme_id, f"{mark} decision", stamp),
         )
         run(
+            "INSERT INTO onboarding_skips (user_id, step, skipped_at) VALUES (?, ?, ?)",
+            (user_id, "notifications", f"{stamp} {mark}"),
+        )
+        run(
+            "INSERT INTO programme_overrides (user_id, programme_id, kind, "
+            "exercise_template_id, scope_json, value_json, starts_on, ends_on, status, "
+            "note, created_at) VALUES (?, ?, 'pin', 'template', ?, ?, '2026-08-01', "
+            "'2026-12-01', 'active', ?, ?)",
+            (
+                user_id,
+                programme_id,
+                f'{{"exercise_template_id": "{mark}-template"}}',
+                f'{{"fields": ["load"], "note": "{mark}"}}',
+                f"{mark} override",
+                stamp,
+            ),
+        )
+        run(
             "INSERT INTO hevy_routine_snapshots (user_id, snapshot_id, routine_id, title, "
             "content_hash, schema_version, snapshot_json) VALUES (?, ?, ?, ?, 'hash', 1, '{}')",
             (user_id, f"{mark}-snapshot", f"{mark}-routine", f"{mark} snapshot"),
@@ -480,6 +498,18 @@ def build_world(directory: Path, monkeypatch: Any) -> World:
         world.ids["notification"] = conn.execute(
             "SELECT id FROM notifications WHERE user_id = ?", (alice,)
         ).fetchone()[0]
+        world.ids["programme_id"] = conn.execute(
+            "SELECT id FROM programmes WHERE user_id = ? ORDER BY id LIMIT 1", (alice,)
+        ).fetchone()[0]
+        world.ids["decision_id"] = conn.execute(
+            "SELECT id FROM adaptation_decisions WHERE user_id = ? ORDER BY id LIMIT 1",
+            (alice,),
+        ).fetchone()[0]
+        world.ids["override_id"] = conn.execute(
+            "SELECT id FROM programme_overrides WHERE user_id = ? ORDER BY id LIMIT 1",
+            (alice,),
+        ).fetchone()[0]
+        world.ids["workout_id"] = f"{ALICE.marker}-w1"
     return world
 
 
@@ -752,6 +782,115 @@ ATTACKS: tuple[Attack, ...] = (
         also=("export",),
         owner_key_used=_hevy,
     ),
+    Attack("POST", "/api/onboarding/skip", {"step": "notifications"}),
+    Attack("POST", "/api/onboarding/resume", {"step": "notifications"}),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/pause",
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/resume",
+        {"extend": True},
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/extend",
+        {"weeks": 1},
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/review",
+        {"deleted_workout_ids": []},
+        foreign=(404,),
+        legit=(404,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/decisions/{decision_id}/confirm",
+        {"adjustment": None},
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/decisions/{decision_id}/reject",
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/decisions/{decision_id}/revert",
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/decisions/{decision_id}/override",
+        {"adjustment": {"load": 100}},
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/overrides",
+        {
+            "kind": "pin",
+            "exercise_template_id": "template",
+            "value": {"fields": ["load"]},
+        },
+        foreign=(404,),
+        legit=(422,),
+        changes_owner=False,
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/overrides/{override_id}/revoke",
+        foreign=(404,),
+        legit=(200,),
+        names_object=True,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/workout-matches/confirm",
+        {"workout_id": "{workout_id}", "routine_position": 1},
+        foreign=(422,),
+        legit=(422,),
+        changes_owner=False,
+    ),
+    Attack(
+        "POST",
+        "/api/programmes/{programme_id}/drift/resolve",
+        {"resolutions": [{"routine_id": "routine-1", "action": "keep"}]},
+        legit=(502,),
+        foreign=(502,),
+        changes_owner=False,
+        also=("export",),
+        owner_key_used=_hevy,
+    ),
     Attack(
         "POST",
         "/api/account/deletion",
@@ -775,9 +914,16 @@ def render(world: World, text: str, *, missing: bool = False) -> str:
     notification = "999999" if missing else str(world.ids["notification"])
     session = "999999" if missing else str(world.ids.get("session"))
     connection = "conn-missing" if missing else f"conn-{ALICE.marker}"
+    def _id(name: str) -> str:
+        return "999999" if missing else str(world.ids[name])
+
     return (
         text.replace("{notification_id}", notification)
         .replace("{session_id}", session)
         .replace("{connection_id}", connection)
+        .replace("{workout_id}", _id("workout_id"))
+        .replace("{override_id}", _id("override_id"))
+        .replace("{decision_id}", _id("decision_id"))
+        .replace("{programme_id}", _id("programme_id"))
         .replace("{alice}", world.alice)
     )

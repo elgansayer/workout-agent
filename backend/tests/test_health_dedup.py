@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
-from health_dedup import deduplicate_metrics, metric_fingerprint, select_preferred_metric
+from health_dedup import (
+    deduplicate_metrics,
+    metric_fingerprint,
+    select_preferred_metric,
+)
 from health_models import HealthMetric, MetricType, SourceProvenance
-
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
 

@@ -137,6 +137,11 @@ def _seed(db: str, user_id: str) -> None:
             "INSERT INTO user_preferences (user_id, goals, updated_at) VALUES (?, '[]', ?)",
             (user_id, stamp),
         )
+        run(
+            "INSERT INTO onboarding_skips (user_id, step, skipped_at) "
+            "VALUES (?, 'notifications', ?)",
+            (user_id, stamp),
+        )
         programme_id = run(
             "INSERT INTO programmes (user_id, source, template_key, definition, active, created_at, updated_at) "
             "VALUES (?, 'template', 'synthetic', '{}', 1, ?, ?)",
@@ -178,6 +183,12 @@ def _seed(db: str, user_id: str) -> None:
             "(user_id, programme_id, to_revision_id, rule_version, created_at) "
             "VALUES (?, ?, ?, 'test', ?)",
             (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO programme_overrides "
+            "(user_id, programme_id, kind, created_at) "
+            "VALUES (?, ?, 'pin', ?)",
+            (user_id, programme_id, stamp),
         )
         run(
             "INSERT INTO programme_decisions "
