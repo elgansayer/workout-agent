@@ -48,6 +48,22 @@ class AccountStatus(StrEnum):
 OPERATOR_STATUSES = frozenset({AccountStatus.ACTIVE, AccountStatus.SUSPENDED})
 
 
+class AccountRole(StrEnum):
+    """Administrative role of an account (mirrors ``database.ACCOUNT_ROLES``).
+
+    Ownership of the account's own tenant data is independent of this role:
+    every role can act on its own records. The role only decides which
+    *administrative* permissions (account management, support access,
+    connector diagnostics, exports, deletion of other accounts, and deployment
+    configuration) the account holds.
+    """
+
+    OWNER = "owner"
+    ADMIN = "admin"
+    SUPPORT = "support"
+    USER = "user"
+
+
 class AccountError(RuntimeError):
     """Base class for account-model failures."""
 
@@ -233,6 +249,46 @@ def has_verified_identity(conn: sqlite3.Connection, user_id: str) -> bool:
     )
 
 
+def set_account_role(
+    user_id: str,
+    role: AccountRole | str,
+    db_path: str = DEFAULT_DB_PATH,
+) -> UserRow:
+    """Change an account's administrative role and end its earlier sessions.
+
+    The role is authorization-relevant, so every change bumps ``session_epoch``:
+    a session issued under the old role cannot keep acting under it. The legacy
+    holding account can never be promoted; terminal accounts cannot change role.
+    Callers must already have passed the deployment's ``CONFIGURATION``
+    permission check (see ``permissions.authorize``).
+    """
+
+    try:
+        target = AccountRole(role)
+    except ValueError as exc:
+        raise AccountError(f"Unknown account role {role!r}.") from exc
+
+    with transaction(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        user = _load(conn, user_id)
+        if user["role"] == target:
+            return user
+        if user["status"] in TERMINAL_ACCOUNT_STATUSES:
+            raise AccountError(f"A {user['status']} account cannot change role.")
+        if user["email"] == LEGACY_TENANT_EMAIL:
+            raise AccountError(
+                "The legacy placeholder account cannot be given an "
+                "administrative role."
+            )
+        now = _now_iso()
+        conn.execute(
+            "UPDATE users SET role = ?, updated_at = ?, "
+            "session_epoch = session_epoch + 1 WHERE id = ?",
+            (target.value, now, user_id),
+        )
+        return _load(conn, user_id)
+
+
 def set_account_status(
     user_id: str,
     status: AccountStatus | str,
@@ -279,11 +335,13 @@ __all__ = [
     "AccountError",
     "AccountInactiveError",
     "AccountNotFoundError",
+    "AccountRole",
     "AccountStatus",
     "IdentityConflictError",
     "IdentityVerificationError",
     "has_verified_identity",
     "require_active_user",
     "resolve_oauth_user",
+    "set_account_role",
     "set_account_status",
 ]

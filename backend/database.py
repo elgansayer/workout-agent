@@ -65,6 +65,7 @@ class UserRow(TypedDict):
     timezone: str
     units: str
     status: str
+    role: str
     status_changed_at: str
     updated_at: str
     last_login_at: str | None
@@ -81,13 +82,22 @@ LEGACY_ROUTINE_DAYS = 6
 ACCOUNT_STATUSES = ("active", "suspended", "unclaimed", "retired", "deleted")
 # Statuses an account can never leave (enforced by trigger).
 TERMINAL_ACCOUNT_STATUSES = ("retired", "deleted")
+# Account authorization vocabulary. ``accounts.AccountRole`` mirrors this tuple
+# and a drift test asserts the CHECK constraint and the enum stay in agreement.
+# ``user`` is the only non-administrative role; it keeps full ownership of its
+# own tenant data but has no administrative permission.
+ACCOUNT_ROLES = ("owner", "admin", "support", "user")
+# Absolute precedence for administrative actions. A role may never manage an
+# account whose role outranks it (owner > admin > support > user).
+ACCOUNT_ROLE_RANK = {role: rank for rank, role in enumerate(reversed(ACCOUNT_ROLES))}
 # Both tuples are code constants (never user input), so rendering them into DDL
 # is safe.
 _ACCOUNT_STATUS_SQL = ", ".join(f"'{status}'" for status in ACCOUNT_STATUSES)
 _TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in TERMINAL_ACCOUNT_STATUSES)
+_ACCOUNT_ROLE_SQL = ", ".join(f"'{role}'" for role in ACCOUNT_ROLES)
 
 _USER_COLUMNS = (
-    "id, email, display_name, created_at, timezone, units, status, "
+    "id, email, display_name, created_at, timezone, units, status, role, "
     "status_changed_at, updated_at, last_login_at"
 )
 
@@ -172,9 +182,10 @@ def _user_from_row(row: Any) -> UserRow:
         timezone=row[4] or "UTC",
         units=row[5] or "metric",
         status=row[6],
-        status_changed_at=row[7] or row[3],
-        updated_at=row[8] or row[3],
-        last_login_at=row[9],
+        role=row[7] or "user",
+        status_changed_at=row[8] or row[3],
+        updated_at=row[9] or row[3],
+        last_login_at=row[10],
     )
 
 
@@ -545,6 +556,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 units TEXT DEFAULT 'metric',
                 status TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ({_ACCOUNT_STATUS_SQL})),
+                role TEXT NOT NULL DEFAULT 'user'
+                    CHECK (role IN ({_ACCOUNT_ROLE_SQL})),
                 status_changed_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT '',
                 last_login_at TEXT
@@ -2290,6 +2303,10 @@ _USER_UPGRADE_COLUMNS = (
     (
         "status",
         f"TEXT NOT NULL DEFAULT 'active' CHECK (status IN ({_ACCOUNT_STATUS_SQL}))",
+    ),
+    (
+        "role",
+        f"TEXT NOT NULL DEFAULT 'user' CHECK (role IN ({_ACCOUNT_ROLE_SQL}))",
     ),
     ("status_changed_at", "TEXT NOT NULL DEFAULT ''"),
     ("updated_at", "TEXT NOT NULL DEFAULT ''"),

@@ -33,12 +33,15 @@ from pathlib import Path
 from typing import Any, Literal
 
 import account_deletion
+import admin_service
 import analytics
 import insights
 import lifestyle
 from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
 from accounts import (
     AccountError,
+    AccountInactiveError,
+    AccountNotFoundError,
     require_active_user,
     resolve_oauth_user,
 )
@@ -170,6 +173,12 @@ from localisation import (
     prompt_context,
     spelling_for,
     weight_unit,
+)
+from permissions import (
+    Permission,
+    PermissionDeniedError,
+    authorize,
+    permissions_for_user,
 )
 from onboarding import (
     OnboardingError,
@@ -893,6 +902,27 @@ async def get_current_user_api(request: Request) -> Any:
     return JSONResponse({"user": user})
 
 
+@app.get("/api/me/permissions")
+def get_current_permissions_api(request: Request) -> Any:
+    """Return the current role and permissions so the SPA can hide controls.
+
+    This is a convenience for presentation only. Every administrative route
+    re-checks the same matrix server-side, so hiding or forging this response
+    cannot grant access.
+    """
+    user_id = _check_api_auth(request, allow_closing=True)
+    account = get_user_by_id(user_id, DB_PATH)
+    if account is None:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(
+        {
+            "role": account["role"],
+            "permissions": sorted(
+                permission.value for permission in permissions_for_user(account)
+            ),
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
 @app.get("/api/sessions")
 def api_list_sessions(request: Request) -> dict[str, Any]:
     user_id = _check_api_auth(request)
@@ -5202,6 +5232,243 @@ def api_account_deletion_cancel(request: Request) -> JSONResponse:
     except account_deletion.DeletionError as exc:
         raise _deletion_http_error(exc) from exc
     return JSONResponse(jsonable_encoder(status))
+
+
+# ---------------------------------------------------------------------------
+# Administrative surfaces
+# ---------------------------------------------------------------------------
+#
+# Every route below resolves the actor from the signed session and checks the
+# central matrix in ``permissions`` before touching another tenant. A 403 here is
+# the authoritative denial; hiding a control in the SPA is not a security
+# boundary. Target ids are administrative identifiers only, never authorisation.
+
+
+class AdminStatusBody(BaseModel):
+    """Operator status transition for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "suspended"]
+
+
+class AdminRoleBody(BaseModel):
+    """Owner-only role assignment for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["owner", "admin", "support", "user"]
+
+
+def _admin_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, AccountNotFoundError):
+        return HTTPException(status_code=404, detail="Account not found.")
+    if isinstance(exc, (PermissionDeniedError, admin_service.RoleHierarchyError)):
+        return HTTPException(status_code=403, detail="Forbidden.")
+    if isinstance(exc, admin_service.LastOwnerError):
+        return HTTPException(status_code=409, detail="The last owner cannot be removed.")
+    if isinstance(exc, admin_service.AdminValidationError):
+        return HTTPException(status_code=422, detail="Invalid administrative request.")
+    if isinstance(exc, AccountInactiveError):
+        return HTTPException(status_code=403, detail="The account is not active.")
+    if isinstance(exc, AccountError):
+        return HTTPException(status_code=400, detail="The account change was refused.")
+    if isinstance(exc, sqlite3.Error):
+        return HTTPException(status_code=503, detail="Service temporarily unavailable.")
+    return HTTPException(status_code=400, detail="The administrative request failed.")
+
+
+_ADMIN_ERRORS = (
+    AccountNotFoundError,
+    AccountInactiveError,
+    AccountError,
+    PermissionDeniedError,
+    admin_service.RoleHierarchyError,
+    admin_service.LastOwnerError,
+    admin_service.AdminValidationError,
+    sqlite3.Error,
+)
+
+
+def _check_permission(
+    request: Request,
+    permission: Permission,
+    *,
+    target_user_id: str | None = None,
+) -> str:
+    """Return the authenticated actor id after enforcing *permission*.
+
+    Authentication and the account gate come first so a suspended, closing or
+    missing account cannot reach the permission check at all. The actor id is
+    never taken from the request body.
+    """
+
+    actor_user_id = _check_api_auth(request)
+    try:
+        authorize(actor_user_id, permission, DB_PATH)
+    except PermissionDeniedError as exc:
+        _audit(
+            request,
+            AuditEventType.ADMIN_ACCESS,
+            AuditOutcome.DENIED,
+            AuditSubjectType.PERMISSION,
+            subject_id=permission.value,
+            user_id=actor_user_id,
+            metadata={
+                "permission": permission.value,
+                "target": target_user_id or "-",
+            },
+        )
+        raise HTTPException(status_code=403, detail="Forbidden.") from exc
+    _audit(
+        request,
+        AuditEventType.ADMIN_ACCESS,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id or actor_user_id,
+        user_id=actor_user_id,
+        metadata={"permission": permission.value},
+    )
+    return actor_user_id
+
+
+@app.get("/api/admin/accounts")
+def api_admin_accounts(request: Request) -> JSONResponse:
+    """List accounts for an authorised account manager."""
+    actor_user_id = _check_permission(request, Permission.ACCOUNT_MANAGEMENT)
+    accounts = admin_service.list_accounts(actor_user_id, DB_PATH)
+    return JSONResponse(
+        {"accounts": accounts}, headers={"Cache-Control": "private, no-store"}
+    )
+
+
+@app.post("/api/admin/accounts/{target_user_id}/status")
+def api_admin_account_status(
+    target_user_id: str, body: AdminStatusBody, request: Request
+) -> JSONResponse:
+    """Suspend or reactivate a lower-ranked account."""
+    actor_user_id = _check_permission(
+        request, Permission.ACCOUNT_MANAGEMENT, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_status(
+            actor_user_id, target_user_id, body.status, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:  # mapped to a stable, non-sensitive response
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/admin/accounts/{target_user_id}/role")
+def api_admin_account_role(
+    target_user_id: str, body: AdminRoleBody, request: Request
+) -> JSONResponse:
+    """Assign an administrative role. Owner-only."""
+    actor_user_id = _check_permission(
+        request, Permission.CONFIGURATION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_role(
+            actor_user_id, target_user_id, body.role, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        subject_id=body.role,
+        user_id=actor_user_id,
+        metadata={"target": target_user_id, "role": body.role},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/support")
+def api_admin_support_summary(target_user_id: str, request: Request) -> JSONResponse:
+    """Return non-secret support context for another tenant."""
+    actor_user_id = _check_permission(
+        request, Permission.SUPPORT_ACCESS, target_user_id=target_user_id
+    )
+    try:
+        summary = admin_service.support_summary(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/diagnostics")
+def api_admin_connector_diagnostics(
+    target_user_id: str, request: Request
+) -> JSONResponse:
+    """Return connector diagnostics for another tenant to a support engineer."""
+    actor_user_id = _check_permission(
+        request, Permission.CONNECTOR_DIAGNOSTICS, target_user_id=target_user_id
+    )
+    try:
+        status_code, payload = admin_service.connector_diagnostics(
+            actor_user_id, target_user_id, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/admin/accounts/{target_user_id}/export")
+def api_admin_export(target_user_id: str, request: Request) -> JSONResponse:
+    """Export a target tenant's account/programme envelope."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_EXPORT, target_user_id=target_user_id
+    )
+    try:
+        payload = admin_service.export_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_EXPORTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.DATA,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"schema_version": payload["schema_version"]},
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
+
+
+@app.delete("/api/admin/accounts/{target_user_id}")
+def api_admin_delete_account(target_user_id: str, request: Request) -> JSONResponse:
+    """Tombstone a lower-ranked account and revoke its sessions."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_DELETION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.delete_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"scope": "account_access"},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/config")
+def api_admin_config(request: Request) -> JSONResponse:
+    """Return non-secret deployment configuration to an owner."""
+    actor_user_id = _check_permission(request, Permission.CONFIGURATION)
+    summary = admin_service.configuration_summary(actor_user_id, DB_PATH)
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/notifications")

@@ -87,15 +87,15 @@ one operation it:
    an identifier or state planted before sign-in is useless afterwards
    (session-fixation defence).
 
-**Privilege changes.** The product has no roles or step-up authentication, so the
-privilege transitions that exist are: anonymous → signed-in (rotated, above),
-one account → another (rotated, above) and access being withdrawn
-(`ALLOWED_EMAILS`, below). The registry binds each identifier to one `user_id`;
-a cookie whose `user_id` differs from the registry owner is rejected, so code
-that rewrites the identity inside an existing session without calling
-`establish` fails closed on the very next request. **Any future role or step-up
-feature must call `SessionLifecycle.establish` when it changes what a session may
-do.**
+**Privilege changes.** The privilege transitions are: anonymous → signed-in
+(rotated, above), one account → another (rotated, above), access being withdrawn
+(`ALLOWED_EMAILS`, below) and an administrative role change. A role change bumps
+the target's `session_epoch` in `accounts.set_account_role`, so a session issued
+under the old role fails closed on its next request and the person must sign in
+again. The registry binds each identifier to one `user_id`; a cookie whose
+`user_id` differs from the registry owner is rejected. **Any future role or
+step-up feature must call `SessionLifecycle.establish` when it changes what a
+session may do.**
 
 ## Revocation
 
