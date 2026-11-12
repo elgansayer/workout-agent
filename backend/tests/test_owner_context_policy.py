@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import ast
 import dataclasses
-import inspect
 from pathlib import Path
 from typing import Any
 
@@ -30,13 +29,6 @@ from tenant_isolation import (
 
 BACKEND = Path(__file__).resolve().parents[1]
 _SKIPPED_DIRS = {"tests", "__pycache__"}
-
-#: Classes whose public methods must take ``owner: AuthenticatedOwner``. Add a
-#: repository or service here when it is converted; the check keeps it converted.
-OWNER_CONTEXT_CLASSES: dict[str, tuple[str, ...]] = {
-    "programme_domain/repository.py": ("ProgrammeRepository",),
-    "programme_domain/service.py": ("ProgrammeService",),
-}
 
 #: Identifiers that name an account. A client must never be able to send one.
 OWNER_FIELD_NAMES = frozenset(
