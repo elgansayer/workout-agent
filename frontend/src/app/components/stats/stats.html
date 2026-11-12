@@ -18,11 +18,11 @@
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'stale') {
+  @if (viewState() === 'attention') {
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+  @if (viewState() === 'ready' || viewState() === 'attention') {
     <section class="stat-strip">
       <div class="stat-card big-num">
         <span class="num">{{ data.total_sessions }}</span>

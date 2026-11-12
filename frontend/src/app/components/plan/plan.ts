@@ -9,7 +9,12 @@ import { FormsModule } from '@angular/forms';
 import { LocalDatePipe } from '../../shared/local-format.pipes';
 import { ProvenanceBadge } from '../../shared/provenance-badge';
 import { SetupNotice } from '../../shared/setup-notice';
-import { SetupState, ViewState, resolveViewState } from '../../shared/setup-state';
+import {
+  SetupState,
+  ViewState,
+  needsAttention,
+  resolveViewState,
+} from '../../shared/setup-state';
 
 @Component({
   selector: 'app-plan',
@@ -43,7 +48,7 @@ export class Plan implements OnInit {
       loading: this.loading(),
       error: this.error(),
       hasData: this.hasData(),
-      stale: this.setup()?.stale ?? false,
+      attention: needsAttention(this.setup()),
     }),
   );
 

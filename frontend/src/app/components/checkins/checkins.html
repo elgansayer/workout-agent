@@ -30,11 +30,11 @@
     }
   }
 
-  @if (viewState() === 'stale') {
+  @if (viewState() === 'attention') {
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+  @if (viewState() === 'ready' || viewState() === 'attention') {
     <app-list-controls [list]="entries" id="checkins" label="check-ins">
       @for (item of entries.visible(); track item.number) {
         <details class="checkin">

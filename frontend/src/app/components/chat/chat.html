@@ -20,10 +20,7 @@
             class="status-dot"
             [class.thinking]="isStreaming()"
             [class.online]="capability()?.status === 'ready'"
-            [class.warning]="
-              capabilities()?.overall_status === 'educational_only' ||
-              capabilities()?.overall_status === 'setup_required'
-            "
+            [class.warning]="statusWarns()"
           ></span>
           <span class="status-text" role="status">{{ statusText() }}</span>
         </div>
@@ -67,10 +64,25 @@
     }
     @if (coachNeedsSetup()) {
       <div class="chat-setup">
-        <app-setup-notice
-          [setup]="setup()"
-          headingOverride="Coach needs setup before it can answer"
-        />
+        <app-setup-notice [setup]="setup()" [headingOverride]="noticeHeading()" />
+      </div>
+    }
+    @if (canTestProvider() || providerTestMessage()) {
+      <div class="chat-setup" id="coach-provider-test">
+        @if (canTestProvider()) {
+          <button
+            class="btn"
+            type="button"
+            id="coach-test-provider"
+            [disabled]="testingProvider()"
+            (click)="testProvider()"
+          >
+            {{ testingProvider() ? 'Testing…' : 'Test your AI provider' }}
+          </button>
+        }
+        @if (providerTestMessage(); as message) {
+          <p class="muted" role="status" id="coach-provider-test-result">{{ message }}</p>
+        }
       </div>
     }
     @if (messages().length === 0) {

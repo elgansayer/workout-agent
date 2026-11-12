@@ -96,6 +96,7 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("dashboard_insights", ()),
     OwnedTable("deep_correlations", ()),
     OwnedTable("user_preferences", ()),
+    OwnedTable("onboarding_skips", ("step",)),
     OwnedTable("user_api_keys", ("provider",)),
     OwnedTable("push_subscriptions", ("endpoint",)),
     OwnedTable("programmes", ("template_key",), single_active=True),

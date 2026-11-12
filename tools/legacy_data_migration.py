@@ -82,6 +82,7 @@ USER_OWNED_TABLES: tuple[str, ...] = (
     "push_subscriptions",
     "notifications",
     "user_preferences",
+    "onboarding_skips",
     "programmes",
     "programme_revisions",
     "programme_routines",
