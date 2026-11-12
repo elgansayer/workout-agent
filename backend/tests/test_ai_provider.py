@@ -220,9 +220,9 @@ def test_available_providers_exposes_registered_defaults() -> None:
     providers = {provider["id"]: provider for provider in available_providers()}
 
     assert providers["gemini"]["name"] == "Google Gemini"
-    assert providers["claude"]["default_model"] == "claude-sonnet-4-20250514"
+    assert providers["claude"]["default_model"] == "claude-sonnet-5-5"
     assert providers["openai"]["default_model"] == "gpt-4o"
-    assert providers["deepseek"]["default_model"] == "deepseek-chat"
+    assert providers["deepseek"]["default_model"] == "deepseek-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ def _register_fake_providers():
         },
         "claude": {
             "class": lambda api_key, model: _FakeProvider("claude", api_key, model),
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-5-5",
         },
         "openai": {
             "class": lambda api_key, model: _FakeProvider("openai", api_key, model),
@@ -264,7 +264,7 @@ def _register_fake_providers():
         },
         "deepseek": {
             "class": lambda api_key, model: _FakeProvider("deepseek", api_key, model),
-            "default_model": "deepseek-chat",
+            "default_model": "deepseek-flash",
         },
     }
 

@@ -24,3 +24,11 @@ just Gemini — this is a core product promise (`AGENTS.md` §3/§6).
    the `ai-provider-wiring` skill as part of this task rather than only
    reporting it — this audit exists to make measurable weekly progress on
    the migration, not just re-discover the same gap indefinitely.
+5. Review the model lifecycle policy (`backend/ai_model_policy.py`, see
+   `docs/AI_PROVIDER_CONNECTION_TESTS.md`): compare `_LIFECYCLE` / `_UNSUPPORTED`
+   with each provider's current deprecation page, confirm every `PROVIDERS`
+   default model still passes `evaluate_model`, update the tables and tests for
+   anything newly deprecated or retired, and bump `POLICY_REVIEWED_ON`. A
+   default that a provider has retired is a production outage for every user
+   on that provider's default model, so treat it as higher priority than the
+   call-site counts above.

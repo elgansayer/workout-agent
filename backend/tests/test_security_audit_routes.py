@@ -21,6 +21,7 @@ pytest.importorskip("fastapi")
 pytest.importorskip("authlib")
 pytest.importorskip("httpx")
 
+import ai_provider
 import security_audit as audit
 from account_policy import AccessPolicy, AccessPolicyConfig
 from database import get_or_create_user, init_db, set_meta
@@ -65,6 +66,15 @@ def _rejected_hevy() -> HevyCredentialTest:
         tested_at=datetime.now(UTC),
         detail="Hevy rejected the credential.",
     )
+
+
+class _ProbingProvider:
+    def probe(self) -> None:
+        return None
+
+
+def _fake_ai_provider(*_args: Any, **_kwargs: Any) -> _ProbingProvider:
+    return _ProbingProvider()
 
 
 def _events(db: str, *event_types: str) -> list[dict[str, Any]]:
@@ -357,7 +367,10 @@ def test_saving_and_deleting_a_hevy_key_records_credential_and_connector_changes
     assert _HEVY_KEY not in repr(events)
 
 
-def test_saving_an_ai_provider_key_is_a_credential_change_only(env: _Env) -> None:
+def test_saving_an_ai_provider_key_is_a_credential_change_only(
+    env: _Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ai_provider, "get_provider", _fake_ai_provider)
     response = env.client_for(env.user_a).post(
         "/api/settings/key",
         json={"provider": "gemini", "api_key": _AI_KEY, "model": "synthetic-model"},

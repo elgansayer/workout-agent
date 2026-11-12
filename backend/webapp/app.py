@@ -42,6 +42,12 @@ from accounts import (
     require_active_user,
     resolve_oauth_user,
 )
+from ai_connection import (
+    ConnectionCheck,
+    ConnectionCheckRateLimited,
+    http_status_for,
+)
+from ai_connection import checker as ai_connection_checker
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -2618,8 +2624,105 @@ def _hevy_verification_status(state: HevyCredentialState) -> int:
     return 400
 
 
-@app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, Any]:
+async def _json_object(request: Request) -> dict[str, Any]:
+    """Parse a JSON object body; malformed input is a 400, never a 500."""
+    try:
+        body = await request.json()
+    except ValueError:  # json.JSONDecodeError and UnicodeDecodeError
+        raise HTTPException(
+            status_code=400, detail="Request body must be valid JSON"
+        ) from None
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400, detail="Request body must be a JSON object"
+        )
+    return body
+
+
+def _optional_model(value: Any) -> str:
+    """Validate the optional ``model`` request field ("" when absent)."""
+    if value is not None and not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Model must be a string")
+    model = value.strip() if isinstance(value, str) else ""
+    if len(model) > 200:
+        raise HTTPException(status_code=400, detail="Model is too long")
+    return model
+
+
+async def _check_ai_connection(
+    user_id: str, provider: str, model: str, api_key: str
+) -> ConnectionCheck:
+    """Run a provider check off the event loop; our own throttle becomes a 429."""
+    try:
+        return await run_in_threadpool(
+            ai_connection_checker.check, user_id, provider, model, api_key
+        )
+    except ConnectionCheckRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Too many connection tests. "
+                f"Wait {exc.retry_after} seconds and try again."
+            ),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+def _ai_check_refusal(check: ConnectionCheck, outcome: str) -> JSONResponse:
+    """Refuse a flow after a failed check: ``detail`` stays a plain string.
+
+    The structured fields (``code``, ``retryable``, ...) ride alongside it so
+    existing clients that only render ``detail`` keep working.
+    """
+    payload = check.to_payload()
+    payload["detail"] = f"{check.message} {outcome}"
+    headers = {"Retry-After": str(check.retry_after)} if check.retry_after else None
+    return JSONResponse(payload, status_code=http_status_for(check), headers=headers)
+
+
+@app.post("/api/settings/ai/test", response_model=None)
+async def test_ai_connection(request: Request) -> JSONResponse:
+    """Check an AI provider key and model for the current user, saving nothing.
+
+    ``api_key`` is optional: omitted, the user's own stored key is tested. The
+    result is always HTTP 200 with ``status`` ``ok`` or ``error`` and a stable
+    ``code``; only malformed requests and our own throttle use 4xx.
+    """
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await _json_object(request)
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if provider not in defaults:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown AI provider. Use: {', '.join(sorted(defaults))}",
+        )
+    model = _optional_model(body.get("model")) or defaults[provider]
+
+    api_key_value = body.get("api_key")
+    if api_key_value is not None and not isinstance(api_key_value, str):
+        raise HTTPException(status_code=400, detail="api_key must be a string")
+    api_key = (api_key_value or "").strip()
+    if not api_key:
+        # Tenant-scoped: the authenticated user's own credential, never a body id.
+        credential = _vault_credential(user_id, provider, purpose="ai_connection_test")
+        api_key = (
+            credential.api_key.reveal()
+            if credential is not None and credential.api_key is not None
+            else ""
+        )
+
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return JSONResponse(check.to_payload())
+
+
+@app.post("/api/settings/key", response_model=None)
+async def save_api_key(request: Request) -> dict[str, Any] | JSONResponse:
     """Save or update an API key for the current user.
 
     A Hevy credential is verified before it is stored: an unusable key is
@@ -2650,6 +2753,16 @@ async def save_api_key(request: Request) -> dict[str, Any]:
     model = model_value.strip() if isinstance(model_value, str) else ""
     if len(model) > 200:
         raise HTTPException(status_code=400, detail="Model is too long")
+
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
+        check = await _check_ai_connection(
+            user_id, provider, model or ai_provider_defaults[provider], api_key
+        )
+        if not check.ok:
+            return _ai_check_refusal(check, "Your key was not saved.")
 
     verification: HevyCredentialTest | None = None
     if provider == "hevy":
@@ -2683,6 +2796,8 @@ async def save_api_key(request: Request) -> dict[str, Any]:
             raise _vault_http_error(exc) from exc
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+
+    ai_connection_checker.invalidate(user_id, provider)
 
     if verification is not None:
         save_hevy_connection(
@@ -2739,8 +2854,8 @@ async def save_api_key(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/api/settings/key/rotate")
-async def rotate_api_key(request: Request) -> dict[str, Any]:
+@app.post("/api/settings/key/rotate", response_model=None)
+async def rotate_api_key(request: Request) -> dict[str, Any] | JSONResponse:
     """Replace an existing credential, keeping its audit history."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -2757,10 +2872,20 @@ async def rotate_api_key(request: Request) -> dict[str, Any]:
 
     model_value = body.get("model")
     model = model_value.strip() if isinstance(model_value, str) else None
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
+        check = await _check_ai_connection(
+            user_id, provider, model or ai_provider_defaults[provider], api_key
+        )
+        if not check.ok:
+            return _ai_check_refusal(check, "Your key was not rotated.")
     try:
         summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -2794,6 +2919,7 @@ async def revoke_api_key(request: Request) -> dict[str, Any]:
         summary = _vault().revoke(user_id, provider)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -2841,6 +2967,7 @@ async def remove_api_key(request: Request) -> dict[str, Any]:
         raise _vault_http_error(exc) from exc
     if provider == "hevy":
         delete_hevy_connection(user_id, db_path=DB_PATH)
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -2976,8 +3103,48 @@ def credential_audit(request: Request, limit: int = Query(50, ge=1, le=200)):
     }
 
 
-@app.post("/api/settings/preferences")
-async def save_preferences(request: Request) -> dict[str, Any]:
+async def _refuse_unverified_ai_selection(
+    user_id: str, preferred_ai: str | None, ai_model: str | None
+) -> JSONResponse | None:
+    """Gate *activating* a provider/model on the static policy and a live check.
+
+    Only a changed selection is gated, so saving unrelated profile fields never
+    spends a provider call or trips over a model the user already had. The live
+    check uses the user's own stored key; with no stored key there is nothing to
+    verify against yet (the key save verifies it), so only the static policy runs.
+    """
+    if preferred_ai is None and not ai_model:
+        return None
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    stored = get_user_preferences(user_id, DB_PATH)
+    stored_provider = str(stored.get("preferred_ai") or "gemini")
+    stored_model = str(stored.get("ai_model") or defaults.get(stored_provider, ""))
+
+    provider = preferred_ai or stored_provider
+    if provider not in defaults:
+        return None
+    model = ai_model or stored_model or defaults[provider]
+    if (provider, model) == (stored_provider, stored_model):
+        return None
+
+    outcome = "Your AI settings were not saved."
+    refused = ai_connection_checker.validate_model(provider, model)
+    if refused is not None:
+        return _ai_check_refusal(refused, outcome)
+    credential = _vault_credential(user_id, provider, purpose="ai_settings_validation")
+    api_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
+    if not api_key:
+        return None
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return None if check.ok else _ai_check_refusal(check, outcome)
+
+
+@app.post("/api/settings/preferences", response_model=None)
+async def save_preferences(request: Request) -> dict[str, Any] | JSONResponse:
     """Save user training preferences and validate active programme."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -3011,6 +3178,10 @@ async def save_preferences(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="AI model is too long")
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
+
+    refusal = await _refuse_unverified_ai_selection(user_id, preferred_ai, ai_model)
+    if refusal is not None:
+        return refusal
 
     previous_ai = get_user_preferences(user_id, DB_PATH).get("preferred_ai")
     training_rules_payload = body.get("training_rules")

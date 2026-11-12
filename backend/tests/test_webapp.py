@@ -467,7 +467,7 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         "claude",
         {
             "class": _build_claude,
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-5-5",
         },
     )
 
@@ -939,10 +939,23 @@ def test_settings_credential_lifecycle_is_masked_and_audited(
 ) -> None:
     """Save/test/rotate/revoke/delete never echo the submitted secret."""
     import webapp.app as app_module
+    from ai_connection import ConnectionCheck
     from cryptography.fernet import Fernet
     from database import get_legacy_user_id
     from secret_vault import CredentialUnavailableError, SecretVault, VerificationResult
 
+    async def _ok_check(user_id: str, provider: str, model: str, api_key: str) -> ConnectionCheck:
+        return ConnectionCheck(
+            provider=provider,
+            model=model,
+            ok=True,
+            code="ok",
+            message="Connected.",
+            retryable=False,
+            checked_at="2026-11-12T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(app_module, "_check_ai_connection", _ok_check)
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     user_id = get_legacy_user_id(app_module.DB_PATH)
     original = "synthetic-claude-key-1234"
@@ -1035,9 +1048,22 @@ def test_settings_credential_save_fails_closed_without_encryption_key(
 ) -> None:
     """No ENCRYPTION_KEY means no credential can be stored or read."""
     import webapp.app as app_module
+    from ai_connection import ConnectionCheck
     from database import get_legacy_user_id
     from fastapi import HTTPException
 
+    async def _ok_check(user_id: str, provider: str, model: str, api_key: str) -> ConnectionCheck:
+        return ConnectionCheck(
+            provider=provider,
+            model=model,
+            ok=True,
+            code="ok",
+            message="Connected.",
+            retryable=False,
+            checked_at="2026-11-12T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(app_module, "_check_ai_connection", _ok_check)
     monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     secret = "synthetic-never-stored-key"
     user_id = get_legacy_user_id(app_module.DB_PATH)
