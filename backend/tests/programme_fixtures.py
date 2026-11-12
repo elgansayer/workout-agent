@@ -2,6 +2,8 @@
 
 Only synthetic users, routines and workouts are used; nothing here resembles a
 real provider payload or personal record.
+
+synthetic-profile: true
 """
 
 from __future__ import annotations
@@ -113,7 +115,7 @@ def build_preview(
     return build_programme_preview(data or training_data(), request)
 
 
-def new_user(db: str, email: str = "athlete-a@example.test", timezone_name: str = "UTC") -> str:
+def new_user(db: str, email: str = "athlete-a@example.com", timezone_name: str = "UTC") -> str:
     user = database.get_or_create_user(email, "Synthetic", db)
     if timezone_name != "UTC":
         with database.transaction(db) as conn:
