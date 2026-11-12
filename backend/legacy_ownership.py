@@ -106,6 +106,7 @@ OWNED_TABLES: tuple[OwnedTable, ...] = (
     OwnedTable("exercise_prescriptions"),
     OwnedTable("programme_week_states"),
     OwnedTable("adaptation_decisions"),
+    OwnedTable("programme_overrides"),
     OwnedTable("routine_workout_matches", ("programme_id", "workout_id")),
     OwnedTable("hevy_routine_snapshots", ("snapshot_id",)),
     OwnedTable("routine_match_overrides", ("pattern_type", "pattern_value")),

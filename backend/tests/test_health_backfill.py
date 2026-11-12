@@ -1,7 +1,6 @@
 from datetime import date, timedelta
 
 import pytest
-
 from health_backfill import BackfillWindow
 
 

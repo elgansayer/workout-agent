@@ -1,5 +1,4 @@
 import pytest
-
 from connectors import ConnectorContext, ConnectorError
 from connectors.oura import OuraConnector
 from connectors.polar import PolarConnector

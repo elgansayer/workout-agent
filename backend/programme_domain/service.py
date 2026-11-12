@@ -7,10 +7,11 @@ before delegating SQL to :class:`ProgrammeRepository`.
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from datetime import date
 
 from database import DEFAULT_DB_PATH
-from tenant_isolation import AuthenticatedOwner, require_owner
 
 from .models import (
     AdaptationDecision,
@@ -32,13 +33,7 @@ MAX_DURATION_WEEKS = 104
 
 
 class ProgrammeService:
-    """The only supported way for runtime code to read or change programmes.
-
-    Every method takes the :class:`~tenant_isolation.AuthenticatedOwner` the
-    caller proved through :func:`~tenant_isolation.authorize_owner`, never a
-    bare ``user_id``: a string that came from a request, a queue or a flag is
-    refused at runtime before any SQL runs.
-    """
+    """The only supported way for runtime code to read or change programmes."""
 
     def __init__(
         self,
@@ -51,81 +46,107 @@ class ProgrammeService:
     # Drafts and lifecycle
     # ------------------------------------------------------------------
 
-    def preview_draft(
-        self, owner: AuthenticatedOwner, draft: ProgrammeDraft
-    ) -> ProgrammeDraft:
+    def preview_draft(self, user_id: str, draft: ProgrammeDraft) -> ProgrammeDraft:
         """Validate a draft without writing it, for preview surfaces."""
 
-        validate_draft(require_owner(owner).user_id, draft)
+        validate_draft(user_id, draft)
         return draft
 
-    def persist_draft(
-        self, owner: AuthenticatedOwner, draft: ProgrammeDraft
-    ) -> Programme:
+    def persist_draft(self, user_id: str, draft: ProgrammeDraft) -> Programme:
         """Persist a validated draft revision; it is not activated."""
 
-        validate_draft(require_owner(owner).user_id, draft)
-        return self.repository.create_draft(owner, draft)
+        validate_draft(user_id, draft)
+        return self.repository.create_draft(user_id, draft)
 
-    def activate(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
-        return self.repository.activate(require_owner(owner), programme_id)
+    def activate(self, user_id: str, programme_id: int) -> Programme:
+        self._require_user(user_id)
+        return self.repository.activate(user_id, programme_id)
 
-    def pause(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
-        return self.repository.set_status(require_owner(owner), programme_id, "paused")
+    def activate_generated(
+        self,
+        user_id: str,
+        draft: ProgrammeDraft,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+        first_week: ProgrammeWeekState | None = None,
+        event: AdaptationDecisionInput | None = None,
+        notification: dict[str, str] | None = None,
+        legacy_start_date: str | None = None,
+        template_key: str | None = None,
+    ) -> Programme:
+        """Validate, persist and activate a generated draft in one transaction."""
 
-    def complete(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
-        return self.repository.set_status(
-            require_owner(owner), programme_id, "completed"
+        self._require_user(user_id)
+        validate_draft(user_id, draft)
+        return self.repository.activate_generated(
+            user_id,
+            draft,
+            guard=guard,
+            first_week=first_week,
+            event=event,
+            notification=notification,
+            legacy_start_date=legacy_start_date,
+            template_key=template_key,
         )
 
-    def archive(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
+    def pause(self, user_id: str, programme_id: int) -> Programme:
+        self._require_user(user_id)
+        return self.repository.set_status(user_id, programme_id, "paused")
+
+    def complete(self, user_id: str, programme_id: int) -> Programme:
+        self._require_user(user_id)
+        return self.repository.set_status(user_id, programme_id, "completed")
+
+    def archive(self, user_id: str, programme_id: int) -> Programme:
+        self._require_user(user_id)
         return self.repository.set_status(
-            require_owner(owner), programme_id, "archived", archive=True
+            user_id, programme_id, "archived", archive=True
         )
 
     # ------------------------------------------------------------------
     # Tenant-scoped reads
     # ------------------------------------------------------------------
 
-    def get_active_programme(self, owner: AuthenticatedOwner) -> Programme | None:
-        return self.repository.get_active_programme(require_owner(owner))
+    def get_active_programme(self, user_id: str) -> Programme | None:
+        self._require_user(user_id)
+        return self.repository.get_active_programme(user_id)
 
-    def get_active_revision(
-        self, owner: AuthenticatedOwner
-    ) -> ProgrammeRevision | None:
-        programme = self.get_active_programme(owner)
+    def get_active_revision(self, user_id: str) -> ProgrammeRevision | None:
+        programme = self.get_active_programme(user_id)
         return programme.current_revision if programme else None
 
-    def get_programme(
-        self, owner: AuthenticatedOwner, programme_id: int
-    ) -> Programme | None:
-        return self.repository.get_programme(require_owner(owner), programme_id)
+    def get_programme(self, user_id: str, programme_id: int) -> Programme | None:
+        self._require_user(user_id)
+        return self.repository.get_programme(user_id, programme_id)
 
     def get_programme_week(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         week_number: int,
         *,
         revision_number: int | None = None,
     ) -> ProgrammeWeek | None:
+        self._require_user(user_id)
         return self.repository.get_programme_week(
-            require_owner(owner),
+            user_id,
             programme_id,
             week_number,
             revision_number=revision_number,
         )
 
     def list_revision_history(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self, user_id: str, programme_id: int
     ) -> list[ProgrammeRevision]:
-        return self.repository.list_revisions(require_owner(owner), programme_id)
+        self._require_user(user_id)
+        return self.repository.list_revisions(user_id, programme_id)
 
     def get_revision(
-        self, owner: AuthenticatedOwner, programme_id: int, revision_number: int
+        self, user_id: str, programme_id: int, revision_number: int
     ) -> ProgrammeRevision | None:
+        self._require_user(user_id)
         return self.repository.get_revision(
-            require_owner(owner), programme_id, revision_number
+            user_id, programme_id, revision_number
         )
 
     # ------------------------------------------------------------------
@@ -134,18 +155,18 @@ class ProgrammeService:
 
     def create_revision_from_adaptation(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         draft: ProgrammeDraft,
         decision: AdaptationDecisionInput,
     ) -> ProgrammeRevision:
         """Record an adaptation and append the resulting immutable revision."""
 
-        user_id = require_owner(owner).user_id
+        self._require_user(user_id)
         validate_adaptation(decision)
         validate_draft(user_id, draft)
         return self.repository.create_revision(
-            owner,
+            user_id,
             programme_id,
             draft,
             reason="adaptation",
@@ -154,7 +175,7 @@ class ProgrammeService:
 
     def create_revision_from_rebase(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         draft: ProgrammeDraft,
         *,
@@ -162,17 +183,31 @@ class ProgrammeService:
     ) -> ProgrammeRevision:
         """Append a new revision after source reconciliation or explicit edits."""
 
-        validate_draft(require_owner(owner).user_id, draft)
+        self._require_user(user_id)
+        validate_draft(user_id, draft)
         return self.repository.create_revision(
-            owner, programme_id, draft, reason=reason
+            user_id, programme_id, draft, reason=reason
         )
 
     def list_adaptation_decisions(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self, user_id: str, programme_id: int
     ) -> list[AdaptationDecision]:
-        return self.repository.list_adaptation_decisions(
-            require_owner(owner), programme_id
-        )
+        self._require_user(user_id)
+        return self.repository.list_adaptation_decisions(user_id, programme_id)
+
+    def list_week_states(
+        self, user_id: str, programme_id: int
+    ) -> list[tuple[int, ProgrammeWeekState]]:
+        """Every stored week state with the revision id that produced it."""
+
+        self._require_user(user_id)
+        return self.repository.list_week_states(user_id, programme_id)
+
+    def get_adaptation_decision(
+        self, user_id: str, programme_id: int, decision_id: int
+    ) -> AdaptationDecision | None:
+        self._require_user(user_id)
+        return self.repository.get_adaptation_decision(user_id, programme_id, decision_id)
 
     # ------------------------------------------------------------------
     # Week state and workout matching
@@ -180,36 +215,35 @@ class ProgrammeService:
 
     def save_week_state(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         revision_id: int,
         state: ProgrammeWeekState,
     ) -> ProgrammeWeekState:
-        require_owner(owner)
+        self._require_user(user_id)
         if state.week_number < 1:
             raise ProgrammeValidationError("Week numbers start at 1.")
         return self.repository.save_week_state(
-            owner, programme_id, revision_id, state
+            user_id, programme_id, revision_id, state
         )
 
     def save_routine_workout_match(
-        self, owner: AuthenticatedOwner, match: RoutineWorkoutMatch
+        self, user_id: str, match: RoutineWorkoutMatch
     ) -> RoutineWorkoutMatch:
-        require_owner(owner)
+        self._require_user(user_id)
         if not 0.0 <= match.score <= 1.0:
             raise ProgrammeValidationError("Match score must be between 0 and 1.")
         if not 0.0 <= match.confidence <= 1.0:
             raise ProgrammeValidationError(
                 "Match confidence must be between 0 and 1."
             )
-        return self.repository.save_routine_workout_match(owner, match)
+        return self.repository.save_routine_workout_match(user_id, match)
 
     def list_routine_workout_matches(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self, user_id: str, programme_id: int
     ) -> list[RoutineWorkoutMatch]:
-        return self.repository.list_routine_workout_matches(
-            require_owner(owner), programme_id
-        )
+        self._require_user(user_id)
+        return self.repository.list_routine_workout_matches(user_id, programme_id)
 
     @staticmethod
     def _require_user(user_id: str) -> None:

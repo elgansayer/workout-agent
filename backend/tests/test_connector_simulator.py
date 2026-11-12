@@ -1,5 +1,4 @@
 import pytest
-
 from connectors.simulator import SimulatedPage, SyncSimulator
 
 

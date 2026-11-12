@@ -1,9 +1,8 @@
 """Tenant-scoped SQL repository for immutable programme revisions.
 
-Every public method requires an :class:`~tenant_isolation.AuthenticatedOwner`
-(never a bare ``user_id``).  Reads, writes and deletes include the owner's
-identifier in their predicates; caller-supplied programme or revision
-identifiers are never treated as authorisation.
+Every public method requires an authenticated ``user_id``.  Reads, writes and
+deletes include that identifier in their predicates; caller-supplied programme
+or revision identifiers are never treated as authorisation.
 """
 
 from __future__ import annotations
@@ -11,12 +10,11 @@ from __future__ import annotations
 import contextlib
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from database import DEFAULT_DB_PATH, _connect
-from tenant_isolation import AuthenticatedOwner, require_owner
 
 from .models import (
     AdaptationDecision,
@@ -26,6 +24,7 @@ from .models import (
     ProgrammeBlock,
     ProgrammeDraft,
     ProgrammeNotFoundError,
+    ProgrammeOverride,
     ProgrammeRevision,
     ProgrammeRoutine,
     ProgrammeValidationError,
@@ -67,55 +66,193 @@ class ProgrammeRepository:
     # Draft creation and revisions
     # ------------------------------------------------------------------
 
-    def create_draft(self, owner: AuthenticatedOwner, draft: ProgrammeDraft) -> Programme:
+    def create_draft(self, user_id: str, draft: ProgrammeDraft) -> Programme:
         """Persist a complete draft revision in a single transaction."""
-        user_id = require_owner(owner).user_id
 
         self._assert_snapshot_ownership(user_id, draft)
         with self.transaction() as conn:
-            now = _now()
-            cursor = conn.execute(
-                """
-                INSERT INTO programmes
-                    (user_id, source, template_key, definition, active,
-                     created_at, updated_at, name, status, goal,
-                     duration_weeks, start_date, end_date)
-                VALUES (?, 'hevy', NULL, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?)
-                """,
-                (
-                    user_id,
-                    _json(draft.settings),
-                    now,
-                    now,
-                    draft.name,
-                    draft.goal,
-                    draft.duration_weeks,
-                    draft.start_date.isoformat(),
-                    draft.end_date.isoformat(),
-                ),
+            programme_id, _revision = self._create_draft_in(conn, user_id, draft)
+            return self._load_programme(conn, user_id, programme_id)
+
+    @staticmethod
+    def _unique_template_key(
+        conn: sqlite3.Connection, user_id: str, base: str | None
+    ) -> str | None:
+        """A per-tenant unique provenance key derived from *base*."""
+
+        if not base:
+            return None
+        key, counter = base, 1
+        while conn.execute(
+            "SELECT 1 FROM programmes WHERE user_id = ? AND template_key = ?",
+            (user_id, key),
+        ).fetchone():
+            counter += 1
+            key = f"{base}:{counter}"
+        return key
+
+    def _create_draft_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        draft: ProgrammeDraft,
+        template_key: str | None = None,
+    ) -> tuple[int, ProgrammeRevision]:
+        now = _now()
+        cursor = conn.execute(
+            """
+            INSERT INTO programmes
+                (user_id, source, template_key, definition, active,
+                 created_at, updated_at, name, status, goal,
+                 duration_weeks, start_date, end_date)
+            VALUES (?, 'hevy', ?, ?, 0, ?, ?, ?, 'draft', ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                self._unique_template_key(conn, user_id, template_key),
+                _json(draft.settings),
+                now,
+                now,
+                draft.name,
+                draft.goal,
+                draft.duration_weeks,
+                draft.start_date.isoformat(),
+                draft.end_date.isoformat(),
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to persist programme.")
+        programme_id = int(cursor.lastrowid)
+        revision = self._insert_revision_contents(
+            conn,
+            user_id=user_id,
+            programme_id=programme_id,
+            revision_number=1,
+            draft=draft,
+            reason=draft.reason,
+            engine_version=draft.engine_version,
+        )
+        conn.execute(
+            "UPDATE programmes SET current_revision_id = ?, updated_at = ? "
+            "WHERE id = ? AND user_id = ?",
+            (revision.id, now, programme_id, user_id),
+        )
+        return programme_id, revision
+
+    def activate_generated(
+        self,
+        user_id: str,
+        draft: ProgrammeDraft,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+        first_week: ProgrammeWeekState | None = None,
+        event: AdaptationDecisionInput | None = None,
+        notification: dict[str, str] | None = None,
+        legacy_start_date: str | None = None,
+        template_key: str | None = None,
+    ) -> Programme:
+        """Create, validate, activate and materialise a programme atomically.
+
+        Everything happens in one ``BEGIN IMMEDIATE`` transaction: the
+        ``guard`` (which re-runs the shared structured validator against the
+        tenant's *current* rules) executes first, then the immutable revision,
+        the archival of the previous active programme, the first week state,
+        the audit event and the notification.  Any failure rolls the whole
+        activation back and leaves the previous active programme untouched; two
+        concurrent activations serialise on the write lock and leave exactly one
+        active programme.
+        """
+
+        self._assert_snapshot_ownership(user_id, draft)
+        with self.transaction() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if guard is not None:
+                guard(conn)
+            previous = conn.execute(
+                "SELECT id FROM programmes WHERE user_id = ? AND status = 'active' "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            programme_id, revision = self._create_draft_in(
+                conn, user_id, draft, template_key
             )
-            if cursor.lastrowid is None:
-                raise RuntimeError("Failed to persist programme.")
-            programme_id = int(cursor.lastrowid)
-            revision = self._insert_revision_contents(
-                conn,
-                user_id=user_id,
-                programme_id=programme_id,
-                revision_number=1,
-                draft=draft,
-                reason=draft.reason,
-                engine_version=draft.engine_version,
+            now = _now()
+            conn.execute(
+                """
+                UPDATE programmes
+                SET status = 'archived', active = 0, archived_at = ?,
+                    updated_at = ?
+                WHERE user_id = ? AND status = 'active' AND id <> ?
+                """,
+                (now, now, user_id, programme_id),
+            )
+            # Legacy blobs flag themselves with ``active`` only.
+            conn.execute(
+                "UPDATE programmes SET active = 0 WHERE user_id = ? AND id <> ?",
+                (user_id, programme_id),
             )
             conn.execute(
-                "UPDATE programmes SET current_revision_id = ?, updated_at = ? "
-                "WHERE id = ? AND user_id = ?",
-                (revision.id, now, programme_id, user_id),
+                """
+                UPDATE programmes
+                SET status = 'active', active = 1, activated_at = ?,
+                    predecessor_programme_id = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    now,
+                    int(previous["id"]) if previous else None,
+                    now,
+                    programme_id,
+                    user_id,
+                ),
             )
+            if first_week is not None:
+                self._save_week_state_in(
+                    conn, user_id, programme_id, revision.id, first_week
+                )
+            if event is not None:
+                self._insert_decision_in(
+                    conn, user_id, programme_id, None, revision.id, event, now
+                )
+            conn.execute(
+                """
+                INSERT INTO programme_decisions
+                    (user_id, programme_id, source, template_key, decision,
+                     reason, created_at)
+                VALUES (?, ?, 'hevy', NULL, 'authoritative', 'user_activation', ?)
+                """,
+                (user_id, programme_id, now),
+            )
+            if legacy_start_date:
+                conn.execute(
+                    """
+                    INSERT INTO hevy_meta (user_id, key, value)
+                    VALUES (?, 'programme_start_date', ?)
+                    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+                    """,
+                    (user_id, legacy_start_date),
+                )
+            if notification is not None:
+                conn.execute(
+                    """
+                    INSERT INTO notifications
+                        (user_id, type, title, message, link, is_read, created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                    """,
+                    (
+                        user_id,
+                        notification.get("type", "programme"),
+                        notification["title"],
+                        notification["message"],
+                        notification.get("link"),
+                        now,
+                    ),
+                )
             return self._load_programme(conn, user_id, programme_id)
 
     def create_revision(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         draft: ProgrammeDraft,
         *,
@@ -123,65 +260,145 @@ class ProgrammeRepository:
         adaptation: AdaptationDecisionInput | None = None,
     ) -> ProgrammeRevision:
         """Append an immutable revision and optionally an adaptation record."""
-        user_id = require_owner(owner).user_id
+
+        with self.transaction() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            revision, _decision_id = self.create_revision_in(
+                conn,
+                user_id,
+                programme_id,
+                draft,
+                reason=reason,
+                adaptation=adaptation,
+            )
+            return revision
+
+    def create_revision_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        draft: ProgrammeDraft,
+        *,
+        reason: str,
+        adaptation: AdaptationDecisionInput | None = None,
+    ) -> tuple[ProgrammeRevision, int | None]:
+        """In-transaction form of :meth:`create_revision`.
+
+        Returns the new revision and the id of the recorded decision.  The
+        programme's schedule columns and compatibility definition follow the new
+        revision, but its start date never moves: completed weeks stay dated.
+        """
 
         self._assert_snapshot_ownership(user_id, draft)
-        with self.transaction() as conn:
-            programme = self._programme_row(conn, user_id, programme_id)
-            if programme is None:
-                raise ProgrammeNotFoundError("Programme not found for this user.")
-            if programme["status"] in {"completed", "archived", "migration_required"}:
-                raise ProgrammeValidationError(
-                    "A completed or archived programme cannot receive a new revision."
-                )
-            next_number = int(
-                conn.execute(
-                    "SELECT COALESCE(MAX(revision_number), 0) + 1 "
-                    "FROM programme_revisions WHERE user_id = ? AND programme_id = ?",
-                    (user_id, programme_id),
-                ).fetchone()[0]
+        programme = self._programme_row(conn, user_id, programme_id)
+        if programme is None:
+            raise ProgrammeNotFoundError("Programme not found for this user.")
+        if programme["status"] in {"completed", "archived", "migration_required"}:
+            raise ProgrammeValidationError(
+                "A completed or archived programme cannot receive a new revision."
             )
-            previous_id = programme["current_revision_id"]
-            revision = self._insert_revision_contents(
-                conn,
-                user_id=user_id,
-                programme_id=programme_id,
-                revision_number=next_number,
-                draft=draft,
-                reason=reason,
-                engine_version=draft.engine_version,
+        if programme["start_date"] and draft.start_date.isoformat() != str(
+            programme["start_date"]
+        ):
+            raise ProgrammeValidationError(
+                "A new revision cannot move the programme start date."
             )
-            now = _now()
+        next_number = int(
             conn.execute(
-                "UPDATE programmes SET current_revision_id = ?, updated_at = ? "
-                "WHERE id = ? AND user_id = ?",
-                (revision.id, now, programme_id, user_id),
+                "SELECT COALESCE(MAX(revision_number), 0) + 1 "
+                "FROM programme_revisions WHERE user_id = ? AND programme_id = ?",
+                (user_id, programme_id),
+            ).fetchone()[0]
+        )
+        previous_id = programme["current_revision_id"]
+        revision = self._insert_revision_contents(
+            conn,
+            user_id=user_id,
+            programme_id=programme_id,
+            revision_number=next_number,
+            draft=draft,
+            reason=reason,
+            engine_version=draft.engine_version,
+        )
+        now = _now()
+        conn.execute(
+            """
+            UPDATE programmes
+            SET current_revision_id = ?, duration_weeks = ?, end_date = ?,
+                definition = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                revision.id,
+                draft.duration_weeks,
+                draft.end_date.isoformat(),
+                _json(draft.settings),
+                now,
+                programme_id,
+                user_id,
+            ),
+        )
+        decision_id: int | None = None
+        if adaptation is not None:
+            decision_id = self._insert_decision_in(
+                conn, user_id, programme_id, previous_id, revision.id, adaptation, now
             )
-            if adaptation is not None:
-                conn.execute(
-                    """
-                    INSERT INTO adaptation_decisions
-                        (user_id, programme_id, from_revision_id, to_revision_id,
-                         scope_json, inputs_json, output_json, confidence,
-                         rule_version, explanation, confirmed, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        user_id,
-                        programme_id,
-                        previous_id,
-                        revision.id,
-                        _json(adaptation.scope),
-                        _json(adaptation.inputs),
-                        _json(adaptation.output),
-                        adaptation.confidence,
-                        adaptation.rule_version,
-                        adaptation.explanation,
-                        1 if adaptation.confirmed else 0,
-                        now,
-                    ),
-                )
-            return self._load_revision(conn, revision.id, user_id)
+        return self._load_revision(conn, revision.id, user_id), decision_id
+
+    def _insert_decision_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        from_revision_id: int | None,
+        to_revision_id: int,
+        decision: AdaptationDecisionInput,
+        now: str,
+    ) -> int:
+        resolved = (
+            now
+            if decision.application_state
+            in {"user_confirmed", "overridden", "reverted", "rejected"}
+            else ""
+        )
+        cursor = conn.execute(
+            """
+            INSERT INTO adaptation_decisions
+                (user_id, programme_id, from_revision_id, to_revision_id,
+                 scope_json, inputs_json, output_json, confidence,
+                 rule_version, explanation, confirmed, created_at,
+                 decision_type, application_state, idempotency_key,
+                 week_number, exercise_template_id, source_workout_id,
+                 source_workout_hash, resolved_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                programme_id,
+                from_revision_id,
+                to_revision_id,
+                _json(decision.scope),
+                _json(decision.inputs),
+                _json(decision.output),
+                decision.confidence,
+                decision.rule_version,
+                decision.explanation,
+                1 if decision.confirmed else 0,
+                now,
+                decision.decision_type,
+                decision.application_state,
+                decision.idempotency_key,
+                int(decision.week_number or 0),
+                decision.exercise_template_id,
+                decision.source_workout_id,
+                decision.source_workout_hash,
+                resolved,
+            ),
+        )
+        if cursor.lastrowid is None:
+            raise RuntimeError("Failed to persist adaptation decision.")
+        return int(cursor.lastrowid)
 
     def _insert_revision_contents(
         self,
@@ -209,6 +426,8 @@ class ProgrammeRepository:
             "goal": draft.goal,
             "duration_weeks": draft.duration_weeks,
         }
+        if draft.audit:
+            source_summary["audit"] = draft.audit
         cursor = conn.execute(
             """
             INSERT INTO programme_revisions
@@ -338,9 +557,8 @@ class ProgrammeRepository:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def activate(self, owner: AuthenticatedOwner, programme_id: int) -> Programme:
+    def activate(self, user_id: str, programme_id: int) -> Programme:
         """Activate one programme, archiving any previous active programme."""
-        user_id = require_owner(owner).user_id
 
         with self.transaction() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -378,46 +596,84 @@ class ProgrammeRepository:
 
     def set_status(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         status: str,
         *,
         archive: bool = False,
     ) -> Programme:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
-            programme = self._programme_row(conn, user_id, programme_id)
-            if programme is None:
-                raise ProgrammeNotFoundError("Programme not found for this user.")
-            now = _now()
-            if status == "active":
-                raise ProgrammeValidationError("Use activate() to activate a programme.")
-            conn.execute(
-                """
-                UPDATE programmes
-                SET status = ?, active = 0,
-                    archived_at = CASE WHEN ? THEN ? ELSE archived_at END,
-                    updated_at = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (status, 1 if archive else 0, now, now, programme_id, user_id),
-            )
-            return self._load_programme(conn, user_id, programme_id)
+            return self.set_status_in(conn, user_id, programme_id, status, archive=archive)
+
+    def set_status_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        status: str,
+        *,
+        archive: bool = False,
+    ) -> Programme:
+        programme = self._programme_row(conn, user_id, programme_id)
+        if programme is None:
+            raise ProgrammeNotFoundError("Programme not found for this user.")
+        now = _now()
+        if status == "active":
+            raise ProgrammeValidationError("Use activate() to activate a programme.")
+        conn.execute(
+            """
+            UPDATE programmes
+            SET status = ?, active = 0,
+                archived_at = CASE WHEN ? THEN ? ELSE archived_at END,
+                updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (status, 1 if archive else 0, now, now, programme_id, user_id),
+        )
+        return self._load_programme(conn, user_id, programme_id)
+
+    def resume_in(
+        self, conn: sqlite3.Connection, user_id: str, programme_id: int
+    ) -> Programme:
+        """Re-activate a paused programme, archiving any other active one."""
+
+        programme = self._programme_row(conn, user_id, programme_id)
+        if programme is None:
+            raise ProgrammeNotFoundError("Programme not found for this user.")
+        if programme["status"] != "paused":
+            raise ProgrammeValidationError("Only a paused programme can be resumed.")
+        now = _now()
+        conn.execute(
+            """
+            UPDATE programmes
+            SET status = 'archived', active = 0, archived_at = ?, updated_at = ?
+            WHERE user_id = ? AND status = 'active' AND id <> ?
+            """,
+            (now, now, user_id, programme_id),
+        )
+        conn.execute(
+            "UPDATE programmes SET active = 0 WHERE user_id = ? AND id <> ?",
+            (user_id, programme_id),
+        )
+        conn.execute(
+            "UPDATE programmes SET status = 'active', active = 1, updated_at = ? "
+            "WHERE id = ? AND user_id = ?",
+            (now, programme_id, user_id),
+        )
+        return self._load_programme(conn, user_id, programme_id)
 
     # ------------------------------------------------------------------
     # Tenant-scoped reads
     # ------------------------------------------------------------------
 
-    def get_programme(self, owner: AuthenticatedOwner, programme_id: int) -> Programme | None:
-        user_id = require_owner(owner).user_id
+    def get_programme(self, user_id: str, programme_id: int) -> Programme | None:
         with self.transaction() as conn:
             row = self._programme_row(conn, user_id, programme_id)
             if row is None:
                 return None
             return self._load_programme(conn, user_id, programme_id)
 
-    def get_active_programme(self, owner: AuthenticatedOwner) -> Programme | None:
-        user_id = require_owner(owner).user_id
+    def get_active_programme(self, user_id: str) -> Programme | None:
         with self.transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM programmes "
@@ -430,9 +686,8 @@ class ProgrammeRepository:
             return self._load_programme(conn, user_id, int(row["id"]))
 
     def list_revisions(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self, user_id: str, programme_id: int
     ) -> list[ProgrammeRevision]:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if self._programme_row(conn, user_id, programme_id) is None:
                 return []
@@ -449,9 +704,8 @@ class ProgrammeRepository:
             ]
 
     def get_revision(
-        self, owner: AuthenticatedOwner, programme_id: int, revision_number: int
+        self, user_id: str, programme_id: int, revision_number: int
     ) -> ProgrammeRevision | None:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             row = conn.execute(
                 """
@@ -466,13 +720,12 @@ class ProgrammeRepository:
 
     def get_programme_week(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         week_number: int,
         *,
         revision_number: int | None = None,
     ) -> ProgrammeWeek | None:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             programme = self._programme_row(conn, user_id, programme_id)
             if programme is None:
@@ -515,6 +768,17 @@ class ProgrammeRepository:
                 """,
                 (user_id, programme_id, revision.id, week_number),
             ).fetchone()
+            if state_row is None and revision_number is None:
+                # A later revision never rewrites a week: show the state recorded
+                # against the revision that was current when the week was lived.
+                state_row = conn.execute(
+                    """
+                    SELECT * FROM programme_week_states
+                    WHERE user_id = ? AND programme_id = ? AND week_number = ?
+                    ORDER BY revision_id DESC LIMIT 1
+                    """,
+                    (user_id, programme_id, week_number),
+                ).fetchone()
             return ProgrammeWeek(
                 programme_id=programme_id,
                 revision_id=revision.id,
@@ -542,64 +806,137 @@ class ProgrammeRepository:
 
     def save_week_state(
         self,
-        owner: AuthenticatedOwner,
+        user_id: str,
         programme_id: int,
         revision_id: int,
         state: ProgrammeWeekState,
     ) -> ProgrammeWeekState:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
-            if not self._revision_belongs_to(
-                conn, user_id, programme_id, revision_id
-            ):
-                raise ProgrammeNotFoundError(
-                    "Revision not found for this user and programme."
-                )
-            now = _now()
-            conn.execute(
-                """
-                INSERT INTO programme_week_states
-                    (user_id, programme_id, revision_id, week_number,
-                     planned_json, actual_json, adherence, fatigue,
-                     review_state, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(revision_id, week_number) DO UPDATE SET
-                    planned_json = excluded.planned_json,
-                    actual_json = excluded.actual_json,
-                    adherence = excluded.adherence,
-                    fatigue = excluded.fatigue,
-                    review_state = excluded.review_state,
-                    updated_at = excluded.updated_at
-                WHERE programme_week_states.user_id = excluded.user_id
-                """,
-                (
-                    user_id,
-                    programme_id,
-                    revision_id,
-                    state.week_number,
-                    _json(state.planned),
-                    _json(state.actual),
-                    state.adherence,
-                    state.fatigue,
-                    state.review_state,
-                    now,
-                    now,
-                ),
+            return self._save_week_state_in(
+                conn, user_id, programme_id, revision_id, state
             )
-            row = conn.execute(
+
+    def save_week_state_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        revision_id: int,
+        state: ProgrammeWeekState,
+    ) -> ProgrammeWeekState:
+        return self._save_week_state_in(conn, user_id, programme_id, revision_id, state)
+
+    def _save_week_state_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        revision_id: int,
+        state: ProgrammeWeekState,
+    ) -> ProgrammeWeekState:
+        if not self._revision_belongs_to(conn, user_id, programme_id, revision_id):
+            raise ProgrammeNotFoundError(
+                "Revision not found for this user and programme."
+            )
+        now = _now()
+        conn.execute(
+            """
+            INSERT INTO programme_week_states
+                (user_id, programme_id, revision_id, week_number,
+                 planned_json, actual_json, adherence, fatigue,
+                 review_state, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(revision_id, week_number) DO UPDATE SET
+                planned_json = excluded.planned_json,
+                actual_json = excluded.actual_json,
+                adherence = excluded.adherence,
+                fatigue = excluded.fatigue,
+                review_state = excluded.review_state,
+                updated_at = excluded.updated_at
+            WHERE programme_week_states.user_id = excluded.user_id
+            """,
+            (
+                user_id,
+                programme_id,
+                revision_id,
+                state.week_number,
+                _json(state.planned),
+                _json(state.actual),
+                state.adherence,
+                state.fatigue,
+                state.review_state,
+                now,
+                now,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT * FROM programme_week_states
+            WHERE user_id = ? AND programme_id = ? AND revision_id = ?
+              AND week_number = ?
+            """,
+            (user_id, programme_id, revision_id, state.week_number),
+        ).fetchone()
+        return self._row_to_week_state(row)
+
+    def get_week_state_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        revision_id: int,
+        week_number: int,
+    ) -> ProgrammeWeekState | None:
+        row = conn.execute(
+            """
+            SELECT * FROM programme_week_states
+            WHERE user_id = ? AND programme_id = ? AND revision_id = ?
+              AND week_number = ?
+            """,
+            (user_id, programme_id, revision_id, week_number),
+        ).fetchone()
+        return self._row_to_week_state(row) if row else None
+
+    def get_latest_week_state_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        week_number: int,
+    ) -> ProgrammeWeekState | None:
+        """The state recorded for a week by the most recent revision that has one."""
+
+        row = conn.execute(
+            """
+            SELECT * FROM programme_week_states
+            WHERE user_id = ? AND programme_id = ? AND week_number = ?
+            ORDER BY revision_id DESC LIMIT 1
+            """,
+            (user_id, programme_id, week_number),
+        ).fetchone()
+        return self._row_to_week_state(row) if row else None
+
+    def list_week_states(
+        self, user_id: str, programme_id: int
+    ) -> list[tuple[int, ProgrammeWeekState]]:
+        """Every stored week state with the revision id that produced it."""
+
+        with self.transaction() as conn:
+            if self._programme_row(conn, user_id, programme_id) is None:
+                return []
+            rows = conn.execute(
                 """
                 SELECT * FROM programme_week_states
-                WHERE user_id = ? AND programme_id = ? AND revision_id = ?
-                  AND week_number = ?
+                WHERE user_id = ? AND programme_id = ?
+                ORDER BY week_number ASC, revision_id ASC
                 """,
-                (user_id, programme_id, revision_id, state.week_number),
-            ).fetchone()
-            return self._row_to_week_state(row)
+                (user_id, programme_id),
+            ).fetchall()
+            return [(int(row["revision_id"]), self._row_to_week_state(row)) for row in rows]
 
     def save_routine_workout_match(
-        self, owner: AuthenticatedOwner, match: RoutineWorkoutMatch
+        self, user_id: str, match: RoutineWorkoutMatch
     ) -> RoutineWorkoutMatch:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if not self._revision_belongs_to(
                 conn, user_id, match.programme_id, match.revision_id
@@ -674,9 +1011,8 @@ class ProgrammeRepository:
             )
 
     def list_routine_workout_matches(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self, user_id: str, programme_id: int
     ) -> list[RoutineWorkoutMatch]:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
             if self._programme_row(conn, user_id, programme_id) is None:
                 return []
@@ -706,37 +1042,326 @@ class ProgrammeRepository:
             ]
 
     def list_adaptation_decisions(
-        self, owner: AuthenticatedOwner, programme_id: int
+        self,
+        user_id: str,
+        programme_id: int,
+        *,
+        states: tuple[str, ...] | None = None,
+        decision_types: tuple[str, ...] | None = None,
+        exercise_template_id: str | None = None,
+        source_workout_id: str | None = None,
+        revision_id: int | None = None,
     ) -> list[AdaptationDecision]:
-        user_id = require_owner(owner).user_id
         with self.transaction() as conn:
-            if self._programme_row(conn, user_id, programme_id) is None:
-                return []
-            rows = conn.execute(
-                """
-                SELECT * FROM adaptation_decisions
-                WHERE user_id = ? AND programme_id = ?
-                ORDER BY id ASC
-                """,
-                (user_id, programme_id),
-            ).fetchall()
-            return [
-                AdaptationDecision(
-                    id=int(row["id"]),
-                    programme_id=int(row["programme_id"]),
-                    from_revision_id=row["from_revision_id"],
-                    to_revision_id=int(row["to_revision_id"]),
-                    scope=_loads(row["scope_json"]),
-                    inputs=_loads(row["inputs_json"]),
-                    output=_loads(row["output_json"]),
-                    confidence=float(row["confidence"]),
-                    rule_version=str(row["rule_version"]),
-                    explanation=str(row["explanation"]),
-                    confirmed=bool(row["confirmed"]),
-                    created_at=str(row["created_at"]),
-                )
-                for row in rows
-            ]
+            return self.list_decisions_in(
+                conn,
+                user_id,
+                programme_id,
+                states=states,
+                decision_types=decision_types,
+                exercise_template_id=exercise_template_id,
+                source_workout_id=source_workout_id,
+                revision_id=revision_id,
+            )
+
+    def list_decisions_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        *,
+        states: tuple[str, ...] | None = None,
+        decision_types: tuple[str, ...] | None = None,
+        exercise_template_id: str | None = None,
+        source_workout_id: str | None = None,
+        revision_id: int | None = None,
+    ) -> list[AdaptationDecision]:
+        if self._programme_row(conn, user_id, programme_id) is None:
+            return []
+        query = "SELECT * FROM adaptation_decisions WHERE user_id = ? AND programme_id = ?"
+        params: list[Any] = [user_id, programme_id]
+        if states:
+            query += f" AND application_state IN ({', '.join('?' for _ in states)})"
+            params.extend(states)
+        if decision_types:
+            query += f" AND decision_type IN ({', '.join('?' for _ in decision_types)})"
+            params.extend(decision_types)
+        if exercise_template_id is not None:
+            query += " AND exercise_template_id = ?"
+            params.append(exercise_template_id)
+        if source_workout_id is not None:
+            query += " AND source_workout_id = ?"
+            params.append(source_workout_id)
+        if revision_id is not None:
+            query += " AND (from_revision_id = ? OR to_revision_id = ?)"
+            params.extend([revision_id, revision_id])
+        query += " ORDER BY id ASC"
+        return [
+            self._row_to_decision(row) for row in conn.execute(query, params).fetchall()
+        ]
+
+    def get_adaptation_decision(
+        self, user_id: str, programme_id: int, decision_id: int
+    ) -> AdaptationDecision | None:
+        with self.transaction() as conn:
+            return self.get_decision_in(conn, user_id, programme_id, decision_id)
+
+    def get_decision_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        decision_id: int,
+    ) -> AdaptationDecision | None:
+        row = conn.execute(
+            "SELECT * FROM adaptation_decisions "
+            "WHERE id = ? AND user_id = ? AND programme_id = ?",
+            (decision_id, user_id, programme_id),
+        ).fetchone()
+        return self._row_to_decision(row) if row else None
+
+    def record_decision_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        from_revision_id: int | None,
+        to_revision_id: int,
+        decision: AdaptationDecisionInput,
+    ) -> tuple[AdaptationDecision, bool]:
+        """Insert a decision; an identical idempotency key returns the stored row."""
+
+        if decision.idempotency_key:
+            row = conn.execute(
+                "SELECT * FROM adaptation_decisions WHERE user_id = ? "
+                "AND programme_id = ? AND idempotency_key = ?",
+                (user_id, programme_id, decision.idempotency_key),
+            ).fetchone()
+            if row is not None:
+                return self._row_to_decision(row), False
+        decision_id = self._insert_decision_in(
+            conn,
+            user_id,
+            programme_id,
+            from_revision_id,
+            to_revision_id,
+            decision,
+            _now(),
+        )
+        stored = self.get_decision_in(conn, user_id, programme_id, decision_id)
+        if stored is None:  # pragma: no cover - defensive
+            raise RuntimeError("Failed to read back adaptation decision.")
+        return stored, True
+
+    def set_decision_state_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        decision_id: int,
+        state: str,
+        *,
+        output: dict[str, Any] | None = None,
+        confirmed: bool | None = None,
+        to_revision_id: int | None = None,
+        from_revision_id: int | None = None,
+    ) -> AdaptationDecision:
+        """Move a decision to a new application state (tenant and programme scoped)."""
+
+        decision = self.get_decision_in(conn, user_id, programme_id, decision_id)
+        if decision is None:
+            raise ProgrammeNotFoundError("Decision not found for this user.")
+        conn.execute(
+            """
+            UPDATE adaptation_decisions
+            SET application_state = ?, resolved_at = ?, output_json = ?,
+                confirmed = ?, to_revision_id = ?, from_revision_id = ?
+            WHERE id = ? AND user_id = ? AND programme_id = ?
+            """,
+            (
+                state,
+                _now(),
+                _json(output if output is not None else decision.output),
+                1 if (decision.confirmed if confirmed is None else confirmed) else 0,
+                to_revision_id if to_revision_id is not None else decision.to_revision_id,
+                from_revision_id if from_revision_id is not None else decision.from_revision_id,
+                decision_id,
+                user_id,
+                programme_id,
+            ),
+        )
+        updated = self.get_decision_in(conn, user_id, programme_id, decision_id)
+        if updated is None:  # pragma: no cover - defensive
+            raise RuntimeError("Failed to read back adaptation decision.")
+        return updated
+
+    @staticmethod
+    def _row_to_decision(row: sqlite3.Row) -> AdaptationDecision:
+        return AdaptationDecision(
+            id=int(row["id"]),
+            programme_id=int(row["programme_id"]),
+            from_revision_id=row["from_revision_id"],
+            to_revision_id=int(row["to_revision_id"]),
+            scope=_loads(row["scope_json"]),
+            inputs=_loads(row["inputs_json"]),
+            output=_loads(row["output_json"]),
+            confidence=float(row["confidence"]),
+            rule_version=str(row["rule_version"]),
+            explanation=str(row["explanation"]),
+            confirmed=bool(row["confirmed"]),
+            created_at=str(row["created_at"]),
+            decision_type=str(row["decision_type"]),
+            application_state=str(row["application_state"]),
+            idempotency_key=str(row["idempotency_key"]),
+            week_number=int(row["week_number"] or 0),
+            exercise_template_id=str(row["exercise_template_id"]),
+            source_workout_id=str(row["source_workout_id"]),
+            source_workout_hash=str(row["source_workout_hash"]),
+            resolved_at=str(row["resolved_at"]),
+        )
+
+    # ------------------------------------------------------------------
+    # Durable user overrides
+    # ------------------------------------------------------------------
+
+    def create_override_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        *,
+        kind: str,
+        exercise_template_id: str,
+        scope: dict[str, Any],
+        value: dict[str, Any],
+        starts_on: str,
+        ends_on: str,
+        note: str,
+    ) -> ProgrammeOverride:
+        if self._programme_row(conn, user_id, programme_id) is None:
+            raise ProgrammeNotFoundError("Programme not found for this user.")
+        cursor = conn.execute(
+            """
+            INSERT INTO programme_overrides
+                (user_id, programme_id, kind, exercise_template_id,
+                 scope_json, value_json, starts_on, ends_on, status, note,
+                 created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            """,
+            (
+                user_id,
+                programme_id,
+                kind,
+                exercise_template_id,
+                _json(scope),
+                _json(value),
+                starts_on,
+                ends_on,
+                note,
+                _now(),
+            ),
+        )
+        stored = self.get_override_in(conn, user_id, programme_id, int(cursor.lastrowid or 0))
+        if stored is None:  # pragma: no cover - defensive
+            raise RuntimeError("Failed to read back override.")
+        return stored
+
+    def get_override_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        override_id: int,
+    ) -> ProgrammeOverride | None:
+        row = conn.execute(
+            "SELECT * FROM programme_overrides "
+            "WHERE id = ? AND user_id = ? AND programme_id = ?",
+            (override_id, user_id, programme_id),
+        ).fetchone()
+        return self._row_to_override(row) if row else None
+
+    def list_overrides(
+        self,
+        user_id: str,
+        programme_id: int,
+        *,
+        active_only: bool = False,
+    ) -> list[ProgrammeOverride]:
+        with self.transaction() as conn:
+            return self.list_overrides_in(
+                conn, user_id, programme_id, active_only=active_only
+            )
+
+    def list_overrides_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        *,
+        active_only: bool = False,
+    ) -> list[ProgrammeOverride]:
+        if self._programme_row(conn, user_id, programme_id) is None:
+            return []
+        query = "SELECT * FROM programme_overrides WHERE user_id = ? AND programme_id = ?"
+        if active_only:
+            query += " AND status = 'active'"
+        query += " ORDER BY id ASC"
+        return [
+            self._row_to_override(row)
+            for row in conn.execute(query, (user_id, programme_id)).fetchall()
+        ]
+
+    def revoke_override_in(
+        self,
+        conn: sqlite3.Connection,
+        user_id: str,
+        programme_id: int,
+        override_id: int,
+    ) -> ProgrammeOverride:
+        override = self.get_override_in(conn, user_id, programme_id, override_id)
+        if override is None:
+            raise ProgrammeNotFoundError("Override not found for this user.")
+        if override.status == "active":
+            conn.execute(
+                "UPDATE programme_overrides SET status = 'revoked', revoked_at = ? "
+                "WHERE id = ? AND user_id = ? AND programme_id = ?",
+                (_now(), override_id, user_id, programme_id),
+            )
+        revoked = self.get_override_in(conn, user_id, programme_id, override_id)
+        if revoked is None:  # pragma: no cover - defensive
+            raise RuntimeError("Failed to read back override.")
+        return revoked
+
+    @staticmethod
+    def _row_to_override(row: sqlite3.Row) -> ProgrammeOverride:
+        return ProgrammeOverride(
+            id=int(row["id"]),
+            programme_id=int(row["programme_id"]),
+            kind=str(row["kind"]),
+            exercise_template_id=str(row["exercise_template_id"]),
+            scope=_loads(row["scope_json"]),
+            value=_loads(row["value_json"]),
+            starts_on=str(row["starts_on"]),
+            ends_on=str(row["ends_on"]),
+            status=str(row["status"]),
+            note=str(row["note"]),
+            created_at=str(row["created_at"]),
+            revoked_at=str(row["revoked_at"]),
+        )
+
+    # ------------------------------------------------------------------
+    # Programme row helpers for orchestration modules
+    # ------------------------------------------------------------------
+
+    def programme_in(
+        self, conn: sqlite3.Connection, user_id: str, programme_id: int
+    ) -> Programme:
+        return self._load_programme(conn, user_id, programme_id)
+
+    def revision_in(
+        self, conn: sqlite3.Connection, user_id: str, revision_id: int
+    ) -> ProgrammeRevision:
+        return self._load_revision(conn, revision_id, user_id)
 
     # ------------------------------------------------------------------
     # Internal helpers
