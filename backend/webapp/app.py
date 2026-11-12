@@ -19,6 +19,8 @@ In a container: see Dockerfile.web / the `web` service in docker-compose.yml
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -63,6 +65,14 @@ from connector_operations import (
 )
 from connectors.base import ConnectorContext
 from connectors.builtin import build_builtin_registry
+from connectors.oauth import (
+    OAuthStateError,
+    PendingOAuthState,
+    RedirectUriError,
+    begin_authorization,
+    consume_authorization,
+    validate_redirect_uri,
+)
 from database import (
     clear_all_notifications,
     clear_chat_messages,
@@ -226,7 +236,7 @@ from setup_state import (
 )
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware
-from tenancy import implicit_single_user_allowed
+from tenancy import NON_PRODUCTION_ENVIRONMENTS, implicit_single_user_allowed
 from tenant_isolation import OwnerIdentity, OwnershipError, owner_scoped_key
 from training_rules import (
     StructuredTrainingRules,
@@ -244,6 +254,7 @@ from user_settings import (
 from webapp import ai_widgets, charts
 from webapp.audit_events import audit_request_event, audit_runtime_posture
 from webapp.auth_boundary import has_verified_identity
+from webapp.oauth_state import SQLiteStateLedger, single_use_integration
 from webapp.request_correlation import RequestCorrelationMiddleware
 from webapp.runtime_security import validate_web_runtime
 from webapp.session_security import (
@@ -465,6 +476,10 @@ def _check_rate_limit(request: Request, limit: int = 10, window: int = 60) -> No
 
 WEB_GOOGLE_CLIENT_ID = os.environ.get("WEB_GOOGLE_CLIENT_ID", "").strip()
 WEB_GOOGLE_CLIENT_SECRET = os.environ.get("WEB_GOOGLE_CLIENT_SECRET", "").strip()
+# Optional explicit login callback URI. It is exact-match allow-listed, so a
+# request cannot substitute a lookalike; when unset the callback is derived
+# from WEB_PUBLIC_URL + /auth.
+WEB_GOOGLE_REDIRECT_URI = os.environ.get("WEB_GOOGLE_REDIRECT_URI", "").strip()
 WEB_AUTH_SECRET = os.environ.get("WEB_AUTH_SECRET", "").strip()
 ALLOW_ANONYMOUS_WEB = not bool(WEB_GOOGLE_CLIENT_ID)
 
@@ -650,16 +665,34 @@ GH_CLIENT_SECRET = os.environ.get("GOOGLE_HEALTH_CLIENT_SECRET", "").strip()
 # scheme/host match exactly what is registered with Google). When unset it is
 # derived from the incoming request.
 GH_REDIRECT_URI = os.environ.get("GOOGLE_HEALTH_REDIRECT_URI", "").strip()
-_GH_STATE_KEY = "google_health_oauth_state"
+# Connector binding for OAuth state, and the issuer a Google authorization
+# response may name (RFC 9207). Both are fixed, never taken from the request.
+_GH_OAUTH_PROVIDER = "google_health"
+_GH_ISSUERS = frozenset({"https://accounts.google.com", "accounts.google.com"})
 
-oauth = OAuth()
+# Server-side ledger of consumed OAuth state (issue #764). The Google Health
+# callback and web sign-in both claim their state here before using it, so a
+# state is single use even when an older copy of the session cookie is replayed.
+OAUTH_STATE_LEDGER = SQLiteStateLedger(DB_PATH)
+
+
+class _HardenedOAuth(OAuth):
+    """Web sign-in state that expires quickly and is claimed exactly once."""
+
+    framework_integration_cls = single_use_integration(OAUTH_STATE_LEDGER)
+
+
+oauth = _HardenedOAuth()
 if WEB_GOOGLE_CLIENT_ID and WEB_GOOGLE_CLIENT_SECRET:
     oauth.register(
         name="google",
         client_id=WEB_GOOGLE_CLIENT_ID,
         client_secret=WEB_GOOGLE_CLIENT_SECRET,
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile"},
+        client_kwargs={
+            "scope": "openid email profile",
+            "code_challenge_method": "S256",
+        },
     )
 
 _BASE_DIR = Path(__file__).resolve().parent
@@ -817,9 +850,11 @@ app.add_middleware(RequestCorrelationMiddleware)
 async def login_google(request: Request) -> Any:
     if not WEB_GOOGLE_CLIENT_ID:
         return HTMLResponse("Web auth is not configured.", status_code=500)
-    redirect_uri = str(request.url_for("auth"))
-    if "localhost" not in redirect_uri and "127.0.0.1" not in redirect_uri:
-        redirect_uri = redirect_uri.replace("http://", "https://")
+    try:
+        redirect_uri = _login_redirect_uri(request)
+    except RedirectUriError:
+        logger.warning("Refused a login redirect outside the exact allowlist.")
+        return HTMLResponse("Web auth redirect is misconfigured.", status_code=500)
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
@@ -2491,9 +2526,86 @@ User's question: {q}"""
     return StreamingResponse(generate(), media_type="text/plain")
 
 
+_OAUTH_STATE_FALLBACK_SECRET = secrets.token_bytes(32)
+
+
+def _oauth_state_secret() -> bytes:
+    """The key used to sign OAuth correlation state and derive PKCE verifiers.
+
+    A dedicated subkey is derived from ``WEB_AUTH_SECRET`` (the runtime boundary
+    requires at least 32 characters whenever sign-in is configured), so the raw
+    session secret is never used directly for OAuth.  The per-process fallback
+    only applies to the explicit local/anonymous mode, where there is no
+    multi-worker flow to correlate.
+    """
+
+    master = (
+        WEB_AUTH_SECRET.encode("utf-8")
+        if WEB_AUTH_SECRET
+        else _OAUTH_STATE_FALLBACK_SECRET
+    )
+    return hmac.new(master, b"workout-agent/oauth-state/v1", hashlib.sha256).digest()
+
+
+def _public_origin() -> str:
+    return os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+
+
+def _callback_uris(
+    request: Request, *, override: str, path: str, endpoint: str
+) -> tuple[str, ...]:
+    """The callback URIs registered for one OAuth flow, most preferred first.
+
+    They come from configuration only: the explicit override and/or the
+    canonical ``WEB_PUBLIC_URL`` origin plus the flow's fixed callback path.
+    They are never built from the request being served, so a forged ``Host``
+    header cannot widen them.  Only a recognised non-production ``APP_ENV`` with
+    neither configured (local development has no public origin) falls back to
+    the current request's own URL; anything else fails closed with no URIs.
+    """
+
+    uris = [override] if override else []
+    public = _public_origin()
+    if public and f"{public}{path}" not in uris:
+        uris.append(f"{public}{path}")
+    if not uris and (
+        os.environ.get("APP_ENV", "").strip().lower() in NON_PRODUCTION_ENVIRONMENTS
+    ):
+        candidate = str(request.url_for(endpoint))
+        if "localhost" not in candidate and "127.0.0.1" not in candidate:
+            candidate = candidate.replace("http://", "https://")
+        uris.append(candidate)
+    return tuple(uris)
+
+
+def _login_redirect_uri(request: Request) -> str:
+    """Pick the web sign-in callback URI; it must be exactly allow-listed."""
+
+    uris = _callback_uris(
+        request, override=WEB_GOOGLE_REDIRECT_URI, path="/auth", endpoint="auth"
+    )
+    return validate_redirect_uri(uris[0] if uris else "", uris)
+
+
+def _gh_callback_uris(request: Request) -> tuple[str, ...]:
+    return _callback_uris(
+        request,
+        override=GH_REDIRECT_URI,
+        path="/google-health/callback",
+        endpoint="google_health_callback",
+    )
+
+
 def _gh_redirect_uri(request: Request) -> str:
-    """The OAuth redirect URI, explicit env override or derived from the request."""
-    return GH_REDIRECT_URI or str(request.url_for("google_health_callback"))
+    """Pick the Google Health callback URI; it must be exactly allow-listed.
+
+    The callback later exchanges the code with the URI recorded at initiation,
+    re-validated against :func:`_gh_callback_uris`, never one recomputed from
+    the callback request.
+    """
+
+    uris = _gh_callback_uris(request)
+    return validate_redirect_uri(uris[0] if uris else "", uris)
 
 
 def _audit_key_change(
@@ -3158,12 +3270,24 @@ def google_health_connect(request: Request) -> RedirectResponse:
     if not (GH_CLIENT_ID and GH_CLIENT_SECRET):
         return RedirectResponse("/settings?gh=unconfigured", status_code=303)
     user_id = _check_api_auth(request)
-    state = secrets.token_urlsafe(16)
-    set_meta(_GH_STATE_KEY, state, DB_PATH, user_id=user_id)
+    try:
+        redirect_uri = _gh_redirect_uri(request)
+    except RedirectUriError:
+        logger.warning("Refused a Google Health redirect outside the allowlist.")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    authorization = begin_authorization(
+        _oauth_state_secret(),
+        user_id=user_id,
+        provider=_GH_OAUTH_PROVIDER,
+        redirect_uri=redirect_uri,
+        session_id=_current_session_id(request) or "",
+    )
     url = build_authorize_url(
         GH_CLIENT_ID,
-        state,
-        redirect_uri=_gh_redirect_uri(request),
+        authorization.state,
+        redirect_uri=authorization.redirect_uri,
+        nonce=authorization.nonce,
+        code_challenge=authorization.code_challenge,
     )
     return RedirectResponse(url, status_code=303)
 
@@ -3189,21 +3313,60 @@ def google_health_callback(request: Request) -> RedirectResponse:
             metadata=details,
         )
 
+    supplied_state = request.query_params.get("state") or ""
+
+    def spend_state() -> PendingOAuthState | None:
+        """Verify and burn the state; ``None`` for anything that is not ours."""
+
+        try:
+            return consume_authorization(
+                OAUTH_STATE_LEDGER,
+                _oauth_state_secret(),
+                supplied_state,
+                expected_user_id=user_id,
+                expected_provider=_GH_OAUTH_PROVIDER,
+                expected_session_id=_current_session_id(request) or "",
+            )
+        except OAuthStateError:
+            return None
+        except (sqlite3.Error, OSError):
+            logger.exception("OAuth state ledger unavailable; refusing the callback.")
+            return None
+
     if request.query_params.get("error"):
+        # Burn a matching state so a denied consent cannot be replayed.
+        spend_state()
         audit_connect(AuditOutcome.DENIED, "consent_denied")
         return RedirectResponse("/settings?gh=denied", status_code=303)
     code = request.query_params.get("code")
-    state = request.query_params.get("state")
-    expected = get_meta(_GH_STATE_KEY, DB_PATH, user_id=user_id)
-    set_meta(_GH_STATE_KEY, "", DB_PATH, user_id=user_id)  # one-time use
-    if not code or not state or not expected or state != expected:
+    if not code or not supplied_state:
         audit_connect(AuditOutcome.FAILURE, "state_mismatch")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    pending = spend_state()
+    if pending is None:
+        audit_connect(AuditOutcome.FAILURE, "state_mismatch")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    # RFC 9207: a response that names a different authorization server is a
+    # mix-up attempt. Providers that omit ``iss`` are accepted.
+    issuer = request.query_params.get("iss")
+    if issuer is not None and issuer not in _GH_ISSUERS:
+        audit_connect(AuditOutcome.FAILURE, "issuer_mismatch")
+        return RedirectResponse("/settings?gh=error", status_code=303)
+    try:
+        # The exchange must repeat the redirect URI sent at initiation, and that
+        # URI must still be registered; never one recomputed from this request.
+        redirect_uri = validate_redirect_uri(
+            pending.redirect_uri, _gh_callback_uris(request)
+        )
+    except RedirectUriError:
+        audit_connect(AuditOutcome.FAILURE, "redirect_uri_mismatch")
         return RedirectResponse("/settings?gh=error", status_code=303)
     tokens = exchange_code(
         GH_CLIENT_ID,
         GH_CLIENT_SECRET,
         code,
-        redirect_uri=_gh_redirect_uri(request),
+        redirect_uri=redirect_uri,
+        code_verifier=pending.code_verifier,
     )
     if not tokens or not tokens.get("refresh_token"):
         audit_connect(AuditOutcome.FAILURE, "token_exchange_failed")
