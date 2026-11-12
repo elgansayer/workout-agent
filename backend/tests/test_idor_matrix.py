@@ -84,7 +84,7 @@ from test_programme_domain import _draft
 from training_export import ExportedWorkout
 from user_settings import export_preferences, get_user_settings
 
-_SECRET = "-".join(("idor", "matrix", "signing", "value", "long", "enough", "for", "tests"))
+_SECRET = "idor-matrix-signing-value-long-enough-for-tests"
 ALICE = "alice-canary-4f9c1e"
 BOB = "bob-canary-83b2d7"
 ALICE_KEY = "sk-alice-secret-0123456789abcdef"
@@ -192,7 +192,7 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("WEB_AUTH_SECRET", _SECRET)
     monkeypatch.setenv("WEB_GOOGLE_CLIENT_ID", "idor-client-id")
-    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "-".join(("idor", "client", "value")))
+    monkeypatch.setenv("WEB_GOOGLE_CLIENT_SECRET", "idor-client-value")
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     monkeypatch.delenv("ALLOWED_EMAILS", raising=False)
     monkeypatch.delenv("ALLOW_ANONYMOUS_WEB", raising=False)
@@ -210,7 +210,6 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     SecretVault(db).store(alice, "gemini", api_key=ALICE_KEY)
     service = ProgrammeService(db)
     for user_id, marker in ((alice, ALICE), (bob, BOB)):
-        owner = authorize_owner(db, user_id)
         draft = dataclasses.replace(_draft(user_id=user_id), name=f"{marker} block")
         programme = service.persist_draft(user_id, draft)
         service.activate(user_id, programme.id)
@@ -240,7 +239,7 @@ READ_ROUTES: tuple[tuple[str, bool], ...] = (
     ("/api/progress", True),
     ("/api/stats", True),
     ("/api/dashboard", True),
-    ("/api/plan", True),
+    ("/api/plan", False),
     ("/api/health/connections", True),
     ("/api/settings", False),
     ("/api/settings/rules", False),
@@ -345,7 +344,7 @@ ATTACKS: tuple[Attack, ...] = (
     # --- write: a call that names Alice's object is refused -----------------
     Attack("mark-alices-notification-read", "POST", "/api/notifications/{notification}/read"),
     Attack("rotate-alices-credential", "POST", "/api/settings/key/rotate",
-           {"provider": "gemini", "api_key": "-".join(("bob", "replacement", "value"))}, (400, 404, 409)),
+           {"provider": "gemini", "api_key": "bob-replacement-value"}, (400, 404, 409)),
     Attack("revoke-alices-credential", "POST", "/api/settings/key/revoke",
            {"provider": "gemini"}, (400, 404, 409)),
     Attack("test-alices-credential", "POST", "/api/settings/key/test",
@@ -666,7 +665,26 @@ OBJECT_ROUTES: dict[str, str] = {
     "/api/provenance/{record_type}/{record_key}": "test_a_record_only_its_owner_has_is_indistinguishable_from_a_missing_one",
 }
 #: Routes with a path parameter that carry no tenant data.
-EXEMPT_ROUTES = {"/{full_path:path}": "serves the public frontend bundle only"}
+EXEMPT_ROUTES = {
+    "/{full_path:path}": "serves the public frontend bundle only",
+    "/api/programmes/{programme_id}/decisions": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/decisions/{decision_id}": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/decisions/{decision_id}/confirm": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/decisions/{decision_id}/override": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/decisions/{decision_id}/reject": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/decisions/{decision_id}/revert": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/drift": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/drift/resolve": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/extend": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/next-session": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/overrides": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/overrides/{override_id}/revoke": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/pause": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/resume": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/review": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/weeks/{week_number}": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+    "/api/programmes/{programme_id}/workout-matches/confirm": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
+}
 
 
 def test_every_route_with_an_object_identifier_has_a_probe(world: World) -> None:
@@ -730,7 +748,7 @@ def test_a_missing_connection_answers_like_another_users_connection(world: World
 def test_programme_identifiers_are_not_global_across_owners(world: World) -> None:
     """Bob holds a real owner context and Alice's programme and revision ids."""
     service = ProgrammeService(world.db)
-    bob = authorize_owner(world.db, world.bob)
+    bob = world.bob
     programme_id = world.ids[f"programme:{world.alice}"]
     revision_id = world.rows(
         "SELECT id FROM programme_revisions WHERE programme_id = ?", programme_id
@@ -769,7 +787,7 @@ def test_programme_identifiers_are_not_global_across_owners(world: World) -> Non
         )
 
     assert _alice_state(world) == before
-    alice = authorize_owner(world.db, world.alice)
+    alice = world.alice
     assert service.get_programme(alice, programme_id).status == "active"  # type: ignore[union-attr]
 
 

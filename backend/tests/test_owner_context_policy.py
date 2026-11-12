@@ -18,7 +18,6 @@ from typing import Any
 
 import pytest
 from database import get_or_create_user, init_db
-from programme_domain import ProgrammeRepository, ProgrammeService
 from tenant_isolation import (
     AuthenticatedOwner,
     OwnerIdentity,
