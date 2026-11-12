@@ -1,0 +1,106 @@
+<div class="export-panel" id="export-panel" aria-labelledby="export-heading">
+  <h3 id="export-heading">Download your data</h3>
+  <p class="muted" id="export-help">
+    Get a portable copy of the data held about you: your profile, programmes, workouts, metrics,
+    check-ins, connector details, notifications, Coach history and security activity, as JSON files
+    in a ZIP archive. API keys, tokens and other secrets are never included. It is prepared in the
+    background, only you can download it, and it is deleted after
+    {{ info() ? retention() : 'a short time' }}.
+  </p>
+
+  @if (info(); as details) {
+    <details class="export-contents">
+      <summary>What the archive contains</summary>
+      <ul id="export-included">
+        @for (item of details.included; track item.category) {
+          <li>{{ item.label }}</li>
+        }
+      </ul>
+      <p>Never included:</p>
+      <ul id="export-excluded">
+        @for (item of details.excluded; track item.category) {
+          <li>{{ item.reason }}</li>
+        }
+      </ul>
+    </details>
+  }
+
+  <p id="export-status" class="key-status" role="status">{{ status() }}</p>
+  @if (error()) {
+    <p id="export-error" class="key-status error" role="alert">{{ error() }}</p>
+  }
+
+  @if (info(); as details) {
+    @if (!details.eligible) {
+      <p class="panel muted" id="export-ineligible">
+        Exports are only available when you are signed in with your own account.
+      </p>
+    } @else {
+      @if (latest(); as record) {
+        <div class="export-latest" id="export-latest" [attr.data-state]="record.state">
+          @switch (record.state) {
+            @case ('queued') {
+              <p>Queued. The background worker starts it shortly; this page updates by itself.</p>
+              <progress class="export-progress" aria-label="Export progress"></progress>
+            }
+            @case ('running') {
+              <p>Preparing your export. This page updates by itself.</p>
+              <progress class="export-progress" aria-label="Export progress"></progress>
+            }
+            @case ('ready') {
+              <p>
+                Ready since {{ record.completed_at | date: 'medium' }}. Available until
+                <strong>{{ record.expires_at | date: 'medium' }}</strong
+                >.
+                @if (record.record_count !== null) {
+                  It holds {{ record.record_count }} records.
+                }
+              </p>
+              @if (record.download_url) {
+                <div class="btn-row">
+                  <a class="btn" id="export-download" [href]="record.download_url" download>
+                    Download ZIP ({{ readableSize(record.size_bytes) }})
+                  </a>
+                </div>
+              }
+              @if (record.sha256) {
+                <p class="muted">
+                  SHA-256 checksum: <code class="export-checksum">{{ record.sha256 }}</code>
+                </p>
+              }
+            }
+            @case ('expired') {
+              <p>
+                The export from {{ record.requested_at | date: 'medium' }} has expired and was
+                deleted. Request a new one to download your data again.
+              </p>
+            }
+            @default {
+              <p id="export-failure">{{ failureText(record) }}</p>
+            }
+          }
+          <p class="muted">Reference: <code>{{ record.export_id }}</code></p>
+        </div>
+      }
+
+      <div class="btn-row">
+        <button
+          type="button"
+          class="btn"
+          id="export-request"
+          aria-describedby="export-help export-quota"
+          [disabled]="!canRequest()"
+          (click)="request()"
+        >
+          {{ inFlight() ? 'Export in progress' : 'Request export' }}
+        </button>
+      </div>
+      <p class="muted" id="export-quota">
+        {{ details.remaining_today }} of {{ details.daily_limit }} exports left in the next 24
+        hours. A new export replaces the previous one.
+      </p>
+    }
+  } @else {
+    <p class="muted" role="status">Loading…</p>
+  }
+</div>

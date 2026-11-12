@@ -52,7 +52,7 @@ Every statement is `… WHERE user_id = ?` with the owner taken from the session
 | `primary_records` | `workout_history`, `exercise_progress`, `daily_log`, `programme_state`, `programmes`, `user_preferences`, `hevy_routines`, `body_metrics`, `health_metrics`, `health_sync_runs` | `body_metrics`, `health_metrics`, `health_sync_runs` |
 | `caches` | `csrf_tokens` (per-user single-use CSRF nonce registry) | – |
 | `search_indexes` | None exist. The step fails the request if an unregistered virtual (FTS) table appears. | – |
-| `retained_exports` | The directory `<database directory>/exports/<user id>/` | Yes |
+| `retained_exports` | The directory `<database directory>/exports/<user id>/` and the account's `account_export_requests` rows | Yes |
 | `unregistered_stores` | Any other table with a `user_id` column that is not in the manifest is swept and reported, so a forgotten table cannot silently survive | – |
 | `account_identity` | The `users` row, then the tombstone is written in the same transaction | – |
 
@@ -60,7 +60,7 @@ Browser-side state cannot be reached from the server, so the closing response ca
 
 ### Retained exports contract
 
-No export feature persists files today. Any feature that retains an export artefact **must** keep it under `<database directory>/exports/<user id>/`; deletion removes that directory (unlinking, never following, a symlink) and the verifier fails the request if it survives. Identifiers that are not a safe single path component are never mapped to a path.
+The account export feature (`docs/ACCOUNT_EXPORT.md`) persists archives under `<database directory>/exports/<user id>/`. Any feature that retains an export artefact **must** keep it there; deletion removes that directory (unlinking, never following, a symlink) and the verifier fails the request if it survives. Identifiers that are not a safe single path component are never mapped to a path.
 
 ### Append-only and immutable tables
 

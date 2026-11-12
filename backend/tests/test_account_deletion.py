@@ -258,6 +258,12 @@ def _seed(db: str, user_id: str) -> None:
             "VALUES (?, 'oura', 'c', 'ok', ?)",
             (user_id, stamp),
         )
+        run(
+            "INSERT INTO account_export_requests "
+            "(id, user_id, state, format_version, requested_at, next_attempt_at) "
+            "VALUES (?, ?, 'queued', 1, ?, ?)",
+            (f"export-{user_id}", user_id, stamp, stamp),
+        )
 
 
 def _user_tables(conn: sqlite3.Connection) -> list[str]:
@@ -1135,7 +1141,10 @@ def test_retained_exports_are_deleted_for_the_user_only(
     assert not dir_a.exists()
     assert (dir_b / "export.json").exists()
     exports = next(s for s in status["steps"] if s["step"] == "retained_exports")
-    assert exports["rows_affected"] == 2 and exports["remaining_after"] == 0
+    assert exports["rows_affected"] == 3 and exports["remaining_after"] == 0
+    assert _scalar(
+        db, "SELECT COUNT(*) FROM account_export_requests WHERE user_id = ?", a
+    ) == 0
 
 
 def test_health_scope_also_removes_retained_exports(

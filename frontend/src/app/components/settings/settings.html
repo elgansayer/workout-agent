@@ -977,9 +977,14 @@
       }
     </div>
     <p class="muted">
-      Erase your health data, or close your account and erase everything. Deletion is permanent and
-      cannot be undone once it starts.
+      Download a copy of your data, erase your health data, or close your account and erase
+      everything. Deletion is permanent and cannot be undone once it starts.
     </p>
+
+    <!-- Created only when the section is opened, like the deletion status below. -->
+    @if (section() === 'account') {
+      <app-account-export />
+    }
 
     <p id="deletion-status" class="key-status" role="status">{{ deletionStatus() }}</p>
     @if (deletionError()) {

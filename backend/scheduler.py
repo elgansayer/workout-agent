@@ -23,6 +23,7 @@ from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 from account_deletion import process_due_deletions
+from account_export import process_due_exports
 from config import Config, ConfigError
 from database import UserRow, get_all_users, init_db
 from localisation import resolve_timezone
@@ -231,6 +232,20 @@ def run_account_deletions(config: Config) -> int:
         return 0
 
 
+def run_data_exports(config: Config) -> int:
+    """Build queued account exports and expire old ones; never stops the loop.
+
+    Each export runs as an owner-scoped, re-authorized job inside
+    ``account_export.process_due_exports``. Web replicas only queue and serve
+    exports, so this process must be running for a requested export to finish.
+    """
+    try:
+        return process_due_exports(config.database_path)
+    except Exception:
+        logger.exception("Account export processing failed.")
+        return 0
+
+
 def _run_per_owner(
     config: Config,
     kind: str,
@@ -336,6 +351,7 @@ def run_once(config: Config) -> int:
     """
     logger.info("Running scheduled cycle...")
     run_account_deletions(config)
+    run_data_exports(config)
     rc = run_coaching(config)
     run_daily_insight(config)
 
@@ -402,6 +418,7 @@ def run_schedule(config: Config) -> None:
 
     while True:
         run_account_deletions(config)
+        run_data_exports(config)
         now = datetime.now(tz=timezone.utc)
         by_job: dict[str, list[str]] = {}
         for item in due_jobs(get_all_users(config.database_path), now, schedule, done):

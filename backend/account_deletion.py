@@ -220,6 +220,10 @@ USER_DATA_STORES: tuple[DataStore, ...] = (
     DataStore("user_sessions", Step.CACHES),
     DataStore("body_metrics", Step.PRIMARY_RECORDS, health=True),
     DataStore("record_provenance", Step.DERIVED_INSIGHTS, health=True),
+    # Export jobs (account_export.py). The archives sit in the retained-exports
+    # directory erased by the same step, and a health-data erasure removes both
+    # because an archive embeds that data.
+    DataStore("account_export_requests", Step.RETAINED_EXPORTS, health=True),
     DataStore("csrf_tokens", Step.CACHES, optional=True),
     # Canonical health platform tables (health_schema.py). Optional because the
     # additive migration may not have been applied to this database.

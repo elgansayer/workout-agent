@@ -3,6 +3,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DisplaySettings, DisplaySettingsService } from '../../services/display-settings';
+import { AccountExport } from './account-export';
 import { SetupAccount, SetupStateService } from '../../services/setup-state.service';
 import { aiProviderFact, hevyFact, keyVerification, lastSyncFact } from './settings.readiness';
 import {
@@ -105,7 +106,7 @@ interface ConnectorSummary {
 @Component({
   selector: 'app-settings',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, AccountExport],
   templateUrl: './settings.html',
   styleUrl: './settings.css',
 })

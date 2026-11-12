@@ -144,6 +144,10 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
         "append-only provenance captured per account; re-parenting it would "
         "rewrite immutable lineage"
     ),
+    "account_export_requests": (
+        "export jobs and archives belong to a specific account's request; "
+        "never adopted"
+    ),
 }
 
 

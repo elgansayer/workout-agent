@@ -1,0 +1,33 @@
+.export-panel {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+.export-panel h3 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+}
+.export-contents {
+  margin: 0.75rem 0;
+}
+.export-contents summary {
+  cursor: pointer;
+}
+.export-contents ul {
+  margin: 0.4rem 0 0.4rem 1.25rem;
+  padding: 0;
+  color: var(--muted);
+}
+.export-latest {
+  margin-top: 0.75rem;
+}
+.export-progress {
+  display: block;
+  width: 100%;
+  height: 0.6rem;
+  margin-top: 0.5rem;
+  accent-color: var(--accent);
+}
+.export-checksum {
+  overflow-wrap: anywhere;
+}

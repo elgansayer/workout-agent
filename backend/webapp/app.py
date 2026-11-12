@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import account_deletion
+import account_export
 import analytics
 import insights
 import lifestyle
@@ -4436,6 +4437,126 @@ def api_account_deletion_cancel(request: Request) -> JSONResponse:
     except account_deletion.DeletionError as exc:
         raise _deletion_http_error(exc) from exc
     return JSONResponse(jsonable_encoder(status))
+
+
+class AccountExportBody(BaseModel):
+    """An export request has no options: the owner is always the signed-in session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+_EXPORT_HTTP_STATUS = {
+    "not_eligible": 403,
+    "not_found": 404,
+    "not_ready": 409,
+    "expired": 410,
+    "rate_limited": 429,
+}
+
+
+def _export_http_error(exc: account_export.ExportError) -> HTTPException:
+    return HTTPException(status_code=_EXPORT_HTTP_STATUS.get(exc.code, 400), detail=exc.code)
+
+
+def _export_payload(status: account_export.ExportStatus) -> dict[str, Any]:
+    """An export's status plus the download route, offered only while it can work."""
+    return {
+        **status,
+        "download_url": (
+            f"/api/account/exports/{status['export_id']}/download"
+            if status["can_download"]
+            else None
+        ),
+    }
+
+
+def _delivery_starts_at_zero(request: Request) -> bool:
+    """True for a whole-file or first-range request, so resumed ranges count once."""
+    requested = request.headers.get("range", "").strip().lower()
+    return not requested or requested.startswith("bytes=0-")
+
+
+@app.get("/api/account/exports")
+def api_account_exports(request: Request) -> JSONResponse:
+    """What an export contains, its limits, and the owner's recent exports."""
+    user_id = _check_api_auth(request)
+    info = account_export.describe_exports(DB_PATH, user_id)
+    info["exports"] = [_export_payload(item) for item in info["exports"]]
+    return JSONResponse(jsonable_encoder(info))
+
+
+@app.post("/api/account/exports")
+def api_account_export_request(
+    request: Request, body: AccountExportBody | None = None
+) -> JSONResponse:
+    """Queue a full export of the signed-in account.
+
+    The scheduler process builds it; ``202`` means it was queued, ``200`` that an
+    export was already queued or running and is returned instead.
+    """
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    try:
+        status, created = account_export.request_export(DB_PATH, user_id)
+    except account_export.ExportError as exc:
+        raise _export_http_error(exc) from exc
+    response = JSONResponse(
+        jsonable_encoder(_export_payload(status)), status_code=202 if created else 200
+    )
+    response.headers["Location"] = f"/api/account/exports/{status['export_id']}"
+    return response
+
+
+@app.get("/api/account/exports/{export_id}")
+def api_account_export_status(export_id: str, request: Request) -> JSONResponse:
+    """Status of one export; identical 404 for unknown and other accounts' ids."""
+    user_id = _check_api_auth(request)
+    status = account_export.get_export(DB_PATH, user_id, export_id)
+    if status is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return JSONResponse(jsonable_encoder(_export_payload(status)))
+
+
+@app.get("/api/account/exports/{export_id}/download")
+def api_account_export_download(export_id: str, request: Request) -> FileResponse:
+    """Stream the archive to its owner while it is ready and unexpired."""
+    user_id = _check_api_auth(request)
+    subject = export_id if account_export.is_export_id(export_id) else None
+    try:
+        target = account_export.open_download(DB_PATH, user_id, export_id)
+    except account_export.ExportError as exc:
+        if exc.code == "not_found":
+            _audit(
+                request,
+                AuditEventType.DATA_EXPORTED,
+                AuditOutcome.DENIED,
+                AuditSubjectType.DATA,
+                subject,
+                user_id=user_id,
+                metadata={"reason": "not_found"},
+            )
+        raise _export_http_error(exc) from exc
+    if _delivery_starts_at_zero(request):
+        _audit(
+            request,
+            AuditEventType.DATA_EXPORTED,
+            AuditOutcome.SUCCESS,
+            AuditSubjectType.DATA,
+            export_id,
+            user_id=user_id,
+            metadata={
+                "format_version": account_export.EXPORT_FORMAT_VERSION,
+                "size_bytes": target.size_bytes,
+            },
+        )
+    # Private no-store caching and the baseline security headers are applied by the
+    # global response middleware; the download is an attachment, never inline.
+    return FileResponse(
+        target.path,
+        media_type="application/zip",
+        filename=target.filename,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.get("/api/notifications")

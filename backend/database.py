@@ -1861,6 +1861,62 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
 
+        # ---- Account data export jobs (see account_export.py) ----
+        # One row per export request, owned by exactly one account and erased
+        # with it. The archive itself lives in the owner's export directory,
+        # which account deletion also removes. Only one request per account may
+        # be queued or running at a time.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS account_export_requests (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                state TEXT NOT NULL CHECK (
+                    state IN ('queued', 'running', 'ready', 'failed', 'expired')
+                ),
+                format_version INTEGER NOT NULL,
+                requested_at TEXT NOT NULL,
+                next_attempt_at TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT,
+                completed_at TEXT,
+                expires_at TEXT,
+                size_bytes INTEGER,
+                sha256 TEXT,
+                record_count INTEGER,
+                error_code TEXT
+            )
+            """
+        )
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_account_export_open "
+            "ON account_export_requests (user_id) "
+            "WHERE state IN ('queued', 'running')"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_export_requests_user "
+            "ON account_export_requests (user_id, requested_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_export_requests_due "
+            "ON account_export_requests (state, next_attempt_at)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_account_export_requests_expiry "
+            "ON account_export_requests (state, expires_at)"
+        )
+        # A request can never be re-parented to another tenant.
+        cursor.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS trg_account_export_requests_user_immutable
+            BEFORE UPDATE OF user_id ON account_export_requests
+            WHEN NEW.user_id IS NOT OLD.user_id
+            BEGIN
+                SELECT RAISE(ABORT, 'account_export_requests.user_id is immutable');
+            END
+            """
+        )
+
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
 

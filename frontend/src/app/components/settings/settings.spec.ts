@@ -610,6 +610,18 @@ const deletionInfo = (request: unknown = null, eligible = true) => ({
   request,
 });
 
+const exportsResponse = {
+  eligible: true,
+  reason: null,
+  retention_hours: 24,
+  daily_limit: 5,
+  remaining_today: 5,
+  format_version: 1,
+  included: [{ category: 'profile', label: 'Profile, preferences and sign-in methods' }],
+  excluded: [{ category: 'credentials', reason: 'API keys and tokens are never exported.' }],
+  exports: [],
+};
+
 describe('Settings account and data deletion', () => {
   let http: HttpTestingController;
 
@@ -625,6 +637,8 @@ describe('Settings account and data deletion', () => {
     vi.restoreAllMocks();
     window.history.pushState({}, '', '/');
     http.match('/api/settings/display').forEach((req) => req.flush(displayResponse));
+    // These tests exercise deletion; the export panel loads beside it and is settled here.
+    http.match('/api/account/exports').forEach((req) => req.flush(exportsResponse));
     settleReadiness(http);
     http.verify();
   });
@@ -658,7 +672,23 @@ describe('Settings account and data deletion', () => {
     await fixture.whenStable();
     fixture.detectChanges();
     http.expectNone('/api/account/deletion');
+    http.expectNone('/api/account/exports');
+    expect(query(fixture, 'app-account-export')).toBeNull();
     expect(query(fixture, '#settings-account')?.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('shows the data export above the destructive controls once the section is opened', async () => {
+    const fixture = await openAccount(deletionInfo());
+    http.expectOne('/api/account/exports').flush(exportsResponse);
+    fixture.detectChanges();
+    const panel = query<HTMLElement>(fixture, 'app-account-export #export-panel');
+    expect(panel).not.toBeNull();
+    const deletion = query<HTMLElement>(fixture, '#deletion-health')!;
+    expect(
+      panel!.compareDocumentPosition(deletion) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(query(fixture, '#settings-account')?.textContent).toContain('Download a copy of your data');
+    expect(query(fixture, '#export-request')).not.toBeNull();
   });
 
   it('opens straight to the section from the Account page deep link', async () => {
