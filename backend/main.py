@@ -56,6 +56,7 @@ from hevy_client import fetch_latest_workout
 from hevy_parser import normalise_name, parse_workout
 from hevy_sync import sync_routines
 from legacy_ownership import is_deployment_owner
+from log_redaction import install_log_redaction
 from programme_runtime import ProgrammeRuntime, load_programme_runtime, local_today
 from provenance import Provenance, generated_text_provenance, normalise_timestamp
 from push_notifier import send_push_notification
@@ -74,6 +75,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+install_log_redaction()
 logger = logging.getLogger("workout_agent")
 
 DAILY_PLAN_VERSION = "daily-plan/1"

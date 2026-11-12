@@ -21,10 +21,18 @@ REPO_ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from data_classification import DataClass, classify_field  # noqa: E402
+from data_classification import DataClass, classify_field
 
 _LOG_METHODS = {"debug", "info", "warning", "error", "exception", "critical", "log"}
-_SAFE_WRAPPERS = {"safe_log_value", "redact_for_log"}
+_SAFE_WRAPPERS = {"safe_log_value", "redact_for_log", "redact_text", "redact_value"}
+# Values that must never be handed to a logging call by name: credentials, and
+# prompt/response payloads (the call site cannot know what a prompt contains).
+_UNLOGGABLE_CLASSES = {DataClass.CREDENTIAL, DataClass.PROMPT}
+_LOGGING_SETUP_CALLS = {"basicConfig", "dictConfig", "fileConfig"}
+_BODY_ATTRIBUTES = {"text", "content", "body"}
+# Tests whose purpose is to push synthetic secrets through logging so the
+# redaction layer can be proven; they are the only files allowed to do so.
+_DELIBERATE_LEAK_TESTS = {"test_data_classification.py", "test_log_redaction.py"}
 _SQL_COLUMN_RE = re.compile(r"^\s*([a-z][a-z0-9_]*)\s+(?:TEXT|REAL|INTEGER|BLOB)\b", re.MULTILINE)
 _SENSITIVE_SCHEMA_HINTS = (
     "api_key",
@@ -90,14 +98,47 @@ def _sensitive_names(node: ast.AST) -> set[str]:
         return set()
 
     names: set[str] = set()
-    if isinstance(node, ast.Name) and classify_field(node.id) is DataClass.CREDENTIAL:
+    if isinstance(node, ast.Name) and classify_field(node.id) in _UNLOGGABLE_CLASSES:
         names.add(node.id)
-    elif isinstance(node, ast.Attribute) and classify_field(node.attr) is DataClass.CREDENTIAL:
+    elif isinstance(node, ast.Attribute) and classify_field(node.attr) in _UNLOGGABLE_CLASSES:
         names.add(node.attr)
 
     for child in ast.iter_child_nodes(node):
         names.update(_sensitive_names(child))
     return names
+
+
+def _attribute_chain(node: ast.AST) -> list[str]:
+    names: list[str] = []
+    while isinstance(node, ast.Attribute):
+        names.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        names.append(node.id)
+    return names
+
+
+def _response_body_expressions(node: ast.AST) -> set[str]:
+    """Collect raw HTTP response bodies (``resp.text``, ``exc.response.json()``)."""
+    if isinstance(node, ast.Call) and _call_name(node) in _SAFE_WRAPPERS:
+        return set()
+
+    found: set[str] = set()
+    target: ast.AST | None = None
+    if isinstance(node, ast.Attribute) and node.attr in _BODY_ATTRIBUTES:
+        target = node.value
+    elif (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "json"
+    ):
+        target = node.func.value
+    if target is not None and any("resp" in part.lower() for part in _attribute_chain(target)):
+        found.add(ast.unparse(node))
+
+    for child in ast.iter_child_nodes(node):
+        found.update(_response_body_expressions(child))
+    return found
 
 
 def find_logging_violations(path: Path) -> list[Finding]:
@@ -112,21 +153,71 @@ def find_logging_violations(path: Path) -> list[Finding]:
         if not isinstance(node, ast.Call) or _call_name(node) not in _LOG_METHODS:
             continue
         names: set[str] = set()
+        bodies: set[str] = set()
         for arg in node.args:
             names.update(_sensitive_names(arg))
+            bodies.update(_response_body_expressions(arg))
         for keyword in node.keywords:
             names.update(_sensitive_names(keyword.value))
+            bodies.update(_response_body_expressions(keyword.value))
         if names:
             findings.append(
                 Finding(
                     str(path),
                     node.lineno,
-                    "credential value passed directly to logging call: "
+                    "credential or prompt value passed directly to logging call: "
                     + ", ".join(sorted(names))
                     + "; wrap with safe_log_value()/redact_for_log()",
                 )
             )
+        if bodies:
+            findings.append(
+                Finding(
+                    str(path),
+                    node.lineno,
+                    "raw HTTP response body passed to logging call: "
+                    + ", ".join(sorted(bodies))
+                    + "; log the status code, never the body",
+                )
+            )
     return findings
+
+
+def find_logging_setup_violations(path: Path) -> list[Finding]:
+    """Require every module that configures logging to install log redaction.
+
+    ``log_redaction.install_log_redaction()`` hardens every record the process
+    creates; a process that sets up logging without it would write credentials,
+    OAuth codes and payloads unredacted.
+    """
+    source = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        return [Finding(str(path), exc.lineno or 1, f"cannot parse Python source: {exc.msg}")]
+
+    setup_lines: list[int] = []
+    installs = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = _call_name(node)
+        if name == "install_log_redaction":
+            installs = True
+        elif name in _LOGGING_SETUP_CALLS and (
+            isinstance(node.func, ast.Name) or "logging" in _attribute_chain(node.func)
+        ):
+            setup_lines.append(node.lineno)
+    if installs or not setup_lines:
+        return []
+    return [
+        Finding(
+            str(path),
+            min(setup_lines),
+            "logging is configured without install_log_redaction(); "
+            "call it next to the logging setup (see docs/LOG_REDACTION.md)",
+        )
+    ]
 
 
 def find_schema_violations(database_path: Path) -> list[Finding]:
@@ -257,9 +348,11 @@ def scan(root: Path = ROOT) -> list[Finding]:
     for path in sorted(root.rglob("*.py")):
         if any(part in {".venv", "venv", "__pycache__"} for part in path.parts):
             continue
-        if path.name == "test_data_classification.py":
+        if path.name in _DELIBERATE_LEAK_TESTS:
             continue
         findings.extend(find_logging_violations(path))
+        if "tests" not in path.relative_to(root).parts:
+            findings.extend(find_logging_setup_violations(path))
 
     database_path = root / "database.py"
     if database_path.exists():

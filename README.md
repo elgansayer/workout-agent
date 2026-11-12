@@ -55,6 +55,8 @@ The executable classification and redaction rules live in `backend/data_classifi
 
 Sign-ins, failed sign-ins, session revocation, credential and connector changes, deletions and permission changes are recorded in an append-only, hash-chained audit trail, and anomaly alert rules watch it for repeated failures, disabled production authentication, unusual exports and connector abuse. See [Security audit logging](docs/SECURITY_AUDIT_LOGGING.md).
 
+Secrets and personal data are removed from logs centrally (authorization headers, API keys, OAuth codes, tokens, cookies, health fields and prompt payloads), and production error responses carry only an opaque `error_id` while the trace stays in protected diagnostics. See [Log redaction and opaque error responses](docs/LOG_REDACTION.md).
+
 ## Synthetic example programme
 
 The repository includes `current-workout.md` only as a synthetic demonstration of a programme-shaped document. It is not a real person's programme and must remain marked with `synthetic-profile: true`.

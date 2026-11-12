@@ -300,8 +300,13 @@ def test_a_sync_that_raises_is_recorded_as_failed_not_left_running(
 
     monkeypatch.setattr("scripts.sync_history.sync_all", _explode)
 
-    with pytest.raises(RuntimeError):
-        client.post("/api/settings/sync-history")
+    response = client.post("/api/settings/sync-history")
+
+    # The crash reaches the client as an opaque error (issue #766), never as the
+    # exception text, and the operation is still closed out as failed below.
+    assert response.status_code == 500
+    assert set(response.json()) == {"detail", "error_id"}
+    assert "synthetic-hevy-key" not in response.text
 
     status = read_connector_status(user_id, db_path=db_path)
     assert status.operation is None

@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from data_classification import redact_for_log
+from log_redaction import redact_text
 
 logger = logging.getLogger(__name__)
 
@@ -328,7 +329,9 @@ _METADATA_KEY_INVALID = re.compile(r"[^a-z0-9_]")
 def scrub_text(value: str, *, limit: int = _MAX_STRING_LENGTH) -> str:
     """Remove secret-shaped fragments, control characters and excess length."""
 
-    text = _CONTROL_CHARACTERS.sub(" ", str(value))
+    # The central layer first (registered and environment secrets, credential
+    # pairs, query values, addresses), then the audit-specific scrubbers below.
+    text = redact_text(_CONTROL_CHARACTERS.sub(" ", str(value)))
     for pattern, replacement in _SCRUBBERS:
         text = pattern.sub(replacement, text)
     return text[:limit]

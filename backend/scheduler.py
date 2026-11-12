@@ -26,6 +26,7 @@ from account_deletion import process_due_deletions
 from config import Config, ConfigError
 from database import UserRow, get_all_users, init_db
 from localisation import resolve_timezone
+from log_redaction import install_log_redaction
 from programme_runtime import user_timezone
 from tenancy import implicit_single_user_allowed
 from tenant_isolation import (
@@ -40,6 +41,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+install_log_redaction()
 logger = logging.getLogger("scheduler")
 
 _RUN_AT = os.environ.get("RUN_AT", "07:00")

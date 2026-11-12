@@ -77,6 +77,18 @@ while `request.state.validated_origin` and
 `request.state.validated_client_ip` provide explicit validated values for new
 code.
 
+## Proxy access logs and the OAuth callback
+
+The Google sign-in callback carries a single-use authorisation `code` and the
+`state` value in its query string (`/auth?code=…&state=…`). The application
+redacts everything it writes, including the web server's access log (see
+[Log redaction](LOG_REDACTION.md)), but a reverse proxy in front of it records the
+full request URI in its own access log, which that layer cannot touch. Configure
+the proxy to log the path without the query string, for example `$uri` instead of
+`$request` in an nginx `log_format`, or `%U` instead of `%r` in an Apache
+`LogFormat`, and apply the same retention limits to those logs as to the
+application's.
+
 ## Reverse-proxy configuration
 
 The proxy should:

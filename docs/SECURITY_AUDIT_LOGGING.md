@@ -21,7 +21,7 @@ id**, an **outcome**, a **severity** and flat **safe metadata**.
 | `user_id` | Tenant that owns the affected account/data. `NULL` for unauthenticated or deployment-wide events. Always taken from the signed session, never from a body, query string or header. |
 | `subject_type` / `subject_id` | What was acted on: `account`, `identity`, `session`, `credential`, `connector`, `data`, `permission`, `source`, `system`. |
 | `occurred_at` | UTC ISO-8601 with microseconds. |
-| `request_id` | The `X-Request-ID` the response carried, so a user or operator can quote it. Server-generated per request; an inbound `X-Request-ID` is ignored. |
+| `request_id` | The `X-Request-ID` the response carried, so a user or operator can quote it. Server-generated per request; an inbound `X-Request-ID` is ignored. The same id is in the `server_error` diagnostics record for a failed request (`docs/LOG_REDACTION.md`). |
 | `outcome` | `success`, `failure`, `denied`, or `raised` (alert events only). |
 | `severity` | `info`, `warning` or `critical`. |
 | `source_ref` | Keyed pseudonym of the validated client address (never the address). |

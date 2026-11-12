@@ -37,11 +37,9 @@ def send_push_notification(
         )
         return True
     except WebPushException as ex:
-        logger.error("WebPush Exception: %s", repr(ex))
-        if ex.response is not None:
-            try:
-                extra = ex.response.json()
-                logger.error("Remote service replied with %s", extra)
-            except Exception:  # noqa: BLE001
-                logger.error("Remote service replied with status %s: %s", ex.response.status_code, ex.response.text)
+        # The exception text and the push service's reply embed the subscription
+        # endpoint (a capability URL) and provider diagnostics, so only the
+        # status is recorded.
+        status = getattr(ex.response, "status_code", None)
+        logger.error("WebPush delivery failed (HTTP status %s).", status or "unavailable")
         return False

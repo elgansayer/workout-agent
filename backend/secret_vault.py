@@ -50,6 +50,7 @@ from typing import Any
 
 import encryption
 from database import DEFAULT_DB_PATH, _connect
+from log_redaction import register_secret
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +203,9 @@ class SecretValue:
 
     def __init__(self, value: str) -> None:
         self._value = value
+        # Pattern matching cannot recognise a credential without a distinctive
+        # shape, so its exact value is also masked from every later log line.
+        register_secret(value)
 
     def reveal(self) -> str:
         return self._value
@@ -400,6 +404,7 @@ def _clean_secret(value: object) -> str:
         raise InvalidSecretError(
             "The credential must be printable ASCII without spaces."
         )
+    register_secret(text)
     return text
 
 

@@ -10,6 +10,12 @@ those environments.
 
 from __future__ import annotations
 
+from log_redaction import install_log_redaction
+
+# First, so nothing the web process logs (including the startup checks below)
+# can carry a credential, an OAuth code or a health value. See docs/LOG_REDACTION.md.
+install_log_redaction()
+
 from webapp.runtime_security import WebRuntimeSecurity, validate_web_runtime
 
 RUNTIME_SECURITY: WebRuntimeSecurity = validate_web_runtime()

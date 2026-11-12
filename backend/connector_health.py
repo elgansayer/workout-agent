@@ -35,10 +35,13 @@ import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from log_redaction import install_log_redaction
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
+install_log_redaction()
 logger = logging.getLogger("connector_health")
 
 # ---------------------------------------------------------------------------

@@ -3,10 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from scripts.check_data_policy import (
+    find_logging_setup_violations,
     find_logging_violations,
     find_public_data_violations,
     find_schema_violations,
 )
+
+BACKEND = Path(__file__).resolve().parents[1]
 
 
 def test_logging_checker_rejects_direct_secret_values(tmp_path: Path) -> None:
@@ -37,6 +40,111 @@ def test_logging_checker_accepts_central_redaction(tmp_path: Path) -> None:
     )
 
     assert find_logging_violations(source) == []
+
+
+def test_logging_checker_rejects_prompt_payloads(tmp_path: Path) -> None:
+    source = tmp_path / "unsafe_prompt.py"
+    source.write_text(
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def f(user_prompt: str) -> None:\n"
+        "    logger.info('asked: %s', user_prompt)\n",
+        encoding="utf-8",
+    )
+
+    findings = find_logging_violations(source)
+
+    assert len(findings) == 1
+    assert "user_prompt" in findings[0].message
+
+
+def test_logging_checker_rejects_raw_http_response_bodies(tmp_path: Path) -> None:
+    source = tmp_path / "unsafe_body.py"
+    source.write_text(
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def f(response, exc) -> None:\n"
+        "    logger.error('reply: %s', response.text)\n"
+        "    logger.error('reply: %s', exc.response.json())\n"
+        "    logger.error('status: %s', response.status_code)\n",
+        encoding="utf-8",
+    )
+
+    findings = find_logging_violations(source)
+
+    assert [finding.line for finding in findings] == [4, 5]
+    assert all("raw HTTP response body" in finding.message for finding in findings)
+
+
+def test_logging_checker_accepts_central_redaction_of_bodies(tmp_path: Path) -> None:
+    source = tmp_path / "safe_body.py"
+    source.write_text(
+        "import logging\n"
+        "from log_redaction import redact_text\n"
+        "logger = logging.getLogger(__name__)\n"
+        "def f(response) -> None:\n"
+        "    logger.error('reply: %s', redact_text(response.text))\n",
+        encoding="utf-8",
+    )
+
+    assert find_logging_violations(source) == []
+
+
+def test_logging_setup_must_install_log_redaction(tmp_path: Path) -> None:
+    unsafe = tmp_path / "unsafe_entrypoint.py"
+    unsafe.write_text(
+        "import logging\nlogging.basicConfig(level=logging.INFO)\n", encoding="utf-8"
+    )
+    safe = tmp_path / "safe_entrypoint.py"
+    safe.write_text(
+        "import logging\n"
+        "from log_redaction import install_log_redaction\n"
+        "logging.basicConfig(level=logging.INFO)\n"
+        "install_log_redaction()\n",
+        encoding="utf-8",
+    )
+    dict_config = tmp_path / "dict_config.py"
+    dict_config.write_text(
+        "import logging.config\nlogging.config.dictConfig({'version': 1})\n",
+        encoding="utf-8",
+    )
+    unrelated = tmp_path / "unrelated.py"
+    unrelated.write_text(
+        "class Tool:\n    def basicConfig(self): ...\nTool().basicConfig()\n",
+        encoding="utf-8",
+    )
+
+    assert [f.line for f in find_logging_setup_violations(unsafe)] == [2]
+    assert "install_log_redaction" in find_logging_setup_violations(unsafe)[0].message
+    assert find_logging_setup_violations(safe) == []
+    assert [f.line for f in find_logging_setup_violations(dict_config)] == [2]
+    assert find_logging_setup_violations(unrelated) == []
+
+
+def test_every_production_entrypoint_that_configures_logging_installs_redaction(
+    tmp_path: Path,
+) -> None:
+    modules = [
+        path
+        for path in sorted(BACKEND.rglob("*.py"))
+        if "tests" not in path.relative_to(BACKEND).parts
+        and ".venv" not in path.parts
+        and "logging.basicConfig(" in path.read_text(encoding="utf-8")
+    ]
+    names = {path.name for path in modules}
+    assert {"main.py", "scheduler.py", "insight_cron.py", "sync_history.py"} <= names
+
+    for path in modules:
+        assert find_logging_setup_violations(path) == [], path
+
+        # The detector must see the real file shape: removing the install call
+        # from an actual entry point has to be caught.
+        stripped = tmp_path / path.name
+        stripped.write_text(
+            path.read_text(encoding="utf-8").replace("install_log_redaction()", "pass"),
+            encoding="utf-8",
+        )
+        assert find_logging_setup_violations(stripped), path
 
 
 def test_schema_checker_rejects_unclassified_sensitive_column(tmp_path: Path) -> None:

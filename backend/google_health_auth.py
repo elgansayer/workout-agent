@@ -38,6 +38,7 @@ from typing import Any
 
 import requests
 from google_health_client import SCOPE, TOKEN_URL
+from log_redaction import redact_text
 
 AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/auth"
 DEFAULT_REDIRECT_URI = "http://localhost:8080/"
@@ -95,9 +96,11 @@ def exchange_code(
             return None
         return data
     except requests.RequestException as exc:
-        print(f"Token exchange failed: {exc}", file=sys.stderr)
+        # A failed exchange can echo the authorisation code, client secret or
+        # tokens back in its message or body, so print only a redacted summary.
+        print(f"Token exchange failed: {redact_text(exc)}", file=sys.stderr)
         if exc.response is not None:
-            print(exc.response.text, file=sys.stderr)
+            print(redact_text(exc.response.text), file=sys.stderr)
         return None
     except ValueError:
         print("Google returned invalid token JSON.", file=sys.stderr)

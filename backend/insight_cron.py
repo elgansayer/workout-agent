@@ -22,6 +22,7 @@ from database import (
     save_notification,
 )
 from localisation import local_today, prompt_context, spelling_for
+from log_redaction import install_log_redaction
 from provenance import RETRIEVAL_GUIDANCE, ai_provenance, annotate_for_retrieval
 from tenancy import implicit_single_user_allowed
 from tenant_isolation import (
@@ -30,13 +31,13 @@ from tenant_isolation import (
     OwnershipError,
     authorize_owner,
 )
-
 from user_settings import UserSettings, get_user_settings_or_defaults
 
 DASHBOARD_INSIGHT_VERSION = "dashboard-insight/1"
 DEEP_CORRELATION_VERSION = "deep-correlation/1"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
+install_log_redaction()
 logger = logging.getLogger("insight_cron")
 
 
@@ -172,7 +173,11 @@ Keep it brutally concise. Write the text values in {spelling_for(settings.locale
             )
             logger.info("Daily insight generated successfully via %s.", provider.name())
         else:
-            logger.error("Invalid JSON structure returned: %s", text)
+            # The response is a prompt payload: record only its size, never its text.
+            logger.error(
+                "Daily insight response lacked the required fields (%d characters).",
+                len(text),
+            )
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to generate daily insight: %s", e)
 

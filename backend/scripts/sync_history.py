@@ -26,10 +26,12 @@ from database import init_db, require_tenant, save_progress, save_workout
 from hevy_client import get_all_workouts
 from hevy_parser import parse_workout
 from legacy_ownership import is_deployment_owner
+from log_redaction import install_log_redaction
 from tenancy import TenantRequiredError
 from tenant_isolation import OwnershipError, authorize_owner
 
 logging.basicConfig(level=logging.INFO)
+install_log_redaction()
 logger = logging.getLogger(__name__)
 
 

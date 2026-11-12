@@ -21,18 +21,19 @@ if (
     _proxy_environment["WEB_PUBLIC_URL"] = "http://testserver"
 _PROXY_SECURITY = load_proxy_security_config(_proxy_environment)
 
-from webapp.app import (  # noqa: E402
+from webapp.app import (
     DB_PATH,
     SESSION_SECURITY,
     SESSION_STORE,
 )
-from webapp.app import app as application  # noqa: E402
-from webapp.csrf_security import CSRFMiddleware  # noqa: E402
-from webapp.health import (  # noqa: E402
+from webapp.app import app as application
+from webapp.csrf_security import CSRFMiddleware
+from webapp.error_responses import ErrorBoundaryMiddleware
+from webapp.health import (
     OperationalHealthMiddleware,
     install_authenticated_diagnostics,
 )
-from webapp.security_headers import SecurityHeadersMiddleware  # noqa: E402
+from webapp.security_headers import SecurityHeadersMiddleware
 
 
 def _trusted_browser_origins() -> tuple[str, ...]:
@@ -91,10 +92,17 @@ if _session_secret and _google_client_id:
 # it validates Host and strips untrusted forwarding metadata before FastAPI,
 # OAuth, rate limiting, or audit logging can consume it. Operational probes stay
 # outside that boundary so container/orchestrator health checks can reach them
-# directly. Security headers remain outermost for every response.
+# directly. The application already turns its own failures into opaque errors;
+# the error boundary here covers the layers around it (proxy, CSRF, probes) so
+# no exception from them reaches the client either. Security headers remain
+# outermost for every response, error responses included.
+# (The local middlewares annotate ``scope`` as ``dict`` and Starlette's as
+# ``MutableMapping``; they are call-compatible, so the mismatch is ignored.)
 app = SecurityHeadersMiddleware(
-    OperationalHealthMiddleware(
-        ProxySecurityMiddleware(secured_application, _PROXY_SECURITY),
-        db_path=DB_PATH,
+    ErrorBoundaryMiddleware(  # type: ignore[arg-type]
+        OperationalHealthMiddleware(  # type: ignore[arg-type]
+            ProxySecurityMiddleware(secured_application, _PROXY_SECURITY),
+            db_path=DB_PATH,
+        )
     )
 )

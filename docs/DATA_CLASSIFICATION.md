@@ -23,6 +23,8 @@ Use `classify_field()` and `policy_for()` instead of adding feature-local sensit
 
 Before logging a value whose class is not Public, pass it through `safe_log_value()` or pass the whole structure through `redact_for_log()`. Credentials, identifiers, health values, workout payloads, prompts, and derived analytics are replaced with class-labelled redaction markers.
 
+That per-call discipline is now backed by a process-wide layer: `log_redaction.install_log_redaction()` redacts every log record the process creates (arguments, rendered message, tracebacks), using this module's classification plus patterns for credentials, OAuth codes, URL query values and e-mail addresses, so a value that reaches a logger without an explicit wrapper (for example inside a provider exception message) is still removed. Error responses are covered too: they never carry stack traces, exception text or echoed request values. See [Log redaction and opaque error responses](LOG_REDACTION.md).
+
 Before building a user export, pass untrusted/general mappings through `sanitize_for_export()` and then apply the feature's authenticated tenant filter. The sanitizer always removes Credential, Internal, and Analytics fields. A future export that deliberately includes a derived analytics field must explicitly transform it into a reviewed export DTO rather than weakening the global policy.
 
 The classification helper does **not** replace encryption, ownership checks, consent checks, or retention jobs. It provides one shared decision point that those systems can consume.
@@ -58,13 +60,13 @@ If real personal data has already been committed, removing it from the current t
 
 `backend/scripts/check_data_policy.py` performs high-confidence repository checks:
 
-1. it parses Python logging calls and fails when credential-like variables are passed directly rather than through a central redaction helper;
+1. it parses Python logging calls and fails when credential-like or prompt-like variables, or a raw HTTP response body (`response.text`, `exc.response.json()`), are passed directly rather than through a central redaction helper, and fails when a non-test module configures logging without calling `install_log_redaction()`;
 2. it scans SQLite schema declarations and fails when sensitive-looking columns resolve to the fail-closed Internal class;
 3. it scans public documentation and fixture/sample sources for likely named personal profiles, nearby first-person health/training details, non-example email addresses in sensitive example data, and sensitive fixtures that lack an explicit synthetic marker.
 
 The public-source heuristic is deliberately conservative. It is a prevention layer, not a complete DLP or historical-secret scanner, and does not replace review of screenshots, binary attachments, generated artifacts, or Git history.
 
-`backend/tests/test_data_classification.py` verifies the complete matrix, classification fallbacks, recursive log redaction, and export filtering. `backend/tests/test_data_policy_check.py` exercises the static checker against synthetic safe and unsafe code.
+`backend/tests/test_data_classification.py` verifies the complete matrix, classification fallbacks, recursive log redaction, and export filtering. `backend/tests/test_data_policy_check.py` exercises the static checker against synthetic safe and unsafe code. `backend/tests/test_log_redaction.py`, `test_log_redaction_web.py` and `test_error_responses.py` inject synthetic credentials, OAuth codes, health fields and prompts into logs, exceptions and requests and prove none of them appears in captured logs or responses.
 
 The `Data classification policy` GitHub Actions workflow runs the focused tests and repository scanner when backend policy code, public documentation, fixture paths, or the workflow itself changes.
 
@@ -72,7 +74,8 @@ The `Data classification policy` GitHub Actions workflow runs the focused tests 
 
 - Classify new fields before persistence or transport.
 - Keep every tenant-owned value scoped to the authenticated owner.
-- Never log raw credentials, health payloads, workout payloads, or prompts.
+- Never log raw credentials, health payloads, workout payloads, or prompts, and never log a provider's response body: log its status code.
+- Never return an exception message, stack trace, or submitted request value in an error response; return the opaque `error_id` and keep the detail in the protected diagnostics log.
 - Never return stored credentials after submission.
 - Treat exports as a new disclosure boundary; filter by owner first and classification second.
 - Do not downgrade a class to make a test pass. Add a purpose-specific reviewed DTO when a legitimate disclosure is required.

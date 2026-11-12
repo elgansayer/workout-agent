@@ -158,6 +158,7 @@ from localisation import (
     spelling_for,
     weight_unit,
 )
+from log_redaction import install_log_redaction
 from onboarding import (
     OnboardingError,
     build_onboarding,
@@ -244,6 +245,7 @@ from user_settings import (
 from webapp import ai_widgets, charts
 from webapp.audit_events import audit_request_event, audit_runtime_posture
 from webapp.auth_boundary import has_verified_identity
+from webapp.error_responses import install_error_handling
 from webapp.request_correlation import RequestCorrelationMiddleware
 from webapp.runtime_security import validate_web_runtime
 from webapp.session_security import (
@@ -254,6 +256,10 @@ from webapp.session_security import (
 )
 
 DB_PATH = os.environ.get("DATABASE_PATH", "workout_agent.db").strip()
+# Every log record this process creates is redacted (credentials, OAuth codes,
+# health fields, prompts). Re-run here so secrets loaded from ``.env`` by the
+# config import above are registered too. See docs/LOG_REDACTION.md.
+install_log_redaction()
 logger = logging.getLogger(__name__)
 _WEB_RUNTIME = validate_web_runtime()
 _SESSION_LIFETIME_SECONDS = 14 * 24 * 60 * 60
@@ -808,6 +814,11 @@ app.add_middleware(
     store=SESSION_STORE,
     identity_allowed=_identity_allowed,
 )
+# Unhandled exceptions, 5xx responses and validation errors leave as opaque
+# bodies with an ``error_id``; the detail goes to the protected diagnostics log
+# only. Installed before the correlation middleware so it sits inside it and its
+# responses carry X-Request-ID. See docs/LOG_REDACTION.md.
+install_error_handling(app)
 # Outermost: every response carries X-Request-ID and every audit event written
 # while serving the request shares that correlation id.
 app.add_middleware(RequestCorrelationMiddleware)
