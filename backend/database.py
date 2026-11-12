@@ -349,14 +349,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             """,
         )
         cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
-            "ON routine_workout_matches (user_id, routine_snapshot_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
-            "ON routine_workout_matches (user_id, confidence)"
-        )
-        cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS routine_match_overrides (
                 user_id TEXT NOT NULL REFERENCES users(id),
@@ -1449,6 +1441,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_programme "
             "ON routine_workout_matches (user_id, programme_id, id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
+            "ON routine_workout_matches (user_id, routine_snapshot_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
+            "ON routine_workout_matches (user_id, confidence)"
         )
         # Recreate unique constraints as named indexes so partially upgraded
         # databases get the same conflict targets as fresh databases.
