@@ -180,6 +180,12 @@ def _seed(db: str, user_id: str) -> None:
             (user_id, programme_id, revision_id, stamp),
         )
         run(
+            "INSERT INTO programme_overrides "
+            "(user_id, programme_id, kind, created_at) "
+            "VALUES (?, ?, 'pin', ?)",
+            (user_id, programme_id, stamp),
+        )
+        run(
             "INSERT INTO programme_decisions "
             "(user_id, programme_id, source, decision, reason, created_at) "
             "VALUES (?, ?, 'synthetic', 'keep', 'synthetic', ?)",

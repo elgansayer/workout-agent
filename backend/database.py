@@ -17,7 +17,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from localisation import derive_local_day, local_today, resolve_timezone
 import encryption
 import provenance_ledger as ledger
 from canonical_programme import (
@@ -26,6 +25,7 @@ from canonical_programme import (
     get_canonical_programme_definition,
 )
 from hevy_parser import HEVY_PARSER_VERSION, workout_identity
+from localisation import derive_local_day, local_today, resolve_timezone
 from provenance import (
     MANUAL_SOURCE,
     UNATTRIBUTED_SOURCE,
@@ -121,6 +121,7 @@ USER_OWNED_TABLES = (
     "exercise_prescriptions",
     "programme_week_states",
     "adaptation_decisions",
+    "programme_overrides",
     "routine_workout_matches",
     "hevy_routine_snapshots",
     "routine_match_overrides",
@@ -1006,6 +1007,30 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
+        # Durable, scoped user overrides (pins, pain/equipment/time reports,
+        # intentional substitutions, review requests).  Rows are never deleted:
+        # a revoked override keeps its audit trail.  No CHECK constraints on the
+        # vocabulary columns; the service validates them so the vocabulary can
+        # grow additively.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                kind TEXT NOT NULL,
+                exercise_template_id TEXT NOT NULL DEFAULT '',
+                scope_json TEXT NOT NULL DEFAULT '{}',
+                value_json TEXT NOT NULL DEFAULT '{}',
+                starts_on TEXT NOT NULL DEFAULT '',
+                ends_on TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                revoked_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
 
         # Complete a partially applied domain upgrade without rebuilding rows.
         domain_table_columns: dict[str, dict[str, str]] = {
@@ -1099,6 +1124,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "explanation": "TEXT NOT NULL DEFAULT ''",
                 "confirmed": "INTEGER NOT NULL DEFAULT 0",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
+                # Deterministic adaptation audit (#975).  Empty strings mean
+                # "not applicable" so the columns stay NOT NULL and the
+                # idempotency index below can ignore them.
+                "decision_type": "TEXT NOT NULL DEFAULT 'revision'",
+                "application_state": "TEXT NOT NULL DEFAULT 'auto_applied'",
+                "idempotency_key": "TEXT NOT NULL DEFAULT ''",
+                "week_number": "INTEGER NOT NULL DEFAULT 0",
+                "exercise_template_id": "TEXT NOT NULL DEFAULT ''",
+                "source_workout_id": "TEXT NOT NULL DEFAULT ''",
+                "source_workout_hash": "TEXT NOT NULL DEFAULT ''",
+                "resolved_at": "TEXT NOT NULL DEFAULT ''",
             },
             "routine_workout_matches": {
                 "id": "INTEGER",
@@ -1312,6 +1348,20 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_adaptation_decisions_user_programme "
             "ON adaptation_decisions (user_id, programme_id, id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_adaptation_decisions_user_workout "
+            "ON adaptation_decisions (user_id, programme_id, source_workout_id)"
+        )
+        # Replaying the same Hevy event must never create a second decision.
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_adaptation_decisions_idempotency "
+            "ON adaptation_decisions (user_id, programme_id, idempotency_key) "
+            "WHERE idempotency_key <> ''"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_overrides_user_programme "
+            "ON programme_overrides (user_id, programme_id, status, id)"
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_programme "
@@ -4892,6 +4942,23 @@ def _profile_constraints_from_connection(
         return []
 
 
+def load_validation_rules(
+    conn: sqlite3.Connection,
+    user_id: str,
+) -> tuple[Any, dict[str, Any]]:
+    """Return ``(profile_constraints, training_rules)`` read through *conn*.
+
+    Programme activation and adaptation call this *inside* their write
+    transaction so the shared structured validator always sees the tenant's
+    current rules, never a copy captured before a concurrent profile edit.
+    """
+
+    return (
+        _profile_constraints_from_connection(conn, user_id),
+        _training_rules_from_connection(conn, user_id),
+    )
+
+
 def _save_training_rules_with_connection(
     conn: sqlite3.Connection,
     user_id: str,
@@ -4946,9 +5013,14 @@ def _deactivate_invalid_active_programme(
         training_rules=_training_rules_from_connection(conn, user_id),
     )
     if not definition or validation.blocking_violations:
+        # Keep the domain lifecycle aligned with the legacy flag: a programme the
+        # tenant's rules now contradict is paused (reactivatable after
+        # remediation), never left ``status = 'active'`` for the domain runtime.
         conn.execute(
-            "UPDATE programmes SET active = 0 WHERE user_id = ? AND active = 1",
-            (user_id,),
+            "UPDATE programmes SET active = 0, "
+            "status = CASE WHEN status = 'active' THEN 'paused' ELSE status END, "
+            "updated_at = ? WHERE user_id = ? AND active = 1",
+            (datetime.now(tz=timezone.utc).isoformat(), user_id),
         )
 
 
@@ -5248,66 +5320,6 @@ def seed_canonical_programme(
             (user_id, prog_id, CANONICAL_TEMPLATE_KEY, datetime.now(tz=timezone.utc).isoformat()),
         )
     return prog_id
-
-
-def activate_programme_definition(
-    user_id: str,
-    source: str,
-    template_key: str,
-    definition: dict[str, Any],
-    *,
-    start_date: str | None = None,
-    db_path: str = DEFAULT_DB_PATH,
-) -> None:
-    """Activate a programme definition and its start date atomically.
-
-    The programme row and the ``programme_start_date`` metadata are written in
-    a single transaction so a failed activation never leaves a programme
-    without its start date (or the other way round).
-    """
-    if source == "template":
-        raise ValueError(
-            "Static programme templates have been removed; activate a Hevy-derived definition."
-        )
-    if not isinstance(definition, dict) or not definition:
-        raise ValueError("A non-empty Hevy-derived programme definition is required.")
-
-    now = datetime.now(tz=timezone.utc).isoformat()
-    with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE programmes SET active = 0 WHERE user_id = ?",
-            (user_id,),
-        )
-        conn.execute(
-            """
-            INSERT INTO programmes
-                (user_id, source, template_key, definition, active,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(user_id, template_key) DO UPDATE SET
-                source = excluded.source,
-                definition = excluded.definition,
-                active = 1,
-                updated_at = excluded.updated_at
-            """,
-            (
-                user_id,
-                source,
-                template_key,
-                json.dumps(definition, default=str),
-                now,
-                now,
-            ),
-        )
-        if start_date:
-            conn.execute(
-                """
-                INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
-                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
-                """,
-                (user_id, "programme_start_date", start_date),
-            )
-
 
 
 def save_notification(

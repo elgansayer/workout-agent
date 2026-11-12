@@ -2,7 +2,6 @@ import sqlite3
 from datetime import datetime, timezone
 
 import pytest
-
 from health_migration import migrate_health_schema
 from health_models import HealthMetric, MetricType, SourceProvenance
 from health_sqlite_repository import SQLiteHealthRepository

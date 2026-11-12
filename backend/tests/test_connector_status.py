@@ -1,6 +1,12 @@
-from connectors.base import Connector, ConnectorCapabilities, ConnectorState, ConnectorStatus, SyncResult
-from connectors.status import public_connector_status
 from connectors import ConnectorContext
+from connectors.base import (
+    Connector,
+    ConnectorCapabilities,
+    ConnectorState,
+    ConnectorStatus,
+    SyncResult,
+)
+from connectors.status import public_connector_status
 
 
 class StatusConnector(Connector):

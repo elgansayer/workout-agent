@@ -129,6 +129,8 @@ Run the shared structured validator for import, edit, generation and activation.
 
 Do not silently migrate a static active programme into a Hevy-derived definition. Archive it as legacy and require a new activation.
 
+> Implementation: activation, week states, the adaptation engine, overrides and drift reconciliation live in `backend/programme_domain/` and are documented in `docs/PROGRAMME_ADAPTATION.md`. Extend those modules; do not add a parallel adaptation path.
+
 ### 9. Adapt future scope only
 
 After workouts sync, map them to routine snapshots using provider relations or a scored matcher with confidence. Progress/hold/reduce within the configured bounds. Persist contributing evidence and explanation.
