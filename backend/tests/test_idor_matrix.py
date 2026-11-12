@@ -212,8 +212,8 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> World:
     for user_id, marker in ((alice, ALICE), (bob, BOB)):
         owner = authorize_owner(db, user_id)
         draft = dataclasses.replace(_draft(user_id=user_id), name=f"{marker} block")
-        programme = service.persist_draft(owner, draft)
-        service.activate(owner, programme.id)
+        programme = service.persist_draft(user_id, draft)
+        service.activate(user_id, programme.id)
         built.ids[f"programme:{user_id}"] = programme.id
 
     with sqlite3.connect(db) as conn:

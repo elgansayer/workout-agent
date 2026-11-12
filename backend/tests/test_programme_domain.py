@@ -23,13 +23,12 @@ from programme_domain import (
     ProgrammeWeekState,
     RoutineWorkoutMatch,
 )
-from tenant_isolation import AuthenticatedOwner, OwnershipError, authorize_owner
 
 
-def _users(db: str) -> tuple[AuthenticatedOwner, AuthenticatedOwner]:
+def _users(db: str) -> tuple[str, str]:
     first = database.get_or_create_user("athlete-a@example.test", "A", db)
     second = database.get_or_create_user("athlete-b@example.test", "B", db)
-    return authorize_owner(db, first["id"]), authorize_owner(db, second["id"])
+    return first["id"], second["id"]
 
 
 def _routine(position: int, source_id: str = "routine-a") -> ProgrammeRoutine:
@@ -129,9 +128,7 @@ def _draft(
     )
 
 
-def _service(
-    tmp_path: Any,
-) -> tuple[ProgrammeService, str, AuthenticatedOwner, AuthenticatedOwner]:
+def _service(tmp_path: Any) -> tuple[ProgrammeService, str, str, str]:
     db = str(tmp_path / "domain.db")
     database.init_db(db)
     first, second = _users(db)
@@ -189,7 +186,7 @@ def test_draft_round_trip_preserves_order_blocks_and_prescriptions(
     tmp_path: Any,
 ) -> None:
     service, _db, first, _second = _service(tmp_path)
-    draft = _draft(user_id=first.user_id)
+    draft = _draft(user_id=first)
 
     persisted = service.persist_draft(first, draft)
     revision = persisted.current_revision
@@ -225,7 +222,7 @@ def test_draft_round_trip_preserves_order_blocks_and_prescriptions(
 
 def test_repository_methods_cannot_cross_tenant_boundaries(tmp_path: Any) -> None:
     service, _db, first, second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     service.activate(first, programme.id)
     revision = programme.current_revision
     assert revision is not None
@@ -265,8 +262,8 @@ def test_repository_methods_cannot_cross_tenant_boundaries(tmp_path: Any) -> Non
 
 def test_activation_keeps_exactly_one_active_programme(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    first_programme = service.persist_draft(first, _draft(user_id=first.user_id))
-    second_draft = _draft(user_id=first.user_id)
+    first_programme = service.persist_draft(first, _draft(user_id=first))
+    second_draft = _draft(user_id=first)
     second_programme = service.persist_draft(first, second_draft)
 
     service.activate(first, first_programme.id)
@@ -280,7 +277,7 @@ def test_activation_keeps_exactly_one_active_programme(tmp_path: Any) -> None:
     with sqlite3.connect(service.repository.db_path) as conn:
         active_count = conn.execute(
             "SELECT COUNT(*) FROM programmes WHERE user_id = ? AND status = 'active'",
-            (first.user_id,),
+            (first,),
         ).fetchone()[0]
     assert active_count == 1
 
@@ -288,7 +285,7 @@ def test_activation_keeps_exactly_one_active_programme(tmp_path: Any) -> None:
 def test_concurrent_activation_attempts_leave_one_active(tmp_path: Any) -> None:
     service, db, first, _second = _service(tmp_path)
     programmes = [
-        service.persist_draft(first, _draft(user_id=first.user_id)).id for _ in range(3)
+        service.persist_draft(first, _draft(user_id=first)).id for _ in range(3)
     ]
 
     def activate(programme_id: int) -> str:
@@ -301,14 +298,14 @@ def test_concurrent_activation_attempts_leave_one_active(tmp_path: Any) -> None:
     with sqlite3.connect(db) as conn:
         active_rows = conn.execute(
             "SELECT COUNT(*) FROM programmes WHERE user_id = ? AND status = 'active'",
-            (first.user_id,),
+            (first,),
         ).fetchone()[0]
     assert active_rows == 1
 
 
 def test_revisions_are_immutable_and_adaptations_append(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     original = programme.current_revision
     assert original is not None
     service.activate(first, programme.id)
@@ -316,7 +313,7 @@ def test_revisions_are_immutable_and_adaptations_append(tmp_path: Any) -> None:
     adapted = service.create_revision_from_adaptation(
         first,
         programme.id,
-        _draft(user_id=first.user_id, duration=8),
+        _draft(user_id=first, duration=8),
         AdaptationDecisionInput(
             scope={"exercise_template_id": "bench", "week": 5},
             inputs={"completed_sets": 9, "target_rir": 2},
@@ -350,11 +347,11 @@ def test_revisions_are_immutable_and_adaptations_append(tmp_path: Any) -> None:
 
 def test_rebase_creates_new_revision_without_mutating_previous(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     first_revision = programme.current_revision
     assert first_revision is not None
 
-    rebase_draft = _draft(user_id=first.user_id, duration=10)
+    rebase_draft = _draft(user_id=first, duration=10)
     rebase_draft = replace(
         rebase_draft,
         blocks=[
@@ -379,7 +376,7 @@ def test_rebase_creates_new_revision_without_mutating_previous(tmp_path: Any) ->
 
 def test_foreign_owned_routine_snapshot_is_rejected(tmp_path: Any) -> None:
     service, _db, first, second = _service(tmp_path)
-    draft = _draft(user_id=second.user_id)
+    draft = _draft(user_id=second)
 
     with pytest.raises(ProgrammeValidationError, match="owned by another user"):
         service.persist_draft(first, draft)
@@ -387,7 +384,7 @@ def test_foreign_owned_routine_snapshot_is_rejected(tmp_path: Any) -> None:
 
 def test_block_order_bounds_and_duration_are_enforced(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    overlapping = _draft(user_id=first.user_id)
+    overlapping = _draft(user_id=first)
     overlapping = ProgrammeDraft(
         **{
             **overlapping.__dict__,
@@ -404,11 +401,11 @@ def test_block_order_bounds_and_duration_are_enforced(tmp_path: Any) -> None:
     with pytest.raises(ProgrammeValidationError, match="non-overlapping"):
         service.preview_draft(first, overlapping)
 
-    out_of_bounds = _draft(user_id=first.user_id, duration=6)
+    out_of_bounds = _draft(user_id=first, duration=6)
     with pytest.raises(ProgrammeValidationError, match="outside the programme"):
         service.preview_draft(first, out_of_bounds)
 
-    reversed_block = _draft(user_id=first.user_id)
+    reversed_block = _draft(user_id=first)
     reversed_block = ProgrammeDraft(
         **{
             **reversed_block.__dict__,
@@ -425,7 +422,7 @@ def test_block_order_bounds_and_duration_are_enforced(tmp_path: Any) -> None:
 
 def test_routine_positions_and_prescription_scope_are_explicit(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    bad_order = _draft(user_id=first.user_id)
+    bad_order = _draft(user_id=first)
     bad_order = ProgrammeDraft(
         **{
             **bad_order.__dict__,
@@ -435,7 +432,7 @@ def test_routine_positions_and_prescription_scope_are_explicit(tmp_path: Any) ->
     with pytest.raises(ProgrammeValidationError, match="rotation positions"):
         service.preview_draft(first, bad_order)
 
-    bad_prescription = _draft(user_id=first.user_id)
+    bad_prescription = _draft(user_id=first)
     bad_prescription = ProgrammeDraft(
         **{
             **bad_prescription.__dict__,
@@ -455,7 +452,7 @@ def test_routine_positions_and_prescription_scope_are_explicit(tmp_path: Any) ->
 
 def test_week_state_and_routine_match_round_trip(tmp_path: Any) -> None:
     service, _db, first, _second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     revision = programme.current_revision
     assert revision is not None
 
@@ -502,7 +499,7 @@ def test_hevy_source_deletion_does_not_cascade_delete_revisions(
     tmp_path: Any,
 ) -> None:
     service, db, first, _second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     service.activate(first, programme.id)
 
     with sqlite3.connect(db) as conn:
@@ -515,9 +512,9 @@ def test_hevy_source_deletion_does_not_cascade_delete_revisions(
             "INSERT OR IGNORE INTO hevy_routines "
             "(user_id, routine_key, routine_id, content_hash) "
             "VALUES (?, 'routine-a', 'routine-a', 'hash-routine-a')",
-            (first.user_id,),
+            (first,),
         )
-        conn.execute("DELETE FROM hevy_routines WHERE user_id = ?", (first.user_id,))
+        conn.execute("DELETE FROM hevy_routines WHERE user_id = ?", (first,))
 
     reloaded = service.get_programme(first, programme.id)
     assert reloaded is not None
@@ -584,11 +581,9 @@ def test_legacy_static_programme_is_archived_and_preserved(tmp_path: Any) -> Non
         assert json.loads(revisions[0][3])["cycle_weeks"] == 12
 
     service = ProgrammeService(db)
-    # A string, even a plausible legacy account id, is not an authenticated owner.
-    with pytest.raises(OwnershipError):
-        service.get_active_programme("legacy-a")  # type: ignore[arg-type]
+    assert service.get_active_programme("legacy-a") is None
     new_user = database.get_or_create_user("new@example.test", "New", db)
-    assert service.get_active_programme(authorize_owner(db, new_user["id"])) is None
+    assert service.get_active_programme(new_user["id"]) is None
     with sqlite3.connect(db) as conn:
         assert (
             conn.execute(
@@ -643,7 +638,7 @@ def test_legacy_active_hevy_programme_stays_active_for_compatibility(
 
     database.init_db(db)
     service = ProgrammeService(db)
-    active = service.get_active_programme(authorize_owner(db, user["id"]))
+    active = service.get_active_programme(user["id"])
     assert active is not None
     assert active.status == "active"
     assert active.current_revision is not None
@@ -687,7 +682,7 @@ def test_legacy_reactivation_cannot_break_database_initialisation(
 
 def test_old_active_flag_cannot_override_new_archive(tmp_path: Any) -> None:
     service, db, first, _second = _service(tmp_path)
-    programme = service.persist_draft(first, _draft(user_id=first.user_id))
+    programme = service.persist_draft(first, _draft(user_id=first))
     service.activate(first, programme.id)
     service.archive(first, programme.id)
 
