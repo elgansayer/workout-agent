@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from health_metric_validation import validate_metric_range
 from health_models import HealthMetric, MetricType, SourceProvenance
 

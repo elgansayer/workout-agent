@@ -770,7 +770,9 @@ Conflict states:
 
 A compatible edit may preserve exercise prescriptions by exercise-template ID and occurrence. Structural edits require a preview and explicit reconciliation.
 
-Implemented: an activated programme stores its selected routine snapshots with a normalised content hash. `GET /api/programmes` compares those snapshots with the live Hevy library and returns `source_drift` with per-routine states (`unchanged`, `renamed`, `content_changed`, `removed`) or `source_unavailable` when the source cannot be read. The active overlay is never rewritten; adopting a change requires a fresh preview and activation, while the builder offers an explicit keep-current action. Provider revision timestamps alone do not create a conflict.
+Implemented (#975): `GET /api/programmes/{id}/drift` returns the exact provider-versus-programme diff (renamed, reordered, added, removed, changed and unsupported exercises, and deleted routines) and `POST /api/programmes/{id}/drift/resolve` applies an explicit keep, merge, rebase or replace. Resolution validates the result, appends a new revision, preserves the old one and never writes to Hevy. See `docs/PROGRAMME_ADAPTATION.md`.
+
+Implemented (#819): an activated programme stores its selected routine snapshots with a normalised content hash. `GET /api/programmes` compares those snapshots with the live Hevy library and returns `source_drift` with per-routine states (`unchanged`, `renamed`, `content_changed`, `removed`) or `source_unavailable` when the source cannot be read. The active overlay is never rewritten; adopting a change requires a fresh preview and activation, while the builder offers an explicit keep-current action. Provider revision timestamps alone do not create a conflict.
 
 ## 19. Proposed data model
 
@@ -1060,6 +1062,10 @@ Week-one set changes are bounded to one fewer or two more than the imported
 source. When recent matching history exists, the opening exposure is also bounded
 by recent tolerated sets. Bodyweight, assisted bodyweight, duration and distance
 exercises use modality-specific fields and never receive e1RM/load progression.
+
+### 23.2 Implemented adaptation engine
+
+`backend/programme_domain/adaptation.py` (rule version `programme-adaptation/v1`) implements the exposure-level and programme-level decisions of sections 13–15: the decision order, confidence-aware bounds, hysteresis, fatigue management and the audit record. Activation, week materialisation, user overrides and drift reconciliation are specified in `docs/PROGRAMME_ADAPTATION.md`.
 
 ## 24. Initial safety and change bounds
 
