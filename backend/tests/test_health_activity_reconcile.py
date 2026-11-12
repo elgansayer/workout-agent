@@ -1,9 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from health_activity_reconcile import SessionWindow, reconcile_sessions
-
 
 NOW = datetime(2026, 8, 19, 12, tzinfo=timezone.utc)
 

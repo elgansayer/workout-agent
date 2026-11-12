@@ -1,10 +1,8 @@
 from datetime import datetime, timezone
 
 import pytest
-
 from health_ingestion import HealthIngestionBatch
 from health_models import HealthMetric, MetricType, SourceProvenance
-
 
 NOW = datetime(2026, 8, 19, tzinfo=timezone.utc)
 SOURCE = SourceProvenance("garmin", "connection", upstream_id="same")

@@ -2,7 +2,6 @@ from datetime import datetime, timedelta, timezone
 
 from health_freshness import Freshness, classify_freshness
 
-
 NOW = datetime(2026, 8, 19, 12, tzinfo=timezone.utc)
 
 

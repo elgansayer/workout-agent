@@ -1,0 +1,105 @@
+<header class="page-heading">
+  <div>
+    <p class="eyebrow">First-run setup</p>
+    <h1>Get your account ready</h1>
+  </div>
+</header>
+
+<p class="muted">
+  Complete the required steps to unlock your training data. Optional steps can be skipped now and
+  revisited later; the sequence always resumes from what the server has verified.
+</p>
+
+@if (error(); as message) {
+  <div class="panel error-panel" role="alert">
+    {{ message }}
+    <button class="btn btn-ghost" type="button" (click)="onboarding.load(true)">Try again</button>
+  </div>
+}
+
+@if (onboarding.loading() && !onboarding.state()) {
+  <p class="loading-state muted" role="status">Loading your setup…</p>
+}
+
+@if (onboarding.state(); as state) {
+  <section class="panel setup-progress" aria-labelledby="setup-progress-heading">
+    <div class="page-heading">
+      <div>
+        <p class="eyebrow">
+          {{ state.completed_count }} of {{ state.total_steps }} steps done
+          @if (state.skipped_count) {
+            · {{ state.skipped_count }} skipped
+          }
+        </p>
+        <h2 id="setup-progress-heading">
+          {{ state.account_ready ? 'Your account is ready' : 'Setup progress' }}
+        </h2>
+      </div>
+      <span class="chip">{{ state.progress_percent }}%</span>
+    </div>
+    <div
+      class="progress-track"
+      role="progressbar"
+      aria-label="First-run setup progress"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      [attr.aria-valuenow]="state.progress_percent"
+      [attr.aria-valuetext]="state.progress_percent + '% complete'"
+    >
+      <span class="progress-fill" [style.width.%]="state.progress_percent"></span>
+    </div>
+    @if (state.account_ready) {
+      <p role="status">
+        The required setup is complete. You can open Today now, or finish any optional step.
+      </p>
+      <a class="btn" href="/dashboard">Go to Today</a>
+    } @else if (state.next_step; as next) {
+      <p role="status">
+        Next: <strong>{{ next.title }}</strong
+        >. {{ next.description }}
+      </p>
+      <a class="btn" [href]="next.href">{{ next.optional ? 'Set up' : 'Continue' }}</a>
+    }
+  </section>
+
+  <ol class="onboarding-steps" aria-label="Setup steps">
+    @for (step of state.steps; track step.id) {
+      <li class="panel onboarding-step" [attr.data-status]="step.status">
+        <div class="step-heading">
+          <h2>{{ step.title }}</h2>
+          <span class="chip" [class.ghost]="step.optional">
+            {{ step.optional ? 'Optional' : 'Required' }}
+          </span>
+        </div>
+        <p>{{ step.description }}</p>
+
+        @switch (step.status) {
+          @case ('complete') {
+            <p class="step-state complete" role="status">Verified complete</p>
+          }
+          @case ('skipped') {
+            <p class="step-state skipped" role="status">
+              Skipped for now. {{ step.skip_consequence }}
+            </p>
+            <button class="btn btn-ghost" type="button" [disabled]="busy()" (click)="resume(step)">
+              Revisit this step
+            </button>
+          }
+          @default {
+            <a class="btn" [href]="step.href">{{ step.optional ? 'Set up' : 'Continue' }}</a>
+            @if (step.optional) {
+              <p class="muted">{{ step.skip_consequence }}</p>
+              <button class="btn btn-ghost" type="button" [disabled]="busy()" (click)="skip(step)">
+                Skip for now
+              </button>
+            }
+          }
+        }
+      </li>
+    }
+  </ol>
+
+  @if (status()) {
+    <p class="panel muted" role="status">{{ status() }}</p>
+  }
+}

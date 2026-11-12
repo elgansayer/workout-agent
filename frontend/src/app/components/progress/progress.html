@@ -18,11 +18,11 @@
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'stale') {
+  @if (viewState() === 'attention') {
     <app-setup-notice [setup]="setup()" />
   }
 
-  @if (viewState() === 'ready' || viewState() === 'stale') {
+  @if (viewState() === 'ready' || viewState() === 'attention') {
     @if (data.body_readings?.length) {
       <section class="panel" aria-labelledby="readings-heading">
         <h2 id="readings-heading">Body readings</h2>

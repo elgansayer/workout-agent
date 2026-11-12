@@ -19,7 +19,8 @@ repository predicate includes the authenticated tenant.
 | `programme_blocks` | Ordered, non-overlapping week ranges with objective, targets, adaptation policy and exit criteria. |
 | `exercise_prescriptions` | Deterministic modality-aware set/rep/effort/load/rest and progression rules. |
 | `programme_week_states` | Planned versus actual dose, adherence, fatigue and review state. |
-| `adaptation_decisions` | Inputs, output, confidence, rule version and from/to revision audit record. |
+| `adaptation_decisions` | Audit stream: inputs, output, confidence, rule version, from/to revision, decision type, application state and idempotency key for adaptation, activation, lifecycle and drift events (#975). |
+| `programme_overrides` | Durable, scoped user instructions (pins, pain/equipment/time reports, substitutions); revoked rows are retained (#975). |
 | `routine_workout_matches` | Workout-to-routine mapping score, confidence, method and user confirmation. |
 
 Indexes are tenant-prefixed. A partial unique index,
@@ -45,7 +46,14 @@ service.get_programme_week(user_id, programme_id, week_number)
 service.create_revision_from_adaptation(user_id, programme_id, draft, decision)
 service.create_revision_from_rebase(user_id, programme_id, draft)
 service.list_revision_history(user_id, programme_id)
+service.activate_generated(user_id, draft, guard=..., first_week=..., event=..., notification=...)
 ```
+
+Issue #975 adds the orchestration services in the same package:
+`AdaptationService` (workout ingestion, audit, confirm/reject/override/revert,
+overrides), `LifecycleService` (pause, resume, extension, week materialisation)
+and `DriftService` (provider diff and keep/merge/rebase/replace). See
+`docs/PROGRAMME_ADAPTATION.md` for the contract.
 
 Drafts carry typed selected routine snapshots, explicit rotation positions,
 duration, goal, blocks and prescriptions. Validation rejects cross-tenant
@@ -54,9 +62,14 @@ out-of-duration or overlapping blocks, and prescriptions that reference an
 unselected routine or unknown block.
 
 Activation archives any previous active programme and activates the target in
-one `BEGIN IMMEDIATE` transaction. Editing, adaptation and rebase operations
-append a new revision and move the programme's `current_revision_id`; previous
-revisions are never mutated.
+one `BEGIN IMMEDIATE` transaction. Generated previews are activated with
+`activate_generated`, which additionally re-runs the shared validator against
+the tenant's current rules, materialises the first week state and writes the
+audit event and notification inside the same transaction. Editing, adaptation,
+extension and rebase operations append a new revision, move the programme's
+`current_revision_id` and keep `duration_weeks`, `end_date` and the compatibility
+definition in step (the start date never moves); previous revisions are never
+mutated.
 
 ## Migration behaviour
 
