@@ -55,8 +55,13 @@ export const apiInterceptor: HttpInterceptorFn = (req, next) => {
       !isAuthProbe(req.url)
     ) {
       auth.markSessionEnded();
-      if (!router.url.startsWith('/login')) {
-        void router.navigate(['/login']);
+      const current = router.url;
+      if (!current.startsWith('/login')) {
+        if (current && current !== '/') {
+          void router.navigate(['/login'], { queryParams: { next: current } });
+        } else {
+          void router.navigate(['/login']);
+        }
       }
     }
     return throwError(() => error);

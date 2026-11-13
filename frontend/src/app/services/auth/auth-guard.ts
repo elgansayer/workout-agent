@@ -14,6 +14,6 @@ export const authGuard: CanActivateFn = async (route, state) => {
   }
   
   const router = inject(Router);
-  router.navigate(['/login']);
+  void router.navigate(['/login'], { queryParams: { next: state.url } });
   return false;
 };

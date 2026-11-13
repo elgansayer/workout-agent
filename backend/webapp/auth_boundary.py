@@ -29,6 +29,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse, RedirectResponse, Response
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from webapp.login_destination import login_redirect
 from webapp.runtime_security import validate_web_runtime
 
 if TYPE_CHECKING:
@@ -116,10 +117,10 @@ class AuthenticationBoundaryMiddleware:
         self.session_guard = session_guard
 
     @staticmethod
-    def _unauthenticated_response(path: str) -> Response:
+    def _unauthenticated_response(path: str, query_string: str = "") -> Response:
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-        return RedirectResponse("/login", status_code=303)
+        return RedirectResponse(login_redirect(path, query_string), status_code=303)
 
     async def __call__(
         self,
@@ -136,9 +137,16 @@ class AuthenticationBoundaryMiddleware:
             await self.app(scope, receive, send)
             return
 
+        raw_query = scope.get("query_string", b"")
+        query_string = (
+            raw_query.decode("latin-1", "replace")
+            if isinstance(raw_query, bytes)
+            else str(raw_query)
+        )
+
         session = scope.get("session")
         if not isinstance(session, Mapping) or not has_verified_identity(session):
-            response = self._unauthenticated_response(path)
+            response = self._unauthenticated_response(path, query_string)
             await response(scope, receive, send)
             return
 
@@ -162,7 +170,7 @@ class AuthenticationBoundaryMiddleware:
                 # the cookie, so a well-behaved browser stops presenting it.
                 if isinstance(session, MutableMapping):
                     session.clear()
-                response = self._unauthenticated_response(path)
+                response = self._unauthenticated_response(path, query_string)
                 await response(scope, receive, send)
                 return
 

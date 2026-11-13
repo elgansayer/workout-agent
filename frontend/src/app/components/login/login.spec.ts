@@ -42,6 +42,13 @@ describe('Login access-denied messaging', () => {
     expect(page.querySelector('[role="alert"]')?.textContent).toContain('temporarily unavailable');
   });
 
+  it('carries the intended destination through the OAuth start link', async () => {
+    const page = await render({ next: '/plan?week=2' });
+    expect(page.querySelector('a')?.getAttribute('href')).toBe(
+      '/login/google?next=%2Fplan%3Fweek%3D2',
+    );
+  });
+
   it('never echoes an unknown or hostile error value', async () => {
     for (const hostile of [
       '<img src=x onerror=alert(1)>',

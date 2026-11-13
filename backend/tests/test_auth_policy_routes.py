@@ -37,6 +37,7 @@ import database
 from fastapi import FastAPI
 from itsdangerous import TimestampSigner
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import RedirectResponse
 from starlette.testclient import TestClient
 from webapp.auth_boundary import AuthenticationBoundaryMiddleware
 
@@ -208,6 +209,71 @@ def test_login_completion_admits_a_verified_identity_and_binds_the_session(harne
         me = client.get("/api/me")
         assert me.status_code == 200
         assert me.json() == {"user": ALICE}
+
+
+def test_login_resumes_at_the_intended_destination(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_authorize_redirect(
+        request: Any, _redirect_uri: str, **_kwargs: Any
+    ) -> RedirectResponse:
+        return RedirectResponse("/fake-google", status_code=302)
+
+    monkeypatch.setattr(
+        harness.module.oauth.google, "authorize_redirect", fake_authorize_redirect
+    )
+    with harness.client() as client:
+        start = client.get(
+            "/login/google", params={"next": "/plan?week=2"}, follow_redirects=False
+        )
+        assert start.status_code == 302
+        client.cookies.set("__Host-session", issued_session_cookie(start))
+
+        response = harness.sign_in(client, ALICE)
+
+        assert response.status_code in {302, 307}
+        assert response.headers["location"] == "/plan?week=2"
+        client.cookies.set("__Host-session", issued_session_cookie(response))
+        assert client.get("/api/me").json() == {"user": ALICE}
+
+
+@pytest.mark.parametrize(
+    "hostile",
+    [
+        "https://evil.example/plan",
+        "//evil.example/plan",
+        "/\\evil.example/plan",
+        "/login/google",
+        "/auth",
+    ],
+)
+def test_login_never_redirects_to_an_unsafe_destination(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, hostile: str
+) -> None:
+    async def fake_authorize_redirect(
+        request: Any, _redirect_uri: str, **_kwargs: Any
+    ) -> RedirectResponse:
+        return RedirectResponse("/fake-google", status_code=302)
+
+    monkeypatch.setattr(
+        harness.module.oauth.google, "authorize_redirect", fake_authorize_redirect
+    )
+    with harness.client() as client:
+        client.get("/login/google", params={"next": hostile}, follow_redirects=False)
+
+        response = harness.sign_in(client, ALICE)
+
+        assert response.headers["location"] == "/"
+
+
+def test_an_unauthenticated_page_remembers_where_the_visitor_was_going(
+    harness: Harness,
+) -> None:
+    with harness.client() as client:
+        response = client.get("/plan?week=2", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login?next=%2Fplan%3Fweek%3D2"
 
 
 def test_login_discards_any_pre_login_session_state(harness: Harness) -> None:
@@ -411,7 +477,10 @@ def test_page_navigation_with_a_revoked_session_redirects_to_login(harness: Harn
         harness.sign_in_ok(client)
         database.revoke_account_sessions(harness.account(ALICE)["id"], harness.db)
         response = client.get("/dashboard")
-        assert response.status_code == 303 and response.headers["location"] == "/login"
+        assert (
+            response.status_code == 303
+            and response.headers["location"] == "/login?next=%2Fdashboard"
+        )
 
 
 def test_reactivation_does_not_resurrect_sessions_but_a_new_login_works(harness: Harness) -> None:
