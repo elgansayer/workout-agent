@@ -24,7 +24,7 @@ pytest.importorskip("httpx")
 import ai_provider
 import security_audit as audit
 from account_policy import AccessPolicy, AccessPolicyConfig
-from database import get_or_create_user, init_db, set_meta
+from database import get_or_create_user, init_db
 from hevy_connection import HevyCredentialState, HevyCredentialTest
 from itsdangerous import TimestampSigner
 from secret_vault import SecretVault
@@ -464,20 +464,29 @@ def test_history_sync_records_counts_on_success_and_only_a_reason_on_failure(
 def test_google_health_connect_denial_mismatch_failure_success_and_disconnect(
     env: _Env, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from urllib.parse import parse_qs, urlsplit
+
     exchanges = iter([None, {"refresh_token": "synthetic-refresh-token-value"}])
     monkeypatch.setattr(env.module, "exchange_code", lambda *_a, **_k: next(exchanges))
     client = env.client_for(env.user_a)
 
-    def callback(query: str, state: str = "st-1") -> int:
-        set_meta("google_health_oauth_state", state, env.db, user_id=env.user_a)
+    def start_state() -> str:
+        response = client.get("/google-health/connect", follow_redirects=False)
+        assert response.status_code == 303
+        location = response.headers["location"]
+        return parse_qs(urlsplit(location).query)["state"][0]
+
+    def callback(query: str) -> int:
         return client.get(
             f"/google-health/callback?{query}", follow_redirects=False
         ).status_code
 
     assert callback("error=access_denied") == 303
     assert callback("code=synthetic-code&state=wrong") == 303
-    assert callback("code=synthetic-code&state=st-1") == 303  # token exchange fails
-    assert callback("code=synthetic-code&state=st-1") == 303  # succeeds
+    state = start_state()
+    assert callback(f"code=synthetic-code&state={state}") == 303  # exchange fails
+    state = start_state()
+    assert callback(f"code=synthetic-code&state={state}") == 303  # succeeds
     assert (
         client.post("/google-health/disconnect", follow_redirects=False).status_code
         == 303

@@ -28,6 +28,9 @@ REVIEWED_DDL_SOURCES = {
     "health_schema.py",
     "provenance_ledger.py",
     "webapp/csrf_security.py",
+    # Consumed OAuth state hashes: tenant-bound, no user_id column and short
+    # lived, so they are neither adopted nor treated as single-user data.
+    "webapp/oauth_state.py",
 }
 _CREATE_TABLE = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?\w+\s*\(", re.IGNORECASE

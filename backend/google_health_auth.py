@@ -50,21 +50,26 @@ def build_authorize_url(
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
     scope: str = SCOPE,
+    nonce: str | None = None,
+    code_challenge: str | None = None,
 ) -> str:
     """Build the Google consent URL the user opens in their browser."""
-    query = urllib.parse.urlencode(
-        {
-            "response_type": "code",
-            "client_id": client_id,
-            "redirect_uri": redirect_uri,
-            "scope": scope,
-            "state": state,
-            # offline + consent guarantee a refresh token is returned.
-            "access_type": "offline",
-            "prompt": "consent",
-        },
-    )
-    return f"{AUTHORIZE_URL}?{query}"
+    params: dict[str, str] = {
+        "response_type": "code",
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+        # offline + consent guarantee a refresh token is returned.
+        "access_type": "offline",
+        "prompt": "consent",
+    }
+    if nonce:
+        params["nonce"] = nonce
+    if code_challenge:
+        params["code_challenge"] = code_challenge
+        params["code_challenge_method"] = "S256"
+    return f"{AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
 
 
 def exchange_code(
@@ -73,19 +78,23 @@ def exchange_code(
     code: str,
     *,
     redirect_uri: str = DEFAULT_REDIRECT_URI,
+    code_verifier: str | None = None,
 ) -> dict[str, Any] | None:
     """Swap an authorisation code for access and refresh tokens."""
+    data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }
+    if code_verifier:
+        data["code_verifier"] = code_verifier
     try:
         response = requests.post(
             TOKEN_URL,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri,
-                "client_id": client_id,
-                "client_secret": client_secret,
-            },
+            data=data,
             timeout=REQUEST_TIMEOUT,
         )
         response.raise_for_status()
@@ -202,8 +211,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    from connectors.oauth import generate_code_verifier, generate_nonce, pkce_challenge
+
     state = secrets.token_urlsafe(16)
-    url = build_authorize_url(client_id, state, redirect_uri=redirect_uri)
+    nonce = generate_nonce()
+    code_verifier = generate_code_verifier()
+    url = build_authorize_url(
+        client_id,
+        state,
+        redirect_uri=redirect_uri,
+        nonce=nonce,
+        code_challenge=pkce_challenge(code_verifier),
+    )
 
     print("\nOpen this URL and approve access (the weight scope):\n")
     print(url, "\n")
@@ -216,11 +235,19 @@ def main(argv: list[str] | None = None) -> int:
     if not code:
         print("No authorisation code was captured. Try again.", file=sys.stderr)
         return 1
-    if returned_state != state:
+    if not secrets.compare_digest(
+        (returned_state or "").encode("utf-8"), state.encode("utf-8")
+    ):
         print("State mismatch; aborting for safety.", file=sys.stderr)
         return 1
 
-    tokens = exchange_code(client_id, client_secret, code, redirect_uri=redirect_uri)
+    tokens = exchange_code(
+        client_id,
+        client_secret,
+        code,
+        redirect_uri=redirect_uri,
+        code_verifier=code_verifier,
+    )
     if not tokens or not tokens.get("refresh_token"):
         print(
             "Could not obtain a refresh token. Make sure the consent screen "
