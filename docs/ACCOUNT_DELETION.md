@@ -47,7 +47,7 @@ Every statement is `… WHERE user_id = ?` with the owner taken from the session
 | --- | --- | --- |
 | `queued_jobs` | There is no persistent job queue. Scheduled work is fenced (see above); the step verifies the account can no longer be scheduled. | – |
 | `notifications` | `notifications`, `push_subscriptions` | – |
-| `connector_tokens` | `user_api_keys` (Hevy, AI providers, health providers), `hevy_meta` (which also holds the Google Health refresh token and OAuth state, check-in counters, the routine folder id and the connector operation and last-sync status described in `READINESS.md`), `health_connections` | Only health-provider keys, `google_health_*` meta rows and `health_connections` |
+| `connector_tokens` | `user_api_keys` (Hevy, AI providers, health providers), `hevy_meta` (which also holds the Google Health refresh token and any legacy OAuth state, check-in counters, the routine folder id and the connector operation and last-sync status described in `READINESS.md`), `health_connections` | Only health-provider keys, `google_health_*` meta rows and `health_connections` |
 | `derived_insights` | `dashboard_insights`, `deep_correlations`, `reasoning_logs`, `chat_messages`, `check_ins` | All |
 | `primary_records` | `workout_history`, `exercise_progress`, `daily_log`, `programme_state`, `programmes`, `user_preferences`, `hevy_routines`, `body_metrics`, `health_metrics`, `health_sync_runs` | `body_metrics`, `health_metrics`, `health_sync_runs` |
 | `caches` | `csrf_tokens` (per-user single-use CSRF nonce registry) | – |
