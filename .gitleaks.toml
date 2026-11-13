@@ -1,0 +1,9 @@
+title = "workout-agent secret scanning"
+
+[allowlist]
+description = "Synthetic credentials in test fixtures"
+paths = [
+  '''^backend/tests/test_secret_vault\.py$''',
+  '''^backend/tests/tenant_matrix\.py$''',
+  '''^backend/tests/test_idor_matrix\.py$''',
+]

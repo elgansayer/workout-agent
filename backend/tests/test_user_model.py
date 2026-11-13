@@ -25,6 +25,7 @@ from database import (
     init_db,
 )
 from legacy_ownership import NOT_TRANSFERRED_TABLES, OWNED_TABLES
+from owned_rows import insert_owned_row
 from tenancy import LEGACY_TENANT_EMAIL, TenantRequiredError
 from test_database import _create_pre_multi_tenant_schema, _user_id_is_indexed_first
 
@@ -71,29 +72,7 @@ def _add_identity(
 
 def _owned_row(conn: sqlite3.Connection, table: str, user_id: Any) -> None:
     """Insert one syntactically valid row into *table* owned by *user_id*."""
-    names: list[str] = []
-    values: list[Any] = []
-    for _cid, name, column_type, _notnull, _default, pk in conn.execute(
-        f"PRAGMA table_info({table})"
-    ).fetchall():
-        if name == "user_id":
-            names.append(name)
-            values.append(user_id)
-        elif pk and column_type.upper() == "INTEGER" and name == "id":
-            continue  # rowid alias
-        elif column_type.upper() == "INTEGER":
-            names.append(name)
-            values.append(1)
-        elif column_type.upper() == "REAL":
-            names.append(name)
-            values.append(1.0)
-        else:
-            names.append(name)
-            values.append("synthetic")
-    placeholders = ", ".join("?" for _ in names)
-    conn.execute(
-        f"INSERT INTO {table} ({', '.join(names)}) VALUES ({placeholders})", values
-    )
+    insert_owned_row(conn, table, user_id)
 
 
 # ---------------------------------------------------------------------------

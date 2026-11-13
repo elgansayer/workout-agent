@@ -55,6 +55,8 @@ The legacy Gemini SDK resolves clients lazily from process-global configuration.
 
 The Angular Settings page renders the provider list and default model placeholders returned by `GET /api/settings`; neither layer keeps a second hardcoded provider list. The API response is derived from `available_providers()`, returns only masked credential status and lifecycle metadata, and never returns a stored secret after submission. Saving preferences persists both the selected provider and its current model. Request-time provider resolution is deliberately uncached so credential and preference changes take effect without a process restart.
 
+Settings also proves a key and model before they are stored or activated: a **Test** action, verification on key save and on provider/model changes, per-user rate limiting, a brief tenant-scoped result cache and a static deprecated/unsupported-model policy. The contract, error codes and operating notes are in [AI provider connection tests](AI_PROVIDER_CONNECTION_TESTS.md).
+
 The production scheduler now invokes coaching and insights once per persisted user. Each coaching run resolves that user's encrypted Hevy key and Google Health token through `secret_vault`; server-level legacy Hevy and Google Health refresh tokens are restricted to the deployment owner (the verified account the pre-account data was assigned to, or the local tenant in the explicit non-production mode; see `docs/USER_MODEL.md`) so a shared fallback cannot cross tenant boundaries. A revoked or undecryptable credential fails with an explicit reason rather than falling back to a server key.
 
 ## Repeatable checks

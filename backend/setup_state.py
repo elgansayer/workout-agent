@@ -640,7 +640,7 @@ def ai_provider_status(
     """
 
     from ai_provider import PROVIDERS
-    from database import get_user_api_key, get_user_preferences
+    from database import get_user_preferences
     from secret_vault import SecretVault, VaultError
 
     try:
@@ -659,21 +659,16 @@ def ai_provider_status(
         )
 
     try:
-        record = get_user_api_key(user_id, provider, db_path=db_path)
-    except Exception:  # noqa: BLE001 - decryption failures mean "not usable"
-        record = None
-    own_key = bool(record and str(record.get("api_key") or "").strip())
+        vault = SecretVault(db_path)
+        own_key = vault.has_usable_credential(user_id, provider)
+        summary = vault.describe(user_id, provider) if own_key else None
+    except (VaultError, ValueError):
+        own_key = False
+        summary = None
 
-    if own_key:
-        last_status: str | None = None
-        last_tested_at: str | None = None
-        try:
-            summary = SecretVault(db_path).describe(user_id, provider)
-        except (VaultError, ValueError):
-            summary = None
-        if summary is not None and summary.configured:
-            last_status = summary.last_test_status
-            last_tested_at = summary.last_tested_at
+    if own_key and summary is not None:
+        last_status = summary.last_test_status
+        last_tested_at = summary.last_tested_at
         return AiProviderStatus(
             provider=provider,
             supported=True,
@@ -728,12 +723,14 @@ def build_account_setup(
         get_hevy_connection,
         get_progress_history,
         get_session_volumes,
-        get_user_api_keys,
     )
+    from secret_vault import SecretVault, VaultError
 
     now = now or datetime.now(tz=timezone.utc)
-    keys = get_user_api_keys(user_id, db_path=db_path)
-    hevy_key = str((keys.get("hevy") or {}).get("api_key") or "").strip()
+    try:
+        has_hevy_key = SecretVault(db_path).has_usable_credential(user_id, "hevy")
+    except VaultError:  # no such account: nothing is usable
+        has_hevy_key = False
 
     programme = get_active_programme(user_id, db_path=db_path)
     progress = get_progress_history(db_path=db_path, user_id=user_id)
@@ -748,7 +745,7 @@ def build_account_setup(
 
     last_activity_at = _latest_datetime(candidates)
 
-    connection = get_hevy_connection(user_id, db_path) if hevy_key else None
+    connection = get_hevy_connection(user_id, db_path) if has_hevy_key else None
     provider = ai_provider_status(
         user_id=user_id,
         db_path=db_path,
@@ -756,7 +753,7 @@ def build_account_setup(
     )
 
     return derive_account_state(
-        has_hevy_key=bool(hevy_key),
+        has_hevy_key=has_hevy_key,
         has_programme=bool(programme),
         has_training_data=bool(progress),
         has_session_history=bool(sessions or logs),

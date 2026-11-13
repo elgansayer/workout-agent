@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-
 from connector_health import (
     HealthReport,
     _check_env_docs,

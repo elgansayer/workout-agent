@@ -480,6 +480,9 @@ def test_refuses_rows_owned_by_an_unknown_account(
 ) -> None:
     path, _legacy_id, target_id = legacy_db
     with _db(path) as conn:  # foreign keys are not enforced by the application
+        # A database that predates the owner-exists guard can hold such an
+        # orphan; the guard now stops new ones, so lift it to rebuild that state.
+        conn.execute("DROP TRIGGER trg_chat_messages_owner_exists_insert")
         assert _insert_row(conn, "chat_messages", "deleted-account-id")
     _assert_refused_untouched(
         path,

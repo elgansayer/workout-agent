@@ -414,6 +414,8 @@ def run(preview: bool = False, user_id: str | None = None) -> int:
     settings = get_user_settings_or_defaults(user_id, config.database_path)
     today = local_today(settings.timezone)
     when = today.isoformat()
+    if not preview:
+        _review_programme(config, user_id)
     runtime = load_programme_runtime(
         user_id,
         config.database_path,
@@ -641,6 +643,28 @@ def _deliver_programme_state(
     )
 
 
+def _review_programme(config: Config, user_id: str) -> None:
+    """Evaluate completed workouts against the active programme (best effort).
+
+    The review is deterministic, tenant scoped and idempotent; a failure must
+    never prevent today's plan from being delivered.
+    """
+
+    try:
+        from programme_review_runner import run_review
+
+        result = run_review(user_id, config.database_path)
+        if result is not None:
+            logger.info(
+                "Programme review: %d workout(s) evaluated, %d replayed, %d decision(s).",
+                result.evaluated,
+                result.replayed,
+                len(result.decisions),
+            )
+    except Exception as exc:  # noqa: BLE001 - adaptation must not block the run
+        logger.warning("Programme adaptation review failed: %s", exc)
+
+
 def _persist_week_state(
     config: Config,
     runtime: ProgrammeRuntime,
@@ -649,31 +673,45 @@ def _persist_week_state(
     plan: str,
     summary: Any,
 ) -> None:
-    """Persist planned/actual week state for a domain-backed programme."""
+    """Record today's delivered plan on the week state of a domain programme.
+
+    The week state also carries the materialised plan and the recorded
+    exposures, so the daily record is *merged* under ``daily`` keys instead of
+    replacing them.
+    """
     if runtime.programme_id is None or runtime.revision_id is None:
         return
     try:
         from programme_domain import ProgrammeService, ProgrammeWeekState
 
-        state = ProgrammeWeekState(
-            week_number=runtime.week,
-            planned={
-                "date": when,
-                "routine_id": (runtime.next_day or {}).get("routine_id"),
-                "focus": (runtime.next_day or {}).get("focus"),
-                "plan": plan,
-                "revision_number": runtime.revision_number,
-            },
-            actual={
-                "summary": summary.as_text() if summary is not None else "",
-            },
-            review_state="planned",
-        )
-        ProgrammeService(config.database_path).save_week_state(
+        service = ProgrammeService(config.database_path)
+        week = service.get_programme_week(user_id, runtime.programme_id, runtime.week)
+        existing = week.state if week is not None else None
+        planned = dict(existing.planned) if existing else {}
+        actual = dict(existing.actual) if existing else {}
+        daily_plan = dict(planned.get("daily") or {})
+        daily_plan[when] = {
+            "routine_id": (runtime.next_day or {}).get("routine_id"),
+            "focus": (runtime.next_day or {}).get("focus"),
+            "plan": plan,
+            "revision_number": runtime.revision_number,
+        }
+        planned["daily"] = daily_plan
+        summaries = dict(actual.get("daily_summaries") or {})
+        summaries[when] = summary.as_text() if summary is not None else ""
+        actual["daily_summaries"] = summaries
+        service.save_week_state(
             user_id,
             runtime.programme_id,
             runtime.revision_id,
-            state,
+            ProgrammeWeekState(
+                week_number=runtime.week,
+                planned=planned,
+                actual=actual,
+                adherence=existing.adherence if existing else None,
+                fatigue=existing.fatigue if existing else None,
+                review_state=existing.review_state if existing else "planned",
+            ),
         )
     except Exception as exc:  # noqa: BLE001 - state persistence is best effort
         logger.warning("Could not persist programme week state: %s", exc)

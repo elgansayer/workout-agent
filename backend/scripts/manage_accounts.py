@@ -8,6 +8,7 @@ it) so ``APP_ENV`` and ``DATABASE_PATH`` match production::
     python scripts/manage_accounts.py invite person@example.com --days 7
     python scripts/manage_accounts.py revoke-invite person@example.com
     python scripts/manage_accounts.py set-status --email person@example.com --status suspended
+    python scripts/manage_accounts.py set-role --email owner@example.com --role owner
     python scripts/manage_accounts.py suspend person@example.com
     python scripts/manage_accounts.py reactivate person@example.com
     python scripts/manage_accounts.py revoke-sessions person@example.com
@@ -28,7 +29,10 @@ here prints a secret; accounts are identified by opaque id and pseudonymous tag.
 
 ``delete`` is an *access* tombstone. It permanently blocks sign-in and ends
 sessions but does not erase the account's data or stop background jobs; that
-belongs to the account-deletion and suspension-lifecycle work.
+belongs to the account-deletion and suspension-lifecycle work. ``set-role``
+assigns an administrative role (`owner`, `admin`, `support`, `user`) and ends the
+account's earlier sessions; new accounts are `user` with no administrative
+permission. See ``docs/ROLE_PERMISSIONS.md``.
 """
 
 from __future__ import annotations
@@ -51,7 +55,11 @@ if str(_BACKEND_ROOT) not in sys.path:
 from account_policy import canonical_email
 from accounts import (
     AccountError,
+    AccountRole,
     has_verified_identity,
+)
+from accounts import (
+    set_account_role as set_operator_role,
 )
 from accounts import (
     set_account_status as set_operator_status,
@@ -181,14 +189,15 @@ def _print_plan(plan: OwnershipPlan) -> None:
 
 def _command_list(db_path: str) -> int:
     init_db(db_path)
-    print(f"{'status':<11}{'verified':<10}{'created':<22}{'email':<34}id")
+    print(f"{'status':<11}{'verified':<10}{'created':<22}{'email':<34}id role")
     users = get_all_users(db_path, include_inactive=True)
     with transaction(db_path) as conn:
         for user in users:
             verified = "yes" if has_verified_identity(conn, user["id"]) else "no"
             print(
                 f"{user['status']:<11}{verified:<10}"
-                f"{user['created_at'][:19]:<22}{user['email']:<34}{user['id']}"
+                f"{user['created_at'][:19]:<22}{user['email']:<34}"
+                f"{user['id']} {user['role']}"
             )
     return EXIT_OK
 
@@ -248,6 +257,26 @@ def _command_set_status(db_path: str, email: str, status: str) -> int:
         print(f"Refused: {exc}", file=sys.stderr)
         return EXIT_FAILED
     print(f"Account is now {updated['status']}.")
+    return EXIT_OK
+
+
+def _command_set_role(db_path: str, email: str, role: str) -> int:
+    init_db(db_path)
+    canonical = normalise_email(email)
+    users = [
+        user
+        for user in get_all_users(db_path, include_inactive=True)
+        if user["email"].lower() == canonical
+    ]
+    if not users:
+        print("No account has that email.", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        updated = set_operator_role(users[0]["id"], AccountRole(role), db_path)
+    except (AccountError, ValueError) as exc:
+        print(f"Refused: {exc}", file=sys.stderr)
+        return EXIT_FAILED
+    print(f"Account role is now {updated['role']}; all earlier sessions are revoked.")
     return EXIT_OK
 
 
@@ -366,6 +395,16 @@ def build_parser() -> argparse.ArgumentParser:
     set_status.add_argument("--email", required=True)
     set_status.add_argument("--status", required=True, choices=("active", "suspended"))
 
+    set_role = commands.add_parser(
+        "set-role", help="Assign an administrative role and end earlier sessions."
+    )
+    set_role.add_argument("--email", required=True)
+    set_role.add_argument(
+        "--role",
+        required=True,
+        choices=tuple(role.value for role in AccountRole),
+    )
+
     suspend = commands.add_parser(
         "suspend", help="Suspend an account and end its sessions."
     )
@@ -423,6 +462,8 @@ def _dispatch(args: argparse.Namespace, db_path: str) -> int:
         return _command_list(db_path)
     if args.command == "set-status":
         return _command_set_status(db_path, args.email, args.status)
+    if args.command == "set-role":
+        return _command_set_role(db_path, args.email, args.role)
     if args.command == "plan-legacy-assignment":
         return _command_plan(db_path, args.owner_email, args.as_json)
     if args.command == "assign-legacy-data":

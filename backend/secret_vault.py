@@ -1438,6 +1438,20 @@ class SecretVault:
             model=row.model,
         )
 
+    def has_usable_credential(self, user_id: str, provider: str) -> bool:
+        """Return whether the owner's *provider* credential can be used right now.
+
+        For readiness and capability checks that need a yes/no and nothing
+        else: the secret is decrypted inside the vault and discarded, so the
+        caller never holds it. An absent, revoked or undecryptable credential,
+        or a server that cannot decrypt at all, is simply ``False``.
+        """
+        try:
+            self.resolve(user_id, provider, purpose="readiness_check")
+        except CredentialUnavailableError:
+            return False
+        return True
+
     # -- legacy migration --------------------------------------------------
 
     def _upgrade_in_place(

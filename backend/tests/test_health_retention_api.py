@@ -13,6 +13,7 @@ pytest.importorskip("httpx")
 from database import get_legacy_user_id, get_meta, init_db, set_meta
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from owned_rows import ensure_users
 from starlette.requests import Request
 
 
@@ -52,6 +53,7 @@ def _login(test_client: TestClient, app_module: Any, user_id: str) -> None:
 
 
 def _seed(db_path: str, user_id: str) -> None:
+    ensure_users(db_path, "another-user")
     with sqlite3.connect(db_path) as connection:
         connection.executemany(
             "INSERT INTO health_connections "

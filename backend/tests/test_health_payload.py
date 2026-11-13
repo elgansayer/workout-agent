@@ -1,5 +1,4 @@
 import pytest
-
 from health_payload import MAX_PAYLOAD_BYTES, parse_bounded_json
 
 

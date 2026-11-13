@@ -21,6 +21,7 @@ from ai_provider import (
 )
 from ai_resolver import resolve_provider
 from secret_vault import ResolvedCredential, SecretValue
+from tenancy import TenantRequiredError
 
 
 def _stored(api_key: str, model: str | None = None) -> ResolvedCredential:
@@ -219,9 +220,9 @@ def test_available_providers_exposes_registered_defaults() -> None:
     providers = {provider["id"]: provider for provider in available_providers()}
 
     assert providers["gemini"]["name"] == "Google Gemini"
-    assert providers["claude"]["default_model"] == "claude-sonnet-4-20250514"
+    assert providers["claude"]["default_model"] == "claude-sonnet-5-5"
     assert providers["openai"]["default_model"] == "gpt-4o"
-    assert providers["deepseek"]["default_model"] == "deepseek-chat"
+    assert providers["deepseek"]["default_model"] == "deepseek-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +256,7 @@ def _register_fake_providers():
         },
         "claude": {
             "class": lambda api_key, model: _FakeProvider("claude", api_key, model),
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-5-5",
         },
         "openai": {
             "class": lambda api_key, model: _FakeProvider("openai", api_key, model),
@@ -263,7 +264,7 @@ def _register_fake_providers():
         },
         "deepseek": {
             "class": lambda api_key, model: _FakeProvider("deepseek", api_key, model),
-            "default_model": "deepseek-chat",
+            "default_model": "deepseek-flash",
         },
     }
 
@@ -444,6 +445,92 @@ def test_non_gemini_provider_does_not_inherit_server_gemini_model(provider_name:
         )
 
     factory.assert_called_once_with(provider_name, api_key="synthetic-user-key", model=None)
+
+
+@pytest.mark.parametrize(
+    ("app_env", "allow_anonymous"),
+    [
+        ("production", None),
+        ("production", "1"),  # the local-mode flag alone never opens production
+        ("", "1"),  # an unset environment is treated like production
+        ("staging", "1"),  # so is an unrecognised one
+        ("test", None),  # non-production but not explicitly single-user
+    ],
+)
+def test_resolve_provider_without_an_owner_is_refused_outside_local_mode(
+    monkeypatch, app_env: str, allow_anonymous: str | None
+):
+    """No authenticated owner, no provider: the shared server key is never lent."""
+    monkeypatch.setenv("APP_ENV", app_env)
+    if allow_anonymous is None:
+        monkeypatch.delenv("ALLOW_ANONYMOUS_WEB", raising=False)
+    else:
+        monkeypatch.setenv("ALLOW_ANONYMOUS_WEB", allow_anonymous)
+
+    with patch("ai_resolver.get_provider") as factory:
+        with pytest.raises(TenantRequiredError):
+            resolve_provider(
+                user_id=None,
+                server_gemini_key="synthetic-server-key",
+                fallback_api_key="synthetic-fallback-key",
+            )
+        with pytest.raises(TenantRequiredError):
+            resolve_provider(server_gemini_key="synthetic-server-key")
+        factory.assert_not_called()
+
+
+def test_resolve_provider_still_serves_a_named_owner_in_production(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("ALLOW_ANONYMOUS_WEB", raising=False)
+
+    with (
+        patch("ai_provider.PROVIDERS", _register_fake_providers()),
+        patch("database.get_user_preferences", return_value={"preferred_ai": "claude"}),
+        patch(
+            "ai_resolver._user_credential", return_value=_stored("synthetic-user-key")
+        ),
+    ):
+        provider = resolve_provider(user_id="user-1")
+
+    assert provider.name().startswith("claude")
+
+
+def test_a_blank_owner_is_never_treated_as_no_owner(monkeypatch, tmp_path):
+    """``""`` is a claim that fails validation, not a request for the local tenant."""
+    monkeypatch.setenv("APP_ENV", "test")
+    monkeypatch.setenv("ALLOW_ANONYMOUS_WEB", "1")
+
+    with (
+        patch("ai_resolver.get_provider") as factory,
+        pytest.raises(TenantRequiredError),
+    ):
+        resolve_provider(
+            user_id="  ",
+            server_gemini_key="synthetic-server-key",
+            db_path=str(tmp_path / "blank.db"),
+        )
+
+    factory.assert_not_called()
+
+
+def test_the_daily_run_cannot_resolve_a_provider_without_an_owner(monkeypatch):
+    import main
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("ALLOW_ANONYMOUS_WEB", raising=False)
+    config = SimpleNamespace(
+        database_path="unused.db",
+        gemini_api_key="synthetic-server-key",
+        gemini_model="gemini-server-model",
+    )
+
+    with (
+        patch("ai_resolver.get_provider") as factory,
+        pytest.raises(TenantRequiredError),
+    ):
+        main._resolve_provider(config)
+
+    factory.assert_not_called()
 
 
 def test_available_providers_is_a_projection_of_registry():

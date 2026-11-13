@@ -1,5 +1,4 @@
 import pytest
-
 from health_models import MetricType
 from health_user_preferences import HealthSourcePreference
 

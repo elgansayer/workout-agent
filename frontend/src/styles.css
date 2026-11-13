@@ -1029,6 +1029,42 @@ nav a.nav-coach.on {
 }
 .bubble-content li { margin-bottom: 0.2em; }
 
+/* ---- Evidence and provenance ---- */
+.evidence-panel {
+    margin-top: 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.02);
+    padding: 0.45rem 0.6rem;
+    font-size: 0.72rem;
+}
+.evidence-head {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem;
+    margin-bottom: 0.3rem;
+}
+.evidence-badge {
+    font-size: 0.66rem; font-weight: 600; letter-spacing: 0.02em;
+    border-radius: 999px; padding: 0.12rem 0.45rem;
+    border: 1px solid var(--border); color: var(--muted);
+}
+.evidence-badge.observed { color: var(--accent); border-color: rgba(74,222,128,0.35); }
+.evidence-badge.inferred { color: #fbbf24; border-color: rgba(251,191,36,0.35); }
+.evidence-badge.incomplete { color: #fb923c; border-color: rgba(251,146,60,0.35); }
+.evidence-badge.pending { color: var(--accent-2); border-color: rgba(56,189,248,0.35); }
+.evidence-badge.unknown { color: var(--muted); }
+.evidence-window { color: var(--muted); opacity: 0.8; }
+.evidence-list {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 0.25rem;
+}
+.evidence-item {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem;
+    color: var(--text); line-height: 1.4;
+}
+.evidence-id { color: var(--accent); font-weight: 600; }
+.evidence-summary { flex: 1 1 12rem; }
+.evidence-meta { color: var(--muted); opacity: 0.75; font-size: 0.66rem; }
+
 /* ---- Streaming cursor ---- */
 .streaming-cursor {
     display: inline-block; width: 2px; height: 1em;

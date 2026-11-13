@@ -291,6 +291,8 @@ def _cadence_for(
         spec.get("cadence") if isinstance(spec, dict) else None,
         spec.get("rotation_mode") if isinstance(spec, dict) else None,
     ):
+        if isinstance(value, dict):  # the preview stores {"mode": "rolling"|"weekly"}
+            value = value.get("mode")
         mode = _normalise_cadence(value)
         if mode:
             return mode
@@ -382,6 +384,7 @@ def resolve_programme_runtime(
     *,
     today: date,
     timezone_name: str = "UTC",
+    completed_positions: list[int] | None = None,
 ) -> ProgrammeRuntime:
     """Resolve the current block and next exposure from this tenant's data."""
     result = ProgrammeRuntime()
@@ -435,13 +438,23 @@ def resolve_programme_runtime(
     result.days = deepcopy(definition.get("days") or [])
     for day in result.days:
         for exercise in day.get("exercises") or []:
-            for prescription in exercise.get("prescriptions") or []:
-                if prescription.get("block_number") == result.block.get("number"):
-                    exercise.update(prescription)
-                    exercise["scheme"] = (
-                        f"{prescription['sets']} × {prescription['rep_range']}"
-                    )
-                    break
+            candidates = [
+                item
+                for item in exercise.get("prescriptions") or []
+                if item.get("block_number") == result.block.get("number")
+            ]
+            # A week-specific prescription (e.g. a planned fatigue-management week)
+            # takes precedence over the block-level one.
+            chosen = next(
+                (item for item in candidates if item.get("week_number") == result.week),
+                next(
+                    (item for item in candidates if item.get("week_number") in (None, 0)),
+                    None,
+                ),
+            )
+            if chosen is not None:
+                exercise.update(chosen)
+                exercise["scheme"] = f"{chosen['sets']} × {chosen['rep_range']}"
 
     if elapsed < 0:
         result.status = NOT_STARTED
@@ -490,12 +503,21 @@ def resolve_programme_runtime(
 
     result.cadence = _cadence_for(definition, result.days)
     if result.cadence == "rolling":
-        position = _rolling_position(result.days, completed)
+        if completed_positions:
+            from programme_domain.weeks import rolling_pointer
+
+            position = rolling_pointer(result.days, completed_positions)
+        else:
+            position = _rolling_position(result.days, completed)
     else:
         position = elapsed % len(result.days)
 
     result.status = ACTIVE
-    schedule = definition.get("schedule") or []
+    # Rolling order never skips a routine because a weekday passed, so its
+    # nominal schedule dates are guidance only; the calendar cadence is dated.
+    schedule = [] if result.cadence == "rolling" else definition.get("schedule") or []
+    if result.cadence == "rolling":
+        result.next_session_date = today.isoformat()
     if schedule:
         scheduled_day, scheduled_date = _schedule_session(
             schedule,
@@ -579,9 +601,14 @@ def load_programme_runtime(
     domain_revision = None
     try:
         from programme_domain import ProgrammeService
+        from tenant_isolation import authorize_owner
 
+        # The loader's callers already proved who is asking; the repository
+        # requires that proof as a value, so re-verify it against the user store.
         service = ProgrammeService(db_path)
-        domain_programme = service.get_active_programme(user_id)
+        domain_programme = service.get_active_programme(
+            authorize_owner(db_path, user_id).user_id
+        )
         if domain_programme is not None:
             domain_revision = domain_programme.current_revision
     except Exception:  # noqa: BLE001 - missing domain rows are a setup state
@@ -590,6 +617,9 @@ def load_programme_runtime(
     if domain_programme is not None and domain_revision is not None:
         definition = _definition_from_domain(
             domain_programme, domain_revision, timezone_name=timezone_name
+        )
+        positions, decisions, overrides = _recorded_state(
+            service, user_id, domain_programme.id
         )
         runtime = resolve_programme_runtime(
             {
@@ -602,10 +632,14 @@ def load_programme_runtime(
             history,
             today=today,
             timezone_name=timezone_name,
+            completed_positions=positions,
         )
         runtime.programme_id = domain_programme.id
         runtime.revision_id = domain_revision.id
         runtime.revision_number = domain_revision.revision_number
+        _overlay_adjustments(
+            runtime, db_path, domain_revision, decisions, overrides, today
+        )
         return runtime
 
     from database import get_active_programme
@@ -619,6 +653,99 @@ def load_programme_runtime(
         return runtime
 
     return _lifecycle_runtime(user_id, db_path, today=today, timezone_name=timezone_name)
+
+
+def _recorded_state(
+    service: Any, user_id: str, programme_id: int
+) -> tuple[list[int] | None, list[Any], list[Any]]:
+    """Recorded rotation positions, applied decisions and active overrides.
+
+    Failures degrade to "nothing recorded": the plan must always render.
+    """
+
+    try:
+        states = service.list_week_states(user_id, programme_id)
+        decisions = service.list_adaptation_decisions(user_id, programme_id)
+        overrides = service.repository.list_overrides(
+            user_id, programme_id, active_only=True
+        )
+    except Exception:  # noqa: BLE001 - optional enrichment
+        return None, [], []
+    exposures: dict[str, dict[str, Any]] = {}
+    for _revision_id, state in states:
+        for item in (state.actual or {}).get("exposures") or []:
+            if isinstance(item, dict) and item.get("workout_id"):
+                exposures[str(item["workout_id"])] = item
+    ordered = sorted(
+        (
+            item
+            for item in exposures.values()
+            if item.get("status") in {"completed", "partial", "substituted"}
+            and item.get("routine_position") is not None
+        ),
+        key=lambda item: (str(item.get("performed_at")), str(item.get("workout_id"))),
+    )
+    positions = [int(item["routine_position"]) for item in ordered]
+    return (positions or None), list(decisions), list(overrides)
+
+
+def _overlay_adjustments(
+    runtime: ProgrammeRuntime,
+    db_path: str,
+    revision: Any,
+    decisions: list[Any],
+    overrides: list[Any],
+    today: date,
+) -> None:
+    """Show applied adaptation decisions and pins on the materialised week."""
+
+    if runtime.status != ACTIVE or not runtime.days:
+        return
+    try:
+        from programme_domain import AdaptationService
+
+        service = AdaptationService(db_path)
+        for day in runtime.days:
+            position = int(day.get("number") or 0)
+            for exercise in day.get("exercises") or []:
+                template_id = str(exercise.get("template_id") or "")
+                found = service.effective_prescription(
+                    revision.settings,
+                    decisions,
+                    revision,
+                    template_id=template_id,
+                    routine_position=position,
+                    week=max(1, runtime.week),
+                )
+                if found is None:
+                    continue
+                prescription, folded = found
+                applied = service.applied_for(
+                    decisions, revision.id, template_id, position
+                )
+                pins = sorted(
+                    {
+                        name
+                        for item in overrides
+                        if item.kind == "pin"
+                        and item.exercise_template_id == template_id
+                        and item.is_active_on(today)
+                        for name in item.value.get("fields", [])
+                    }
+                )
+                if prescription.load_kg is not None:
+                    exercise["load_target_kg"] = prescription.load_kg
+                if folded.get("rep_target") is not None:
+                    exercise["rep_target"] = folded["rep_target"]
+                if applied:
+                    exercise["sets"] = prescription.sets
+                    exercise["adjustments"] = [item["decision_type"] for item in applied]
+                if folded.get("fatigue_management"):
+                    exercise["fatigue_management"] = True
+                if pins:
+                    exercise["pinned_fields"] = pins
+    except Exception:  # noqa: BLE001 - never let an overlay break the plan
+        return
 
 
 def _lifecycle_runtime(

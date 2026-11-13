@@ -16,12 +16,14 @@ from database import (
     save_daily_log,
     set_active_programme,
 )
+from owned_rows import ensure_users
 
 
 @pytest.fixture
 def clean_db(tmp_path: Any) -> str:
     db_file = str(tmp_path / "test_coach.db")
     init_db(db_file)
+    ensure_users(db_file, "user-1")
     return db_file
 
 
