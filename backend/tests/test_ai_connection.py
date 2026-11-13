@@ -268,7 +268,10 @@ def test_claude_probe_sends_one_bounded_request() -> None:
     request = requests[0]
     sent = json.loads(request.content)
     assert request.url.path.endswith("/v1/messages")
-    assert request.headers["x-api-key"] == KEY
+    # Anthropic SDK 2.x moved the API key to an Authorization bearer token.
+    api_key_header = request.headers.get("x-api-key")
+    bearer_header = request.headers.get("authorization")
+    assert api_key_header == KEY or bearer_header == f"Bearer {KEY}"
     assert sent["model"] == MODEL
     assert sent["max_tokens"] == PROBE_MAX_TOKENS
     assert sent["messages"] == [{"role": "user", "content": PROBE_PROMPT}]

@@ -390,6 +390,51 @@ def test_init_db_migration_idempotent(tmp_path: Any) -> None:
         assert "user_id" in col_names
 
 
+def test_init_db_defers_routine_match_indexes_until_columns_exist(
+    tmp_path: Any,
+) -> None:
+    """An older match table gains its columns before the indexes need them."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        conn.execute(
+            """
+            CREATE TABLE routine_workout_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                programme_id INTEGER,
+                workout_id TEXT NOT NULL DEFAULT '',
+                routine_id TEXT,
+                confidence REAL NOT NULL DEFAULT 0,
+                features_json TEXT NOT NULL DEFAULT '{}',
+                method TEXT NOT NULL DEFAULT 'unknown',
+                matcher_version TEXT NOT NULL DEFAULT 'unknown',
+                is_ambiguous INTEGER NOT NULL DEFAULT 0,
+                user_confirmed INTEGER NOT NULL DEFAULT 0,
+                matched_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
+    init_db(db)  # must not raise "no such column: routine_snapshot_id"
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(routine_workout_matches)")
+        }
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(routine_workout_matches)")
+        }
+    assert "routine_snapshot_id" in columns
+    assert {
+        "idx_routine_workout_matches_user_routine",
+        "idx_routine_workout_matches_user_confidence",
+    } <= indexes
+
+
 # ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: exercise_progress user_id scoping
 # ---------------------------------------------------------------------------
@@ -752,18 +797,21 @@ def test_chat_messages_persist_evidence_payload(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
 
-    from database import get_chat_messages, save_chat_message
+    from database import get_chat_messages, get_or_create_user, save_chat_message
 
     payload = '{"grounding":"observed","items":[{"evidence_id":"E1"}]}'
+    user_id = str(
+        get_or_create_user("user-a-123@example.test", "User A", db_path=db)["id"]
+    )
     save_chat_message(
         "assistant",
         "Deadlift is up [E1].",
         db,
-        user_id="user-a-123",
+        user_id=user_id,
         evidence_json=payload,
     )
 
-    msgs = get_chat_messages(db_path=db, user_id="user-a-123")
+    msgs = get_chat_messages(db_path=db, user_id=user_id)
     assert msgs[0]["evidence"] == {
         "grounding": "observed",
         "items": [{"evidence_id": "E1"}],

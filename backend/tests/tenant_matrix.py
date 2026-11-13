@@ -724,6 +724,12 @@ ATTACKS: tuple[Attack, ...] = (
     Attack("POST", "/api/settings/key/delete", {"provider": "gemini"}),
     Attack(
         "POST",
+        "/api/settings/ai/test",
+        {"provider": "gemini"},
+        changes_owner=False,
+    ),
+    Attack(
+        "POST",
         "/api/settings/key/test",
         {"provider": "gemini"},
         also=("export",),
@@ -899,6 +905,39 @@ ATTACKS: tuple[Attack, ...] = (
         foreign=(200, 202),
         also=("queue",),
     ),
+    # The administrative surface is cross-tenant by design and covered by
+    # test_admin_api.py, but ordinary accounts must still be refused here.
+    Attack(
+        "DELETE",
+        "/api/admin/accounts/{target_user_id}",
+        legit=(403,),
+        foreign=(403,),
+        changes_owner=False,
+    ),
+    Attack(
+        "POST",
+        "/api/admin/accounts/{target_user_id}/status",
+        {"status": "suspended"},
+        legit=(403,),
+        foreign=(403,),
+        changes_owner=False,
+    ),
+    Attack(
+        "POST",
+        "/api/admin/accounts/{target_user_id}/role",
+        {"role": "admin"},
+        legit=(403,),
+        foreign=(403,),
+        changes_owner=False,
+    ),
+    Attack(
+        "GET",
+        "/api/admin/accounts/{target_user_id}/export",
+        legit=(403,),
+        foreign=(403,),
+        changes_owner=False,
+        also=("export",),
+    ),
     Attack(
         "POST",
         "/api/account/deletion/cancel",
@@ -914,11 +953,14 @@ def render(world: World, text: str, *, missing: bool = False) -> str:
     notification = "999999" if missing else str(world.ids["notification"])
     session = "999999" if missing else str(world.ids.get("session"))
     connection = "conn-missing" if missing else f"conn-{ALICE.marker}"
+    target_user_id = "999999" if missing else world.alice
+
     def _id(name: str) -> str:
         return "999999" if missing else str(world.ids[name])
 
     return (
         text.replace("{notification_id}", notification)
+        .replace("{target_user_id}", target_user_id)
         .replace("{session_id}", session)
         .replace("{connection_id}", connection)
         .replace("{workout_id}", _id("workout_id"))

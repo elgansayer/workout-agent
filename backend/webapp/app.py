@@ -2906,6 +2906,16 @@ async def rotate_api_key(request: Request) -> dict[str, Any] | JSONResponse:
         item["id"]: item["default_model"] for item in available_providers()
     }
     if provider in ai_provider_defaults:
+        try:
+            configured = _vault().describe(user_id, provider).configured
+        except VaultError as exc:
+            raise _vault_http_error(exc) from exc
+        if not configured:
+            # Rotation replaces an existing credential. Reject a request with
+            # nothing to rotate before spending a provider probe on it.
+            raise HTTPException(
+                status_code=404, detail="No active credential exists to rotate."
+            )
         check = await _check_ai_connection(
             user_id, provider, model or ai_provider_defaults[provider], api_key
         )
