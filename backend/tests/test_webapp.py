@@ -213,10 +213,18 @@ def test_rag_search_evidence_is_tenant_and_window_scoped(
     """Retrieval never includes another user's or out-of-window records."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
     import webapp.app as app_module
-    from database import get_legacy_user_id, save_daily_log, save_progress
+    from database import (
+        get_legacy_user_id,
+        get_or_create_user,
+        save_daily_log,
+        save_progress,
+    )
 
     db_path = app_module.DB_PATH
     legacy_user = get_legacy_user_id(db_path)
+    other_user = str(
+        get_or_create_user("other-user@example.test", "Other", db_path=db_path)["id"]
+    )
     save_daily_log(
         "2026-03-10",
         1,
@@ -225,7 +233,7 @@ def test_rag_search_evidence_is_tenant_and_window_scoped(
         "plan",
         "life",
         db_path,
-        user_id="other-user",
+        user_id=other_user,
     )
     save_progress(
         WorkoutSummary(
@@ -236,7 +244,7 @@ def test_rag_search_evidence_is_tenant_and_window_scoped(
             [ExerciseSummary("OtherUserLift", 200.0, 5, 3)],
         ),
         db_path,
-        user_id="other-user",
+        user_id=other_user,
     )
     save_daily_log(
         "2025-12-01",
