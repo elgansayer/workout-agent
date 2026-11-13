@@ -65,6 +65,7 @@ class UserRow(TypedDict):
     timezone: str
     units: str
     status: str
+    role: str
     status_changed_at: str
     updated_at: str
     last_login_at: str | None
@@ -81,13 +82,22 @@ LEGACY_ROUTINE_DAYS = 6
 ACCOUNT_STATUSES = ("active", "suspended", "unclaimed", "retired", "deleted")
 # Statuses an account can never leave (enforced by trigger).
 TERMINAL_ACCOUNT_STATUSES = ("retired", "deleted")
+# Account authorization vocabulary. ``accounts.AccountRole`` mirrors this tuple
+# and a drift test asserts the CHECK constraint and the enum stay in agreement.
+# ``user`` is the only non-administrative role; it keeps full ownership of its
+# own tenant data but has no administrative permission.
+ACCOUNT_ROLES = ("owner", "admin", "support", "user")
+# Absolute precedence for administrative actions. A role may never manage an
+# account whose role outranks it (owner > admin > support > user).
+ACCOUNT_ROLE_RANK = {role: rank for rank, role in enumerate(reversed(ACCOUNT_ROLES))}
 # Both tuples are code constants (never user input), so rendering them into DDL
 # is safe.
 _ACCOUNT_STATUS_SQL = ", ".join(f"'{status}'" for status in ACCOUNT_STATUSES)
 _TERMINAL_STATUS_SQL = ", ".join(f"'{status}'" for status in TERMINAL_ACCOUNT_STATUSES)
+_ACCOUNT_ROLE_SQL = ", ".join(f"'{role}'" for role in ACCOUNT_ROLES)
 
 _USER_COLUMNS = (
-    "id, email, display_name, created_at, timezone, units, status, "
+    "id, email, display_name, created_at, timezone, units, status, role, "
     "status_changed_at, updated_at, last_login_at"
 )
 
@@ -122,6 +132,7 @@ USER_OWNED_TABLES = (
     "exercise_prescriptions",
     "programme_week_states",
     "adaptation_decisions",
+    "programme_overrides",
     "routine_workout_matches",
     "hevy_routine_snapshots",
     "routine_match_overrides",
@@ -132,6 +143,32 @@ USER_OWNED_TABLES = (
     "health_connections",
     "health_metrics",
     "health_sync_runs",
+)
+
+# Tables bound to a real account that never existed in the single-user
+# deployment, so the legacy ownership assignment never adopts them (see
+# ``legacy_ownership.NOT_TRANSFERRED_TABLES``). Their ``user_id`` is already
+# ``NOT NULL`` and user-first indexed; ``init_db`` still gives them the owner
+# existence and immutability guards. Deletion-ledger and audit tables are left
+# out on purpose: they must outlive, or describe attempts without, an account.
+ACCOUNT_BOUND_TABLES = (
+    "user_sessions",
+    "credential_audit_events",
+    "record_provenance",
+)
+
+# Account-bound tables whose rows are never updated (their own trigger aborts
+# every UPDATE), so they need only the insert-time existence guard.
+APPEND_ONLY_OWNED_TABLES = ("credential_audit_events", "record_provenance")
+
+# References between owner-scoped tables that the schema does not declare as
+# foreign keys, as ``(child, column, parent, parent_column)``. Declared foreign
+# keys between owned tables are discovered from the live schema, so a new
+# relationship is covered without editing this list.
+_UNDECLARED_OWNED_REFERENCES = (
+    ("programmes", "current_revision_id", "programme_revisions", "id"),
+    ("routine_workout_matches", "programme_id", "programmes", "id"),
+    ("routine_workout_matches", "revision_id", "programme_revisions", "id"),
 )
 
 
@@ -145,9 +182,10 @@ def _user_from_row(row: Any) -> UserRow:
         timezone=row[4] or "UTC",
         units=row[5] or "metric",
         status=row[6],
-        status_changed_at=row[7] or row[3],
-        updated_at=row[8] or row[3],
-        last_login_at=row[9],
+        role=row[7] or "user",
+        status_changed_at=row[8] or row[3],
+        updated_at=row[9] or row[3],
+        last_login_at=row[10],
     )
 
 
@@ -309,14 +347,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 UNIQUE(user_id, programme_id, workout_id)
             )
             """,
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
-            "ON routine_workout_matches (user_id, routine_snapshot_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
-            "ON routine_workout_matches (user_id, confidence)"
         )
         cursor.execute(
             """
@@ -518,6 +548,8 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 units TEXT DEFAULT 'metric',
                 status TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ({_ACCOUNT_STATUS_SQL})),
+                role TEXT NOT NULL DEFAULT 'user'
+                    CHECK (role IN ({_ACCOUNT_ROLE_SQL})),
                 status_changed_at TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL DEFAULT '',
                 last_login_at TEXT
@@ -602,6 +634,29 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user "
             "ON push_subscriptions (user_id)"
         )
+        # A push endpoint is one browser profile, so it belongs to one account
+        # at a time: otherwise a notification for the account that left a shared
+        # device would still be delivered to whoever signs in there next. Rows
+        # written before this rule can repeat an endpoint; keep the newest
+        # registration (the account that most recently took the device).
+        if cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_push_subscriptions_endpoint'"
+        ).fetchone() is None:
+            repeated = cursor.execute(
+                "DELETE FROM push_subscriptions WHERE id NOT IN "
+                "(SELECT MAX(id) FROM push_subscriptions GROUP BY endpoint)"
+            ).rowcount
+            if repeated > 0:
+                # A count only: an endpoint is a delivery credential.
+                logger.info(
+                    "Removed %d push registrations that repeated an endpoint.",
+                    repeated,
+                )
+            cursor.execute(
+                "CREATE UNIQUE INDEX idx_push_subscriptions_endpoint "
+                "ON push_subscriptions (endpoint)"
+            )
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS notifications (
@@ -1027,6 +1082,30 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             )
             """
         )
+        # Durable, scoped user overrides (pins, pain/equipment/time reports,
+        # intentional substitutions, review requests).  Rows are never deleted:
+        # a revoked override keeps its audit trail.  No CHECK constraints on the
+        # vocabulary columns; the service validates them so the vocabulary can
+        # grow additively.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS programme_overrides (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL REFERENCES users(id),
+                programme_id INTEGER NOT NULL REFERENCES programmes(id),
+                kind TEXT NOT NULL,
+                exercise_template_id TEXT NOT NULL DEFAULT '',
+                scope_json TEXT NOT NULL DEFAULT '{}',
+                value_json TEXT NOT NULL DEFAULT '{}',
+                starts_on TEXT NOT NULL DEFAULT '',
+                ends_on TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                revoked_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
 
         # Complete a partially applied domain upgrade without rebuilding rows.
         domain_table_columns: dict[str, dict[str, str]] = {
@@ -1120,6 +1199,17 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 "explanation": "TEXT NOT NULL DEFAULT ''",
                 "confirmed": "INTEGER NOT NULL DEFAULT 0",
                 "created_at": "TEXT NOT NULL DEFAULT ''",
+                # Deterministic adaptation audit (#975).  Empty strings mean
+                # "not applicable" so the columns stay NOT NULL and the
+                # idempotency index below can ignore them.
+                "decision_type": "TEXT NOT NULL DEFAULT 'revision'",
+                "application_state": "TEXT NOT NULL DEFAULT 'auto_applied'",
+                "idempotency_key": "TEXT NOT NULL DEFAULT ''",
+                "week_number": "INTEGER NOT NULL DEFAULT 0",
+                "exercise_template_id": "TEXT NOT NULL DEFAULT ''",
+                "source_workout_id": "TEXT NOT NULL DEFAULT ''",
+                "source_workout_hash": "TEXT NOT NULL DEFAULT ''",
+                "resolved_at": "TEXT NOT NULL DEFAULT ''",
             },
             "routine_workout_matches": {
                 "id": "INTEGER",
@@ -1335,8 +1425,30 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "ON adaptation_decisions (user_id, programme_id, id)"
         )
         cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_adaptation_decisions_user_workout "
+            "ON adaptation_decisions (user_id, programme_id, source_workout_id)"
+        )
+        # Replaying the same Hevy event must never create a second decision.
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_adaptation_decisions_idempotency "
+            "ON adaptation_decisions (user_id, programme_id, idempotency_key) "
+            "WHERE idempotency_key <> ''"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_programme_overrides_user_programme "
+            "ON programme_overrides (user_id, programme_id, status, id)"
+        )
+        cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_programme "
             "ON routine_workout_matches (user_id, programme_id, id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
+            "ON routine_workout_matches (user_id, routine_snapshot_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
+            "ON routine_workout_matches (user_id, confidence)"
         )
         # Recreate unique constraints as named indexes so partially upgraded
         # databases get the same conflict targets as fresh databases.
@@ -1399,6 +1511,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_chat_messages_user "
             "ON chat_messages (user_id, id DESC)",
         )
+
+        # Migration: persist deterministic evidence/provenance alongside replies.
+        cursor.execute("PRAGMA table_info(chat_messages)")
+        cm_evidence_columns = {row[1] for row in cursor.fetchall()}
+        if "evidence_json" not in cm_evidence_columns:
+            cursor.execute(
+                "ALTER TABLE chat_messages ADD COLUMN evidence_json TEXT",
+            )
 
         # Migration: Migrate reasoning_logs to user_id-scoped composite PK
         cursor.execute("PRAGMA table_info(reasoning_logs)")
@@ -1861,6 +1981,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
         # Provenance and lineage ledger (additive, append-only, tenant scoped).
         ledger.ensure_schema(cursor)
 
+        # Owner existence, immutability and same-tenant references. Installed
+        # after every table exists (including the ledger above) and after the
+        # last table rebuild, which would otherwise discard the triggers.
+        _install_owner_integrity_guards(cursor)
+
+
 def _init_credential_vault_schema(cursor: sqlite3.Cursor) -> None:
     """Add the additive credential-vault lifecycle columns and audit trail.
 
@@ -2017,7 +2143,14 @@ def _install_owner_guards(cursor: sqlite3.Cursor) -> None:
 
     Idempotent (``IF NOT EXISTS``), additive, and carries no data migration.
     """
-    for table in USER_OWNED_TABLES:
+    _install_owner_required_guards(cursor, USER_OWNED_TABLES)
+
+
+def _install_owner_required_guards(
+    cursor: sqlite3.Cursor, tables: Iterable[str]
+) -> None:
+    """Install the ``user_id is required`` insert/update guards on *tables*."""
+    for table in tables:
         cursor.execute(
             f"""
             CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_required_insert
@@ -2040,10 +2173,140 @@ def _install_owner_guards(cursor: sqlite3.Cursor) -> None:
         )
 
 
+def owned_references(cursor: sqlite3.Cursor) -> list[tuple[str, str, str, str]]:
+    """Return every reference from one owner-scoped table to another.
+
+    Each item is ``(child, column, parent, parent_column)``. Declared foreign
+    keys are read from the live schema; the few references the schema does not
+    declare are listed in ``_UNDECLARED_OWNED_REFERENCES``. Every name comes
+    from the schema this module creates, never from a request.
+    """
+    owned = set(USER_OWNED_TABLES)
+    found: dict[tuple[str, str, str, str], None] = {}
+    for table in USER_OWNED_TABLES:
+        for row in cursor.execute(f"PRAGMA foreign_key_list({table})").fetchall():
+            parent, column, parent_column = row[2], row[3], row[4]
+            if parent in owned and column and parent_column:
+                found[(table, column, parent, parent_column)] = None
+    for edge in _UNDECLARED_OWNED_REFERENCES:
+        found[edge] = None
+    for edge in found:
+        if not all(name.isidentifier() for name in edge):
+            raise ValueError(f"unsafe SQL identifier in owner reference {edge!r}")
+    return list(found)
+
+
+def _install_owner_integrity_guards(cursor: sqlite3.Cursor) -> None:
+    """Enforce, inside the database, that an owner is real and cannot change.
+
+    ``REFERENCES users(id)`` is decorative while ``PRAGMA foreign_keys`` is off,
+    which is how every runtime connection opens. These triggers make the same
+    guarantees unconditional for every user-scoped table, whichever code path
+    (repository, migration, ad-hoc SQL) issues the statement:
+
+    * **Owner exists.** An INSERT, or an UPDATE of ``user_id``, must name a row
+      of ``users``. A row can never belong to an account that does not exist.
+    * **Owner is immutable.** Once a row has an owner it cannot be re-assigned,
+      so a bug or a crafted statement cannot hand one user's record to another.
+      Taking ownership of a previously unowned row (``NULL`` or empty) stays
+      possible for the pre-account backfill. The two audited legacy-adoption
+      flows lift this guard inside their own transaction, exactly as they lift
+      the programme-revision ``no_update`` guards, and recreate it before commit.
+    * **References stay inside the tenant.** A row that points at another
+      owner-scoped row (a revision's programme, a routine's revision, ...) must
+      point at one with the *same* ``user_id``. Without it an indirect object
+      reference can be written that resolves into another user's data.
+
+    The ``WHEN`` clauses are mutually exclusive with the ``owner_required``
+    guards, so an ownerless write always reports ``user_id is required``.
+    Append-only tables get the insert-time existence guard only: their own
+    trigger already aborts every UPDATE.
+    Idempotent (``IF NOT EXISTS``), additive, and carries no data migration.
+    """
+    for table in (*USER_OWNED_TABLES, *ACCOUNT_BOUND_TABLES):
+        # The registry tables turn away a NULL or empty owner with their
+        # ``owner_required`` guards; the account-bound tables rely on NOT NULL,
+        # so for them an empty owner must fail the existence check as well.
+        named = (
+            "NEW.user_id IS NOT NULL"
+            if table in ACCOUNT_BOUND_TABLES
+            else "NEW.user_id IS NOT NULL AND NEW.user_id <> ''"
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_exists_insert
+            BEFORE INSERT ON {table}
+            WHEN {named}
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id must reference an existing user');
+            END
+            """
+        )
+        if table in APPEND_ONLY_OWNED_TABLES:
+            continue
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_owner_exists_update
+            BEFORE UPDATE OF user_id ON {table}
+            WHEN {named} AND NEW.user_id IS NOT OLD.user_id
+                 AND NOT EXISTS (SELECT 1 FROM users WHERE id = NEW.user_id)
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id must reference an existing user');
+            END
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{table}_user_immutable
+            BEFORE UPDATE OF user_id ON {table}
+            WHEN OLD.user_id IS NOT NULL AND OLD.user_id <> ''
+                 AND NEW.user_id IS NOT NULL AND NEW.user_id <> ''
+                 AND NEW.user_id IS NOT OLD.user_id
+            BEGIN
+                SELECT RAISE(ABORT, '{table}.user_id is immutable');
+            END
+            """
+        )
+
+    for child, column, parent, parent_column in owned_references(cursor):
+        message = f"{child}.{column} must reference a row owned by the same user"
+        same_owner = (
+            f"NEW.{column} IS NOT NULL "
+            "AND NEW.user_id IS NOT NULL AND NEW.user_id <> '' "
+            f"AND NOT EXISTS (SELECT 1 FROM {parent} "
+            f"WHERE {parent_column} = NEW.{column} AND user_id = NEW.user_id)"
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{child}_{column}_same_owner_insert
+            BEFORE INSERT ON {child}
+            WHEN {same_owner}
+            BEGIN
+                SELECT RAISE(ABORT, '{message}');
+            END
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS trg_{child}_{column}_same_owner_update
+            BEFORE UPDATE OF {column} ON {child}
+            WHEN NEW.{column} IS NOT OLD.{column} AND {same_owner}
+            BEGIN
+                SELECT RAISE(ABORT, '{message}');
+            END
+            """
+        )
+
+
 _USER_UPGRADE_COLUMNS = (
     (
         "status",
         f"TEXT NOT NULL DEFAULT 'active' CHECK (status IN ({_ACCOUNT_STATUS_SQL}))",
+    ),
+    (
+        "role",
+        f"TEXT NOT NULL DEFAULT 'user' CHECK (role IN ({_ACCOUNT_ROLE_SQL}))",
     ),
     ("status_changed_at", "TEXT NOT NULL DEFAULT ''"),
     ("updated_at", "TEXT NOT NULL DEFAULT ''"),
@@ -2694,7 +2957,7 @@ def get_progress_history(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT exercise_name, top_weight_kg, top_reps, sets, date
+            SELECT id, exercise_name, top_weight_kg, top_reps, sets, date
             FROM (
                 SELECT exercise_name, top_weight_kg, top_reps, sets, date, id,
                        ROW_NUMBER() OVER (PARTITION BY exercise_name ORDER BY id DESC) as rn
@@ -2708,9 +2971,10 @@ def get_progress_history(
         ).fetchall()
 
     series: dict[str, list[dict[str, Any]]] = {}
-    for name, weight, reps, sets, when in rows:
+    for record_id, name, weight, reps, sets, when in rows:
         series.setdefault(name, []).append(
             {
+                "id": record_id,
                 "top_weight_kg": weight,
                 "top_reps": reps,
                 "sets": sets,
@@ -2807,7 +3071,8 @@ def get_personal_records(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT exercise_name,
+            SELECT id,
+                   exercise_name,
                    top_weight_kg,
                    top_reps,
                    date,
@@ -2823,13 +3088,14 @@ def get_personal_records(
 
     return [
         {
+            "id": record_id,
             "exercise": name,
             "e1rm": float(e1rm),
             "weight_kg": float(weight),
             "reps": int(reps),
             "date": when,
         }
-        for name, weight, reps, when, e1rm in rows
+        for record_id, name, weight, reps, when, e1rm in rows
     ]
 
 
@@ -3472,7 +3738,7 @@ def get_daily_logs(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT date, day, focus, carb_tier, plan, lifestyle
+            SELECT id, date, day, focus, carb_tier, plan, lifestyle
             FROM daily_log
             WHERE user_id = ?
             ORDER BY date DESC, id DESC
@@ -3482,13 +3748,14 @@ def get_daily_logs(
         ).fetchall()
         entries = (
             ledger.current_entries(
-                conn, uid, RecordType.DAILY_PLAN, [row[0] for row in rows]
+                conn, uid, RecordType.DAILY_PLAN, [row[1] for row in rows]
             )
             if include_provenance
             else {}
         )
     logs = [
         {
+            "id": record_id,
             "date": when,
             "day": day,
             "focus": focus,
@@ -3496,7 +3763,7 @@ def get_daily_logs(
             "plan": plan,
             "lifestyle": lifestyle,
         }
-        for when, day, focus, carb_tier, plan, lifestyle in rows
+        for record_id, when, day, focus, carb_tier, plan, lifestyle in rows
     ]
     if include_provenance:
         for log in logs:
@@ -3749,7 +4016,7 @@ def get_body_metrics(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
+            SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
             FROM (
                 SELECT id, date, weight_kg, body_fat_pct, muscle_pct, resting_hr, hrv
                 FROM body_metrics
@@ -3763,13 +4030,14 @@ def get_body_metrics(
         ).fetchall()
         entries = (
             ledger.current_entries(
-                conn, uid, RecordType.BODY_METRIC, [row[0] for row in rows]
+                conn, uid, RecordType.BODY_METRIC, [row[1] for row in rows]
             )
             if include_provenance
             else {}
         )
     readings = [
         {
+            "id": record_id,
             "date": when,
             "weight_kg": weight,
             "body_fat_pct": body_fat,
@@ -3777,7 +4045,7 @@ def get_body_metrics(
             "resting_hr": resting_hr,
             "hrv": hrv,
         }
-        for when, weight, body_fat, muscle, resting_hr, hrv in rows
+        for record_id, when, weight, body_fat, muscle, resting_hr, hrv in rows
     ]
     if include_provenance:
         for reading in readings:
@@ -3954,8 +4222,12 @@ def save_chat_message(
     db_path: str = DEFAULT_DB_PATH,
     *,
     user_id: str | None = None,
+    evidence_json: str | None = None,
 ) -> None:
     """Persist a chat message (role is 'user' or 'assistant').
+
+    Assistant messages may carry a serialised evidence/provenance bundle so the
+    UI can show the same grounded sources after a reload.
 
     The message is owned by *user_id* (required outside the explicit local mode).
     """
@@ -3963,10 +4235,10 @@ def save_chat_message(
     with _connect(db_path) as conn:
         conn.execute(
             """
-            INSERT INTO chat_messages (role, content, created_at, user_id)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO chat_messages (role, content, created_at, user_id, evidence_json)
+            VALUES (?, ?, ?, ?, ?)
             """,
-            (role, content, _now_iso(), uid),
+            (role, content, _now_iso(), uid, evidence_json),
         )
 
 
@@ -3985,8 +4257,8 @@ def get_chat_messages(
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT role, content, created_at FROM (
-                SELECT role, content, created_at, id
+            SELECT role, content, created_at, evidence_json FROM (
+                SELECT role, content, created_at, evidence_json, id
                 FROM chat_messages
                 WHERE user_id = ?
                 ORDER BY id DESC
@@ -3995,10 +4267,20 @@ def get_chat_messages(
             """,
             (uid, limit),
         ).fetchall()
-    return [
-        {"role": role, "content": content, "created_at": created_at}
-        for role, content, created_at in rows
-    ]
+    messages: list[dict[str, Any]] = []
+    for role, content, created_at, evidence_json in rows:
+        message: dict[str, Any] = {
+            "role": role,
+            "content": content,
+            "created_at": created_at,
+        }
+        if evidence_json:
+            try:
+                message["evidence"] = json.loads(evidence_json)
+            except ValueError:
+                logger.warning("Ignoring malformed stored chat evidence.")
+        messages.append(message)
+    return messages
 
 
 def clear_chat_messages(
@@ -4143,7 +4425,13 @@ def save_user_api_key(
     extra: dict[str, Any] | None = None,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Store (or update) a per-user encrypted API key for a provider pair."""
+    """Store (or update) a per-user encrypted API key for a provider pair.
+
+    Persistence-layer helper for tests and ownership migrations. It writes no
+    audit row and does not validate the secret, so production code must use
+    ``secret_vault.SecretVault.store`` / ``rotate`` instead (enforced by
+    ``test_credential_boundary_policy``).
+    """
     provider_key = provider.lower()
     master = encryption.load_master_key()
     now = _now_iso()
@@ -4218,7 +4506,13 @@ def get_user_api_key(
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, Any] | None:
-    """Return the decrypted API key record for a user + provider, or None."""
+    """Return the decrypted API key record for a user + provider, or None.
+
+    Hands the plaintext secret to the caller, so production code must not use
+    it: ask ``SecretVault.has_usable_credential`` for a yes/no or
+    ``SecretVault.resolve`` for an opaque value (enforced by
+    ``test_credential_boundary_policy``).
+    """
     provider_key = provider.lower()
     with _connect(db_path) as conn:
         row = conn.execute(
@@ -4277,7 +4571,11 @@ def get_user_api_keys(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> dict[str, dict[str, Any]]:
-    """Return all decrypted API key records for a user, keyed by provider."""
+    """Return all decrypted API key records for a user, keyed by provider.
+
+    Test and migration helper; production code must not read credentials this
+    way (see :func:`get_user_api_key`).
+    """
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -4339,7 +4637,11 @@ def delete_user_api_key(
     provider: str,
     db_path: str = DEFAULT_DB_PATH,
 ) -> None:
-    """Remove a stored API key for a user + provider."""
+    """Remove a stored API key for a user + provider.
+
+    Writes no audit row; production code must use ``SecretVault.revoke`` or
+    ``SecretVault.delete`` (see :func:`save_user_api_key`).
+    """
     with _connect(db_path) as conn:
         conn.execute(
             "DELETE FROM user_api_keys WHERE user_id = ? AND provider = ?",
@@ -4913,6 +5215,23 @@ def _profile_constraints_from_connection(
         return []
 
 
+def load_validation_rules(
+    conn: sqlite3.Connection,
+    user_id: str,
+) -> tuple[Any, dict[str, Any]]:
+    """Return ``(profile_constraints, training_rules)`` read through *conn*.
+
+    Programme activation and adaptation call this *inside* their write
+    transaction so the shared structured validator always sees the tenant's
+    current rules, never a copy captured before a concurrent profile edit.
+    """
+
+    return (
+        _profile_constraints_from_connection(conn, user_id),
+        _training_rules_from_connection(conn, user_id),
+    )
+
+
 def _save_training_rules_with_connection(
     conn: sqlite3.Connection,
     user_id: str,
@@ -4967,9 +5286,14 @@ def _deactivate_invalid_active_programme(
         training_rules=_training_rules_from_connection(conn, user_id),
     )
     if not definition or validation.blocking_violations:
+        # Keep the domain lifecycle aligned with the legacy flag: a programme the
+        # tenant's rules now contradict is paused (reactivatable after
+        # remediation), never left ``status = 'active'`` for the domain runtime.
         conn.execute(
-            "UPDATE programmes SET active = 0 WHERE user_id = ? AND active = 1",
-            (user_id,),
+            "UPDATE programmes SET active = 0, "
+            "status = CASE WHEN status = 'active' THEN 'paused' ELSE status END, "
+            "updated_at = ? WHERE user_id = ? AND active = 1",
+            (datetime.now(tz=timezone.utc).isoformat(), user_id),
         )
 
 
@@ -5047,16 +5371,18 @@ def get_user_preferences(
 def save_push_subscription(
     user_id: str, endpoint: str, p256dh: str, auth: str, db_path: str = DEFAULT_DB_PATH
 ) -> None:
-    """Save a push subscription for a user."""
+    """Save a push subscription for a user.
+
+    An endpoint identifies one browser profile and belongs to one account at a
+    time. Registering it hands the device to *user_id*: every registration of the
+    same endpoint under another account is removed in the same transaction, so
+    that account's notifications are no longer delivered to a browser it left.
+    """
     now = datetime.now(tz=timezone.utc).isoformat()
     with _connect(db_path) as conn:
-        # Avoid duplicate endpoints for the same user
         conn.execute(
-            """
-            DELETE FROM push_subscriptions
-            WHERE user_id = ? AND endpoint = ?
-            """,
-            (user_id, endpoint),
+            "DELETE FROM push_subscriptions WHERE endpoint = ?",
+            (endpoint,),
         )
         conn.execute(
             """
@@ -5269,66 +5595,6 @@ def seed_canonical_programme(
             (user_id, prog_id, CANONICAL_TEMPLATE_KEY, datetime.now(tz=timezone.utc).isoformat()),
         )
     return prog_id
-
-
-def activate_programme_definition(
-    user_id: str,
-    source: str,
-    template_key: str,
-    definition: dict[str, Any],
-    *,
-    start_date: str | None = None,
-    db_path: str = DEFAULT_DB_PATH,
-) -> None:
-    """Activate a programme definition and its start date atomically.
-
-    The programme row and the ``programme_start_date`` metadata are written in
-    a single transaction so a failed activation never leaves a programme
-    without its start date (or the other way round).
-    """
-    if source == "template":
-        raise ValueError(
-            "Static programme templates have been removed; activate a Hevy-derived definition."
-        )
-    if not isinstance(definition, dict) or not definition:
-        raise ValueError("A non-empty Hevy-derived programme definition is required.")
-
-    now = datetime.now(tz=timezone.utc).isoformat()
-    with _connect(db_path) as conn:
-        conn.execute(
-            "UPDATE programmes SET active = 0 WHERE user_id = ?",
-            (user_id,),
-        )
-        conn.execute(
-            """
-            INSERT INTO programmes
-                (user_id, source, template_key, definition, active,
-                 created_at, updated_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?)
-            ON CONFLICT(user_id, template_key) DO UPDATE SET
-                source = excluded.source,
-                definition = excluded.definition,
-                active = 1,
-                updated_at = excluded.updated_at
-            """,
-            (
-                user_id,
-                source,
-                template_key,
-                json.dumps(definition, default=str),
-                now,
-                now,
-            ),
-        )
-        if start_date:
-            conn.execute(
-                """
-                INSERT INTO hevy_meta (user_id, key, value) VALUES (?, ?, ?)
-                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
-                """,
-                (user_id, "programme_start_date", start_date),
-            )
-
 
 
 def save_notification(

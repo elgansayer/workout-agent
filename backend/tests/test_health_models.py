@@ -1,7 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
-
 from health_models import (
     DailyHealthSummary,
     HealthMetric,
@@ -10,7 +9,6 @@ from health_models import (
     SourceProvenance,
     WearableActivity,
 )
-
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
 SOURCE = SourceProvenance(provider="garmin", connection_id="c1", upstream_id="r1")

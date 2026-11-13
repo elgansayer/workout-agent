@@ -9,6 +9,7 @@ route enforces come from the same persisted, tenant-scoped state.
 from __future__ import annotations
 
 import importlib
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -204,6 +205,21 @@ def _use_provider(monkeypatch: Any, provider: _RecordingProvider) -> None:
 
 def _ask(client: TestClient, question: str) -> Any:
     return client.get("/api/rag_search", params={"q": question})
+
+
+def _sse_events(text: str) -> list[tuple[str, Any]]:
+    events: list[tuple[str, Any]] = []
+    for block in text.split("\n\n"):
+        event = None
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event = line[len("event:") :].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[len("data:") :].strip())
+        if event and data_lines:
+            events.append((event, json.loads("\n".join(data_lines))))
+    return events
 
 
 # -- live readiness through the sync route ---------------------------------
@@ -625,7 +641,22 @@ def test_an_untested_provider_may_answer_but_is_never_claimed_to_work(
     response = _ask(client, "What is progressive overload?")
 
     assert response.status_code == 200
-    assert response.text == "Synthetic coach reply."
+    events = _sse_events(response.text)
+    assert [event for event, _ in events] == ["evidence", "delta", "status", "done"]
+    evidence = events[0][1]
+    assert evidence["user_id"] == user_id
+    assert evidence["items"]
+    assert all(
+        item["record_id"].startswith(f"{item['source']}:") for item in evidence["items"]
+    )
+    assert (
+        "".join(data["text"] for event, data in events if event == "delta")
+        == "Synthetic coach reply."
+    )
+    status = next(data for event, data in events if event == "status")
+    # No citation was offered, so the reply must not be presented as observed data.
+    assert status["grounding"] == "inferred"
+    assert status["cited"] == []
     assert len(provider.prompts) == 1
     assert client.get("/api/coach/capability").json()["provider_verified"] is False
 

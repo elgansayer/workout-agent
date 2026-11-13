@@ -171,8 +171,9 @@ Typical procedures:
 
 These are separate pieces of work and are intentionally not changed here:
 
-- An admin UI or HTTP API for invitations and suspension; invitation rate
-  limiting, bulk invites and invitation delivery.
+- An admin UI for invitations and suspension; invitation rate limiting, bulk
+  invites and invitation delivery. The permission-enforced `/api/admin/*`
+  account-management API is documented in `docs/ROLE_PERMISSIONS.md`.
 - Pausing scheduled coaching, insight and notification jobs, and connector
   access, for suspended or deleted accounts. Those jobs still run for every
   stored user.

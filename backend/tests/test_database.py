@@ -31,6 +31,7 @@ from database import (
     set_meta,
 )
 from hevy_parser import ExerciseSummary, WorkoutSummary
+from owned_rows import ensure_users
 
 
 def _db(tmp_path: Any) -> str:
@@ -323,6 +324,7 @@ def test_workout_history_user_isolation(tmp_path: Any) -> None:
     """Two users writing to workout_history do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -343,6 +345,7 @@ def test_workout_history_user_isolation_same_payload(tmp_path: Any) -> None:
     """Scoped reads only return the correct user's data."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -385,6 +388,51 @@ def test_init_db_migration_idempotent(tmp_path: Any) -> None:
         # user_id column still exists
         col_names = {r[1] for r in row}
         assert "user_id" in col_names
+
+
+def test_init_db_defers_routine_match_indexes_until_columns_exist(
+    tmp_path: Any,
+) -> None:
+    """An older match table gains its columns before the indexes need them."""
+    db = _db(tmp_path)
+    import sqlite3
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        conn.execute(
+            """
+            CREATE TABLE routine_workout_matches (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                programme_id INTEGER,
+                workout_id TEXT NOT NULL DEFAULT '',
+                routine_id TEXT,
+                confidence REAL NOT NULL DEFAULT 0,
+                features_json TEXT NOT NULL DEFAULT '{}',
+                method TEXT NOT NULL DEFAULT 'unknown',
+                matcher_version TEXT NOT NULL DEFAULT 'unknown',
+                is_ambiguous INTEGER NOT NULL DEFAULT 0,
+                user_confirmed INTEGER NOT NULL DEFAULT 0,
+                matched_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+
+    init_db(db)  # must not raise "no such column: routine_snapshot_id"
+
+    with sqlite3.connect(db, timeout=10) as conn:
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(routine_workout_matches)")
+        }
+        indexes = {
+            row[1]
+            for row in conn.execute("PRAGMA index_list(routine_workout_matches)")
+        }
+    assert "routine_snapshot_id" in columns
+    assert {
+        "idx_routine_workout_matches_user_routine",
+        "idx_routine_workout_matches_user_confidence",
+    } <= indexes
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +500,7 @@ def test_exercise_progress_user_isolation(tmp_path: Any) -> None:
     """Two users writing exercise_progress do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -470,6 +519,7 @@ def test_progress_history_user_isolation(tmp_path: Any) -> None:
     """get_progress_history scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -489,6 +539,7 @@ def test_session_volumes_user_isolation(tmp_path: Any) -> None:
     """get_session_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -507,6 +558,7 @@ def test_exercise_volumes_user_isolation(tmp_path: Any) -> None:
     """get_exercise_volumes scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -525,6 +577,7 @@ def test_personal_records_user_isolation(tmp_path: Any) -> None:
     """get_personal_records scopes by user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -599,6 +652,7 @@ def test_body_metrics_user_isolation(tmp_path: Any) -> None:
     """Two users writing body_metrics do not see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -619,6 +673,7 @@ def test_body_metrics_same_date_different_users_preserved(tmp_path: Any) -> None
     """Dedup only within the same user_id."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     user_a = "user-a-123"
     user_b = "user-b-456"
@@ -696,6 +751,7 @@ def test_chat_messages_user_isolation(tmp_path: Any) -> None:
     """Two users writing to chat_messages don't see each other's rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import clear_chat_messages, get_chat_messages, save_chat_message
 
@@ -736,6 +792,33 @@ def test_chat_messages_backward_compat(tmp_path: Any) -> None:
     assert get_chat_messages(db_path=db) == []
 
 
+def test_chat_messages_persist_evidence_payload(tmp_path: Any) -> None:
+    """Evidence/provenance survives a reload for the owning user only."""
+    db = _db(tmp_path)
+    init_db(db)
+
+    from database import get_chat_messages, get_or_create_user, save_chat_message
+
+    payload = '{"grounding":"observed","items":[{"evidence_id":"E1"}]}'
+    user_id = str(
+        get_or_create_user("user-a-123@example.test", "User A", db_path=db)["id"]
+    )
+    save_chat_message(
+        "assistant",
+        "Deadlift is up [E1].",
+        db,
+        user_id=user_id,
+        evidence_json=payload,
+    )
+
+    msgs = get_chat_messages(db_path=db, user_id=user_id)
+    assert msgs[0]["evidence"] == {
+        "grounding": "observed",
+        "items": [{"evidence_id": "E1"}],
+    }
+    assert get_chat_messages(db_path=db, user_id="user-b-456") == []
+
+
 # ---------------------------------------------------------------------------
 # Multi-tenant isolation tests: dashboard_insights
 # ---------------------------------------------------------------------------
@@ -766,6 +849,7 @@ def test_dashboard_insights_migration_and_isolation(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import (
         get_dashboard_insight,
@@ -844,6 +928,7 @@ def test_daily_log_user_isolation(tmp_path: Any) -> None:
     """Two different user_ids don't see each other's daily_log rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a", "user-b")
 
     from database import get_daily_logs, save_daily_log
 
@@ -903,6 +988,7 @@ def test_daily_log_dedupes_per_user_per_date(tmp_path: Any) -> None:
     """Same user/date writes replace the prior entry; different users don't clash."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "u1", "u2")
 
     from database import get_daily_logs, save_daily_log
 
@@ -990,6 +1076,7 @@ def test_check_ins_user_isolation(tmp_path: Any) -> None:
     """Two different user_ids don't see each other's check_ins rows."""
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "u1", "u2")
 
     from database import get_checkins, save_checkin
 
@@ -1042,6 +1129,7 @@ def test_deep_correlations_migration_and_isolation(tmp_path: Any) -> None:
     conn.close()
 
     init_db(db)
+    ensure_users(db, "user-a-123", "user-b-456")
 
     from database import (
         get_deep_correlation,
@@ -1526,6 +1614,7 @@ def test_init_db_completes_partial_user_id_backfills(tmp_path: Any) -> None:
 def test_reasoning_logs_roundtrip_is_tenant_scoped(tmp_path: Any) -> None:
     db = _db(tmp_path)
     init_db(db)
+    ensure_users(db, "user-a", "user-b")
 
     save_reasoning_log(
         "shared-context",
@@ -1581,6 +1670,7 @@ def test_fresh_user_owned_tables_reference_users(tmp_path: Any) -> None:
         "exercise_prescriptions",
         "programme_week_states",
         "adaptation_decisions",
+        "programme_overrides",
         "training_rules",
         "credential_audit_events",
         "hevy_connections",

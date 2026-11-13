@@ -7,9 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
-
 import commit_hygiene
+import pytest
 
 # ---------------------------------------------------------------------------
 # check_commit_messages

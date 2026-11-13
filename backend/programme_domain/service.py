@@ -7,6 +7,8 @@ before delegating SQL to :class:`ProgrammeRepository`.
 
 from __future__ import annotations
 
+import sqlite3
+from collections.abc import Callable
 from datetime import date
 
 from database import DEFAULT_DB_PATH
@@ -59,6 +61,33 @@ class ProgrammeService:
     def activate(self, user_id: str, programme_id: int) -> Programme:
         self._require_user(user_id)
         return self.repository.activate(user_id, programme_id)
+
+    def activate_generated(
+        self,
+        user_id: str,
+        draft: ProgrammeDraft,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+        first_week: ProgrammeWeekState | None = None,
+        event: AdaptationDecisionInput | None = None,
+        notification: dict[str, str] | None = None,
+        legacy_start_date: str | None = None,
+        template_key: str | None = None,
+    ) -> Programme:
+        """Validate, persist and activate a generated draft in one transaction."""
+
+        self._require_user(user_id)
+        validate_draft(user_id, draft)
+        return self.repository.activate_generated(
+            user_id,
+            draft,
+            guard=guard,
+            first_week=first_week,
+            event=event,
+            notification=notification,
+            legacy_start_date=legacy_start_date,
+            template_key=template_key,
+        )
 
     def pause(self, user_id: str, programme_id: int) -> Programme:
         self._require_user(user_id)
@@ -165,6 +194,20 @@ class ProgrammeService:
     ) -> list[AdaptationDecision]:
         self._require_user(user_id)
         return self.repository.list_adaptation_decisions(user_id, programme_id)
+
+    def list_week_states(
+        self, user_id: str, programme_id: int
+    ) -> list[tuple[int, ProgrammeWeekState]]:
+        """Every stored week state with the revision id that produced it."""
+
+        self._require_user(user_id)
+        return self.repository.list_week_states(user_id, programme_id)
+
+    def get_adaptation_decision(
+        self, user_id: str, programme_id: int, decision_id: int
+    ) -> AdaptationDecision | None:
+        self._require_user(user_id)
+        return self.repository.get_adaptation_decision(user_id, programme_id, decision_id)
 
     # ------------------------------------------------------------------
     # Week state and workout matching

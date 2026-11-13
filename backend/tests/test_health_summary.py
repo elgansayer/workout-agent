@@ -1,10 +1,8 @@
 from datetime import date, datetime, timezone
 
 import pytest
-
 from health_models import HealthMetric, MetricType, SourceProvenance
 from health_summary import build_daily_summary
-
 
 DAY = date(2026, 8, 19)
 WHEN = datetime(2026, 8, 19, 8, tzinfo=timezone.utc)

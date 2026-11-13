@@ -1,5 +1,4 @@
 import pytest
-
 from connectors.garmin import GarminHealthConnector, GarminTrainingConnector
 from health_write_guard import require_write_permission
 

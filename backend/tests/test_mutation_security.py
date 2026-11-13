@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
-
 from webapp.mutation_security import MutationSecurityMiddleware
 
 _SECRET = "mutation-security-test-secret-that-is-long-enough"
