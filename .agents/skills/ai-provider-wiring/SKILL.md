@@ -33,6 +33,8 @@ description: 'Resolve a user’s chosen AI provider (Gemini/Claude/OpenAI/DeepSe
 
 3. **Handle provider-specific failure modes gracefully:**
    - Catch authentication or rate-limit exceptions at the route level and return clean, user-facing error messages ("Your OpenAI/Claude key is invalid or rate-limited; please check Settings").
+   - Map SDK exceptions with `ai_provider.classify_provider_error()` (stable codes, no provider text) instead of echoing `str(exc)`; SDK messages can quote part of the API key.
+   - Never persist a key or model that has not passed `ai_connection` (`AIProvider.probe()` through the checker). See `docs/AI_PROVIDER_CONNECTION_TESTS.md`.
 
 4. **Support Local & Offline Models (Ollama / vLLM):**
    - Allow users to supply custom OpenAI-compatible base URLs (e.g. `http://localhost:11434/v1` for Ollama) to run 100% private, local inference without external API keys.

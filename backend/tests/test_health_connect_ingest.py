@@ -1,9 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-
 from connectors.health_connect_ingest import HealthConnectUpload, replay_key
-
 
 NOW = datetime(2026, 8, 19, 12, 0, tzinfo=timezone.utc)
 

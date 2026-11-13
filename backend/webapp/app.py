@@ -35,15 +35,24 @@ from pathlib import Path
 from typing import Any, Literal
 
 import account_deletion
+import admin_service
 import analytics
 import insights
 import lifestyle
 from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
 from accounts import (
     AccountError,
+    AccountInactiveError,
+    AccountNotFoundError,
     require_active_user,
     resolve_oauth_user,
 )
+from ai_connection import (
+    ConnectionCheck,
+    ConnectionCheckRateLimited,
+    http_status_for,
+)
+from ai_connection import checker as ai_connection_checker
 from ai_provider import AIProvider, available_providers
 from ai_resolver import resolve_provider
 from authlib.integrations.starlette_client import OAuth
@@ -55,6 +64,13 @@ from coach_capability import (
 from coaching_capabilities import (
     classify_coaching_query,
     get_coaching_capabilities,
+)
+from coaching_evidence import (
+    build_evidence_bundle,
+    evidence_prompt,
+    resolve_grounding,
+    serialise_bundle,
+    validate_citations,
 )
 from config import Config
 from connector_operations import (
@@ -168,6 +184,12 @@ from localisation import (
     spelling_for,
     weight_unit,
 )
+from permissions import (
+    Permission,
+    PermissionDeniedError,
+    authorize,
+    permissions_for_user,
+)
 from onboarding import (
     OnboardingError,
     build_onboarding,
@@ -175,9 +197,8 @@ from onboarding import (
     skip_step,
 )
 from programme_service import (
+    ProgrammeConflictError,
     ProgrammeValidationError,
-    conflict_remediation,
-    detect_source_conflicts,
 )
 from programme_service import (
     activate_programme as activate_generated_programme,
@@ -916,6 +937,27 @@ async def get_current_user_api(request: Request) -> Any:
     return JSONResponse({"user": user})
 
 
+@app.get("/api/me/permissions")
+def get_current_permissions_api(request: Request) -> Any:
+    """Return the current role and permissions so the SPA can hide controls.
+
+    This is a convenience for presentation only. Every administrative route
+    re-checks the same matrix server-side, so hiding or forging this response
+    cannot grant access.
+    """
+    user_id = _check_api_auth(request, allow_closing=True)
+    account = get_user_by_id(user_id, DB_PATH)
+    if account is None:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(
+        {
+            "role": account["role"],
+            "permissions": sorted(
+                permission.value for permission in permissions_for_user(account)
+            ),
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
 @app.get("/api/sessions")
 def api_list_sessions(request: Request) -> dict[str, Any]:
     user_id = _check_api_auth(request)
@@ -1842,37 +1884,25 @@ def activate_programme(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    current_hashes = [
-        {
-            "routine_id": snapshot_item["id"],
-            "source_hash": snapshot_item["source_hash"],
-        }
-        for snapshot_item in preview["source_snapshots"]
-    ]
-    titles = {
-        str(item["id"]): str(item["title"])
-        for item in preview["source_snapshots"]
-    }
-    conflict = detect_source_conflicts(
-        [
-            {
-                "routine_id": item.routine_id,
-                "source_hash": item.source_hash,
-            }
-            for item in payload.source_hashes
-        ],
-        current_hashes,
-        titles=titles,
-    ) if payload.source_hashes else {
-        "changed_routines": [],
-        "added_routines": [],
-        "removed_routines": [],
-        "has_conflicts": False,
-    }
-
-    blocking_violations = preview.get("blocking_violations") or []
-    if blocking_violations:
-        first_violation = blocking_violations[0]
+    try:
+        active = activate_generated_programme(
+            user_id,
+            preview,
+            db_path=DB_PATH,
+            presented_token=payload.preview_token,
+            presented_source_hashes=[
+                {"routine_id": item.routine_id, "source_hash": item.source_hash}
+                for item in payload.source_hashes
+            ],
+        )
+    except ProgrammeConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": exc.message, **exc.details},
+        ) from exc
+    except ProgrammeValidationError as exc:
+        violations = exc.details.get("violations", [])
+        first_violation = violations[0] if violations else None
         if isinstance(first_violation, dict) and {
             "exercise",
             "prescription",
@@ -1882,37 +1912,10 @@ def activate_programme(
             raise HTTPException(
                 status_code=422,
                 detail=_blocking_violation_detail(first_violation),
-            )
+            ) from exc
         raise HTTPException(
             status_code=422,
-            detail={
-                "message": "The programme preview violates blocking constraints.",
-                "violations": blocking_violations,
-            },
-        )
-
-    if preview["preview_token"] != payload.preview_token or conflict["has_conflicts"]:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "message": (
-                    "The Hevy routines or programme settings changed after the "
-                    "preview. Generate a fresh preview before activation."
-                ),
-                "conflict": conflict,
-                "remediation": conflict_remediation(conflict),
-            },
-        )
-
-    try:
-        active = activate_generated_programme(user_id, preview, db_path=DB_PATH)
-    except ProgrammeValidationError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "message": exc.message,
-                "violations": exc.details.get("violations", []),
-            },
+            detail={"message": exc.message, "violations": violations},
         ) from exc
 
     return JSONResponse(
@@ -2346,6 +2349,23 @@ def chat_clear(request: Request):
     return {"status": "ok"}
 
 
+def _sse(event: str, data: Any) -> str:
+    """Encode one server-sent event payload."""
+    return f"event: {event}\ndata: {json.dumps(data, default=str)}\n\n"
+
+
+def _parse_window_bound(raw: str | None, *, name: str, fallback: date) -> date:
+    if raw is None or not raw.strip():
+        return fallback
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} must be an ISO date (YYYY-MM-DD)",
+        ) from exc
+
+
 def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
     """Section-level provenance for AI context where records are not annotated."""
     summary = get_provenance_summary(user_id, RecordType.EXERCISE_PROGRESS, DB_PATH)
@@ -2368,14 +2388,46 @@ def _retrieval_data_sources(user_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/rag_search", response_model=None)
-def rag_search(request: Request, q: str = Query(...)) -> Any:
+def rag_search(
+    request: Request,
+    q: str = Query(...),
+    start_date: str | None = Query(None, alias="start"),
+    end_date: str | None = Query(None, alias="end"),
+    start_date_long: str | None = Query(None, alias="start_date"),
+    end_date_long: str | None = Query(None, alias="end_date"),
+) -> Any:
     _check_rate_limit(request, limit=15)
     user_id = _check_api_auth(request)
     config = get_config()
     provider = _resolve_provider_for_request(request, config)
 
+    now = datetime.now(tz=timezone.utc)
+    today = now.date()
+    start_raw = start_date if start_date is not None else start_date_long
+    end_raw = end_date if end_date is not None else end_date_long
+    window_end = _parse_window_bound(end_raw, name="end", fallback=today)
+    try:
+        default_start = window_end - timedelta(days=90)
+    except OverflowError:
+        default_start = date.min
+    window_start = _parse_window_bound(
+        start_raw,
+        name="start",
+        fallback=default_start,
+    )
+    if window_start > window_end:
+        raise HTTPException(
+            status_code=400,
+            detail="start must not be after end",
+        )
+    # Future data is unavailable. Never let a window request cite it.
+    window_end = min(window_end, today)
+    window_start = min(window_start, window_end)
+
     settings = get_user_settings(user_id, DB_PATH)
-    cap_state = get_coaching_capabilities(user_id, db_path=DB_PATH, config=config, provider=provider)
+    cap_state = get_coaching_capabilities(
+        user_id, db_path=DB_PATH, config=config, provider=provider
+    )
     mode, required_cap = classify_coaching_query(q)
 
     # Gather training context. Every record carries its provenance so the model
@@ -2388,7 +2440,21 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
         db_path=DB_PATH, user_id=user_id, include_provenance=True
     )
     prs = get_personal_records(db_path=DB_PATH, user_id=user_id)
-    active_prog = get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
+    active_prog = (
+        get_active_programme(user_id=user_id, db_path=DB_PATH) if user_id else None
+    )
+
+    evidence = build_evidence_bundle(
+        user_id=user_id,
+        logs=logs,
+        history=history,
+        biometrics=biometrics[-10:],
+        personal_records=prs[:10],
+        as_of=now,
+        window_start=window_start,
+        window_end=window_end,
+    )
+
     capability = _coach_capability_for_user(
         user_id,
         logs=logs,
@@ -2419,9 +2485,23 @@ def rag_search(request: Request, q: str = Query(...)) -> Any:
             save_chat_message("assistant", explanation_msg, db_path=DB_PATH, user_id=user_id)
 
             def generate_disabled_explanation() -> Iterator[str]:
-                yield explanation_msg
+                yield _sse("evidence", evidence.to_dict())
+                yield _sse("delta", {"text": explanation_msg})
+                yield _sse(
+                    "status",
+                    {
+                        "grounding": "incomplete",
+                        "cited": [],
+                        "evidence_count": len(evidence.items),
+                    },
+                )
+                yield _sse("done", {})
 
-            return StreamingResponse(generate_disabled_explanation(), media_type="text/plain")
+            return StreamingResponse(
+                generate_disabled_explanation(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            )
 
     # Build multi-turn conversation from chat history
     chat_history_msgs = get_chat_messages(limit=20, db_path=DB_PATH, user_id=user_id)
@@ -2446,12 +2526,16 @@ Important constraints:
 - Start your response exactly with this header line:
 **Educational Guidance** (General advice — not personalised to your training history)
 
+{evidence_prompt(evidence)}
+
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 Conversation so far:
 {conversation_text}
 
-User's question: {q}"""
+User's question: {q}
+
+Respond naturally as Coach. If the question is about their training data, cite the supporting evidence. If it is a general fitness question, answer from expertise but relate it back to their programme where possible."""
     else:
         active_def = (active_prog.get("definition") if active_prog else None) or {}
         prog_name = active_def.get("name") or "active programme"
@@ -2484,6 +2568,8 @@ Important constraints:
 - Keep answers concise but insightful. You can use **bold** for emphasis and bullet lists for structure.
 - Use {spelling_for(settings.locale)}.
 
+{evidence_prompt(evidence)}
+
 {prompt_context(settings.timezone, settings.locale, settings.unit_system)}
 
 {rules_text}
@@ -2499,6 +2585,7 @@ Verified training data context (recent logs, progress history, biometrics, PRs, 
 User's question: {q}"""
 
     def generate() -> Iterator[str]:
+        yield _sse("evidence", evidence.to_dict())
         collected: list[str] = []
         try:
             response = provider.generate(prompt, stream=True)
@@ -2506,24 +2593,44 @@ User's question: {q}"""
             for chunk in chunks:
                 if chunk:
                     collected.append(chunk)
-                    yield chunk
         except Exception:
             logger.exception("AI chat streaming failed.")
-            error_msg = (
+            collected.append(
                 "Sorry, Coach is currently unavailable or encountered an error. "
                 "Please try again."
             )
-            collected.append(error_msg)
-            yield error_msg
-        finally:
-            # Save the full assistant response
-            full_response = "".join(collected)
-            if full_response:
-                save_chat_message(
-                    "assistant", full_response, db_path=DB_PATH, user_id=user_id
-                )
 
-    return StreamingResponse(generate(), media_type="text/plain")
+        answer, cited = validate_citations("".join(collected), evidence)
+        grounding = resolve_grounding(answer, evidence, cited)
+        if answer:
+            save_chat_message(
+                "assistant",
+                answer,
+                db_path=DB_PATH,
+                user_id=user_id,
+                evidence_json=serialise_bundle(
+                    evidence,
+                    grounding=grounding,
+                    cited=cited,
+                ),
+            )
+        for offset in range(0, len(answer), 140):
+            yield _sse("delta", {"text": answer[offset : offset + 140]})
+        yield _sse(
+            "status",
+            {
+                "grounding": grounding.value,
+                "cited": cited,
+                "evidence_count": len(evidence.items),
+            },
+        )
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 _OAUTH_STATE_FALLBACK_SECRET = secrets.token_bytes(32)
@@ -2659,8 +2766,105 @@ def _hevy_verification_status(state: HevyCredentialState) -> int:
     return 400
 
 
-@app.post("/api/settings/key")
-async def save_api_key(request: Request) -> dict[str, Any]:
+async def _json_object(request: Request) -> dict[str, Any]:
+    """Parse a JSON object body; malformed input is a 400, never a 500."""
+    try:
+        body = await request.json()
+    except ValueError:  # json.JSONDecodeError and UnicodeDecodeError
+        raise HTTPException(
+            status_code=400, detail="Request body must be valid JSON"
+        ) from None
+    if not isinstance(body, dict):
+        raise HTTPException(
+            status_code=400, detail="Request body must be a JSON object"
+        )
+    return body
+
+
+def _optional_model(value: Any) -> str:
+    """Validate the optional ``model`` request field ("" when absent)."""
+    if value is not None and not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="Model must be a string")
+    model = value.strip() if isinstance(value, str) else ""
+    if len(model) > 200:
+        raise HTTPException(status_code=400, detail="Model is too long")
+    return model
+
+
+async def _check_ai_connection(
+    user_id: str, provider: str, model: str, api_key: str
+) -> ConnectionCheck:
+    """Run a provider check off the event loop; our own throttle becomes a 429."""
+    try:
+        return await run_in_threadpool(
+            ai_connection_checker.check, user_id, provider, model, api_key
+        )
+    except ConnectionCheckRateLimited as exc:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Too many connection tests. "
+                f"Wait {exc.retry_after} seconds and try again."
+            ),
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from exc
+
+
+def _ai_check_refusal(check: ConnectionCheck, outcome: str) -> JSONResponse:
+    """Refuse a flow after a failed check: ``detail`` stays a plain string.
+
+    The structured fields (``code``, ``retryable``, ...) ride alongside it so
+    existing clients that only render ``detail`` keep working.
+    """
+    payload = check.to_payload()
+    payload["detail"] = f"{check.message} {outcome}"
+    headers = {"Retry-After": str(check.retry_after)} if check.retry_after else None
+    return JSONResponse(payload, status_code=http_status_for(check), headers=headers)
+
+
+@app.post("/api/settings/ai/test", response_model=None)
+async def test_ai_connection(request: Request) -> JSONResponse:
+    """Check an AI provider key and model for the current user, saving nothing.
+
+    ``api_key`` is optional: omitted, the user's own stored key is tested. The
+    result is always HTTP 200 with ``status`` ``ok`` or ``error`` and a stable
+    ``code``; only malformed requests and our own throttle use 4xx.
+    """
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await _json_object(request)
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    provider_value = body.get("provider")
+    provider = provider_value.strip().lower() if isinstance(provider_value, str) else ""
+    if provider not in defaults:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown AI provider. Use: {', '.join(sorted(defaults))}",
+        )
+    model = _optional_model(body.get("model")) or defaults[provider]
+
+    api_key_value = body.get("api_key")
+    if api_key_value is not None and not isinstance(api_key_value, str):
+        raise HTTPException(status_code=400, detail="api_key must be a string")
+    api_key = (api_key_value or "").strip()
+    if not api_key:
+        # Tenant-scoped: the authenticated user's own credential, never a body id.
+        credential = _vault_credential(user_id, provider, purpose="ai_connection_test")
+        api_key = (
+            credential.api_key.reveal()
+            if credential is not None and credential.api_key is not None
+            else ""
+        )
+
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return JSONResponse(check.to_payload())
+
+
+@app.post("/api/settings/key", response_model=None)
+async def save_api_key(request: Request) -> dict[str, Any] | JSONResponse:
     """Save or update an API key for the current user.
 
     A Hevy credential is verified before it is stored: an unusable key is
@@ -2691,6 +2895,16 @@ async def save_api_key(request: Request) -> dict[str, Any]:
     model = model_value.strip() if isinstance(model_value, str) else ""
     if len(model) > 200:
         raise HTTPException(status_code=400, detail="Model is too long")
+
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
+        check = await _check_ai_connection(
+            user_id, provider, model or ai_provider_defaults[provider], api_key
+        )
+        if not check.ok:
+            return _ai_check_refusal(check, "Your key was not saved.")
 
     verification: HevyCredentialTest | None = None
     if provider == "hevy":
@@ -2724,6 +2938,8 @@ async def save_api_key(request: Request) -> dict[str, Any]:
             raise _vault_http_error(exc) from exc
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+
+    ai_connection_checker.invalidate(user_id, provider)
 
     if verification is not None:
         save_hevy_connection(
@@ -2780,8 +2996,8 @@ async def save_api_key(request: Request) -> dict[str, Any]:
     }
 
 
-@app.post("/api/settings/key/rotate")
-async def rotate_api_key(request: Request) -> dict[str, Any]:
+@app.post("/api/settings/key/rotate", response_model=None)
+async def rotate_api_key(request: Request) -> dict[str, Any] | JSONResponse:
     """Replace an existing credential, keeping its audit history."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -2798,10 +3014,30 @@ async def rotate_api_key(request: Request) -> dict[str, Any]:
 
     model_value = body.get("model")
     model = model_value.strip() if isinstance(model_value, str) else None
+    ai_provider_defaults = {
+        item["id"]: item["default_model"] for item in available_providers()
+    }
+    if provider in ai_provider_defaults:
+        try:
+            configured = _vault().describe(user_id, provider).configured
+        except VaultError as exc:
+            raise _vault_http_error(exc) from exc
+        if not configured:
+            # Rotation replaces an existing credential. Reject a request with
+            # nothing to rotate before spending a provider probe on it.
+            raise HTTPException(
+                status_code=404, detail="No active credential exists to rotate."
+            )
+        check = await _check_ai_connection(
+            user_id, provider, model or ai_provider_defaults[provider], api_key
+        )
+        if not check.ok:
+            return _ai_check_refusal(check, "Your key was not rotated.")
     try:
         summary = _vault().rotate(user_id, provider, api_key=api_key, model=model)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -2835,6 +3071,7 @@ async def revoke_api_key(request: Request) -> dict[str, Any]:
         summary = _vault().revoke(user_id, provider)
     except VaultError as exc:
         raise _vault_http_error(exc) from exc
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -2882,6 +3119,7 @@ async def remove_api_key(request: Request) -> dict[str, Any]:
         raise _vault_http_error(exc) from exc
     if provider == "hevy":
         delete_hevy_connection(user_id, db_path=DB_PATH)
+    ai_connection_checker.invalidate(user_id, provider)
     _audit_key_change(
         request,
         user_id,
@@ -3017,8 +3255,48 @@ def credential_audit(request: Request, limit: int = Query(50, ge=1, le=200)):
     }
 
 
-@app.post("/api/settings/preferences")
-async def save_preferences(request: Request) -> dict[str, Any]:
+async def _refuse_unverified_ai_selection(
+    user_id: str, preferred_ai: str | None, ai_model: str | None
+) -> JSONResponse | None:
+    """Gate *activating* a provider/model on the static policy and a live check.
+
+    Only a changed selection is gated, so saving unrelated profile fields never
+    spends a provider call or trips over a model the user already had. The live
+    check uses the user's own stored key; with no stored key there is nothing to
+    verify against yet (the key save verifies it), so only the static policy runs.
+    """
+    if preferred_ai is None and not ai_model:
+        return None
+    defaults = {item["id"]: item["default_model"] for item in available_providers()}
+    stored = get_user_preferences(user_id, DB_PATH)
+    stored_provider = str(stored.get("preferred_ai") or "gemini")
+    stored_model = str(stored.get("ai_model") or defaults.get(stored_provider, ""))
+
+    provider = preferred_ai or stored_provider
+    if provider not in defaults:
+        return None
+    model = ai_model or stored_model or defaults[provider]
+    if (provider, model) == (stored_provider, stored_model):
+        return None
+
+    outcome = "Your AI settings were not saved."
+    refused = ai_connection_checker.validate_model(provider, model)
+    if refused is not None:
+        return _ai_check_refusal(refused, outcome)
+    credential = _vault_credential(user_id, provider, purpose="ai_settings_validation")
+    api_key = (
+        credential.api_key.reveal()
+        if credential is not None and credential.api_key is not None
+        else ""
+    )
+    if not api_key:
+        return None
+    check = await _check_ai_connection(user_id, provider, model, api_key)
+    return None if check.ok else _ai_check_refusal(check, outcome)
+
+
+@app.post("/api/settings/preferences", response_model=None)
+async def save_preferences(request: Request) -> dict[str, Any] | JSONResponse:
     """Save user training preferences and validate active programme."""
     _check_rate_limit(request, limit=5)
     user_id = _check_api_auth(request)
@@ -3052,6 +3330,10 @@ async def save_preferences(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="AI model is too long")
     if preferred_ai is not None and not ai_model:
         ai_model = ai_provider_defaults[preferred_ai]
+
+    refusal = await _refuse_unverified_ai_selection(user_id, preferred_ai, ai_model)
+    if refusal is not None:
+        return refusal
 
     previous_ai = get_user_preferences(user_id, DB_PATH).get("preferred_ai")
     training_rules_payload = body.get("training_rules")
@@ -4347,6 +4629,530 @@ async def api_programme_history_override(request: Request) -> JSONResponse:
     )
 
 
+# ---------------------------------------------------------------------------
+# Programme lifecycle, adaptation, overrides and source drift (#975)
+#
+# Every route derives the owner from the authenticated session; request bodies
+# forbid unknown fields so a client-supplied owner identifier is rejected, and
+# every domain call is scoped by that tenant.  Adaptation is deterministic: no
+# route calls a language model.
+# ---------------------------------------------------------------------------
+
+
+class _StrictBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProgrammeResumeBody(_StrictBody):
+    extend: bool = True
+
+
+class ProgrammeExtendBody(_StrictBody):
+    weeks: int = Field(ge=1, le=8)
+
+
+class ProgrammeReviewBody(_StrictBody):
+    deleted_workout_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class DecisionAdjustmentBody(_StrictBody):
+    adjustment: dict[str, Any] | None = None
+
+
+class ProgrammeOverrideBody(_StrictBody):
+    kind: str = Field(min_length=1, max_length=40)
+    exercise_template_id: str = Field(default="", max_length=120)
+    value: dict[str, Any] = Field(default_factory=dict)
+    weeks: int | None = Field(default=None, ge=1, le=52)
+    ends_on: date | None = None
+    note: str = Field(default="", max_length=500)
+
+
+class DriftResolutionBody(_StrictBody):
+    routine_id: str = Field(min_length=1, max_length=120)
+    action: Literal["keep", "merge", "rebase", "replace"]
+    accept: list[str] = Field(default_factory=list, max_length=200)
+    replacement_routine_id: str | None = Field(default=None, max_length=120)
+    expected_hash: str | None = Field(default=None, max_length=128)
+    acknowledge_unsupported: bool = False
+
+
+class DriftResolveBody(_StrictBody):
+    resolutions: list[DriftResolutionBody] = Field(min_length=1, max_length=20)
+
+
+class WorkoutMatchConfirmBody(_StrictBody):
+    workout_id: str = Field(min_length=1, max_length=120)
+    routine_position: int = Field(ge=1, le=50)
+
+
+def _programme_summary(programme: Any) -> dict[str, Any]:
+    revision = programme.current_revision
+    return {
+        "id": programme.id,
+        "name": programme.name,
+        "status": programme.status,
+        "goal": programme.goal,
+        "duration_weeks": programme.duration_weeks,
+        "start_date": programme.start_date.isoformat() if programme.start_date else None,
+        "end_date": programme.end_date.isoformat() if programme.end_date else None,
+        "revision_id": revision.id if revision else None,
+        "revision_number": revision.revision_number if revision else None,
+        "revision_reason": revision.reason if revision else None,
+        "predecessor_programme_id": programme.predecessor_programme_id,
+        "activated_at": programme.activated_at,
+    }
+
+
+def _override_view(override: Any) -> dict[str, Any]:
+    return {
+        "id": override.id,
+        "programme_id": override.programme_id,
+        "kind": override.kind,
+        "exercise_template_id": override.exercise_template_id,
+        "value": override.value,
+        "starts_on": override.starts_on,
+        "ends_on": override.ends_on,
+        "status": override.status,
+        "note": override.note,
+        "created_at": override.created_at,
+        "revoked_at": override.revoked_at,
+    }
+
+
+def _domain_call(action: Any) -> Any:
+    """Run a domain operation and map its errors onto HTTP responses."""
+
+    from programme_domain import (
+        DriftConflictError,
+        ProgrammeNotFoundError,
+    )
+    from programme_domain import (
+        ProgrammeValidationError as DomainValidationError,
+    )
+
+    try:
+        return action()
+    except DriftConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProgrammeNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DomainValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _local_now(user_id: str) -> tuple[datetime, str]:
+    timezone_name = get_user_settings(user_id, DB_PATH).timezone
+    return datetime.now(tz=UTC), timezone_name
+
+
+@app.get("/api/programmes/active/state")
+def api_active_programme_state(request: Request) -> JSONResponse:
+    """The active programme, its current week, pending decisions and overrides."""
+
+    from programme_domain import (
+        AdaptationService,
+        LifecycleService,
+        ProgrammeService,
+        decision_view,
+    )
+    from programme_domain.weeks import local_date_of, week_for_date
+
+    user_id = _check_api_auth(request)
+    service = ProgrammeService(DB_PATH)
+    programme = service.get_active_programme(user_id)
+    if programme is None:
+        return JSONResponse({"programme": None, "setup_required": True})
+    now, _tz = _local_now(user_id)
+    today = local_date_of(now, get_user_settings(user_id, DB_PATH).timezone) or now.date()
+    week_number = (
+        week_for_date(programme.start_date, int(programme.duration_weeks or 0), today)
+        if programme.start_date
+        else None
+    )
+    week = (
+        _domain_call(
+            lambda: LifecycleService(DB_PATH).materialise_week(
+                user_id, programme.id, week_number, now=now
+            )
+        )
+        if week_number
+        else None
+    )
+    decisions = service.list_adaptation_decisions(user_id, programme.id)
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "programme": _programme_summary(programme),
+                "week": week,
+                "pending_decisions": [
+                    decision_view(item)
+                    for item in decisions
+                    if item.application_state == "pending_confirmation"
+                ],
+                "overrides": [
+                    _override_view(item)
+                    for item in AdaptationService(DB_PATH).list_overrides(user_id, programme.id)
+                    if item.status == "active"
+                ],
+                "revisions": [
+                    {
+                        "revision_number": item.revision_number,
+                        "reason": item.reason,
+                        "created_at": item.created_at,
+                    }
+                    for item in service.list_revision_history(user_id, programme.id)
+                ],
+            }
+        )
+    )
+
+
+@app.get("/api/programmes/{programme_id}/weeks/{week_number}")
+def api_programme_week(programme_id: int, week_number: int, request: Request) -> JSONResponse:
+    """A dated week with effective prescriptions; reading never writes."""
+
+    from programme_domain import LifecycleService
+
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    week = _domain_call(
+        lambda: LifecycleService(DB_PATH).materialise_week(
+            user_id, programme_id, week_number, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"week": week}))
+
+
+@app.get("/api/programmes/{programme_id}/next-session")
+def api_programme_next_session(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import LifecycleService, ProgrammeService
+    from programme_domain.weeks import local_date_of, week_for_date
+
+    user_id = _check_api_auth(request)
+    programme = ProgrammeService(DB_PATH).get_programme(user_id, programme_id)
+    if programme is None or programme.start_date is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    now, tz_name = _local_now(user_id)
+    today = local_date_of(now, tz_name) or now.date()
+    week_number = week_for_date(programme.start_date, int(programme.duration_weeks or 0), today)
+    if week_number is None:
+        return JSONResponse({"programme_id": programme_id, "week": None, "next_exposure": None})
+    week = _domain_call(
+        lambda: LifecycleService(DB_PATH).materialise_week(
+            user_id, programme_id, week_number, now=now
+        )
+    )
+    return JSONResponse(
+        jsonable_encoder(
+            {
+                "programme_id": programme_id,
+                "week": week_number,
+                "cadence": week["cadence"],
+                "next_exposure": week["next_exposure"],
+            }
+        )
+    )
+
+
+@app.post("/api/programmes/{programme_id}/pause")
+def api_programme_pause(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).pause(user_id, programme_id, now=now)
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/resume")
+def api_programme_resume(
+    programme_id: int, payload: ProgrammeResumeBody, request: Request
+) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).resume(
+            user_id, programme_id, now=now, extend=payload.extend
+        )
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/extend")
+def api_programme_extend(
+    programme_id: int, payload: ProgrammeExtendBody, request: Request
+) -> JSONResponse:
+    from programme_domain import LifecycleService
+
+    _check_rate_limit(request, limit=10)
+    user_id = _check_api_auth(request)
+    now, _tz = _local_now(user_id)
+    programme = _domain_call(
+        lambda: LifecycleService(DB_PATH).extend(
+            user_id, programme_id, payload.weeks, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"programme": _programme_summary(programme)}))
+
+
+@app.post("/api/programmes/{programme_id}/review")
+def api_programme_review(
+    programme_id: int, payload: ProgrammeReviewBody, request: Request
+) -> JSONResponse:
+    """Run the deterministic adaptation review now (an early review request)."""
+
+    from programme_domain import AdaptationService, ProgrammeService
+    from programme_review_runner import run_review
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    active = ProgrammeService(DB_PATH).get_active_programme(user_id)
+    if active is None or active.id != programme_id:
+        raise HTTPException(status_code=404, detail="Active programme not found for this user.")
+    now, _tz = _local_now(user_id)
+    _domain_call(lambda: AdaptationService(DB_PATH).request_review(user_id, programme_id, now=now))
+    result = _domain_call(
+        lambda: run_review(
+            user_id,
+            DB_PATH,
+            now=now,
+            deleted_workout_ids=payload.deleted_workout_ids,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"review": result.to_dict() if result else None}))
+
+
+@app.get("/api/programmes/{programme_id}/decisions")
+def api_programme_decisions(
+    programme_id: int,
+    request: Request,
+    state: str | None = None,
+    decision_type: str | None = None,
+    exercise: str | None = None,
+) -> JSONResponse:
+    from programme_domain import ProgrammeService, decision_view
+
+    user_id = _check_api_auth(request)
+    service = ProgrammeService(DB_PATH)
+    if service.get_programme(user_id, programme_id) is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    decisions = service.repository.list_adaptation_decisions(
+        user_id,
+        programme_id,
+        states=(state,) if state else None,
+        decision_types=(decision_type,) if decision_type else None,
+        exercise_template_id=exercise,
+    )
+    return JSONResponse(
+        jsonable_encoder({"decisions": [decision_view(item) for item in decisions]})
+    )
+
+
+@app.get("/api/programmes/{programme_id}/decisions/{decision_id}")
+def api_programme_decision(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    """Why a decision happened, rebuilt from its stored inputs."""
+
+    from programme_domain import ProgrammeService, decision_view
+
+    user_id = _check_api_auth(request)
+    decision = ProgrammeService(DB_PATH).get_adaptation_decision(
+        user_id, programme_id, decision_id
+    )
+    if decision is None:
+        raise HTTPException(status_code=404, detail="Decision not found for this user.")
+    return JSONResponse(jsonable_encoder({"decision": decision_view(decision)}))
+
+
+def _decision_action(
+    programme_id: int, decision_id: int, request: Request, action: str, adjustment: Any = None
+) -> JSONResponse:
+    from programme_domain import AdaptationService, decision_view
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    service = AdaptationService(DB_PATH)
+    now, _tz = _local_now(user_id)
+    if action == "confirm":
+        decision = _domain_call(
+            lambda: service.confirm(
+                user_id, programme_id, decision_id, adjustment=adjustment, now=now
+            )
+        )
+    elif action == "reject":
+        decision = _domain_call(lambda: service.reject(user_id, programme_id, decision_id))
+    elif action == "revert":
+        decision = _domain_call(lambda: service.revert(user_id, programme_id, decision_id))
+    else:
+        decision = _domain_call(
+            lambda: service.override(user_id, programme_id, decision_id, adjustment or {})
+        )
+    return JSONResponse(jsonable_encoder({"decision": decision_view(decision)}))
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/confirm")
+def api_programme_decision_confirm(
+    programme_id: int, decision_id: int, payload: DecisionAdjustmentBody, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "confirm", payload.adjustment)
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/reject")
+def api_programme_decision_reject(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "reject")
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/revert")
+def api_programme_decision_revert(
+    programme_id: int, decision_id: int, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "revert")
+
+
+@app.post("/api/programmes/{programme_id}/decisions/{decision_id}/override")
+def api_programme_decision_override(
+    programme_id: int, decision_id: int, payload: DecisionAdjustmentBody, request: Request
+) -> JSONResponse:
+    return _decision_action(programme_id, decision_id, request, "override", payload.adjustment)
+
+
+@app.get("/api/programmes/{programme_id}/overrides")
+def api_programme_overrides(programme_id: int, request: Request) -> JSONResponse:
+    from programme_domain import AdaptationService, ProgrammeService
+
+    user_id = _check_api_auth(request)
+    if ProgrammeService(DB_PATH).get_programme(user_id, programme_id) is None:
+        raise HTTPException(status_code=404, detail="Programme not found for this user.")
+    items = AdaptationService(DB_PATH).list_overrides(user_id, programme_id)
+    return JSONResponse(jsonable_encoder({"overrides": [_override_view(item) for item in items]}))
+
+
+@app.post("/api/programmes/{programme_id}/overrides")
+def api_programme_override_create(
+    programme_id: int, payload: ProgrammeOverrideBody, request: Request
+) -> JSONResponse:
+    """Record a durable pin, report, time limit or substitution for this tenant."""
+
+    from programme_domain import AdaptationService
+    from programme_domain.weeks import local_date_of
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    now, tz_name = _local_now(user_id)
+    override = _domain_call(
+        lambda: AdaptationService(DB_PATH).add_override(
+            user_id,
+            programme_id,
+            kind=payload.kind,
+            exercise_template_id=payload.exercise_template_id,
+            value=payload.value,
+            today=local_date_of(now, tz_name) or now.date(),
+            weeks=payload.weeks,
+            ends_on=payload.ends_on,
+            note=payload.note,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"override": _override_view(override)}))
+
+
+@app.post("/api/programmes/{programme_id}/overrides/{override_id}/revoke")
+def api_programme_override_revoke(
+    programme_id: int, override_id: int, request: Request
+) -> JSONResponse:
+    from programme_domain import AdaptationService
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    override = _domain_call(
+        lambda: AdaptationService(DB_PATH).revoke_override(user_id, programme_id, override_id)
+    )
+    return JSONResponse(jsonable_encoder({"override": _override_view(override)}))
+
+
+@app.post("/api/programmes/{programme_id}/workout-matches/confirm")
+def api_programme_confirm_match(
+    programme_id: int, payload: WorkoutMatchConfirmBody, request: Request
+) -> JSONResponse:
+    """Confirm or correct which routine a completed workout belonged to."""
+
+    from hevy_history import parse_cached_workouts
+    from programme_domain import AdaptationService
+
+    _check_rate_limit(request, limit=20)
+    user_id = _check_api_auth(request)
+    workouts = parse_cached_workouts(get_cached_workout_payloads(user_id, db_path=DB_PATH))
+    workout = next((item for item in workouts if item.id == payload.workout_id), None)
+    if workout is None:
+        raise HTTPException(
+            status_code=422, detail="The workout is not available in the cached history."
+        )
+    now, _tz = _local_now(user_id)
+    result = _domain_call(
+        lambda: AdaptationService(DB_PATH).confirm_match(
+            user_id, programme_id, workout, payload.routine_position, now=now
+        )
+    )
+    return JSONResponse(jsonable_encoder({"review": result.to_dict()}))
+
+
+@app.get("/api/programmes/{programme_id}/drift")
+def api_programme_drift(programme_id: int, request: Request) -> JSONResponse:
+    """Exact provider-versus-programme diff; nothing is changed or written to Hevy."""
+
+    from programme_domain import DriftService
+
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    live = serialise_hevy_source(training_data)
+    report = _domain_call(lambda: DriftService(DB_PATH).diff(user_id, programme_id, live))
+    return JSONResponse(jsonable_encoder({"drift": report}))
+
+
+@app.post("/api/programmes/{programme_id}/drift/resolve")
+def api_programme_drift_resolve(
+    programme_id: int, payload: DriftResolveBody, request: Request
+) -> JSONResponse:
+    """Keep, merge, rebase or replace; a change appends a validated revision."""
+
+    from programme_domain import DriftService, Resolution
+
+    _check_rate_limit(request, limit=5)
+    user_id = _check_api_auth(request)
+    training_data = _load_hevy_training_for_user(user_id)
+    live = serialise_hevy_source(training_data)
+    now, _tz = _local_now(user_id)
+    result = _domain_call(
+        lambda: DriftService(DB_PATH).resolve(
+            user_id,
+            programme_id,
+            live,
+            [
+                Resolution(
+                    routine_id=item.routine_id,
+                    action=item.action,
+                    accept=tuple(item.accept),
+                    replacement_routine_id=item.replacement_routine_id,
+                    expected_hash=item.expected_hash,
+                    acknowledge_unsupported=item.acknowledge_unsupported,
+                )
+                for item in payload.resolutions
+            ],
+            now=now,
+        )
+    )
+    return JSONResponse(jsonable_encoder({"result": result}))
+
+
 @app.get("/api/settings")
 def api_settings(request: Request):
     # Read-only and allowed while an account is locked for deletion: the Settings
@@ -4599,6 +5405,243 @@ def api_account_deletion_cancel(request: Request) -> JSONResponse:
     except account_deletion.DeletionError as exc:
         raise _deletion_http_error(exc) from exc
     return JSONResponse(jsonable_encoder(status))
+
+
+# ---------------------------------------------------------------------------
+# Administrative surfaces
+# ---------------------------------------------------------------------------
+#
+# Every route below resolves the actor from the signed session and checks the
+# central matrix in ``permissions`` before touching another tenant. A 403 here is
+# the authoritative denial; hiding a control in the SPA is not a security
+# boundary. Target ids are administrative identifiers only, never authorisation.
+
+
+class AdminStatusBody(BaseModel):
+    """Operator status transition for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "suspended"]
+
+
+class AdminRoleBody(BaseModel):
+    """Owner-only role assignment for another account."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["owner", "admin", "support", "user"]
+
+
+def _admin_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, AccountNotFoundError):
+        return HTTPException(status_code=404, detail="Account not found.")
+    if isinstance(exc, (PermissionDeniedError, admin_service.RoleHierarchyError)):
+        return HTTPException(status_code=403, detail="Forbidden.")
+    if isinstance(exc, admin_service.LastOwnerError):
+        return HTTPException(status_code=409, detail="The last owner cannot be removed.")
+    if isinstance(exc, admin_service.AdminValidationError):
+        return HTTPException(status_code=422, detail="Invalid administrative request.")
+    if isinstance(exc, AccountInactiveError):
+        return HTTPException(status_code=403, detail="The account is not active.")
+    if isinstance(exc, AccountError):
+        return HTTPException(status_code=400, detail="The account change was refused.")
+    if isinstance(exc, sqlite3.Error):
+        return HTTPException(status_code=503, detail="Service temporarily unavailable.")
+    return HTTPException(status_code=400, detail="The administrative request failed.")
+
+
+_ADMIN_ERRORS = (
+    AccountNotFoundError,
+    AccountInactiveError,
+    AccountError,
+    PermissionDeniedError,
+    admin_service.RoleHierarchyError,
+    admin_service.LastOwnerError,
+    admin_service.AdminValidationError,
+    sqlite3.Error,
+)
+
+
+def _check_permission(
+    request: Request,
+    permission: Permission,
+    *,
+    target_user_id: str | None = None,
+) -> str:
+    """Return the authenticated actor id after enforcing *permission*.
+
+    Authentication and the account gate come first so a suspended, closing or
+    missing account cannot reach the permission check at all. The actor id is
+    never taken from the request body.
+    """
+
+    actor_user_id = _check_api_auth(request)
+    try:
+        authorize(actor_user_id, permission, DB_PATH)
+    except PermissionDeniedError as exc:
+        _audit(
+            request,
+            AuditEventType.ADMIN_ACCESS,
+            AuditOutcome.DENIED,
+            AuditSubjectType.PERMISSION,
+            subject_id=permission.value,
+            user_id=actor_user_id,
+            metadata={
+                "permission": permission.value,
+                "target": target_user_id or "-",
+            },
+        )
+        raise HTTPException(status_code=403, detail="Forbidden.") from exc
+    _audit(
+        request,
+        AuditEventType.ADMIN_ACCESS,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id or actor_user_id,
+        user_id=actor_user_id,
+        metadata={"permission": permission.value},
+    )
+    return actor_user_id
+
+
+@app.get("/api/admin/accounts")
+def api_admin_accounts(request: Request) -> JSONResponse:
+    """List accounts for an authorised account manager."""
+    actor_user_id = _check_permission(request, Permission.ACCOUNT_MANAGEMENT)
+    accounts = admin_service.list_accounts(actor_user_id, DB_PATH)
+    return JSONResponse(
+        {"accounts": accounts}, headers={"Cache-Control": "private, no-store"}
+    )
+
+
+@app.post("/api/admin/accounts/{target_user_id}/status")
+def api_admin_account_status(
+    target_user_id: str, body: AdminStatusBody, request: Request
+) -> JSONResponse:
+    """Suspend or reactivate a lower-ranked account."""
+    actor_user_id = _check_permission(
+        request, Permission.ACCOUNT_MANAGEMENT, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_status(
+            actor_user_id, target_user_id, body.status, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:  # mapped to a stable, non-sensitive response
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.post("/api/admin/accounts/{target_user_id}/role")
+def api_admin_account_role(
+    target_user_id: str, body: AdminRoleBody, request: Request
+) -> JSONResponse:
+    """Assign an administrative role. Owner-only."""
+    actor_user_id = _check_permission(
+        request, Permission.CONFIGURATION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.set_account_role(
+            actor_user_id, target_user_id, body.role, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.PERMISSION_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.PERMISSION,
+        subject_id=body.role,
+        user_id=actor_user_id,
+        metadata={"target": target_user_id, "role": body.role},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/support")
+def api_admin_support_summary(target_user_id: str, request: Request) -> JSONResponse:
+    """Return non-secret support context for another tenant."""
+    actor_user_id = _check_permission(
+        request, Permission.SUPPORT_ACCESS, target_user_id=target_user_id
+    )
+    try:
+        summary = admin_service.support_summary(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/accounts/{target_user_id}/diagnostics")
+def api_admin_connector_diagnostics(
+    target_user_id: str, request: Request
+) -> JSONResponse:
+    """Return connector diagnostics for another tenant to a support engineer."""
+    actor_user_id = _check_permission(
+        request, Permission.CONNECTOR_DIAGNOSTICS, target_user_id=target_user_id
+    )
+    try:
+        status_code, payload = admin_service.connector_diagnostics(
+            actor_user_id, target_user_id, DB_PATH
+        )
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    return JSONResponse(
+        payload,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.get("/api/admin/accounts/{target_user_id}/export")
+def api_admin_export(target_user_id: str, request: Request) -> JSONResponse:
+    """Export a target tenant's account/programme envelope."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_EXPORT, target_user_id=target_user_id
+    )
+    try:
+        payload = admin_service.export_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_EXPORTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.DATA,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"schema_version": payload["schema_version"]},
+    )
+    return JSONResponse(payload, headers={"Cache-Control": "private, no-store"})
+
+
+@app.delete("/api/admin/accounts/{target_user_id}")
+def api_admin_delete_account(target_user_id: str, request: Request) -> JSONResponse:
+    """Tombstone a lower-ranked account and revoke its sessions."""
+    actor_user_id = _check_permission(
+        request, Permission.DATA_DELETION, target_user_id=target_user_id
+    )
+    try:
+        account = admin_service.delete_account(actor_user_id, target_user_id, DB_PATH)
+    except _ADMIN_ERRORS as exc:
+        raise _admin_http_error(exc) from exc
+    _audit(
+        request,
+        AuditEventType.DATA_DELETED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        subject_id=target_user_id,
+        user_id=actor_user_id,
+        metadata={"scope": "account_access"},
+    )
+    return JSONResponse(account, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/admin/config")
+def api_admin_config(request: Request) -> JSONResponse:
+    """Return non-secret deployment configuration to an owner."""
+    actor_user_id = _check_permission(request, Permission.CONFIGURATION)
+    summary = admin_service.configuration_summary(actor_user_id, DB_PATH)
+    return JSONResponse(summary, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/notifications")

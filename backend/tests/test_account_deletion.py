@@ -125,8 +125,8 @@ def _seed(db: str, user_id: str) -> None:
             )
         run(
             "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
-            "VALUES (?, 'https://push.example.invalid/x', 'p', 'a', ?)",
-            (user_id, stamp),
+            "VALUES (?, ?, 'p', 'a', ?)",
+            (user_id, f"https://push.example.invalid/{user_id}", stamp),
         )
         run(
             "INSERT INTO notifications (user_id, type, title, message, created_at) "
@@ -183,6 +183,12 @@ def _seed(db: str, user_id: str) -> None:
             "(user_id, programme_id, to_revision_id, rule_version, created_at) "
             "VALUES (?, ?, ?, 'test', ?)",
             (user_id, programme_id, revision_id, stamp),
+        )
+        run(
+            "INSERT INTO programme_overrides "
+            "(user_id, programme_id, kind, created_at) "
+            "VALUES (?, ?, 'pin', ?)",
+            (user_id, programme_id, stamp),
         )
         run(
             "INSERT INTO programme_decisions "
@@ -950,6 +956,16 @@ def test_straggler_sweep_removes_late_writes_for_a_just_closed_account(
                 (user_id,),
             )
 
+    # The closed account no longer exists, so the database refuses the late write
+    # outright instead of letting it resurrect data for a deleted owner.
+    with pytest.raises(sqlite3.IntegrityError, match="must reference an existing user"):
+        late_chat(a)
+    assert _row_counts(db, a) == {}
+
+    # The sweep still covers a straggler that reaches a table by a path the
+    # guard does not cover; reproduce one by lifting the guard for this test.
+    with sqlite3.connect(db) as conn:
+        conn.execute("DROP TRIGGER trg_chat_messages_owner_exists_insert")
     late_chat(a)
     before_b = _row_counts(db, b)
     assert ad.sweep_recent_tombstones(db, now=deleted_at + timedelta(minutes=1)) == 1

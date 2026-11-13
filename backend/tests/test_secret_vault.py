@@ -355,3 +355,45 @@ def test_credential_owner_and_audit_rows_are_immutable(tmp_path: Any) -> None:
                 "WHERE user_id = ?",
                 (owner,),
             )
+
+
+def test_has_usable_credential_answers_yes_or_no_and_never_the_secret(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _db(tmp_path)
+    alice = _user(db, "alice@example.test")
+    bob = _user(db, "bob@example.test")
+    vault = SecretVault(db)
+    vault.store(alice, "hevy", api_key="synthetic-alice-key-1234")
+
+    # Only the owner's own credential counts; another account's never does.
+    result = vault.has_usable_credential(alice, "hevy")
+    assert result is True
+    assert vault.has_usable_credential(bob, "hevy") is False
+    assert vault.has_usable_credential(alice, "claude") is False
+
+    # A readiness check is not a use of the credential: nothing is audited.
+    assert [e.action for e in vault.recent_events(alice)] == ["save"]
+
+    # Revoked, undecryptable and "cannot decrypt at all" are all simply False.
+    vault.store(bob, "hevy", api_key="synthetic-bob-key-5678")
+    vault.revoke(bob, "hevy")
+    assert vault.has_usable_credential(bob, "hevy") is False
+
+    monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+    assert vault.has_usable_credential(alice, "hevy") is False
+    monkeypatch.delenv("ENCRYPTION_KEY")
+    assert vault.has_usable_credential(alice, "hevy") is False
+
+
+def test_has_usable_credential_still_requires_a_real_owner_and_provider(
+    tmp_path: Any,
+) -> None:
+    from secret_vault import UnknownProviderError, UnknownUserError
+
+    vault = SecretVault(_db(tmp_path))
+    with pytest.raises(UnknownUserError):
+        vault.has_usable_credential("   ", "hevy")
+    with pytest.raises(UnknownProviderError):
+        vault.has_usable_credential("someone", "not-a-provider")

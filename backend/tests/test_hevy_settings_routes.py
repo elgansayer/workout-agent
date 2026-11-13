@@ -18,12 +18,12 @@ import pytest
 pytest.importorskip("fastapi")
 pytest.importorskip("httpx")
 
-from session_helpers import signed_session_cookie
-from starlette.testclient import TestClient
-
+import ai_provider
 import database
 import hevy_client
 from secret_vault import CredentialUnavailableError, SecretVault
+from session_helpers import signed_session_cookie
+from starlette.testclient import TestClient
 
 _SECRET = "hevy-connection-test-secret-that-is-long-enough"
 _CANDIDATE_KEY = "synthetic-hevy-key"
@@ -78,6 +78,19 @@ def _install_hevy(monkeypatch: pytest.MonkeyPatch, responses: dict[str, Any]) ->
         return responses.get(path, _FakeResponse(404, {}))
 
     monkeypatch.setattr(hevy_client.requests, "get", _get)
+
+
+class _ProbingProvider:
+    def probe(self) -> None:
+        return None
+
+
+def _install_ai_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        ai_provider,
+        "get_provider",
+        lambda *_args, **_kwargs: _ProbingProvider(),
+    )
 
 
 @pytest.fixture()
@@ -282,6 +295,7 @@ def test_ai_provider_keys_are_not_affected_by_the_hevy_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install_hevy(monkeypatch, _successful_responses())
+    _install_ai_probe(monkeypatch)
 
     response = webapp_client.post(
         "/api/settings/key",

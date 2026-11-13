@@ -28,6 +28,37 @@ part-way through schema initialization.
   reject a row without an owner, so an ownerless write fails whichever code
   path issues it. A fresh production database holds no accounts and no seed
   rows.
+- Runtime connections open with `PRAGMA foreign_keys` off, so a declared
+  `REFERENCES users(id)` is documentation, not protection. `init_db()` therefore
+  also installs (idempotently, last, after the final table rebuild) triggers that
+  enforce the same guarantees unconditionally for every user-scoped table - the
+  registry in `database.USER_OWNED_TABLES` plus `database.ACCOUNT_BOUND_TABLES`
+  (`user_sessions`, `credential_audit_events`, `record_provenance`):
+  - `trg_<table>_owner_exists_{insert,update}` - the owner must be a row of
+    `users`. A write for a closed or never-created account fails instead of
+    leaving data nobody can reach or erase.
+  - `trg_<table>_user_immutable` - once a row has an owner it cannot be given to
+    another account (taking ownership of an unowned `NULL`/empty row, as the
+    pre-account backfill does, is still allowed). The audited legacy adoption
+    flows (`legacy_ownership.apply_legacy_ownership` and
+    `tools/legacy_data_migration.py`) lift this guard together with the
+    revision `*_no_update` guards for their own transaction and recreate it
+    before commit. The append-only `credential_audit_events` and
+    `record_provenance` tables get only the insert-time existence guard because
+    their own trigger already aborts every UPDATE.
+  - `trg_<child>_<column>_same_owner_{insert,update}` - a reference from one
+    owner-scoped row to another (a revision's programme, a routine's revision,
+    a match's programme, ...) must point at a row with the **same** `user_id`.
+    The reference list is read from the live foreign keys by
+    `database.owned_references()` plus the few undeclared integer references in
+    `database._UNDECLARED_OWNED_REFERENCES`, so a new relationship between owned
+    tables is covered without editing a list. A nullable reference may stay
+    unset. The guard fires on INSERT and when the reference column changes; a
+    legacy adoption that only changes `user_id` does not trigger it.
+  The deletion-ledger tables (`account_deletion_requests`, `account_tombstones`)
+  and `security_audit_events` are deliberately outside this set: they must
+  outlive, or describe attempts without, an account. `user_identities` has its own
+  equivalent triggers.
 - The only non-additive step is assigning legacy rows to the verified owner. It
   is a single transaction guarded by a plan digest and a backup attestation;
   rollback is a restore of the pre-assignment backup.
@@ -100,12 +131,24 @@ additive and idempotent, and both covered by
 See `docs/ACCOUNT_ACCESS_POLICY.md` for the behaviour these columns and tables
 drive.
 
+## Push-subscription ownership
+
+A web-push endpoint identifies one browser profile, so it belongs to one account at a time; otherwise a notification for the account that left a shared device would still be delivered to whoever signs in there next. `init_db()` removes any repeated endpoint, keeping the newest registration (the account that most recently took the device), and then creates the unique index `idx_push_subscriptions_endpoint`. Both steps run only while the index is absent, so the migration is idempotent and later starts do not touch the table. `save_push_subscription` hands the device to the registering account by deleting every registration of that endpoint in the same transaction before inserting its own.
+
+Rollback: the index is additive. Dropping it restores the previous behaviour, but the duplicate rows removed on upgrade are not recoverable; each was a registration for a browser another account had since taken. `backend/tests/test_push_subscription_ownership.py` covers the hand-over, the database constraint and the upgrade of a database that already holds repeated endpoints.
+
 ## Regression coverage
 
 The user-model migration, tenant policy and ownership assignment are covered by
 `backend/tests/test_user_model.py`, `test_accounts.py`, `test_legacy_ownership.py`,
 `test_tenancy.py`, `test_manage_accounts.py` and `test_webapp_accounts.py`
 (see `docs/USER_MODEL.md`).
+
+`backend/tests/test_owner_integrity.py` proves, for every table in the two
+registries and with the connection opened exactly as the runtime opens it, that
+each has a non-null owner, a user-first index and the three integrity guards
+above, that they hold on every write path, and that a new `user_id` table must be
+classified. `backend/tests/owned_rows.py` builds valid parent/child rows for it.
 
 `backend/tests/test_database.py` contains three complementary checks:
 

@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
-
 from database import (
     get_exercise_baselines,
     get_routine_match_overrides,
@@ -41,6 +40,7 @@ from hevy_reader import (
     RoutineExercise,
     WorkoutExercise,
 )
+from owned_rows import ensure_users
 
 
 def _template(
@@ -555,6 +555,7 @@ def _db(tmp_path: Any) -> str:
 
 def test_snapshots_matches_overrides_and_baselines_round_trip(tmp_path: Any) -> None:
     db = _db(tmp_path)
+    ensure_users(db, "user-a", "user-b")
     data = _base_data(
         [
             _workout(

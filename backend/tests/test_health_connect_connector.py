@@ -1,5 +1,4 @@
 import pytest
-
 from connectors import ConnectorContext, ConnectorError
 from connectors.health_connect import HealthConnectConnector
 

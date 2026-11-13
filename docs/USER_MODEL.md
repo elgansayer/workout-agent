@@ -18,6 +18,7 @@ An account is a row in `users`:
 | `email` | Mutable attribute, never a key. Unique case-insensitively (`idx_users_email_lower`). |
 | `created_at` | **Immutable** (`trg_users_created_at_immutable`). |
 | `status` | Lifecycle state, constrained to the values below. |
+| `role` | Administrative role: `owner`, `admin`, `support` or `user`. Defaults to `user`; see `docs/ROLE_PERMISSIONS.md`. |
 | `status_changed_at`, `updated_at` | Timestamps maintained on every status change / login. |
 | `last_login_at` | Set by a successful verified sign-in. |
 
@@ -241,6 +242,7 @@ the schema is current. Refusals exit with status 1 and a message on stderr.
   backend/tests/test_user_model.py backend/tests/test_accounts.py \
   backend/tests/test_legacy_ownership.py backend/tests/test_tenancy.py \
   backend/tests/test_manage_accounts.py backend/tests/test_webapp_accounts.py \
+  backend/tests/test_permissions.py backend/tests/test_admin_api.py \
   backend/tests/test_database.py
 ```
 
@@ -252,12 +254,14 @@ the schema is current. Refusals exit with status 1 and a message on stderr.
 | `test_tenancy.py` | The production/local tenant policy. |
 | `test_manage_accounts.py` | The operator CLI end to end, including refusals and exit codes. |
 | `test_webapp_accounts.py` | `/auth` binding, per-request account checks, no anonymous fallback in production. |
+| `test_permissions.py` | Role vocabulary, the central matrix, current-role resolution, immediate revocation on role change and promotion guards. |
+| `test_admin_api.py` | Server-side denial for ordinary/support users and the owner/admin positive paths across every administrative route. |
 
 ## Boundaries of this change
 
 This delivers the account schema, identity binding, tenant resolution and the
-verified legacy-data assignment. It does not add registration policy, session
-rotation/expiry, roles, invitations, recovery flows or account deletion; those
-build on the `active`/`suspended`/`deleted` lifecycle and `user_identities` defined
-here. The diagnostics endpoint validates the session shape but, unlike
-`_check_api_auth`, does not yet re-check account status.
+verified legacy-data assignment. Administrative roles build on this schema in
+`docs/ROLE_PERMISSIONS.md`; tenant ownership remains independent of role. It does
+not add registration policy, session rotation/expiry, recovery flows or account
+data erasure; those build on the `active`/`suspended`/`deleted` lifecycle and
+`user_identities` defined here.

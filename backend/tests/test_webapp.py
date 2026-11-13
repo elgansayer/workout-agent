@@ -191,6 +191,143 @@ def test_rag_search_uses_resolve_provider(client: Any, monkeypatch: Any) -> None
     assert len(captured) == 1
 
 
+def _sse_events(text: str) -> list[tuple[str, Any]]:
+    events: list[tuple[str, Any]] = []
+    for block in text.split("\n\n"):
+        event = None
+        data_lines: list[str] = []
+        for line in block.splitlines():
+            if line.startswith("event:"):
+                event = line[len("event:") :].strip()
+            elif line.startswith("data:"):
+                data_lines.append(line[len("data:") :].strip())
+        if event and data_lines:
+            events.append((event, json.loads("\n".join(data_lines))))
+    return events
+
+
+def test_rag_search_evidence_is_tenant_and_window_scoped(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """Retrieval never includes another user's or out-of-window records."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+    import webapp.app as app_module
+    from database import (
+        get_legacy_user_id,
+        get_or_create_user,
+        save_daily_log,
+        save_progress,
+    )
+
+    db_path = app_module.DB_PATH
+    legacy_user = get_legacy_user_id(db_path)
+    other_user = str(
+        get_or_create_user("other-user@example.test", "Other", db_path=db_path)["id"]
+    )
+    save_daily_log(
+        "2026-03-10",
+        1,
+        "Other user secret focus",
+        "high",
+        "plan",
+        "life",
+        db_path,
+        user_id=other_user,
+    )
+    save_progress(
+        WorkoutSummary(
+            "Other",
+            "2026-03-11",
+            3600,
+            1000.0,
+            [ExerciseSummary("OtherUserLift", 200.0, 5, 3)],
+        ),
+        db_path,
+        user_id=other_user,
+    )
+    save_daily_log(
+        "2025-12-01",
+        1,
+        "Outside requested window",
+        "low",
+        "plan",
+        "life",
+        db_path,
+        user_id=legacy_user,
+    )
+
+    class _FakeProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            assert stream is True
+            return iter(["Deadlift is progressing [E1]. Invented source [E9]."])
+
+    monkeypatch.setattr(
+        "webapp.app.resolve_provider",
+        lambda user_id=None, **kw: _FakeProvider(),
+    )
+    from config import Config
+
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    response = client.get("/api/rag_search?q=deadlift&start=2026-03-01&end=2026-03-31")
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    evidence = next(data for event, data in events if event == "evidence")
+    summaries = " ".join(item["summary"] for item in evidence["items"])
+    dates = {item["date"] for item in evidence["items"]}
+    assert "Other user secret focus" not in summaries
+    assert "OtherUserLift" not in summaries
+    assert "2025-12-01" not in dates
+    assert "2026-03-02" in dates
+    assert all(item["record_id"].startswith(f"{item['source']}:") for item in evidence["items"])
+
+    deltas = "".join(data.get("text", "") for event, data in events if event == "delta")
+    status = next(data for event, data in events if event == "status")
+    assert "[E1]" in deltas
+    assert "[E9]" not in deltas
+    assert status["grounding"] == "observed"
+    assert status["cited"] == ["E1"]
+
+
+def test_rag_search_rejects_invalid_time_window(client: Any) -> None:
+    response = client.get("/api/rag_search?q=test&start=2026-03-31&end=2026-03-01")
+    assert response.status_code == 400
+
+    response = client.get("/api/rag_search?q=test&start=not-a-date")
+    assert response.status_code == 400
+
+
+def test_rag_search_handles_extreme_window_bound_without_overflow(
+    client: Any,
+    monkeypatch: Any,
+) -> None:
+    """A minimum-date end must not raise an unhandled date-underflow error."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
+
+    class _FakeProvider:
+        def generate(self, prompt: Any, *, stream: bool = False) -> Any:
+            return iter(["No matching records."])
+
+    monkeypatch.setattr(
+        "webapp.app.resolve_provider",
+        lambda user_id=None, **kw: _FakeProvider(),
+    )
+    from config import Config
+
+    monkeypatch.setattr("webapp.app.get_config", lambda: Config.load())
+
+    response = client.get("/api/rag_search?q=test&end=0001-01-01")
+
+    assert response.status_code == 200
+    events = _sse_events(response.text)
+    evidence = next(data for event, data in events if event == "evidence")
+    assert evidence["items"] == []
+    assert evidence["window_start"] == "0001-01-01"
+    assert evidence["window_end"] == "0001-01-01"
+
+
 def test_rag_search_rate_limited(client: Any, monkeypatch: Any) -> None:
     """Repeated RAG search requests hit the rate limiter."""
     monkeypatch.setenv("GEMINI_API_KEY", "test-gem-key")
@@ -338,7 +475,7 @@ def test_rag_search_uses_selected_encrypted_claude_key(
         "claude",
         {
             "class": _build_claude,
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-5-5",
         },
     )
 
@@ -351,7 +488,9 @@ def test_rag_search_uses_selected_encrypted_claude_key(
     response = client.get("/api/rag_search?q=synthetic+question")
 
     assert response.status_code == 200
-    assert response.text == "Claude response"
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert "event: evidence" in response.text
+    assert "Claude response" in response.text
     assert constructed == [(synthetic_key, "claude-synthetic-model")]
     assert scoped_users == [user_id]
 
@@ -808,10 +947,23 @@ def test_settings_credential_lifecycle_is_masked_and_audited(
 ) -> None:
     """Save/test/rotate/revoke/delete never echo the submitted secret."""
     import webapp.app as app_module
+    from ai_connection import ConnectionCheck
     from cryptography.fernet import Fernet
     from database import get_legacy_user_id
     from secret_vault import CredentialUnavailableError, SecretVault, VerificationResult
 
+    async def _ok_check(user_id: str, provider: str, model: str, api_key: str) -> ConnectionCheck:
+        return ConnectionCheck(
+            provider=provider,
+            model=model,
+            ok=True,
+            code="ok",
+            message="Connected.",
+            retryable=False,
+            checked_at="2026-11-12T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(app_module, "_check_ai_connection", _ok_check)
     monkeypatch.setenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
     user_id = get_legacy_user_id(app_module.DB_PATH)
     original = "synthetic-claude-key-1234"
@@ -904,9 +1056,22 @@ def test_settings_credential_save_fails_closed_without_encryption_key(
 ) -> None:
     """No ENCRYPTION_KEY means no credential can be stored or read."""
     import webapp.app as app_module
+    from ai_connection import ConnectionCheck
     from database import get_legacy_user_id
     from fastapi import HTTPException
 
+    async def _ok_check(user_id: str, provider: str, model: str, api_key: str) -> ConnectionCheck:
+        return ConnectionCheck(
+            provider=provider,
+            model=model,
+            ok=True,
+            code="ok",
+            message="Connected.",
+            retryable=False,
+            checked_at="2026-11-12T00:00:00+00:00",
+        )
+
+    monkeypatch.setattr(app_module, "_check_ai_connection", _ok_check)
     monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
     secret = "synthetic-never-stored-key"
     user_id = get_legacy_user_id(app_module.DB_PATH)

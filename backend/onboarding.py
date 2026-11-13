@@ -199,10 +199,12 @@ def _preferences_saved(user_id: str, db_path: str) -> bool:
 
 
 def _hevy_connected(user_id: str, db_path: str) -> bool:
-    from database import get_user_api_keys
+    from secret_vault import SecretVault, VaultError
 
-    keys = get_user_api_keys(user_id, db_path=db_path)
-    return bool(str((keys.get("hevy") or {}).get("api_key") or "").strip())
+    try:
+        return SecretVault(db_path).has_usable_credential(user_id, "hevy")
+    except VaultError:
+        return False
 
 
 def _health_connected(user_id: str, db_path: str) -> bool:

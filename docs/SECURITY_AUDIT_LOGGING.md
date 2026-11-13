@@ -38,17 +38,15 @@ id**, an **outcome**, a **severity** and flat **safe metadata**.
 | Connector changes | `connector.connected`, `connector.disconnected`, `connector.sync`, `connector.test` | Hevy key save/delete, `POST /api/settings/verify-hevy`, `POST /api/settings/sync-history`, Google Health `callback` and `disconnect` |
 | Deletion | `data.deleted` | `POST /api/chat/clear`, the only user-data deletion the product exposes today (there is no account or health-data deletion flow yet) |
 | Permission changes | `permission.changed` | `POST /api/settings/push-subscribe` (notification-delivery permission granted) and `POST /api/settings/preferences` when the selected AI provider, which decides who receives coaching context, actually changes |
-| Export | `data.exported` | **No production surface exists yet.** |
-| Admin access | `admin.access` | **No production surface exists yet.** |
+| Export | `data.exported` | `GET /api/admin/accounts/{id}/export` after `data.export` is authorised. |
+| Admin access | `admin.access` | Every authorised or denied `/api/admin/*` permission check. Role changes also emit `permission.changed`. |
 
-Export and admin access are part of the vocabulary and of the alert rules (see
-below), and `record_and_evaluate` records them with the same guarantees, but the
-application currently exposes no export endpoint and no administrative role or
-console. `health_export.HealthExport` and `training_export.ExportedWorkout` are
-validation envelopes with no caller, and `health_delete` is likewise unwired.
-Whoever adds the first such route **must** call `record_and_evaluate` for it
-(including a `denied` event when the tenant/approval check fails) in the same
-change. Do not invent a route solely to emit these events.
+Export and admin access now have production surfaces behind the central matrix in
+`docs/ROLE_PERMISSIONS.md`. A denied permission check records `admin.access` /
+`denied` with the closed-vocabulary permission name and opaque account ids, never
+the target's address or data. `health_export.HealthExport` and
+`training_export.ExportedWorkout` remain validation envelopes with no caller,
+and `health_delete` is still unwired.
 
 Requests rejected before a route runs (authentication boundary, CSRF, owner-claim
 mismatch, rate limit) are not audited: they never reach an action, and recording
