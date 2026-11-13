@@ -155,6 +155,7 @@ ACCOUNT_BOUND_TABLES = (
     "user_sessions",
     "credential_audit_events",
     "record_provenance",
+    "account_action_tokens",
 )
 
 # Account-bound tables whose rows are never updated (their own trigger aborts
@@ -347,14 +348,6 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
                 UNIQUE(user_id, programme_id, workout_id)
             )
             """,
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
-            "ON routine_workout_matches (user_id, routine_snapshot_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
-            "ON routine_workout_matches (user_id, confidence)"
         )
         cursor.execute(
             """
@@ -1450,6 +1443,14 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
             "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_programme "
             "ON routine_workout_matches (user_id, programme_id, id)"
         )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_routine "
+            "ON routine_workout_matches (user_id, routine_snapshot_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_routine_workout_matches_user_confidence "
+            "ON routine_workout_matches (user_id, confidence)"
+        )
         # Recreate unique constraints as named indexes so partially upgraded
         # databases get the same conflict targets as fresh databases.
         cursor.execute(
@@ -1880,6 +1881,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Server-side registry behind the browser session cookie (issue #752).
         ensure_user_sessions_schema(conn)
+
+        # Single-use recovery and verified e-mail change tokens (issue #781).
+        from account_recovery import ensure_schema as ensure_account_action_schema
+
+        ensure_account_action_schema(conn)
 
         # Additive canonical health schema. Created before the owner guards so
         # every tenant-scoped health table is covered by them.

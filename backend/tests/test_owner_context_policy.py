@@ -29,6 +29,20 @@ from tenant_isolation import (
 BACKEND = Path(__file__).resolve().parents[1]
 _SKIPPED_DIRS = {"tests", "__pycache__"}
 
+#: Administrative handlers deliberately name another tenant as their target. They
+#: enforce an explicit ``Permission`` before using it; ``test_admin_api.py``
+#: proves an ordinary account is refused.
+_ADMIN_TARGET_HANDLERS = frozenset(
+    {
+        "api_admin_account_status",
+        "api_admin_account_role",
+        "api_admin_support_summary",
+        "api_admin_connector_diagnostics",
+        "api_admin_export",
+        "api_admin_delete_account",
+    }
+)
+
 #: Identifiers that name an account. A client must never be able to send one.
 OWNER_FIELD_NAMES = frozenset(
     {
@@ -177,6 +191,8 @@ def test_no_route_parameter_lets_a_client_choose_the_owner() -> None:
         for handler in _route_handlers(tree):
             seen += 1
             arguments = handler.args
+            if handler.name in _ADMIN_TARGET_HANDLERS:
+                continue
             for arg in (*arguments.args, *arguments.kwonlyargs):
                 if arg.arg in OWNER_FIELD_NAMES:
                     offenders.append(f"{path.name}:{handler.lineno} {handler.name}({arg.arg})")

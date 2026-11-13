@@ -143,6 +143,8 @@ Who may sign in to a deployment is decided by the server, not by the UI: `ALLOWE
 
 Browser sessions use a `Secure`, `HttpOnly`, `SameSite=Lax`, host-only cookie backed by a server-side registry, so they expire after an idle and an absolute limit (`SESSION_IDLE_TIMEOUT_SECONDS`, `SESSION_ABSOLUTE_TIMEOUT_SECONDS`), rotate at every sign-in, and can be revoked per device or for all devices. See [Session security](docs/SESSION_SECURITY.md).
 
+Account recovery and contact-e-mail changes use short-lived, single-use, hashed tokens with rate limits and previous-address alerts. SMTP delivery is configured with `WEB_SMTP_*`; see [Account recovery](docs/ACCOUNT_RECOVERY.md).
+
 ## Health and workout examples
 
 When documentation needs a payload, use obviously synthetic values and mark the example. For example:

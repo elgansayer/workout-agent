@@ -95,12 +95,30 @@ def _config(world: tm.World) -> Config:
     )
 
 
-def _assert_outbound_is_only(world: tm.World, caller: str) -> None:
-    """Everything sent to a model or to Hevy used the caller's key and data only."""
+def _assert_outbound_is_only(
+    world: tm.World, caller: str, *, provided: set[str] | None = None
+) -> None:
+    """Everything sent to a model or to Hevy used the caller's key and data only.
+
+    ``provided`` holds credentials the caller supplied in this request (for
+    example a candidate key being verified before it is stored). They belong to
+    the caller by construction, never to the other account.
+    """
     own, other = world.canaries(caller), world.canaries(world.other(caller))
-    assert world.outbound.credentials() <= set(own.secrets()), "a call used another key"
+    supplied = provided or set()
+    assert not supplied & set(other.secrets()), "a request carried another account's key"
+    allowed = set(own.secrets()) | supplied
+    assert world.outbound.credentials() <= allowed, "a call used another key"
     leaked = [c for c in other.all() if c in world.outbound.text()]
     assert not leaked, f"a prompt carried another account's data: {leaked}"
+
+
+def _submitted_keys(attack: tm.Attack) -> set[str]:
+    """A credential the caller included in the request body, if any."""
+    if not isinstance(attack.body, dict):
+        return set()
+    value = attack.body.get("api_key")
+    return {value} if isinstance(value, str) and value else set()
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +232,7 @@ def test_change_never_reaches_another_accounts_data(
     assert not world.leaked(world.alice, echoed), f"{attack.id} leaked to Bob"
     assert not any(secret in echoed for secret in tm.BOB.secrets())
     assert world.snapshot(world.alice) == before, f"{attack.id} changed Alice's data"
-    _assert_outbound_is_only(world, world.bob)
+    _assert_outbound_is_only(world, world.bob, provided=_submitted_keys(attack))
     if attack.names_object:
         # Alice's object answers exactly like one that never existed.
         missing = _send(bob, world, attack, missing=True)
@@ -239,7 +257,7 @@ def test_change_never_reaches_another_accounts_data(
         )
     if attack.owner_key_used is not None:
         assert attack.owner_key_used(tm.ALICE) in world.outbound.credentials()
-    _assert_outbound_is_only(world, world.alice)
+    _assert_outbound_is_only(world, world.alice, provided=_submitted_keys(attack))
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +403,7 @@ def test_connector_sync_uses_and_rotates_only_the_owners_token(
 
 #: Every outbound ``send_*`` function in production code, and what it delivers.
 CHANNELS = {
+    "email_delivery.send_email": "SMTP, to the account's own verified or pending address",
     "push_notifier.send_push_notification": "web push, to the owner's registered devices",
     "telegram_notifier.send_telegram_message": "not wired into any production caller",
 }
@@ -463,6 +482,45 @@ def test_every_outbound_sender_is_a_known_channel() -> None:
     )
 
 
+def test_account_action_email_reaches_only_the_named_account(
+    world: tm.World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery and address-change mail leaves for the named owner, never a neighbour."""
+    import account_recovery
+
+    delivered: list[tuple[str, str, str]] = []
+
+    def record(to: str, subject: str, body: str) -> None:
+        delivered.append((to, subject, body))
+
+    monkeypatch.setattr("email_delivery.send_email", record)
+    for user in (world.alice, world.bob):
+        canary = world.canaries(user)
+        delivered.clear()
+        assert account_recovery.request_recovery(
+            email=canary.email,
+            source=f"matrix-{user}",
+            db_path=world.db,
+        )
+        assert {to for to, _subject, _body in delivered} == {canary.email}
+        assert not world.leaked(
+            world.other(user), " ".join(body for _to, _subject, body in delivered)
+        )
+
+        delivered.clear()
+        target = f"new-{canary.marker.lower()}@example.test"
+        account_recovery.request_email_change(
+            user_id=user,
+            new_email=target,
+            authenticated_at=datetime.now(tz=timezone.utc),
+            db_path=world.db,
+        )
+        assert {to for to, _subject, _body in delivered} == {target, canary.email}
+        assert not world.leaked(
+            world.other(user), " ".join(body for _to, _subject, body in delivered)
+        )
+
+
 # ---------------------------------------------------------------------------
 # Export: what leaves the system leaves under the owner's credential, for the owner
 # ---------------------------------------------------------------------------
@@ -500,7 +558,8 @@ def test_no_export_route_exists_without_a_probe(world: tm.World) -> None:
     exporting = [
         f"{method} {path}"
         for method, path in tm.discover_routes(world.module.app)
-        if "export" in path.lower() or "download" in path.lower()
+        if ("export" in path.lower() or "download" in path.lower())
+        and (method, path) not in _ATTACKED
     ]
     assert not exporting, f"register an export probe for: {exporting}"
 
@@ -559,6 +618,11 @@ def build_cells() -> list[Cell]:
             "receive",
             "model prompts",
             "test_model_prompts_carry_only_the_requesting_accounts_data",
+        ),
+        Cell(
+            "receive",
+            "account recovery and e-mail change messages",
+            "test_account_action_email_reaches_only_the_named_account",
         ),
         Cell(
             "export",

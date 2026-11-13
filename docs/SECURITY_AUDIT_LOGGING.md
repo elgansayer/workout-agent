@@ -38,6 +38,10 @@ id**, an **outcome**, a **severity** and flat **safe metadata**.
 | Connector changes | `connector.connected`, `connector.disconnected`, `connector.sync`, `connector.test` | Hevy key save/delete, `POST /api/settings/verify-hevy`, `POST /api/settings/sync-history`, Google Health `callback` and `disconnect` |
 | Deletion | `data.deleted` | `POST /api/chat/clear`, the only user-data deletion the product exposes today (there is no account or health-data deletion flow yet) |
 | Permission changes | `permission.changed` | `POST /api/settings/push-subscribe` (notification-delivery permission granted) and `POST /api/settings/preferences` when the selected AI provider, which decides who receives coaching context, actually changes |
+| Recovery requested | `account.recovery_requested` | `POST /api/auth/recovery/request`. Metadata records only whether a token was issued; the address is never stored. |
+| Recovery completed | `account.recovered` | `POST /api/auth/recovery/complete`: success, or denied for an invalid/expired/replayed token. |
+| E-mail change requested | `account.email_change_requested` | `POST /api/account/email/change-request` after the verification and previous-address warning are queued. |
+| E-mail changed | `account.email_changed` | `POST /api/account/email/confirm`: success, or denied for an invalid/expired/replayed token. |
 | Export | `data.exported` | `GET /api/admin/accounts/{id}/export` after `data.export` is authorised. |
 | Admin access | `admin.access` | Every authorised or denied `/api/admin/*` permission check. Role changes also emit `permission.changed`. |
 

@@ -205,3 +205,67 @@ describe('UserProfile active sessions', () => {
     http.expectOne('/api/sessions').flush(sessionResponse);
   });
 });
+
+describe('UserProfile e-mail change', () => {
+  let http: HttpTestingController;
+
+  beforeEach(async () => {
+    await TestBed.configureTestingModule({
+      imports: [UserProfile],
+      providers: [
+        { provide: Auth, useValue: authMock() },
+        provideHttpClient(),
+        provideHttpClientTesting(),
+      ],
+    }).compileComponents();
+    http = TestBed.inject(HttpTestingController);
+  });
+
+  afterEach(() => http.verify());
+
+  async function loadProfile() {
+    const fixture = TestBed.createComponent(UserProfile);
+    fixture.detectChanges();
+    http.expectOne('/api/sessions').flush(emptySessions);
+    await fixture.whenStable();
+    fixture.detectChanges();
+    return fixture;
+  }
+
+  it('starts a verified change for the entered address', async () => {
+    const fixture = await loadProfile();
+    const element = fixture.nativeElement as HTMLElement;
+    const input = element.querySelector('#new-email') as HTMLInputElement;
+    input.value = 'new-address@example.test';
+    input.dispatchEvent(new Event('input'));
+    fixture.detectChanges();
+
+    const form = element.querySelector('form') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit'));
+    const request = http.expectOne('/api/account/email/change-request');
+    expect(request.request.method).toBe('POST');
+    expect(request.request.body).toEqual({ new_email: 'new-address@example.test' });
+    request.flush({ status: 'pending', message: 'Check the new address.' });
+    fixture.detectChanges();
+
+    expect(element.textContent).toContain('Check the new address.');
+  });
+
+  it('shows the server reason when recent authentication is required', async () => {
+    const fixture = await loadProfile();
+    const element = fixture.nativeElement as HTMLElement;
+    const input = element.querySelector('#new-email') as HTMLInputElement;
+    input.value = 'new-address@example.test';
+    input.dispatchEvent(new Event('input'));
+
+    (element.querySelector('form') as HTMLFormElement).dispatchEvent(new Event('submit'));
+    const request = http.expectOne('/api/account/email/change-request');
+    request.flush(
+      { detail: 'Sign in again before changing the account e-mail address.' },
+      { status: 403, statusText: 'Forbidden' },
+    );
+    fixture.detectChanges();
+
+    expect(element.querySelector('[role="alert"]')?.textContent).toContain('Sign in again');
+  });
+});

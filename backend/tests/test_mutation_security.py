@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.middleware.sessions import SessionMiddleware
-from webapp.mutation_security import MutationSecurityMiddleware
+from webapp.mutation_security import PUBLIC_MUTATION_PATHS, MutationSecurityMiddleware
 
 _SECRET = "mutation-security-test-secret-that-is-long-enough"
 _MUTATION_PATHS = (
@@ -249,6 +249,8 @@ def test_real_application_has_no_anonymous_mutation_escape_hatch(
     failures: list[str] = []
     with TestClient(actual_anonymous_app) as client:
         for route, method in mutation_routes:
+            if route.path in PUBLIC_MUTATION_PATHS:
+                continue
             response = client.request(
                 method,
                 _representative_path(route.path),
@@ -259,3 +261,12 @@ def test_real_application_has_no_anonymous_mutation_escape_hatch(
                     f"{method} {route.path} -> {response.status_code}; expected 401"
                 )
     assert not failures, "\n".join(failures)
+
+
+def test_only_the_explicit_recovery_routes_are_anonymous_mutations() -> None:
+    assert PUBLIC_MUTATION_PATHS == {
+        "/api/auth/recovery/request",
+        "/api/auth/recovery/complete",
+        "/api/account/email/confirm",
+    }
+    assert not any("*" in path or path.endswith("/") for path in PUBLIC_MUTATION_PATHS)

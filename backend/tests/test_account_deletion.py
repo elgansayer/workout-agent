@@ -250,6 +250,12 @@ def _seed(db: str, user_id: str) -> None:
             (f"token-{user_id}", user_id),
         )
         run(
+            "INSERT INTO account_action_tokens "
+            "(token_hash, user_id, purpose, target_email, created_at, expires_at) "
+            "VALUES (?, ?, 'recovery', 'synthetic@example.test', 1, 9999999999)",
+            (f"action-token-{user_id}", user_id),
+        )
+        run(
             "INSERT INTO health_connections (id, user_id, provider, state) "
             "VALUES (?, ?, 'oura', 'connected')",
             (f"conn-{user_id}", user_id),

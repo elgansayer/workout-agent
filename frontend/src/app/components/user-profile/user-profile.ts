@@ -25,6 +25,11 @@ export class UserProfile implements OnInit {
   signingOutEverywhere = signal(false);
   error = signal<string | null>(null);
 
+  newEmail = signal('');
+  emailBusy = signal(false);
+  emailError = signal<string | null>(null);
+  emailStatus = signal<string | null>(null);
+
   sessions = signal<ActiveSession[]>([]);
   sessionsLoading = signal<boolean>(true);
   sessionsError = signal<string | null>(null);
@@ -66,6 +71,37 @@ export class UserProfile implements OnInit {
       },
       error: () => this.sessionStatus.set('Could not revoke that session. Try again.'),
     });
+  }
+
+  updateNewEmail(value: string): void {
+    this.newEmail.set(value);
+  }
+
+  requestEmailChange(): void {
+    if (this.emailBusy()) return;
+    this.emailBusy.set(true);
+    this.emailError.set(null);
+    this.emailStatus.set(null);
+    this.http
+      .post<{ message?: string }>('/api/account/email/change-request', {
+        new_email: this.newEmail().trim(),
+      })
+      .subscribe({
+        next: (response) => {
+          this.emailBusy.set(false);
+          this.emailStatus.set(
+            response.message ?? 'Check the new address for a verification link.',
+          );
+          this.newEmail.set('');
+        },
+        error: (error) => {
+          this.emailBusy.set(false);
+          const detail = error?.error?.detail;
+          this.emailError.set(
+            typeof detail === 'string' ? detail : 'Could not start the e-mail change. Try again.',
+          );
+        },
+      });
   }
 
   revokeOtherSessions() {

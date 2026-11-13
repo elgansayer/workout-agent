@@ -33,11 +33,18 @@ from pathlib import Path
 from typing import Any, Literal
 
 import account_deletion
+import account_recovery
 import admin_service
 import analytics
+import email_delivery
 import insights
 import lifestyle
-from account_policy import SESSION_EPOCH_KEY, AccessPolicy, AccessPolicyConfig
+from account_policy import (
+    SESSION_EPOCH_KEY,
+    AccessPolicy,
+    AccessPolicyConfig,
+    canonical_email,
+)
 from accounts import (
     AccountError,
     AccountInactiveError,
@@ -85,6 +92,7 @@ from database import (
     correct_body_metrics,
     delete_hevy_connection,
     delete_notification,
+    get_account_state,
     get_active_programme,
     get_body_metrics,
     get_cached_workout_payloads,
@@ -174,17 +182,17 @@ from localisation import (
     spelling_for,
     weight_unit,
 )
-from permissions import (
-    Permission,
-    PermissionDeniedError,
-    authorize,
-    permissions_for_user,
-)
 from onboarding import (
     OnboardingError,
     build_onboarding,
     resume_step,
     skip_step,
+)
+from permissions import (
+    Permission,
+    PermissionDeniedError,
+    authorize,
+    permissions_for_user,
 )
 from programme_service import (
     ProgrammeConflictError,
@@ -236,6 +244,7 @@ from session_registry import (
     revoke_other_sessions,
     revoke_session,
     rotate_session,
+    session_authenticated_at,
 )
 from setup_state import (
     AccountSetup,
@@ -462,10 +471,11 @@ def _rate_limit_key(request: Request) -> str:
             logger.warning("Throttling a malformed session identity by address.")
 
     forwarded = request.headers.get("x-forwarded-for")
+    real_ip = request.headers.get("x-real-ip")
     if forwarded:
         ip = forwarded.split(",")[0].strip()
-    elif request.headers.get("x-real-ip"):
-        ip = request.headers.get("x-real-ip").strip()  # type: ignore[union-attr]
+    elif real_ip:
+        ip = real_ip.strip()
     else:
         ip = request.client.host if request.client else "unknown"
     return f"rate-limit-ip:{ip}"
@@ -788,6 +798,10 @@ if WEB_AUTH_SECRET and WEB_GOOGLE_CLIENT_ID:
                     "/login/google",
                     "/logout",
                     "/auth",
+                    "/recover",
+                    "/api/auth/recovery/request",
+                    "/api/auth/recovery/complete",
+                    "/api/account/email/confirm",
                     
                     "/favicon.ico",
                     "/sw.js",
@@ -886,6 +900,232 @@ def api_logout_all(request: Request) -> dict[str, Any]:
     user_id = _check_api_auth(request)
     revoked = SESSION_LIFECYCLE.end_all(request.session, user_id)
     return {"status": "ok", "revoked": revoked}
+
+
+class _RecoveryRequest(BaseModel):
+    """The address a recovery message is requested for."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    email: str = Field(default="", max_length=320)
+
+
+class _RecoveryToken(BaseModel):
+    """A single-use token returned from a recovery or change message."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: str = Field(default="", max_length=512)
+
+
+class _EmailChangeRequest(BaseModel):
+    """The new contact address to verify before applying."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    new_email: str = Field(default="", max_length=320)
+
+
+def _public_base_url(request: Request) -> str:
+    """Return the canonical origin used in single-use action links."""
+
+    configured = os.environ.get("WEB_PUBLIC_URL", "").strip().rstrip("/")
+    return configured or str(request.base_url).rstrip("/")
+
+
+@app.post("/api/auth/recovery/request")
+async def api_recovery_request(
+    body: _RecoveryRequest, request: Request
+) -> JSONResponse:
+    """Start account recovery without revealing whether an address exists.
+
+    Every well-formed request receives the same accepted response, whether the
+    address is unknown, inactive, rate limited, or the message could not be
+    delivered. Delivery failures are logged for operators, never reflected to
+    the caller, so this route cannot be used to enumerate accounts.
+    """
+
+    _check_rate_limit(request, limit=10, window=60)
+    email = body.email
+    canonical = canonical_email(email)
+    issued = False
+    try:
+        issued = account_recovery.request_recovery(
+            email=email,
+            source=_rate_limit_key(request),
+            db_path=DB_PATH,
+            sender=email_delivery.send_email,
+            public_url=_public_base_url(request),
+            allowed=_identity_allowed(canonical),
+        )
+    except account_recovery.AccountActionRateLimited:
+        logger.warning("Account recovery request rate limited.")
+    except account_recovery.EmailDeliveryFailed:
+        logger.warning("Account recovery e-mail could not be delivered.")
+    except account_recovery.AccountActionError as exc:
+        logger.warning("Account recovery request failed: %s", type(exc).__name__)
+    _audit(
+        request,
+        AuditEventType.ACCOUNT_RECOVERY_REQUESTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.SYSTEM,
+        metadata={"issued": issued},
+    )
+    return JSONResponse(
+        {"status": "accepted"},
+        status_code=202,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/auth/recovery/complete")
+async def api_recovery_complete(
+    body: _RecoveryToken, request: Request
+) -> JSONResponse:
+    """Exchange a single-use recovery token for a fresh session."""
+
+    _check_rate_limit(request, limit=20, window=60)
+    token = body.token
+    try:
+        user = account_recovery.complete_recovery(token=token, db_path=DB_PATH)
+    except account_recovery.InvalidTokenError:
+        _audit(
+            request,
+            AuditEventType.ACCOUNT_RECOVERED,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "invalid_token"},
+        )
+        raise HTTPException(status_code=400, detail="Invalid or expired token.")
+
+    account = get_account_state(user["id"], DB_PATH)
+    if (
+        account is None
+        or account["status"] != "active"
+        or not _identity_allowed(account["email"])
+    ):
+        raise HTTPException(status_code=400, detail="Invalid or expired token.")
+
+    user_id = str(user["id"])
+    account_email = str(account["email"])
+    # A recovered account starts from a clean session list. Every session that
+    # an attacker may already hold is ended before the verified owner continues.
+    SESSION_STORE.revoke_all(user_id, reason="recovered")
+    user_agent, client_ip, country_code = _request_session_metadata(request)
+    SESSION_LIFECYCLE.establish(
+        request.session,
+        user_id=user_id,
+        email=account_email,
+        device=describe_device(user_agent),
+        location=approximate_location(client_ip, country_code),
+    )
+    request.session[SESSION_EPOCH_KEY] = int(account["session_epoch"])
+    _audit(
+        request,
+        AuditEventType.ACCOUNT_RECOVERED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        user_id,
+        user_id=user_id,
+        metadata={"method": "recovery_token"},
+    )
+    return JSONResponse(
+        {"status": "ok"},
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/account/email/change-request")
+async def api_request_email_change(
+    body: _EmailChangeRequest, request: Request
+) -> JSONResponse:
+    """Start a verified change of the account contact address."""
+
+    _check_rate_limit(request, limit=5, window=60)
+    user_id = _check_api_auth(request)
+    new_email = body.new_email
+    authenticated_at = session_authenticated_at(
+        user_id,
+        _current_session_id(request),
+        DB_PATH,
+    )
+    try:
+        account_recovery.request_email_change(
+            user_id=user_id,
+            new_email=new_email,
+            authenticated_at=authenticated_at,
+            db_path=DB_PATH,
+            sender=email_delivery.send_email,
+            public_url=_public_base_url(request),
+            new_email_allowed=_identity_allowed(canonical_email(new_email)),
+        )
+    except account_recovery.RecentAuthenticationRequired as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except account_recovery.AccountActionRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except account_recovery.EmailChangeRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except account_recovery.EmailDeliveryFailed as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _audit(
+        request,
+        AuditEventType.EMAIL_CHANGE_REQUESTED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        user_id,
+        user_id=user_id,
+    )
+    return JSONResponse(
+        {
+            "status": "pending",
+            "message": "Check the new address for a verification link.",
+        },
+        status_code=202,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@app.post("/api/account/email/confirm")
+async def api_confirm_email_change(
+    body: _RecoveryToken, request: Request
+) -> JSONResponse:
+    """Apply a verified e-mail change and end every existing session."""
+
+    _check_rate_limit(request, limit=20, window=60)
+    token = body.token
+    try:
+        result = account_recovery.confirm_email_change(
+            token=token,
+            db_path=DB_PATH,
+            sender=email_delivery.send_email,
+        )
+    except account_recovery.InvalidTokenError:
+        _audit(
+            request,
+            AuditEventType.EMAIL_CHANGED,
+            AuditOutcome.DENIED,
+            AuditSubjectType.IDENTITY,
+            metadata={"reason": "invalid_token"},
+        )
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid or expired e-mail change token.",
+        )
+    changed_user_id = str(result.user["id"])
+    SESSION_STORE.revoke_all(changed_user_id, reason="email_changed")
+    request.session.clear()
+    _audit(
+        request,
+        AuditEventType.EMAIL_CHANGED,
+        AuditOutcome.SUCCESS,
+        AuditSubjectType.ACCOUNT,
+        changed_user_id,
+        user_id=changed_user_id,
+    )
+    return JSONResponse(
+        {"status": "ok", "signed_out": True},
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @app.get("/api/me")
@@ -2906,6 +3146,16 @@ async def rotate_api_key(request: Request) -> dict[str, Any] | JSONResponse:
         item["id"]: item["default_model"] for item in available_providers()
     }
     if provider in ai_provider_defaults:
+        try:
+            configured = _vault().describe(user_id, provider).configured
+        except VaultError as exc:
+            raise _vault_http_error(exc) from exc
+        if not configured:
+            # Rotation replaces an existing credential. Reject a request with
+            # nothing to rotate before spending a provider probe on it.
+            raise HTTPException(
+                status_code=404, detail="No active credential exists to rotate."
+            )
         check = await _check_ai_connection(
             user_id, provider, model or ai_provider_defaults[provider], api_key
         )

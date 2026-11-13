@@ -306,6 +306,9 @@ class Attack:
     #: A legitimate call on Bob's own data: it must succeed for Bob and still
     #: leave Alice untouched.
     own_effect: Callable[[World], bool] | None = None
+    #: Alice's stores that genuinely move to Bob, e.g. a shared browser endpoint
+    #: that can belong to only one account at a time.
+    shared_state: frozenset[str] = frozenset()
 
 
 def _bob_timezone(world: World) -> bool:
@@ -344,7 +347,8 @@ ATTACKS: tuple[Attack, ...] = (
     # --- write: a call that names Alice's object is refused -----------------
     Attack("mark-alices-notification-read", "POST", "/api/notifications/{notification}/read"),
     Attack("rotate-alices-credential", "POST", "/api/settings/key/rotate",
-           {"provider": "gemini", "api_key": "bob-replacement-value"}, (400, 404, 409)),
+           {"provider": "gemini", "api_key": "bob-replacement-value"},
+           (400, 404, 409, 422)),
     Attack("revoke-alices-credential", "POST", "/api/settings/key/revoke",
            {"provider": "gemini"}, (400, 404, 409)),
     Attack("test-alices-credential", "POST", "/api/settings/key/test",
@@ -356,7 +360,8 @@ ATTACKS: tuple[Attack, ...] = (
            {"date": "2026-08-01", "weight_kg": 70.5}, (200,), _bob_weight_corrected),
     Attack("subscribe-with-alices-push-endpoint", "POST", "/api/settings/push-subscribe",
            {"endpoint": f"https://push.example.test/{ALICE}",
-            "keys": {"p256dh": "bob-key", "auth": "bob-auth"}}, (200,), _bob_has_alices_endpoint),
+            "keys": {"p256dh": "bob-key", "auth": "bob-auth"}}, (200,), _bob_has_alices_endpoint,
+           frozenset({"push_subscriptions"})),
     # --- owner claims in the request never choose the owner -----------------
     Attack("claim-alice-in-json", "POST", "/api/settings/display",
            {"timezone": "Asia/Tokyo", "user_id": "{alice}"}),
@@ -413,7 +418,11 @@ def test_write_and_delete_never_change_another_users_records(
         response.status_code,
         response.text[:300],
     )
-    assert _alice_state(world) == before, attack.name
+
+    def retained(state: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in state.items() if key not in attack.shared_state}
+
+    assert retained(_alice_state(world)) == retained(before), attack.name
     if attack.own_effect is not None:
         assert attack.own_effect(world), f"{attack.name}: Bob's own call had no effect"
 
@@ -667,6 +676,12 @@ OBJECT_ROUTES: dict[str, str] = {
 #: Routes with a path parameter that carry no tenant data.
 EXEMPT_ROUTES = {
     "/{full_path:path}": "serves the public frontend bundle only",
+    "/api/admin/accounts/{target_user_id}": "administrative cross-tenant route; covered by test_admin_api.py",
+    "/api/admin/accounts/{target_user_id}/diagnostics": "administrative cross-tenant route; covered by test_admin_api.py",
+    "/api/admin/accounts/{target_user_id}/export": "administrative cross-tenant route; covered by test_admin_api.py",
+    "/api/admin/accounts/{target_user_id}/role": "administrative cross-tenant route; covered by test_admin_api.py",
+    "/api/admin/accounts/{target_user_id}/status": "administrative cross-tenant route; covered by test_admin_api.py",
+    "/api/admin/accounts/{target_user_id}/support": "administrative cross-tenant route; covered by test_admin_api.py",
     "/api/programmes/{programme_id}/decisions": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
     "/api/programmes/{programme_id}/decisions/{decision_id}": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",
     "/api/programmes/{programme_id}/decisions/{decision_id}/confirm": "programme-domain route; ownership covered by test_programme_identifiers_are_not_global_across_owners",

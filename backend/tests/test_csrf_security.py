@@ -247,3 +247,56 @@ def test_closed_accounts_can_neither_obtain_nor_use_tokens(tmp_path: Path) -> No
     other = TestClient(client.app, base_url="https://workout.example")
     other.cookies.set("session", _session_cookie("user-2"))
     assert _token(other)
+
+
+def _public_recovery_client(tmp_path: Path) -> TestClient:
+    from webapp.mutation_security import PUBLIC_MUTATION_PATHS
+
+    app = FastAPI()
+
+    def complete() -> dict[str, str]:
+        return {"status": "ok"}
+
+    for path in sorted(PUBLIC_MUTATION_PATHS):
+        app.add_api_route(path, complete, methods=["POST"])
+
+    app.add_middleware(
+        CSRFMiddleware,
+        db_path=str(tmp_path / "public-recovery.db"),
+        session_secret=_SECRET,
+        trusted_origins=(),
+        ttl_seconds=60,
+    )
+    return TestClient(app, base_url="https://workout.example")
+
+
+def test_public_recovery_mutations_reject_explicit_cross_site_browsers(
+    tmp_path: Path,
+) -> None:
+    client = _public_recovery_client(tmp_path)
+    path = "/api/auth/recovery/complete"
+
+    cross_origin = client.post(path, headers={"Origin": "https://evil.example"})
+    assert cross_origin.status_code == 403
+    assert cross_origin.json() == {"detail": "CSRF origin rejected"}
+
+    cross_site_metadata = client.post(path, headers={"Sec-Fetch-Site": "cross-site"})
+    assert cross_site_metadata.status_code == 403
+
+    assert client.post(path).status_code == 200
+    same_origin = client.post(path, headers={"Origin": "https://workout.example"})
+    assert same_origin.status_code == 200
+
+
+def test_public_recovery_mutations_keep_origin_check_with_a_stale_cookie(
+    tmp_path: Path,
+) -> None:
+    client = _public_recovery_client(tmp_path)
+    path = "/api/auth/recovery/complete"
+    client.cookies.set("session", "forged-cookie")
+
+    rejected = client.post(path, headers={"Origin": "https://evil.example"})
+    assert rejected.status_code == 403
+
+    allowed = client.post(path, headers={"Origin": "https://workout.example"})
+    assert allowed.status_code == 200
