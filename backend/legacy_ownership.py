@@ -145,6 +145,9 @@ NOT_TRANSFERRED_TABLES: Mapping[str, str] = {
         "append-only provenance captured per account; re-parenting it would "
         "rewrite immutable lineage"
     ),
+    "account_action_tokens": (
+        "short-lived e-mail recovery/change tokens did not exist before accounts"
+    ),
 }
 
 

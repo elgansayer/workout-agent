@@ -24,6 +24,38 @@
 
     <section
       class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4"
+      aria-labelledby="email-heading"
+    >
+      <h2 id="email-heading">E-mail address</h2>
+      <p class="muted">
+        Changing this address requires a recent sign-in and verification of the new address. The
+        previous address is alerted, and every session is ended once the change is confirmed.
+      </p>
+      <form (submit)="$event.preventDefault(); requestEmailChange()">
+        <label for="new-email">New e-mail address</label>
+        <input
+          id="new-email"
+          name="new_email"
+          type="email"
+          autocomplete="email"
+          required
+          [value]="newEmail()"
+          (input)="updateNewEmail($any($event.target).value)"
+        />
+        <button type="submit" class="btn btn-ghost btn-sm" [disabled]="emailBusy()">
+          {{ emailBusy() ? 'Sending…' : 'Verify new address' }}
+        </button>
+      </form>
+      @if (emailError()) {
+        <p class="panel error-panel" role="alert">{{ emailError() }}</p>
+      }
+      @if (emailStatus()) {
+        <p class="panel" role="status">{{ emailStatus() }}</p>
+      }
+    </section>
+
+    <section
+      class="bg-gradient-to-br from-[#1e232c] to-[#171a21] border border-[#262c37] rounded-2xl p-4 md:p-5 my-4"
       aria-labelledby="active-sessions-heading"
     >
       <div class="card-head">

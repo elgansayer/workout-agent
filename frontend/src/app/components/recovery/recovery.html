@@ -1,0 +1,58 @@
+<div class="recovery-container">
+  <div class="card recovery-card">
+    <p class="eyebrow">Account recovery</p>
+    <h1>{{ kind() === 'email_change' ? 'Confirm your new e-mail' : 'Recover your account' }}</h1>
+
+    @if (token()) {
+      <p class="muted">
+        @if (kind() === 'email_change') {
+          Open this link to finish verifying the new address on your account. You will be signed out
+          everywhere afterwards.
+        } @else {
+          This single-use link signs you in and ends any other session on your account.
+        }
+      </p>
+      @if (error(); as message) {
+        <div class="panel error-panel" role="alert">{{ message }}</div>
+      }
+      @if (status(); as message) {
+        <p class="panel" role="status">{{ message }}</p>
+        <a href="/login" class="btn btn-ghost">Continue to sign in</a>
+      } @else {
+        <button type="button" class="btn" [disabled]="busy()" (click)="confirmToken()">
+          {{
+            busy() ? 'Checking…' : kind() === 'email_change' ? 'Confirm e-mail' : 'Recover account'
+          }}
+        </button>
+      }
+    } @else {
+      <p class="muted">
+        Enter the e-mail address on your account. If it matches an active account, we will send a
+        short-lived recovery link. For privacy, this page gives the same answer for every address.
+      </p>
+      @if (error(); as message) {
+        <div class="panel error-panel" role="alert">{{ message }}</div>
+      }
+      @if (status(); as message) {
+        <p class="panel" role="status">{{ message }}</p>
+      }
+      <form (submit)="$event.preventDefault(); requestRecovery()">
+        <label for="recovery-email">Account e-mail</label>
+        <input
+          id="recovery-email"
+          name="email"
+          type="email"
+          autocomplete="email"
+          required
+          [value]="email()"
+          (input)="updateEmail($any($event.target).value)"
+        />
+        <button type="submit" class="btn" [disabled]="busy()">
+          {{ busy() ? 'Sending…' : 'Send recovery link' }}
+        </button>
+      </form>
+    }
+
+    <p class="muted"><a href="/login">Back to sign in</a></p>
+  </div>
+</div>

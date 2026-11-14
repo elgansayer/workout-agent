@@ -222,6 +222,7 @@ USER_DATA_STORES: tuple[DataStore, ...] = (
     DataStore("body_metrics", Step.PRIMARY_RECORDS, health=True),
     DataStore("record_provenance", Step.DERIVED_INSIGHTS, health=True),
     DataStore("csrf_tokens", Step.CACHES, optional=True),
+    DataStore("account_action_tokens", Step.CACHES),
     # Canonical health platform tables (health_schema.py). Optional because the
     # additive migration may not have been applied to this database.
     *(_health_table_store(table) for table in HEALTH_USER_TABLES),

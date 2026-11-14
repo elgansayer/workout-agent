@@ -403,6 +403,7 @@ def test_connector_sync_uses_and_rotates_only_the_owners_token(
 
 #: Every outbound ``send_*`` function in production code, and what it delivers.
 CHANNELS = {
+    "email_delivery.send_email": "SMTP, to the account's own verified or pending address",
     "push_notifier.send_push_notification": "web push, to the owner's registered devices",
     "telegram_notifier.send_telegram_message": "not wired into any production caller",
 }
@@ -479,6 +480,45 @@ def test_every_outbound_sender_is_a_known_channel() -> None:
     assert set(tm.outbound_senders(BACKEND)) == set(CHANNELS), (
         "a new send_* function needs a receive probe and an entry in CHANNELS"
     )
+
+
+def test_account_action_email_reaches_only_the_named_account(
+    world: tm.World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Recovery and address-change mail leaves for the named owner, never a neighbour."""
+    import account_recovery
+
+    delivered: list[tuple[str, str, str]] = []
+
+    def record(to: str, subject: str, body: str) -> None:
+        delivered.append((to, subject, body))
+
+    monkeypatch.setattr("email_delivery.send_email", record)
+    for user in (world.alice, world.bob):
+        canary = world.canaries(user)
+        delivered.clear()
+        assert account_recovery.request_recovery(
+            email=canary.email,
+            source=f"matrix-{user}",
+            db_path=world.db,
+        )
+        assert {to for to, _subject, _body in delivered} == {canary.email}
+        assert not world.leaked(
+            world.other(user), " ".join(body for _to, _subject, body in delivered)
+        )
+
+        delivered.clear()
+        target = f"new-{canary.marker.lower()}@example.test"
+        account_recovery.request_email_change(
+            user_id=user,
+            new_email=target,
+            authenticated_at=datetime.now(tz=timezone.utc),
+            db_path=world.db,
+        )
+        assert {to for to, _subject, _body in delivered} == {target, canary.email}
+        assert not world.leaked(
+            world.other(user), " ".join(body for _to, _subject, body in delivered)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +618,11 @@ def build_cells() -> list[Cell]:
             "receive",
             "model prompts",
             "test_model_prompts_carry_only_the_requesting_accounts_data",
+        ),
+        Cell(
+            "receive",
+            "account recovery and e-mail change messages",
+            "test_account_action_email_reaches_only_the_named_account",
         ),
         Cell(
             "export",

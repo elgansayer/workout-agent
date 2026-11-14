@@ -274,6 +274,30 @@ def validate_session(
     return True
 
 
+def session_authenticated_at(
+    user_id: str,
+    session_id: str | None,
+    db_path: str = DEFAULT_DB_PATH,
+) -> datetime | None:
+    """Return when *session_id* was authenticated, or ``None`` if not active.
+
+    This is the server-side timestamp behind the "recent authentication"
+    requirement for security-sensitive account changes. It is read from the
+    session registry, never from a client-supplied value.
+    """
+
+    if not user_id or not isinstance(session_id, str) or not session_id:
+        return None
+    with _connect(db_path) as conn:
+        row = _session_row(conn, session_id)
+        if row is None:
+            return None
+        _row_id, row_user_id, created_at, _last_seen_at, revoked_at = row
+        if revoked_at is not None or row_user_id != user_id:
+            return None
+    return datetime.fromtimestamp(float(created_at), tz=timezone.utc)
+
+
 def legacy_session_adoptable(
     user_id: str,
     db_path: str = DEFAULT_DB_PATH,
@@ -499,5 +523,6 @@ __all__ = [
     "revoke_other_sessions",
     "revoke_session",
     "rotate_session",
+    "session_authenticated_at",
     "validate_session",
 ]

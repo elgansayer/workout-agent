@@ -262,6 +262,7 @@ the schema is current. Refusals exit with status 1 and a message on stderr.
 This delivers the account schema, identity binding, tenant resolution and the
 verified legacy-data assignment. Administrative roles build on this schema in
 `docs/ROLE_PERMISSIONS.md`; tenant ownership remains independent of role. It does
-not add registration policy, session rotation/expiry, recovery flows or account
-data erasure; those build on the `active`/`suspended`/`deleted` lifecycle and
-`user_identities` defined here.
+not add registration policy, session rotation/expiry or account data erasure.
+Recovery and verified e-mail changes build on the `active`/`suspended`/`deleted`
+lifecycle and `user_identities` defined here; see
+[`ACCOUNT_RECOVERY.md`](ACCOUNT_RECOVERY.md).

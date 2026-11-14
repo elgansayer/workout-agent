@@ -35,6 +35,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import JSONResponse, Response
 from starlette.types import ASGIApp
 
+from webapp.mutation_security import PUBLIC_MUTATION_PATHS
+
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_TOKEN_PATH = "/api/csrf-token"
 CSRF_TOKEN_TTL_SECONDS = 10 * 60
@@ -335,14 +337,33 @@ class CSRFMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         session_cookie = request.cookies.get(self.session_cookie_name)
+        # The recovery and e-mail verification mutations are reachable before a
+        # session exists, but they must still reject an explicit cross-site
+        # browser request. Otherwise an attacker could submit their own recovery
+        # token from another origin and force the visitor into the attacker's
+        # account (login CSRF). The token itself remains the credential.
+        public_recovery = request.url.path in PUBLIC_MUTATION_PATHS
         if not session_cookie:
             # Non-cookie requests (including connector webhooks) must rely on
             # their route-specific authentication/signature checks. There is no
             # path allowlist that could accidentally exempt a browser session.
+            if public_recovery and not _origin_is_trusted(
+                request, self.trusted_origins
+            ):
+                return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)
             return await call_next(request)
 
         user_id = self.session_identity.user_id(session_cookie)
         if not user_id:
+            # A stale or unreadable cookie carries no authenticated identity to
+            # protect. Recovery primitives stay token/rate-limit guarded and
+            # keep the same browser-origin check.
+            if public_recovery:
+                if not _origin_is_trusted(request, self.trusted_origins):
+                    return JSONResponse(
+                        {"detail": "CSRF origin rejected"}, status_code=403
+                    )
+                return await call_next(request)
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
         if not _origin_is_trusted(request, self.trusted_origins):
             return JSONResponse({"detail": "CSRF origin rejected"}, status_code=403)

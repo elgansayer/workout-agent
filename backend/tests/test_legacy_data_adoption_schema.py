@@ -24,6 +24,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 # Every non-test module that issues ``CREATE TABLE``. ``health_schema.py`` is not
 # applied to the production database yet.
 REVIEWED_DDL_SOURCES = {
+    "account_recovery.py",
     "database.py",
     "health_schema.py",
     "provenance_ledger.py",

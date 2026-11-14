@@ -155,6 +155,7 @@ ACCOUNT_BOUND_TABLES = (
     "user_sessions",
     "credential_audit_events",
     "record_provenance",
+    "account_action_tokens",
 )
 
 # Account-bound tables whose rows are never updated (their own trigger aborts
@@ -1880,6 +1881,11 @@ def init_db(db_path: str = DEFAULT_DB_PATH) -> None:
 
         # Server-side registry behind the browser session cookie (issue #752).
         ensure_user_sessions_schema(conn)
+
+        # Single-use recovery and verified e-mail change tokens (issue #781).
+        from account_recovery import ensure_schema as ensure_account_action_schema
+
+        ensure_account_action_schema(conn)
 
         # Additive canonical health schema. Created before the owner guards so
         # every tenant-scoped health table is covered by them.

@@ -18,6 +18,7 @@ _UNIQUE_SUFFIX = itertools.count(1)
 
 # Columns whose synthetic default would violate a CHECK constraint.
 _TABLE_VALUES: dict[str, dict[str, Any]] = {
+    "account_action_tokens": {"purpose": "recovery"},
     "record_provenance": {"kind": "imported", "supersedes_id": None, "held_by_id": None},
     "user_api_keys": {"status": "active"},
 }

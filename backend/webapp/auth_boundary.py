@@ -45,6 +45,10 @@ PUBLIC_EXACT_PATHS = frozenset(
         "/login",
         "/login/google",
         "/auth",
+        "/recover",
+        "/api/auth/recovery/request",
+        "/api/auth/recovery/complete",
+        "/api/account/email/confirm",
         
         "/livez",
         "/readyz",

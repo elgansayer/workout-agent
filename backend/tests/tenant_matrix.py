@@ -945,6 +945,15 @@ ATTACKS: tuple[Attack, ...] = (
         foreign=(404, 409),
         changes_owner=False,
     ),
+    Attack(
+        "POST",
+        "/api/account/email/change-request",
+        {"new_email": "verified-change@example.test"},
+        legit=(202, 503),
+        foreign=(202, 503),
+        changes_owner=False,
+        also=("receive",),
+    ),
 )
 
 
